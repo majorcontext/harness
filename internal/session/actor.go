@@ -421,8 +421,8 @@ func (a *Actor) Read(ctx context.Context, f func(*eventlog.State)) error {
 }
 
 func (a *Actor) publish(stopped bool) {
-	window := a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow
-	next := &View{Session: Describe(a.cfg.ID, a.state, window), Unsettled: a.state.Unsettled(),
+	caps := a.cfg.Backend.Capabilities(a.state.Model())
+	next := &View{Session: Describe(a.cfg.ID, a.state, caps.ContextWindow, caps.WindowEstimated), Unsettled: a.state.Unsettled(),
 		Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()

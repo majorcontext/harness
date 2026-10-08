@@ -108,32 +108,12 @@ type Config struct {
 	OwnerEpoch int `json:"owner_epoch,omitempty"`
 	// Sync posts each record to a control plane. Only the user file sets it.
 	Sync *SyncSpec `json:"sync,omitempty"`
-	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
-	// session this process creates: the model's context window size, in
-	// tokens. This is an EXPLICIT OVERRIDE, not the only way compaction gets
-	// armed: when left zero (omitted, the default), the engine derives the
-	// window itself from the session's model, using its own built-in table
-	// (package modelmeta, sourced from models.dev) — see
-	// engine.resolveContextWindow. Automatic compaction is disabled only
-	// when BOTH this is zero AND the model has no usable entry in that
-	// table (an unrecognized provider/model, or one below the engine's
-	// sanity floor). See docs/design/context-compaction.md.
+	// ContextWindowTokens is the context window of every model, in tokens,
+	// and replaces the built-in table (package modelmeta, sourced from
+	// models.dev). When it is zero, a model that the table lacks runs with
+	// a default of 128000 tokens, and its gauge marks the window as an
+	// estimate. A context overflow error never changes the window.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
-	// ContextWindowRequired sets engine.Config.RequireContextWindow: a model
-	// the context-window registry does not recognize is a hard refusal at
-	// session creation, model set, and every Prompt, instead of a session
-	// that silently runs with no context management and later dies with
-	// "context exhausted". A nil value (the field omitted) leaves the
-	// product default of TRUE in place; an explicit false allows the old
-	// silent-degradation behavior for an operator running a model the
-	// registry cannot know (a local or gateway-fronted one) who does not
-	// want to name its window. Naming it with `context_window_tokens`
-	// satisfies the requirement for any model and is the better answer,
-	// since that value is what automatic compaction needs anyway. A *bool
-	// distinguishes "unset" (true) from "false" (off) across the
-	// project-config merge, like PromptRetries' *int. Resolve it with
-	// ContextWindowRequiredValue.
-	ContextWindowRequired *bool `json:"context_window_required,omitempty"`
 	// PromptRetries sets engine.Config.PromptRetries: how many ADDITIONAL
 	// attempts the base interactive Prompt loop makes when a model call fails
 	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a

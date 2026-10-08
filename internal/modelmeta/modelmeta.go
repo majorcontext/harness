@@ -54,7 +54,7 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// the amazon-bedrock branch below. Bedrock-served refs consult the
 		// bedrock table EXCLUSIVELY — no first-party fallback: a dotted
 		// family the bedrock snapshot doesn't key resolves as unknown
-		// (compaction stays disabled, the fail-safe direction) rather than
+		// (the backend applies its default window) rather than
 		// borrowing the first-party window, which would silently un-do the
 		// divergence for any form not keyed exactly (e.g. the undated
 		// "anthropic.claude-sonnet-4-5" borrowing 1M where Bedrock's real
@@ -78,10 +78,7 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// gpt-5.6-luna) — so this case looks the model up in that one
 		// table rather than duplicating it. Unlike claudeCodeProvider
 		// below, there is no stand-in fallback: a codex model absent from
-		// the table still misses, so engine.Config.RequireContextWindow's
-		// fail-loud refusal (see engine/context_window.go) stays armed for
-		// a genuinely unknown model instead of a boxes-side override
-		// disabling it globally.
+		// the table still misses and the model runs on the default window.
 		tokens, ok = openaiContextWindows[model]
 	case "bifrost":
 		if tokens, ok = bifrostFireworksContextWindows[model]; ok {

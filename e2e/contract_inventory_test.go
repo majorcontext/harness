@@ -97,7 +97,6 @@ var boxesFeatures = []struct {
 	{"config providers.claude-code", []string{"claudecode_turn_text_and_tool", "claudecode_resume_across_turns"}},
 	{"config goal_evaluator_model", []string{"bifrost_goal_met_first_turn", "bifrost_goal_not_met_then_met"}},
 	{"config session_sync=fsync", []string{"session_sync_fsync_reports_fsync", "session_sync_default_reports_fsync"}},
-	{"config context_window_required", []string{"create_checks_the_model", "create_takes_an_unknown_model_when_no_window_is_required"}},
 	{"config mcp_tool_loading", []string{"mcp_lazy_search_select_then_call", "mcp_auto_defers_over_threshold", "mcp_per_server_tool_loading_overrides_global"}},
 	{"config mcp_servers", []string{"mcp_eager_lists_namespaced_tools", "mcp_tool_call_result", "mcp_http_sse_reply", "mcp_stdio_server_call", "claudecode_configured_mcp_servers_reach_the_cli"}},
 	{"config append_system_prompt", []string{"system_segments_order_append_layers_then_instructions_then_skills"}},

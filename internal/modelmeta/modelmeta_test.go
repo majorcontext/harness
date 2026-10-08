@@ -59,8 +59,7 @@ func TestContextWindowCodex(t *testing.T) {
 // TestContextWindowCodexUnknownModelStillMisses proves the codex case does
 // not fall back to a stand-in figure the way claudeCodeProvider does: a
 // codex ref naming a model absent from openaiContextWindows must still miss,
-// so engine.Config.RequireContextWindow's fail-loud refusal stays armed for
-// a genuinely unknown model instead of silently reporting a guess.
+// so the backend marks its default window as an estimate.
 func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
 	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
 		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
@@ -268,8 +267,8 @@ func TestStripBedrockAnthropicPrefix(t *testing.T) {
 }
 
 // The CLI resolves a bare alias to a model harness never learns, so a
-// claude-code ref must be recognized (RequireContextWindow accepts it) while
-// reporting no window.
+// claude-code ref must be recognized, so the backend gives it no
+// estimated window, while reporting no window.
 func TestContextWindowClaudeCodeReportsNoWindow(t *testing.T) {
 	for _, model := range []string{"opus", "sonnet", "haiku"} {
 		tokens, ok := ContextWindow(message.ModelRef{Provider: "claude-code", Model: model})

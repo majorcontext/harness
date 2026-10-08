@@ -8,7 +8,7 @@ Read the root AGENTS.md.
 - Run the generator only by hand or in the `modelmeta-refresh` workflow.
 - Keep zero unavailable for non-chat models. Zero means unknown.
 - Keep provider-family matching explicit. Preserve dated variants and aliases.
-- An unknown model returns no window. The runtime owns refusal policy.
+- An unknown model returns no window. Hold no default window here; the model API backend owns it.
 - Guess no capability from a model-name substring.
 - `SupportsToolSearch` uses an explicit first-party Anthropic allowlist.
 - Return false for other families and Bedrock-style Anthropic refs.

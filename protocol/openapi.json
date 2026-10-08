@@ -223,6 +223,9 @@
           },
           "window": {
             "type": "integer"
+          },
+          "window_estimated": {
+            "type": "boolean"
           }
         },
         "type": "object",

@@ -21,7 +21,7 @@ func TestApplyEnv(t *testing.T) {
 	}{
 		{name: "a string key", env: map[string]string{"HARNESS_SESSION_DIR": "/env"}, want: with(func(c *Config) { c.SessionDir = "/env" })},
 		{name: "an explicit zero int pointer", env: map[string]string{"HARNESS_PROMPT_RETRIES": "0"}, want: with(func(c *Config) { c.PromptRetries = new(0) })},
-		{name: "an explicit false bool pointer", env: map[string]string{"HARNESS_CONTEXT_WINDOW_REQUIRED": "false"}, want: with(func(c *Config) { c.ContextWindowRequired = new(false) })},
+		{name: "an explicit false bool pointer", env: map[string]string{"HARNESS_MODEL_TOOL": "false"}, want: with(func(c *Config) { c.ModelTool = new(false) })},
 		{name: "a task limit", env: map[string]string{"HARNESS_MAX_TASK_DEPTH": "2"}, want: with(func(c *Config) { c.MaxTaskDepth = 2 })},
 		{name: "a tree token budget", env: map[string]string{"HARNESS_MAX_TREE_TOKENS": "500"}, want: with(func(c *Config) { c.MaxTreeTokens = 500 })},
 		{name: "a float", env: map[string]string{"HARNESS_COMPACTION_THRESHOLD": "0.5"}, want: with(func(c *Config) { c.CompactionThreshold = 0.5 })},

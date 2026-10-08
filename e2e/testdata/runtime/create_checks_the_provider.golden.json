@@ -35,12 +35,25 @@
       }
     },
     "create.anthropic/no-such-model": {
-      "status": 409,
+      "status": 201,
       "body": {
-        "error": {
-          "code": "model_unavailable",
-          "details": {},
-          "message": "harness: model unavailable: modelmeta does not know anthropic/no-such-model"
+        "context": {
+          "tokens": 0,
+          "window": 128000,
+          "window_estimated": true
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#2",
+        "model": "anthropic/no-such-model",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
         }
       }
     },
@@ -53,7 +66,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 2,
-        "id": "ses#4",
+        "id": "ses#6",
         "model": "bifrost/fireworks/accounts/fireworks/routers/firerouter",
         "origin": "",
         "status": "idle",
@@ -75,7 +88,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 2,
-        "id": "ses#2",
+        "id": "ses#3",
         "model": "codex/gpt-5",
         "origin": "",
         "status": "idle",
@@ -89,12 +102,25 @@
       }
     },
     "create.codex/no-such-model": {
-      "status": 409,
+      "status": 201,
       "body": {
-        "error": {
-          "code": "model_unavailable",
-          "details": {},
-          "message": "harness: model unavailable: modelmeta does not know codex/no-such-model"
+        "context": {
+          "tokens": 0,
+          "window": 128000,
+          "window_estimated": true
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#4",
+        "model": "codex/no-such-model",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
         }
       }
     },
@@ -137,7 +163,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 2,
-        "id": "ses#3",
+        "id": "ses#5",
         "model": "openai/gpt-5",
         "origin": "",
         "status": "idle",

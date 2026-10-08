@@ -143,7 +143,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 6,
+        "head_seq": 7,
         "id": "ses:a",
         "model": "anthropic/claude-haiku-4-5",
         "origin": "",
@@ -167,7 +167,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 11,
+        "head_seq": 12,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -194,7 +194,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 14,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -213,12 +213,25 @@
       }
     },
     "set_model.a": {
-      "status": 409,
+      "status": 200,
       "body": {
-        "error": {
-          "code": "model_unavailable",
-          "details": {},
-          "message": "harness: model unavailable: modelmeta does not know anthropic/no-such-model"
+        "context": {
+          "tokens": 0,
+          "window": 128000,
+          "window_estimated": true
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 3,
+        "id": "ses:a",
+        "model": "anthropic/no-such-model",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
         }
       }
     },
@@ -250,7 +263,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 3,
+        "head_seq": 4,
         "id": "ses:a",
         "model": "anthropic/claude-haiku-4-5",
         "origin": "",
@@ -273,7 +286,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 5,
+        "head_seq": 6,
         "id": "ses:a",
         "model": "anthropic/claude-haiku-4-5",
         "origin": "",
@@ -297,7 +310,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 6,
+        "head_seq": 7,
         "id": "ses:a",
         "model": "anthropic/claude-haiku-4-5",
         "origin": "",
@@ -320,7 +333,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 14,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -357,7 +370,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 4,
+        "head_seq": 5,
         "id": "ses:a",
         "model": "anthropic/claude-haiku-4-5",
         "origin": "",
@@ -380,7 +393,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 4,
+        "head_seq": 5,
         "id": "ses:a",
         "model": "anthropic/claude-haiku-4-5",
         "origin": "",
@@ -402,7 +415,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 14,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

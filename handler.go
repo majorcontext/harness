@@ -74,7 +74,7 @@ func (r reads) Read(ctx context.Context, id string) (server.Reader, error) {
 	if s := r.running(id); s != nil {
 		return live{s}, nil
 	}
-	v, err := OpenView(ctx, r.store, id)
+	v, err := openView(ctx, r.store, id, r.models.Capabilities)
 	if err != nil {
 		return nil, err
 	}
