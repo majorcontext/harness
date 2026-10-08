@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `provider`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -204,6 +204,7 @@ Free to change.
 | `internal/turn` | One agent loop; declares `Backend`, `Tool`, and `Source`; `Restrict` |
 | `internal/backend` | The `turn.Backend` of a runtime: it builds a backend for each provider of the registry (the native `anthropic` and `openai`, the default `openrouter`, and each configured entry) and routes each model ref to one. In the new runtime, only this package and the provider packages import a provider wire |
 | `internal/backend/modelapi` | The one model API backend, for every provider wire |
+| `internal/provider` | The wire adapters `anthropic`, `openai` (Responses, the Codex lane included), and `openaicompat`, and the typed `provider.Error`. Only `internal/backend` builds them |
 | `internal/backend/external`, `claudecode` | Third-party harness backends; phase 5 adds `codexcli` |
 | `internal/tool/mcpsrc` | A `turn.Source` that gives MCP tools to each model call |
 | `internal/tool/pluginsrc` | A `turn.Source` and `turn.Hooks` that give the plugin tools, hooks, and events to each session |
@@ -216,7 +217,7 @@ Free to change.
 
 The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, and only `internal/backend` builds a provider wire.
 
-Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it), `mcp`, `plugin`, `skill`, `command`, and `process`, as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
+Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it), `mcp`, `plugin`, `skill`, `command`, `process`, and `provider` (the wire adapters of the model API backend), as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
@@ -713,9 +714,9 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 
 | Entry | Client |
 | --- | --- |
-| `type: openai`, or the `openai` key with no type | `provider/openai` (Responses, the Codex lane included) |
-| `type: openai-compat` | `provider/openaicompat` (chat completions, such as Bifrost) |
-| The `anthropic` key with no type | `provider/anthropic` (Messages) |
+| `type: openai`, or the `openai` key with no type | `internal/provider/openai` (Responses, the Codex lane included) |
+| `type: openai-compat` | `internal/provider/openaicompat` (chat completions, such as Bifrost) |
+| The `anthropic` key with no type | `internal/provider/anthropic` (Messages) |
 | `type: claude-code-cli` | `internal/backend/claudecode`, a delegated backend |
 
 `Options.ModelTransport` wraps the HTTP client of each entry, and may supply the credentials of each wire. Each request sends a baseline response cap of 8192 tokens. A reasoning request can raise it. `Close` reaches a client that pools connections through an optional `Close` method. Each provider package keeps its own SSE reader and status classifier, and the one retry policy stays in `turn`.
@@ -898,7 +899,7 @@ The package imports only the standard library. The `config-leaf` depguard rule e
 | Structured questions (#317) | Generalize to requests |
 | Claude Code delegated backend | Keep; first third-party harness |
 | Codex CLI | Add through the third-party harness seam |
-| Codex lane, websocket transport | Keep inside `provider/openai` |
+| Codex lane, websocket transport | Keep inside `internal/provider/openai` |
 | Startup prewarm | Move into `modelapi` behind `turn.Warmer` |
 | Agent definitions | Keep as agent profiles applied at `Spawn` |
 | Git changes | Keep as `GET /workspace/changes` in `internal/workspace` |
@@ -938,7 +939,7 @@ Today ~70% of 127k test lines read unexported state and will not survive the res
 
 ### Unit tests
 
-Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and the `internal/backend` wire mapping files), `config`, `internal/message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
+Unit tests cover pure code only: `Apply`, wire transcoders (`internal/provider/*/` and the `internal/backend` wire mapping files), `config`, `internal/message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
 
 ### CI gates
 
@@ -949,7 +950,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and th
 | File size | Fail above 800 lines |
 | Function size | Fail when the closing brace is more than 80 lines below the opening brace |
 | Test lines vs code lines per package | Fail above 1.5 test lines per code line, unless the ratio does not rise over the merge base. A new package has no base, but a moved package compares with the package it came from. A change that removes code and adds no test lines always passes |
-| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines (code lines inside `Test`, `Benchmark`, `Fuzz`, and `Example` functions and package-level `var` declarations; top-level helpers, fakes, and types do not count) outside `e2e/`, `internal/eventlog`, `provider/*/`, `config`, `internal/message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
+| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines (code lines inside `Test`, `Benchmark`, `Fuzz`, and `Example` functions and package-level `var` declarations; top-level helpers, fakes, and types do not count) outside `e2e/`, `internal/eventlog`, `internal/provider/*/`, `config`, `internal/message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
 | `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file |
 | `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
 | Merge-base diff | `TestRepository` checks only files and packages that differ from `git merge-base HEAD origin/main`, or from `$GATES_BASE_REF`. A new file meets each limit above. A changed file may not cross a limit that it met, and may not get worse on a limit that it already broke. A renamed file compares with its old path. A change that only deletes code always passes. An unchanged file is not checked. No baseline file exists |

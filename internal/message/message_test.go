@@ -237,7 +237,7 @@ func TestModelRef(t *testing.T) {
 // a Parts element.
 //
 // The normalized value must be "{}", not "null": every transcoder
-// (provider/anthropic, provider/openai) already coerces a zero-length
+// (internal/provider/anthropic, internal/provider/openai) already coerces a zero-length
 // Arguments to an empty JSON object before sending it to the provider, so
 // the canonical marshal must agree — a "null" here would diverge from what
 // actually goes out on the wire and would not survive a resumed session's
@@ -331,7 +331,7 @@ func TestToolCallEmptyArgumentsRoundTripMatchesTranscodeConvention(t *testing.T)
 
 	// The transcode-path expectation: transcoders test len(Arguments) == 0
 	// to decide whether to substitute their own empty-object literal (see
-	// provider/anthropic/transcode.go and provider/openai/transcode.go).
+	// internal/provider/anthropic/transcode.go and internal/provider/openai/transcode.go).
 	// After a round trip through canonical JSON, Arguments must already be
 	// "{}" — valid, non-empty, parseable JSON that a transcoder can pass
 	// straight through — never the 4-byte non-object literal "null".
@@ -578,7 +578,7 @@ func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
 // TestToolCallEmptyArgumentsMarshal and TestReasoningProviderDataEmptyMarshal
 // special-case len(Arguments) == 0 only. A provider stream that dies mid
 // tool_use block — a dropped connection during input_json_delta
-// accumulation, or (as audited in provider/anthropic/anthropic.go) a
+// accumulation, or (as audited in internal/provider/anthropic/anthropic.go) a
 // max_tokens cutoff mid tool-call, which the Anthropic wire protocol still
 // closes out with a normal content_block_stop/message_delta/message_stop
 // sequence — can leave Arguments non-empty but syntactically invalid
@@ -660,7 +660,7 @@ func TestToolCallInvalidTruncatedArgumentsMarshal(t *testing.T) {
 // stream that dies mid tool_use block, e.g. a connection drop during
 // input_json_delta accumulation, or a max_tokens cutoff mid tool-call that
 // the wire protocol still closes out normally (see
-// provider/anthropic/anthropic.go) — must be sanitized once, rather than
+// internal/provider/anthropic/anthropic.go) — must be sanitized once, rather than
 // leaving every downstream consumer (persist, GET /message, a future
 // transcoder) to separately guard against it.
 //
@@ -761,7 +761,7 @@ func TestToolResultNilContentNeverMarshalsNull(t *testing.T) {
 // returned Content holding one Text part whose Text is the empty string
 // (bash.go's captured-output path for a command with no stdout/stderr) --
 // non-nil, len 1, but empty in every way that matters. This must be
-// treated the same as nil Content: transcodeParts (provider/anthropic/
+// treated the same as nil Content: transcodeParts (internal/provider/anthropic/
 // transcode.go) skips an empty Text part entirely, so this shape collapses
 // to zero wire blocks exactly like a nil Content would.
 func TestToolResultBlankTextContentNeverMarshalsNull(t *testing.T) {

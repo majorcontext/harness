@@ -12,8 +12,8 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness/internal/message"
-	"github.com/majorcontext/harness/provider"
-	"github.com/majorcontext/harness/provider/openaicompat"
+	"github.com/majorcontext/harness/internal/provider"
+	"github.com/majorcontext/harness/internal/provider/openaicompat"
 )
 
 func chatStream(t testing.TB, s *Server, req *provider.Request) ([]provider.Event, error) {

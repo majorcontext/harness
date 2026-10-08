@@ -44,7 +44,7 @@ func TestOracleMetaFlagsToolResultInAssistantBlock(t *testing.T) {
 // TestOracleMetaFlagsToolUseInNonAssistantBlock (invariant 2, the
 // tool_use/non-assistant half) feeds a ToolCall sitting inside a RoleTool
 // message and asserts the oracle flags it. Anthropic maps message.RoleTool
-// to a wire "user" turn (provider/anthropic/transcode.go) and emits a
+// to a wire "user" turn (internal/provider/anthropic/transcode.go) and emits a
 // tool_use block for any ToolCall regardless of the enclosing role, which
 // the API rejects with HTTP 400 on a non-assistant turn — the symmetric
 // partner of TestOracleMetaFlagsToolResultInAssistantBlock above.

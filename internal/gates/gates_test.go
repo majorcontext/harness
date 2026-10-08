@@ -308,8 +308,8 @@ var checkCases = []checkCase{
 		name: "new_test_in_pure_code_packages_passes",
 		head: fstest.MapFS{
 			"internal/eventlog/a_test.go":                file(tests(3)),
-			"provider/openai/a_test.go":                  file(tests(3)),
-			"provider/openai/deep/a_test.go":             file(tests(3)),
+			"internal/provider/openai/a_test.go":         file(tests(3)),
+			"internal/provider/openai/deep/a_test.go":    file(tests(3)),
 			"internal/backend/modelapi/convert_test.go":  file(tests(3)),
 			"internal/backend/claudecode/frames_test.go": file(tests(3)),
 			"config/a_test.go":                           file(tests(3)),
@@ -320,7 +320,7 @@ var checkCases = []checkCase{
 	{
 		name: "new_test_in_driving_code_fails",
 		head: fstest.MapFS{
-			"provider/a_test.go":                          file(tests(3)),
+			"internal/provider/a_test.go":                 file(tests(3)),
 			"internal/backend/a_test.go":                  file(tests(3)),
 			"internal/backend/router_test.go":             file(tests(3)),
 			"internal/backend/claudecode/workdir_test.go": file(tests(3)),
@@ -329,7 +329,7 @@ var checkCases = []checkCase{
 			"internal/session/actor_test.go":              file(tests(3)),
 		},
 		want: []string{
-			"provider/a_test.go:contract_tests",
+			"internal/provider/a_test.go:contract_tests",
 			"internal/backend/a_test.go:contract_tests",
 			"internal/backend/router_test.go:contract_tests",
 			"internal/backend/claudecode/workdir_test.go:contract_tests",

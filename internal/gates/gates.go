@@ -377,7 +377,7 @@ func testMayGrow(p string) bool {
 	if testGrowthFiles[p] {
 		return true
 	}
-	if rest, ok := strings.CutPrefix(p, "provider/"); ok && strings.Contains(rest, "/") {
+	if rest, ok := strings.CutPrefix(p, "internal/provider/"); ok && strings.Contains(rest, "/") {
 		return true
 	}
 	for _, d := range testGrowthDirs {

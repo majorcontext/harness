@@ -113,9 +113,9 @@ func TestCoverRows(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	in := "\tgithub.com/majorcontext/harness\t\tcoverage: 12.5% of statements\n" +
-		"\tgithub.com/majorcontext/harness/provider/anthropic\t\tcoverage: 68.7% of statements\n"
+		"\tgithub.com/majorcontext/harness/internal/provider/anthropic\t\tcoverage: 68.7% of statements\n"
 	want := "### Contract suite coverage\n\nTotal: 38.2%\n\n| Package | Statements covered |\n| --- | --- |\n" +
-		"| (root) | 12.5% |\n| provider/anthropic | 68.7% |\n"
+		"| (root) | 12.5% |\n| internal/provider/anthropic | 68.7% |\n"
 	if got := coverMarkdown(coverRows(in), "38.2%"); got != want {
 		t.Errorf("coverMarkdown =\n%s\nwant\n%s", got, want)
 	}

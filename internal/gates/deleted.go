@@ -12,11 +12,11 @@ import (
 // deletedPathRE matches a reference to a package path that the spec deletes or
 // moves under internal/: a path under engine, server, or mcpserver at the
 // module root, a symbol of the engine package, provider/claudecode, the
-// module path of a package that moved under internal/, and harness-migrate.
+// module path of a package that moved under internal/ (provider included), and harness-migrate.
 var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server)/\w|` +
 	`(?:^|[^\w/.-])engine\.[A-Za-z_]|` +
 	`\bprovider/claudecode\b|` +
-	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|plugin|skill|command|process|imageclamp|migrate)\b|` +
+	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|plugin|skill|command|process|imageclamp|migrate|provider)\b|` +
 	`\bharness-migrate\b`)
 
 // CheckDeletedReferences fails each Go file, in code or in a comment, that

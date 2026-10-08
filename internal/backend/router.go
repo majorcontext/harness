@@ -17,12 +17,12 @@ import (
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelmeta"
+	"github.com/majorcontext/harness/internal/provider"
+	"github.com/majorcontext/harness/internal/provider/anthropic"
+	responses "github.com/majorcontext/harness/internal/provider/openai"
+	"github.com/majorcontext/harness/internal/provider/openaicompat"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
-	"github.com/majorcontext/harness/provider"
-	"github.com/majorcontext/harness/provider/anthropic"
-	responses "github.com/majorcontext/harness/provider/openai"
-	"github.com/majorcontext/harness/provider/openaicompat"
 )
 
 const defaultOpenRouter = "openrouter"

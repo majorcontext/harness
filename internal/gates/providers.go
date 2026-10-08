@@ -41,7 +41,7 @@ func providerNames(srcs []source) map[string]bool {
 						n := name.Name
 						switch {
 						case dir == "config" && strings.HasPrefix(n, "Type"),
-							strings.HasPrefix(s.path, "provider/") && strings.HasSuffix(n, "Family"),
+							strings.HasPrefix(s.path, "internal/provider/") && strings.HasSuffix(n, "Family"),
 							s.path == "internal/backend/router.go" && strings.HasPrefix(n, "default"),
 							dir == "internal/modelmeta" && strings.HasSuffix(n, "Provider"):
 							add(vs.Values[i])

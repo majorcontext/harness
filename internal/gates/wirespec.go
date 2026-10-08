@@ -138,22 +138,22 @@ func ParserReads(fsys fs.FS) ([]ParserRead, error) {
 		return err
 	}
 	httpError := map[string][]string{"": {errorBodyKind}}
-	if err := add(caseParserReads(fsys, "anthropic", "provider/anthropic", "anthropic.go", "handle", map[string][]string{"error": {errorBodyKind}}, nil)); err != nil {
+	if err := add(caseParserReads(fsys, "anthropic", "internal/provider/anthropic", "anthropic.go", "handle", map[string][]string{"error": {errorBodyKind}}, nil)); err != nil {
 		return nil, err
 	}
-	if err := add(caseParserReads(fsys, "anthropic", "provider/anthropic", "anthropic.go", "apiError", httpError, nil)); err != nil {
+	if err := add(caseParserReads(fsys, "anthropic", "internal/provider/anthropic", "anthropic.go", "apiError", httpError, nil)); err != nil {
 		return nil, err
 	}
-	if err := add(caseParserReads(fsys, "responses", "provider/openai", "openai.go", "handle", nil, map[string]string{"head": "item"})); err != nil {
+	if err := add(caseParserReads(fsys, "responses", "internal/provider/openai", "openai.go", "handle", nil, map[string]string{"head": "item"})); err != nil {
 		return nil, err
 	}
-	if err := add(caseParserReads(fsys, "responses", "provider/openai", "openai.go", "apiError", httpError, nil)); err != nil {
+	if err := add(caseParserReads(fsys, "responses", "internal/provider/openai", "openai.go", "apiError", httpError, nil)); err != nil {
 		return nil, err
 	}
-	if err := add(caseParserReads(fsys, "chat", "provider/openaicompat", "openaicompat.go", "apiError", httpError, nil)); err != nil {
+	if err := add(caseParserReads(fsys, "chat", "internal/provider/openaicompat", "openaicompat.go", "apiError", httpError, nil)); err != nil {
 		return nil, err
 	}
-	chunk, err := TypeReads(fsys, "provider/openaicompat", "wireChunk")
+	chunk, err := TypeReads(fsys, "internal/provider/openaicompat", "wireChunk")
 	if err != nil {
 		return nil, err
 	}

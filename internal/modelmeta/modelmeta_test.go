@@ -56,10 +56,9 @@ func TestContextWindowCodex(t *testing.T) {
 	}
 }
 
-// TestContextWindowCodexUnknownModelStillMisses proves the codex case does
-// not fall back to a stand-in figure the way claudeCodeProvider does: a
-// codex ref naming a model absent from openaiContextWindows must still miss,
-// so the backend marks its default window as an estimate.
+// TestContextWindowCodexUnknownModelStillMisses proves a codex ref naming a
+// model absent from openaiContextWindows misses, so the backend marks its
+// default window as an estimate.
 func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
 	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
 		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
@@ -266,18 +265,6 @@ func TestStripBedrockAnthropicPrefix(t *testing.T) {
 	}
 }
 
-// The CLI resolves a bare alias to a model harness never learns, so a
-// claude-code ref must be recognized, so the backend gives it no
-// estimated window, while reporting no window.
-func TestContextWindowClaudeCodeReportsNoWindow(t *testing.T) {
-	for _, model := range []string{"opus", "sonnet", "haiku"} {
-		tokens, ok := ContextWindow(message.ModelRef{Provider: "claude-code", Model: model})
-		if !ok || tokens != 0 {
-			t.Errorf("ContextWindow(claude-code/%s) = %d, %v; want 0, true", model, tokens, ok)
-		}
-	}
-}
-
 // TestBedrockTableKeysAreNormalized keeps the generator's key rules aligned
 // with lookup: a key that normalization would rewrite can never match.
 func TestBedrockTableKeysAreNormalized(t *testing.T) {
@@ -291,16 +278,20 @@ func TestBedrockTableKeysAreNormalized(t *testing.T) {
 	}
 }
 
-func TestModelsAreKnownToContextWindow(t *testing.T) {
-	for _, provider := range []string{"codex", "claude-code"} {
-		models := Models(provider)
-		if len(models) == 0 {
-			t.Errorf("Models(%q) is empty", provider)
-		}
-		for _, m := range models {
-			if _, ok := ContextWindow(message.ModelRef{Provider: provider, Model: m}); !ok {
-				t.Errorf("Models(%q) lists %q, which ContextWindow does not know", provider, m)
-			}
+func TestClaudeCodeModelsAreListed(t *testing.T) {
+	if len(Models("claude-code")) == 0 {
+		t.Error(`Models("claude-code") is empty`)
+	}
+}
+
+func TestCodexModelsAreKnownToContextWindow(t *testing.T) {
+	models := Models("codex")
+	if len(models) == 0 {
+		t.Error(`Models("codex") is empty`)
+	}
+	for _, m := range models {
+		if _, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: m}); !ok {
+			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m)
 		}
 	}
 	for _, provider := range []string{"openai", "bedrock"} {

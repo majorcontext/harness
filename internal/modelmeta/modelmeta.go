@@ -17,10 +17,9 @@ import (
 )
 
 // ContextWindow reports ref's advertised context window in tokens. It returns
-// false for an unrecognized provider or model, and 0 with true for a
-// claude-code ref, which is recognized but has no knowable window: the CLI
-// resolves a bare alias itself and never reports its choice. A caller must
-// treat that 0 as "unknown", never as a usable size.
+// false for an unrecognized provider or model. A claude-code ref is
+// unrecognized: the CLI resolves a bare alias itself, so its backend owns the
+// window and reports it during a turn.
 //
 // ref.Model is normalized before lookup because the boxes platform
 // (majorcontext/bailey internal/api/bifrost_models.go) passes THREE-segment
@@ -76,9 +75,8 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// its "openai/*" counterpart does — openaiContextWindows already
 		// keys every codex model boxes uses (gpt-5.6-sol, gpt-5.6-terra,
 		// gpt-5.6-luna) — so this case looks the model up in that one
-		// table rather than duplicating it. Unlike claudeCodeProvider
-		// below, there is no stand-in fallback: a codex model absent from
-		// the table still misses and the model runs on the default window.
+		// table rather than duplicating it. A codex model absent from the
+		// table misses and the model runs on the default window.
 		tokens, ok = openaiContextWindows[model]
 	case "bifrost":
 		if tokens, ok = bifrostFireworksContextWindows[model]; ok {
@@ -89,13 +87,6 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
-	case claudeCodeProvider:
-		// The CLI resolves a bare alias itself, so no window here can be
-		// right. Report none rather than a plausible figure: a wrong
-		// denominator renders a session five times fuller than it is. A
-		// turn's "result" envelope carries the window the CLI chose, and
-		// applyClaudeCodeUsage reports that instead.
-		tokens, ok = 0, true
 	}
 	return tokens, ok
 }
@@ -107,8 +98,10 @@ var codexModels = []string{"gpt-6-astra", "gpt-6-luna", "gpt-6-sol"}
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves.
 var claudeCodeModels = []string{"fable", "haiku", "opus", "sonnet"}
 
-// Models returns, sorted, the models that a provider serves and that
-// ContextWindow knows. It returns nil for a provider with no curated list.
+// Models returns, sorted, the models that a provider serves. The codex models
+// are ones that ContextWindow knows. The claude-code aliases are names that the
+// CLI resolves, and the backend owns their window. It returns nil for a
+// provider with no curated list.
 func Models(provider string) []string {
 	switch provider {
 	case codexProvider:
@@ -126,7 +119,7 @@ const claudeCodeProvider = "claude-code"
 // codexProvider is the message.ModelRef.Provider value the boxes platform
 // mints for a ChatGPT Codex backend model (see
 // majorcontext/bailey internal/api/codex_models.go, e.g. "codex/gpt-5.6-sol")
-// — distinct from provider/openai.CodexFamily, which names an "openai"-type
+// — distinct from internal/provider/openai.CodexFamily, which names an "openai"-type
 // provider's Client.Family for the same backend's wire format, not a
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"

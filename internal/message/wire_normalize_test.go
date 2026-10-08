@@ -112,7 +112,7 @@ func TestNormalizeForWireRepairsToolResultPrecedingToolCall(t *testing.T) {
 // TestNormalizeForWireRepairsIntervalAssistantMessageSplit is gap 4 (the
 // fourth shape found by the oracle): a
 // real ToolResult is separated from its ToolCall by an intervening
-// assistant message. provider/anthropic/transcode.go merges adjacent
+// assistant message. internal/provider/anthropic/transcode.go merges adjacent
 // same-role messages, so the wire sees ONE assistant run spanning both
 // assistant messages — the run-merged wire is therefore already valid, and
 // NormalizeForWire must not disturb it (must not synthesize an erroneous
@@ -314,7 +314,7 @@ func TestNormalizeForWireDemotesUnanswerableToolResult(t *testing.T) {
 // for a demoteToolResult defect: it used to replace an unanswerable
 // ToolResult's image Blob with a bare "[N image attachment(s) omitted]"
 // note, discarding the actual bytes. On anthropic a tool_result Blob
-// transcodes to a real image block (provider/anthropic/transcode.go's
+// transcodes to a real image block (internal/provider/anthropic/transcode.go's
 // transcodeBlob), so the demote path used to lose real pixel data the
 // Blob. The fix must carry
 // the Blob PART itself into the demoted message, not merely describe it.
@@ -356,8 +356,8 @@ func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
 
 // TestNormalizeForWireDemotionNoteFlattensNonImageBlob is the regression
 // test for demoteToolResult keeping EVERY demoted Blob as a real Part,
-// including a non-image or data-less/URL-less one, which provider/openai
-// and provider/openaicompat hard-error building (see buildSafeBlob's own
+// including a non-image or data-less/URL-less one, which internal/provider/openai
+// and internal/provider/openaicompat hard-error building (see buildSafeBlob's own
 // doc comment, internal/message/wire_normalize.go) -- turning the orphan-tool_result
 // wedge this file exists to fix back into a total request-BUILD failure
 // for that shape. A build-safe image Blob must still survive byte-for-byte
@@ -417,7 +417,7 @@ func TestNormalizeForWireDemotionNoteFlattensNonImageBlob(t *testing.T) {
 // TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage is the
 // regression test pinning that a demoted result's build-safe Blob must
 // NEVER be left inside a RoleAssistant wire block.
-// provider/openaicompat's transcodeAssistantMessage rejects any
+// internal/provider/openaicompat's transcodeAssistantMessage rejects any
 // Blob outright, and even where a transcoder's own code has no such check
 // (anthropic's transcodeBlob is role-agnostic), the Anthropic Messages API
 // itself rejects an image block in an assistant turn. A ToolResult sitting
@@ -480,7 +480,7 @@ func TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage(t *testing
 // regression test pinning that the assistant-run blob hoist must not place
 // the hoisted RoleUser blob message immediately after the assistant run's
 // OWN last message -- which is BEFORE the following non-assistant run that
-// answers that assistant's own live tool_calls. On provider/openaicompat
+// answers that assistant's own live tool_calls. On internal/provider/openaicompat
 // (distinct "user" and "tool" wire roles, no folding), that interposed
 // "user" message breaks the tool_calls' required contiguity with their
 // "tool" answers -- the same wedge class the non-assistant branch's own
