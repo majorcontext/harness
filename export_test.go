@@ -19,7 +19,7 @@ func NewWithBackend(opts Options, b turn.Backend) (*Runtime, error) {
 		return nil, err
 	}
 	r.models.Close()
-	r.models = backend.NewRouter(map[string]turn.Backend{"fake": b}, false)
+	r.models = backend.NewRouter(map[string]turn.Backend{"fake": b})
 	return r, nil
 }
 

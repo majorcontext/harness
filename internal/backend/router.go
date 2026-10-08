@@ -34,13 +34,11 @@ var ErrUnavailable = errors.New("harness: model unavailable")
 // of its model's provider.
 type Router struct {
 	backends map[string]turn.Backend
-	// strict refuses a model whose backend reports no context window.
-	strict bool
 }
 
 // NewRouter returns a Router over backends, by provider name.
-func NewRouter(backends map[string]turn.Backend, strict bool) *Router {
-	return &Router{backends: backends, strict: strict}
+func NewRouter(backends map[string]turn.Backend) *Router {
+	return &Router{backends: backends}
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
@@ -65,7 +63,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			backends[name] = modelapi.New(c, cfg.ContextWindowTokens)
 		}
 	}
-	return NewRouter(backends, cfg.ContextWindowRequiredValue() && cfg.ContextWindowTokens == 0)
+	return NewRouter(backends)
 }
 
 // client returns the model API client of entry name, or nil for an entry
@@ -93,21 +91,9 @@ func client(name string, p config.Provider, transport func(provider string) http
 	return nil
 }
 
-// Check returns the backend of ref, or reports why no session can run it: no
-// provider serves it, or its backend reports no context window while the router is strict.
+// Check returns the backend of the provider of ref, or reports that no
+// configured provider serves it.
 func (m *Router) Check(ref message.ModelRef) (turn.Backend, error) {
-	be, err := m.backend(ref)
-	if err != nil {
-		return nil, err
-	}
-	if caps := be.Capabilities(ref.String()); m.strict && caps.ContextWindow == 0 && !caps.OwnsContext {
-		return nil, fmt.Errorf("%w: modelmeta does not know %s", ErrUnavailable, ref)
-	}
-	return be, nil
-}
-
-// backend returns the backend of the provider of ref.
-func (m *Router) backend(ref message.ModelRef) (turn.Backend, error) {
 	be, ok := m.backends[ref.Provider]
 	if !ok {
 		return nil, fmt.Errorf("%w: no provider %q is configured for %s", ErrUnavailable, ref.Provider, ref)
@@ -121,7 +107,7 @@ func (m *Router) lookup(model string) (turn.Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return m.backend(ref)
+	return m.Check(ref)
 }
 
 // Providers returns the names of the configured providers, sorted.

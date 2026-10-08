@@ -67,6 +67,7 @@ export interface Compacted {
 export interface Context {
   tokens: number;
   window: number;
+  window_estimated?: boolean;
 }
 
 export interface CreateSession {

@@ -212,11 +212,11 @@ func openView(ctx context.Context, st Store, id string, windows func(model strin
 	if err != nil {
 		return nil, err
 	}
-	window := 0
+	var caps turn.Capabilities
 	if windows != nil {
-		window = windows(s.Model()).ContextWindow
+		caps = windows(s.Model())
 	}
-	return &View{st: st, id: id, state: session.Describe(id, s, window), log: s}, nil
+	return &View{st: st, id: id, state: session.Describe(id, s, caps.ContextWindow, caps.WindowEstimated), log: s}, nil
 }
 
 // Resumable reports whether Open of the session has work to resume.

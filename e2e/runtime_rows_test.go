@@ -49,7 +49,8 @@ const (
 	specCursor        = "One per-session `seq` serves paging and SSE resume."
 	specEventsRoute   = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
 	specBoxGlobal     = "| Box-global `events.jsonl` | Delete |"
-	specModelCheck    = "An unknown model fails with `model_unavailable` at create and at a settings change."
+	specNoProvider    = "A model that no configured provider serves fails with `model_unavailable` at create and at a settings change; an unknown window never does."
+	specUnknownWindow = "else the default of 128000 tokens with `WindowEstimated`"
 	specThreshold     = "A setting at or below 0 is the default."
 	specOverflowFails = "When no turn can fold or the summary fails, the turn fails."
 	specCompactResult = "`Compact()` returns `protocol.Compacted`"
@@ -380,7 +381,7 @@ var runtimeRows = map[string]runtimeRow{
 	"session_info_reports_the_session":                                    reGolden(specPromptSwitch),
 	"session_info_reports_what_the_session_loaded":                        reGolden(specPromptSwitch),
 	"session_info_reports_the_plugin_and_its_system_segment":              reGolden(specPromptSwitch),
-	"session_settings_validation_and_persistence":                         reGolden(specModelCheck, specErrors, specUpdate, specView, specRestartOpens),
+	"session_settings_validation_and_persistence":                         reGolden(specNoProvider, specErrors, specUpdate, specView, specRestartOpens),
 	"sse_resume_after_kill":                                               reGolden(specCursor, specBoxGlobal, specRestartOpens),
 	"sse_resume_cursor":                                                   reGolden(specCursor, specBoxGlobal),
 	"list_sessions_in_creation_order":                                     reGolden(specView, specListOrder, specRestartOpens),
@@ -402,9 +403,8 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_service_tier_reaches_the_request":                      reGolden(specView, specItems, specUpdate),
 	"codex_settings_switch_to_another_provider_keeps_the_history": reGolden(specView, specItems, specUpdate),
 	"commands_menu_lists_builtin_and_prompt_commands":             reGolden(specCmdMenuRoutes, specCmdUnsupport),
-	"create_checks_the_model":                                     reGolden(specModelCheck, specErrors, specView),
+	"create_checks_the_provider":                                  reGolden(specNoProvider, specUnknownWindow, specErrors, specView),
 	"create_without_a_model_takes_the_default_model":              reGolden(specView),
-	"create_takes_an_unknown_model_when_no_window_is_required":    reGolden(specView),
 	"create_takes_an_unknown_model_with_a_configured_window":      reGolden(specView),
 	"goal_tool_actions_report_and_refuse":                         pendingOn(specGoalPrompt),
 	"goal_tool_adjust_after_set_runs_the_adjusted_condition":      pendingOn(specGoalOwnTurn, specGoalPrompt),

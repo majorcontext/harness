@@ -21,7 +21,7 @@ func TestContractModels(t *testing.T) {
 	}
 	runScenarios(t, []scenario{
 		{
-			name: "create_checks_the_model",
+			name: "create_checks_the_provider",
 			config: map[string]any{
 				"context_window_tokens": 0,
 				"model":                 "fast",
@@ -48,11 +48,6 @@ func TestContractModels(t *testing.T) {
 				"providers":             map[string]any{"anthropic": key(nil), "openrouter": key(nil)},
 			},
 			actions: creates("anthropic/no-such-model", "openrouter/vendor/model"),
-		},
-		{
-			name:    "create_takes_an_unknown_model_when_no_window_is_required",
-			config:  map[string]any{"context_window_tokens": 0, "context_window_required": false},
-			actions: creates("anthropic/no-such-model"),
 		},
 		{
 			name: "models_lists_the_configured_providers",

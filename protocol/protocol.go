@@ -73,9 +73,12 @@ type Usage struct {
 
 // Context is the context gauge of a session: the prompt size of the newest
 // model call that measured one, and the window of its model. Zero means unknown.
+// WindowEstimated marks a window that is the default for a model that nothing
+// states, so a client must not show it as exact.
 type Context struct {
-	Tokens int64 `json:"tokens"`
-	Window int64 `json:"window"`
+	Tokens          int64 `json:"tokens"`
+	Window          int64 `json:"window"`
+	WindowEstimated bool  `json:"window_estimated,omitempty"`
 }
 
 // LastTurn is the outcome of the newest turn that ended: the stop reason, typed

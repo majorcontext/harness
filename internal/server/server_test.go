@@ -170,7 +170,7 @@ func TestErrorsOverHTTP(t *testing.T) {
 		{"GET", base + "/s2", "", 404, protocol.CodeSessionNotFound},
 		{"GET", strings.TrimSuffix(base, "/sessions") + "/nope", "", 404, protocol.CodeInvalidRequest},
 		{"PUT", s1, "", 405, protocol.CodeInvalidRequest},
-		{"PATCH", s1, `{"model":"codex/no-such-model"}`, 409, protocol.CodeModelUnavailable},
+		{"PATCH", s1, `{"model":"nope/no-such-model"}`, 409, protocol.CodeModelUnavailable},
 		{"POST", s1 + "/inputs", `{"id":"a","parts":[{"type":"text","text":"other"}]}`, 409, protocol.CodeInputConflict},
 		{"POST", s1 + "/interrupt", `{"turn_id":"turn_x"}`, 409, protocol.CodeTurnMismatch},
 		{"POST", s1 + "/inputs", `{"id":"b","parts":[{"type":"text","text":"` + strings.Repeat("x", 33<<20) + `"}]}`, 413, protocol.CodePayloadTooLarge},

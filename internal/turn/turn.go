@@ -46,6 +46,8 @@ type Capabilities struct {
 	// Steering is a backend that owns the loop and calls Sink.Steer.
 	Steering      bool
 	ContextWindow int
+	// WindowEstimated marks ContextWindow as the default for an unknown model.
+	WindowEstimated bool
 	// Tools names the built-in tools of a backend that owns the loop. A
 	// session of that backend may allow only these and the embedder tools.
 	Tools []string

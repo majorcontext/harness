@@ -47,9 +47,6 @@ func mergeScalars(out, over *Config) {
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
 	}
-	if over.ContextWindowRequired != nil {
-		out.ContextWindowRequired = over.ContextWindowRequired
-	}
 	if over.PromptRetries != nil {
 		out.PromptRetries = over.PromptRetries
 	}

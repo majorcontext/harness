@@ -246,6 +246,7 @@ type CommandRecorded struct {
 type ContextMeasured struct {
 	Tokens            int64              `json:"tokens"`
 	Window            int64              `json:"window"`
+	WindowEstimated   bool               `json:"window_estimated,omitempty"`
 	Source            string             `json:"source"`
 	Usage             Usage              `json:"usage,omitzero"`
 	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage,omitempty"`

@@ -54,11 +54,11 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
 func (s *State) applyMeasured(e ContextMeasured) {
 	s.usage = s.usage.Add(e.Usage)
 	if e.Tokens > 0 || e.Source != "" {
-		window := e.Window
+		window, estimated := e.Window, e.WindowEstimated
 		if window == 0 && e.Source != "" && e.Source == s.context.Source {
-			window = s.context.Window
+			window, estimated = s.context.Window, s.context.WindowEstimated
 		}
-		s.context = ContextMeasured{Tokens: e.Tokens, Window: window, Source: e.Source}
+		s.context = ContextMeasured{Tokens: e.Tokens, Window: window, WindowEstimated: estimated, Source: e.Source}
 	}
 	if e.SubscriptionUsage != nil {
 		s.subscribed = e.SubscriptionUsage

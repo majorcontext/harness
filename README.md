@@ -120,14 +120,15 @@ field.
 Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
 `openai`, `openrouter`) or a key from `providers`.
 
-The CLI and server refuse to run a model that is missing from the built-in
-context-window catalog, because automatic compaction needs its size. That
-includes every OpenRouter and local model: set `context_window_tokens`, which
-applies to every session. To run such a model without a window, set
-`context_window_required: false`; automatic compaction is then off.
+Automatic compaction needs the context window of the model. A model that is
+missing from the built-in context-window catalog, such as an OpenRouter or
+local model, runs with a window of 128000 tokens. Harness logs one warning for
+the model, and the session gauge sets `window_estimated`. When the provider
+rejects a request as too long, Harness compacts and tries again; it does not
+learn the window from the error. To name the window yourself, set
+`context_window_tokens`, which applies to every session and always wins.
 `claude-code` models are the exception: the Claude Code CLI reports its own
-window after each turn, so do not set one for them. The library applies the same rule through `context_window_required` of the
-`config.Config` that you pass to `harness.New`.
+window after each turn, so do not set one for them.
 
 ### OpenAI-compatible endpoints
 

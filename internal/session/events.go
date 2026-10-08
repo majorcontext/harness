@@ -20,8 +20,10 @@ func contextWindow(model int, c eventlog.ContextMeasured) int64 {
 }
 
 // Describe returns the protocol view of state. window is the context window
-// of the session model, or 0 when it is not known.
-func Describe(id string, s *eventlog.State, window int) protocol.Session {
+// of the session model, or 0 when it is not known, and estimated says that
+// window is the default for a model that nothing states. With no window, the
+// newest reading supplies the window and its estimated flag.
+func Describe(id string, s *eventlog.State, window int, estimated bool) protocol.Session {
 	sum, set, u := s.Summary(), s.Settings(), s.Usage()
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, Model: sum.Model,
@@ -39,7 +41,10 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	if c.Tokens == 0 && c.Source == "" {
 		c = eventlog.ContextMeasured{}
 	}
-	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c)}
+	if window == 0 {
+		estimated = c.WindowEstimated
+	}
+	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c), WindowEstimated: estimated && contextWindow(window, c) > 0}
 	if last := s.LastEnded(); last.TurnID != "" {
 		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: string(last.StopReason), Cause: string(last.Cause), Error: last.Error}
 	}

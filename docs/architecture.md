@@ -216,7 +216,7 @@ Free to change.
 
 The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, and only `internal/backend` builds a provider wire.
 
-Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; read only by the model API backend, which resolves every window through `Capabilities`), `mcp`, `plugin`, `skill`, `command`, and `process`, as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
+Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it), `mcp`, `plugin`, `skill`, `command`, and `process`, as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
@@ -299,7 +299,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `child.spawned` | `child_id`, `agent?` |
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
 | `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
-| `context.measured` | `tokens`, `window`, `source`, `usage?`, `subscription_usage?`, `cost_usd?` |
+| `context.measured` | `tokens`, `window`, `source`, `window_estimated?`, `usage?`, `subscription_usage?`, `cost_usd?` |
 | `backend.state` | `backend`, `head`, `chunk?`, `restart?`, `entries?`, `sum?`; the older form is `backend` and `blob_key` alone |
 | `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
 
@@ -359,7 +359,7 @@ Lifecycle:
 - `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
 - When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
 
-Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped. The gauge window is the window of the session model, or the window of the newest reading when the model reports none; `OpenView` has no backend and reads the window of the newest reading from the log; the runtime reads of a session that it does not run take the window of the session model from the backend, as a running session does. `Session.View`, `Runtime.List`, and a read of a session that the runtime does not run also fill `Plugins`, the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin: the plugin host owns that state, and the log does not hold it. The `View` also holds the profile of a child session and its unsettled children. A read of the whole `State`, such as the history for a plugin or the usage of a child, goes to the actor through `Actor.Read`, which runs a function on the actor goroutine and returns only when that function is not running; the runtime replays a log only for a session that it does not run.
+Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped. The gauge window is the window of the session model, or the window of the newest reading when the model reports none; the reading (`context.measured`) carries `window_estimated` with its window. `OpenView` has no backend and reads the window and the flag of the newest reading from the log; the runtime reads of a session that it does not run take the window of the session model from the backend, as a running session does. `Session.View`, `Runtime.List`, and a read of a session that the runtime does not run also fill `Plugins`, the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin: the plugin host owns that state, and the log does not hold it. The `View` also holds the profile of a child session and its unsettled children. A read of the whole `State`, such as the history for a plugin or the usage of a child, goes to the actor through `Actor.Read`, which runs a function on the actor goroutine and returns only when that function is not running; the runtime replays a log only for a session that it does not run.
 
 ### Ownership
 
@@ -650,12 +650,13 @@ type Backend interface {
 }
 
 type Capabilities struct {
-	OwnsLoop      bool     // backend runs tools and multi-step turns
-	OwnsContext   bool     // backend compacts its own context
-	OwnsMCP       bool     // backend connects Config.MCPServers itself on an unrestricted turn
-	Steering      bool     // a backend with OwnsLoop takes steer input mid-turn through Sink.Steer
-	ContextWindow int      // 0 means the backend reports it
-	Tools         []string // built-in tools of a delegated backend
+	OwnsLoop        bool     // backend runs tools and multi-step turns
+	OwnsContext     bool     // backend compacts its own context
+	OwnsMCP         bool     // backend connects Config.MCPServers itself on an unrestricted turn
+	Steering        bool     // a backend with OwnsLoop takes steer input mid-turn through Sink.Steer
+	ContextWindow   int      // 0 means the backend reports it
+	WindowEstimated bool     // ContextWindow is the default for a model that nothing states
+	Tools           []string // built-in tools of a delegated backend
 }
 
 type Snapshot struct {
@@ -702,7 +703,8 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 - The stall watchdog ends a model call that reports nothing for `stream_idle_timeout_s` (default 300, as Codex). A delta, an item, and `Sink.Alive` each reset it. `modelapi` calls `Alive` for each provider event with no delta, such as a keep-alive or a tool argument that still streams. The stall is retryable. A compaction summary has the same watchdog and no retry. A negative value turns it off. A backend with `OwnsLoop` has no watchdog: its own tools can run silently for a long time.
 - `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds, in `<harness-engine-context>` tags, so the model reads it as engine text. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
 - Private backend state is a chain of `backend.state` records (Andy, 2026-10-06, Sync finality). Each record carries the head, the small fields that each save replaces. The entries, the Claude Code transcript mirror, are appended as chunk blobs, never one growing blob, so no `SyncBatch` nears 32 MiB. A save writes only the entries that the chain lacks, as chunks of whole entries of at most 4 MiB (an entry over 4 MiB is a chunk of its own), and each chunk has its own record. A chunk key holds the backend, the fence of the owner, and an index that no chunk of that owner used before, so a fenced owner never overwrites the chunk of another owner and no key is written twice. A record says whether its chunk continues the current chain or starts a new one (`restart`). A save whose entries do not extend the chain, such as the entries of a new CLI session, starts a new chain. `Apply` keeps the chunk keys of the current chain, and `Sink.State` reads them in order. A record of the older form, with `blob_key` and no chain fields, reads as a chain of one blob that holds the head line and the entries; the next save starts a new chain. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
-- Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
+- The backend `Capabilities(model)` is the one place that resolves a context window: the configured `context_window_tokens`, else the `modelmeta` table, else the default of 128000 tokens with `WindowEstimated`. The turn, the compaction check, the model list, and the session gauge all ask it; nothing else reads `modelmeta` for a window, and `modelmeta` holds no default. The backend logs one WARN per process and model that runs on the default (Andy, 2026-10-07; modeled on pi and fx, which default a custom model to 128000 tokens and compact on a provider overflow error). A model that no configured provider serves fails with `model_unavailable` at create and at a settings change; an unknown window never does.
+- A configured `context_window_tokens` always wins. The runtime does not learn a window from an overflow error: an overflow compacts and calls the model again, as the Compaction rules say.
 - `Telemetry` carries the usage of one model call, its context reading, the subscription snapshot that the provider reported with it, and its cost.
 
 ### Model API backend

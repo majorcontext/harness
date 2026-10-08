@@ -7,7 +7,6 @@ const DefaultModel = "anthropic/claude-fable-5"
 func Defaults() Config {
 	return Config{
 		Model:                   DefaultModel,
-		ContextWindowRequired:   new(true),
 		PromptRetries:           new(2),
 		MaxTokensContinuations:  new(3),
 		StreamIdleTimeoutS:      300,
@@ -55,11 +54,6 @@ func applyProviderDefaults(providers map[string]Provider) {
 // PromptRetriesValue returns prompt_retries, or its default.
 func (c *Config) PromptRetriesValue() int {
 	return valueOr(c, func(c *Config) *int { return c.PromptRetries })
-}
-
-// ContextWindowRequiredValue returns context_window_required, or its default.
-func (c *Config) ContextWindowRequiredValue() bool {
-	return valueOr(c, func(c *Config) *bool { return c.ContextWindowRequired })
 }
 
 // MaxTokensContinuationsValue returns max_tokens_continuations, or its default.

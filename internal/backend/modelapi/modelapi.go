@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
+	"sync"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
@@ -18,6 +20,14 @@ import (
 
 // maxTokens caps a response that sets no cap. The Anthropic API rejects a request without a cap.
 const maxTokens = 8192
+
+// defaultContextWindow is the window, in tokens, of a model that has no
+// configured window and no entry in the modelmeta table.
+const defaultContextWindow = 128000
+
+// warned holds the models that ran on the default window and have logged it,
+// once per process.
+var warned sync.Map
 
 // Backend is a turn.Backend over one provider client.
 type Backend struct {
@@ -32,7 +42,9 @@ func New(p provider.Provider, window int) *Backend {
 	return &Backend{client: p, window: window}
 }
 
-// Capabilities reports the context window of model when it is known or overridden.
+// Capabilities reports the context window of model: the configured window,
+// else the modelmeta window, else defaultContextWindow marked as estimated.
+// It is the only place that resolves a window.
 func (b *Backend) Capabilities(model string) turn.Capabilities {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
@@ -41,8 +53,14 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 	if b.window > 0 {
 		return turn.Capabilities{ContextWindow: b.window}
 	}
-	window, _ := modelmeta.ContextWindow(ref)
-	return turn.Capabilities{ContextWindow: window}
+	window, ok := modelmeta.ContextWindow(ref)
+	if ok {
+		return turn.Capabilities{ContextWindow: window}
+	}
+	if _, seen := warned.LoadOrStore(model, true); !seen {
+		slog.Warn("harness: the model has no known context window, so it runs on the default", "model", model, "window", defaultContextWindow)
+	}
+	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true}
 }
 
 // Run makes one model call on the history of req and reports its assistant item.
@@ -114,7 +132,8 @@ func (b *Backend) telemetry(model string, u provider.Usage, sub *message.Subscri
 		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
 	t := turn.Telemetry{Usage: usage, SubscriptionUsage: subscription(sub)}
 	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
-		t.Context = eventlog.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(b.Capabilities(model).ContextWindow)}
+		caps := b.Capabilities(model)
+		t.Context = eventlog.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(caps.ContextWindow), WindowEstimated: caps.WindowEstimated}
 	}
 	return t
 }
