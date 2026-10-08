@@ -42,7 +42,12 @@ jobs:
           go generate ./protocol
           git diff --exit-code -- protocol/
 
-      - run: go test -race -skip '^TestRepository$' ./...
+      - name: Unit tests
+        # -count=1 keeps a cached e2e result from skipping the coverage table.
+        # Only the e2e package reads HARNESS_E2E_COVER.
+        env:
+          HARNESS_E2E_COVER: '1'
+        run: go test -race -count=1 -skip '^TestRepository$' ./...
 
       - run: go vet ./...
 
@@ -55,12 +60,6 @@ jobs:
         with:
           version: v2.14
           only-new-issues: true
-
-      - name: Contract coverage
-        # Reports what the contract suite reaches in the real binary. It never
-        # gates; the table goes to the job summary.
-        continue-on-error: true
-        run: HARNESS_E2E_COVER=1 go test -race -count=1 ./e2e/ -run TestContract
 
       - name: Runtime contract
         # Runs the contract rows on harness.Runtime in process by their
