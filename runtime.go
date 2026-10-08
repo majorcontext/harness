@@ -483,7 +483,7 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 		default:
 		}
 	}
-	v, err := OpenView(ctx, r.store, id)
+	v, err := openView(ctx, r.store, id, r.models.Capabilities)
 	if err != nil {
 		return protocol.Session{}, err
 	}

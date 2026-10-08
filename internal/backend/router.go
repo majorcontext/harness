@@ -34,7 +34,7 @@ var ErrUnavailable = errors.New("harness: model unavailable")
 // of its model's provider.
 type Router struct {
 	backends map[string]turn.Backend
-	// strict refuses a model that modelmeta does not know.
+	// strict refuses a model whose backend reports no context window.
 	strict bool
 }
 
@@ -94,13 +94,13 @@ func client(name string, p config.Provider, transport func(provider string) http
 }
 
 // Check returns the backend of ref, or reports why no session can run it: no
-// provider serves it, or modelmeta does not know it while the router is strict.
+// provider serves it, or its backend reports no context window while the router is strict.
 func (m *Router) Check(ref message.ModelRef) (turn.Backend, error) {
 	be, err := m.backend(ref)
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := modelmeta.ContextWindow(ref); !ok && m.strict {
+	if caps := be.Capabilities(ref.String()); m.strict && caps.ContextWindow == 0 && !caps.OwnsContext {
 		return nil, fmt.Errorf("%w: modelmeta does not know %s", ErrUnavailable, ref)
 	}
 	return be, nil

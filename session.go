@@ -13,8 +13,8 @@ import (
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
-	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -200,14 +200,21 @@ type View struct {
 }
 
 // OpenView reads a session from st without owning it: no Acquire, no appends.
+// It has no backend, so the gauge window is the window of the newest reading.
 func OpenView(ctx context.Context, st Store, id string) (*View, error) {
+	return openView(ctx, st, id, nil)
+}
+
+// openView is OpenView with a resolver of the window of the session model,
+// which a runtime supplies from its backends.
+func openView(ctx context.Context, st Store, id string, windows func(model string) turn.Capabilities) (*View, error) {
 	s, err := session.Load(ctx, id, storeLog{st, id})
 	if err != nil {
 		return nil, err
 	}
 	window := 0
-	if ref, err := message.ParseModelRef(s.Model()); err == nil {
-		window, _ = modelmeta.ContextWindow(ref)
+	if windows != nil {
+		window = windows(s.Model()).ContextWindow
 	}
 	return &View{st: st, id: id, state: session.Describe(id, s, window), log: s}, nil
 }
