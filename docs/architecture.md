@@ -30,7 +30,7 @@ Goals:
 
 - One owner and one source of truth for each piece of state.
 - Every public interface is designed from what its consumer needs. Nothing is kept because it exists.
-- A public Go API small enough to read in one sitting: `harness`, `harness/config`, `harness/protocol`, `harness/storetest`, `harness/harnesstest`. The wire adapters under `provider/` stay importable but are not part of that API: only `internal/backend` builds them, and no embedder imports them.
+- A public Go API small enough to read in one sitting: `harness`, `harness/config`, `harness/protocol`, `harness/storetest`, `harness/harnesstest`.
 - One HTTP contract, built from the same Go types as the Go API.
 - Pluggable storage and ownership, so a session survives process loss.
 - Delivery as PRs on `main`. Each PR ships alone.
