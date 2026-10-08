@@ -275,6 +275,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_resume_survives_restart":                                   sameAsServe(),
 	"claudecode_subagent_frames_keep_parent":                               sameAsServe(),
 	"claudecode_thinking_block_is_reasoning":                               reGolden(specExternal, specView, specClaudeGauge),
+	"claudecode_window_comes_from_the_cli_not_the_model_table":             sameAsServe(),
 	"claudecode_turn_text_and_tool":                                        reGolden(specView, specClaudeGauge),
 	"codex_http_mcp_tool_schema_is_sanitized":                              reGolden(specItems),
 	"codex_http_reasoning_replays_on_tool_round_trip":                      reGolden(specItems),

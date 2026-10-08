@@ -200,6 +200,14 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 		goalRow("claudecode_credential_refusal_in_errors_fails_a_goal", "credential_error"),
 		row("claudecode_rate_limit_event_reaches_subscription_usage", "rate_limit_event", session),
 		row("claudecode_context_window_from_model_usage", "per_call_usage", session),
+		{
+			name:   "claudecode_window_comes_from_the_cli_not_the_model_table",
+			driver: claudeLaneDriver("per_call_usage"),
+			actions: []action{
+				create{as: "a"}, session,
+				submit{as: "a", text: "run it"}, waitIdle{as: "a"}, session,
+			},
+		},
 	})
 }
 
