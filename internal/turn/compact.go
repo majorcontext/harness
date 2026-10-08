@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // SummaryBanner leads each compaction summary, so that no reader takes the
@@ -90,6 +91,7 @@ func (*answer) Steer() ([]eventlog.Message, error) { return nil, nil }
 func (*answer) State(string) (Snapshot, error)     { return Snapshot{}, nil }
 func (*answer) SaveState(string, Snapshot) error   { return nil }
 func (*answer) Compacted(string) error             { return nil }
+func (*answer) Status(protocol.StatusFrame)        {}
 
 func (*answer) Ask(string, string, json.RawMessage) error {
 	return errors.New("turn: a model call with no tools opens no request")

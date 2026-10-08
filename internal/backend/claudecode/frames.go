@@ -26,6 +26,8 @@ type envelope struct {
 	TotalCostUSD    float64               `json:"total_cost_usd,omitempty"`
 	ParentToolUseID string                `json:"parent_tool_use_id,omitempty"`
 	CompactMetadata *compactMetadata      `json:"compact_metadata,omitempty"`
+	Status          string                `json:"status,omitempty"`
+	CompactResult   string                `json:"compact_result,omitempty"`
 	Model           string                `json:"model,omitempty"`
 	ModelUsage      map[string]modelUsage `json:"modelUsage,omitempty"`
 	Tools           *[]string             `json:"tools,omitempty"`

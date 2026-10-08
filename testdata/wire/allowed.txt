@@ -6,6 +6,8 @@
 parser responses response.failed|error * the Responses failed frame comes mid-stream, and no request provokes one on demand
 parser claudecode * local_command the CLI prints a local command only for a slash command that runs in the terminal; headless runs refuse them
 parser claudecode * compact_metadata+ the CLI compacts only after a long conversation, and headless /compact is refused
+parser claudecode * status the CLI prints a status frame only while it compacts, and compaction follows a long conversation
+parser claudecode * compact_result the CLI prints a compact result only when a compaction ends, and compaction follows a long conversation
 parser claudecode * rate_limit_info.overageResetsAt the CLI sends it only while overage is active
 parser anthropic content_block_start content_block.data only a redacted thinking block carries data, and no request provokes one
 parser chat chunk error+ OpenAI-compatible gateways such as OpenRouter send a mid-stream error object; OpenAI itself does not
