@@ -110,11 +110,10 @@ func TestContractSessionGoalEvaluation(t *testing.T) {
 	}
 	runScenarios(t, []scenario{
 		{
-			name: "interrupt_during_goal_evaluation_keeps_the_goal",
+			name: "interrupt_during_a_goal_evaluation_ends_the_goal",
 			model: []harnesstest.Step{
 				agentStep("work", "done", true),
 				held("judge", isEvaluator),
-				evaluatorStep("again", "MET: ok", true),
 			},
 			actions: []action{
 				create{as: "a"},
@@ -124,6 +123,26 @@ func TestContractSessionGoalEvaluation(t *testing.T) {
 				interrupt{as: "a"},
 				release{step: "judge"},
 				submit{as: "a", text: "next"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+		{
+			name:   "interrupt_during_a_compaction_between_goal_turns_ends_the_goal",
+			config: overThreshold,
+			model: []harnesstest.Step{
+				usedText("one", 5),
+				{Name: "held", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist", Block: true}},
+				{Name: "goal", Match: harnesstest.LastUserText("say done"), Reply: harnesstest.Reply{Text: "working", Usage: harnesstest.Usage{Input: 900, Output: 1}}},
+				evaluatorStep("judge", "NOT MET: more", true),
+				agentStep("rest", "ok", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 3},
+				awaitRequests{n: 4},
+				interrupt{as: "a"},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
 			},

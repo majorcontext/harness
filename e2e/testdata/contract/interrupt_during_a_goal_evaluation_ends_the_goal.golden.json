@@ -101,92 +101,6 @@
           ]
         }
       ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "say done"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "done"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "next"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "done"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "say done"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": true,
-      "model": "eval-model",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ndone\n\nUSER:\nnext\n\nASSISTANT:\ndone\n\nUSER:\nsay done\n\nASSISTANT:\ndone"
-            }
-          ]
-        }
-      ]
     }
   ],
   "sessions": {
@@ -230,26 +144,6 @@
             "text": "done"
           }
         ]
-      },
-      {
-        "id": "msg#5",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "say done"
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "done"
-          }
-        ]
       }
     ]
   },
@@ -257,47 +151,44 @@
     "compact.a": {
       "status": 409,
       "body": {
-        "error": "session is busy with another prompt"
+        "error": {
+          "code": "session_busy",
+          "details": {},
+          "message": "harness: session busy"
+        }
       }
     },
     "get_session.a": {
       "status": 200,
       "body": {
         "context": {
-          "used_tokens": 5,
-          "window_tokens": 1000000
+          "tokens": 5,
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "goal": {
-          "achieved": true,
-          "active": false,
           "condition": "say done",
-          "last_reason": "ok",
-          "turns": 1
+          "max_turns": 3,
+          "reason": "interrupted",
+          "state": "cleared",
+          "turns": 0
         },
+        "head_seq": 14,
         "id": "ses:a",
-        "last_activity_at": "\u003ctime\u003e",
         "last_turn": {
-          "outcome": "completed"
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
         },
-        "lineage": {
-          "children": [],
-          "status": "idle"
-        },
-        "messages": 6,
         "model": "anthropic/claude-fable-5",
-        "plugins": [],
-        "queued": 0,
-        "state": "idle",
+        "origin": "",
         "status": "idle",
         "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 15,
-          "last_input_tokens": 5,
-          "messages": 6,
-          "output_tokens": 9
-        },
-        "workdir": "\u003cworkdir\u003e"
+          "input_tokens": 10,
+          "output_tokens": 6
+        }
       }
     }
   }

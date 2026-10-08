@@ -402,7 +402,7 @@ func (a *Actor) cancel(ctx context.Context, why error) error {
 
 func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error)) {
 	r := a.run
-	if r != nil && r.kind == kindJudge {
+	if r != nil && r.kind == kindJudge && !a.goalStopped(why) {
 		r = nil
 	}
 	switch {
@@ -411,7 +411,7 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	case r == nil || turnID != "" && turnID != r.id:
 		reply(struct{}{}, ErrTurnMismatch)
 	default:
-		if err := a.endGoal(r, why); err != nil {
+		if err := a.endGoal(why); err != nil {
 			reply(struct{}{}, err)
 			return
 		}
@@ -420,10 +420,16 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	}
 }
 
-// endGoal clears an active goal when a user stop ends its turn r, and
-// withdraws the queued goal inputs, so no goal turn starts after the stop.
-func (a *Actor) endGoal(r *running, why error) error {
-	if g, _ := a.state.Goal(); !errors.Is(why, errStopTurn) || r.kind != kindTurn || g.State != eventlog.GoalActive {
+// goalStopped reports whether a stop for why ends an active goal.
+func (a *Actor) goalStopped(why error) bool {
+	g, _ := a.state.Goal()
+	return errors.Is(why, errStopTurn) && g.State == eventlog.GoalActive
+}
+
+// endGoal clears an active goal when a user stop ends the run of the actor,
+// and withdraws the queued goal inputs, so no goal turn starts after the stop.
+func (a *Actor) endGoal(why error) error {
+	if !a.goalStopped(why) {
 		return nil
 	}
 	return a.append(append(a.withdrawGoal(), eventlog.GoalChanged{State: eventlog.GoalCleared, Reason: goalInterrupted})...)

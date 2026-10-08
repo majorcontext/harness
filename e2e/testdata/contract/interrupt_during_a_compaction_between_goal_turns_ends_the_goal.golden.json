@@ -24,27 +24,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "say done"
+              "text": "one"
             },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": true,
-      "model": "eval-model",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ndone"
             }
           ]
         }
@@ -74,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "say done"
+              "text": "one"
             },
             {
               "kind": "text",
@@ -87,7 +71,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "done"
+              "text": "re one"
             }
           ]
         },
@@ -96,7 +80,57 @@
           "parts": [
             {
               "kind": "text",
-              "text": "next"
+              "text": "say done"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\none\n\nASSISTANT:\nre one\n\nUSER:\nsay done\n\nASSISTANT:\nworking"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re one"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
             }
           ]
         }
@@ -111,7 +145,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "say done"
+            "text": "one"
           }
         ]
       },
@@ -121,7 +155,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "done"
+            "text": "re one"
           }
         ]
       },
@@ -131,7 +165,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "next"
+            "text": "say done"
           }
         ]
       },
@@ -141,39 +175,29 @@
         "parts": [
           {
             "type": "text",
-            "text": "done"
+            "text": "working"
           }
         ]
       }
     ]
   },
   "calls": {
-    "compact.a": {
-      "status": 409,
-      "body": {
-        "error": {
-          "code": "session_busy",
-          "details": {},
-          "message": "harness: session busy"
-        }
-      }
-    },
     "get_session.a": {
       "status": 200,
       "body": {
         "context": {
-          "tokens": 5,
-          "window": 1000000
+          "tokens": 900,
+          "window": 1000
         },
         "created_at": "\u003ctime\u003e",
         "goal": {
           "condition": "say done",
           "max_turns": 3,
-          "reason": "ok",
-          "state": "achieved",
+          "reason": "interrupted",
+          "state": "cleared",
           "turns": 1
         },
-        "head_seq": 15,
+        "head_seq": 17,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -186,8 +210,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 905,
+          "output_tokens": 2
         }
       }
     }
