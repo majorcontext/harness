@@ -3,6 +3,7 @@ package eventlog
 import (
 	"maps"
 	"slices"
+	"time"
 )
 
 func (s *State) runningTurn(id string) error {
@@ -170,7 +171,7 @@ func (s *State) applyRequestOpened(e RequestOpened) error {
 	return nil
 }
 
-func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
+func (s *State) applyRequestResolved(e RequestResolved, seq uint64, at time.Time) error {
 	i := s.openRequest(e.RequestID)
 	if i < 0 {
 		return illegal("request %s is not open", e.RequestID)
@@ -183,7 +184,7 @@ func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
 		if e.Resolution == ResolutionAnswered {
 			calls[k].answered = true
 		} else {
-			s.say(seq, "msg_resolved_"+calls[k].CallID, dismissal(calls[k]))
+			s.say(seq, at, "msg_resolved_"+calls[k].CallID, dismissal(calls[k]))
 			calls = slices.Delete(calls, k, k+1)
 		}
 	}

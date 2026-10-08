@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 type provenance struct{ source, id, label string }
 
 type entry struct {
 	seq uint64
+	// at is the time of the record that completed the message: the newest
+	// input of a message of promoted inputs.
+	at time.Time
 	// id is the ID that a reader sees for the message.
 	id  string
 	msg Message
@@ -156,7 +160,7 @@ func (s *State) remember(env Envelope) {
 	case TurnStarted:
 		for _, id := range e.InputIDs {
 			in := s.inputs[id].event
-			s.say(env.Seq, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(in.Parts)})
+			s.say(env.Seq, env.Time, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(in.Parts)})
 			s.history[len(s.history)-1].from = provenance{in.Source, in.SourceID, in.SourceLabel}
 		}
 		s.settle(env.Seq)
@@ -169,14 +173,14 @@ func (s *State) remember(env Envelope) {
 		}
 		if n := len(s.history); n > 0 && s.history[n-1].promoted != nil && s.history[n-1].pinned == pin && s.history[n-1].last+1 == env.Seq {
 			h := s.history[n-1]
-			h.promoted, h.last = append(slices.Clip(h.promoted), in), env.Seq
+			h.promoted, h.last, h.at = append(slices.Clip(h.promoted), in), env.Seq, env.Time
 			h.msg = build(partsOf(h.promoted))
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, id: "msg_" + e.InputID, msg: build([][]Part{in.Parts}), by: s.turnBy, turn: s.turnN, promoted: []InputAdmitted{in}, last: env.Seq, pinned: pin})
+		s.history = append(s.history, entry{seq: env.Seq, at: env.Time, id: "msg_" + e.InputID, msg: build([][]Part{in.Parts}), by: s.turnBy, turn: s.turnN, promoted: []InputAdmitted{in}, last: env.Seq, pinned: pin})
 	case ItemCompleted:
-		s.say(env.Seq, "msg_"+e.ItemID, e.Message)
+		s.say(env.Seq, env.Time, "msg_"+e.ItemID, e.Message)
 	case CompactionApplied:
 		i := slices.IndexFunc(s.history, func(h entry) bool { return h.seq > e.ToSeq })
 		if i < 0 {
@@ -223,8 +227,8 @@ func (s *State) settle(seq uint64) {
 	s.stranded = nil
 }
 
-func (s *State) say(seq uint64, id string, m Message) {
-	s.history = append(s.history, entry{seq: seq, id: id, msg: m, by: s.turnBy, turn: s.turnN})
+func (s *State) say(seq uint64, at time.Time, id string, m Message) {
+	s.history = append(s.history, entry{seq: seq, at: at, id: id, msg: m, by: s.turnBy, turn: s.turnN})
 }
 
 // ProviderOf returns the provider of a model reference.

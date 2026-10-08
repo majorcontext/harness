@@ -160,6 +160,7 @@ export interface Message {
   id: string;
   role: string;
   parts: MessagePart[];
+  created_at?: string;
   parent_call_id?: string;
   source?: string;
   source_id?: string;
