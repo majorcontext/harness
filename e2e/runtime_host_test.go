@@ -174,7 +174,11 @@ func expectPendingFailure(t *testing.T, row runtimeRow) {
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.v", "-test.count=1", "-test.run", strings.Join(parts, "/"))
 	cmd.Env = append(os.Environ(), pendingBinEnv+"="+harnessBin)
 	out, _ := cmd.CombinedOutput()
+	if bytes.Contains(out, []byte("response breaks the served contract")) {
+		t.Errorf("pending row %s breaks the served contract:\n%s", row, tail(out, 4096))
+	}
 	switch {
+	case t.Failed():
 	case bytes.Contains(out, []byte("--- PASS: "+t.Name()+" (")):
 		t.Errorf("pending row now matches its engine golden; mark it same (was %s)", row)
 	case bytes.Contains(out, []byte("--- FAIL: "+t.Name()+" (")):

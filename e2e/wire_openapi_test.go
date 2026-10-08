@@ -96,7 +96,7 @@ var specErrorStatuses = sync.OnceValues(func() (map[string]int, error) {
 	return out, nil
 })
 
-func checkErrorStatus(status int, body []byte) []string {
+func checkErrorStatus(status int, routed bool, body []byte) []string {
 	table, err := specErrorStatuses()
 	if err != nil {
 		return []string{err.Error()}
@@ -113,7 +113,7 @@ func checkErrorStatus(status int, body []byte) []string {
 	switch {
 	case !ok:
 		return []string{fmt.Sprintf("error code %q is not in the Errors table of the spec", e.Error.Code)}
-	case e.Error.Code == "invalid_request" && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed):
+	case !routed && e.Error.Code == "invalid_request" && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed):
 		return nil
 	case want != status:
 		return []string{fmt.Sprintf("error code %q answers %d, and the Errors table of the spec says %d", e.Error.Code, status, want)}
@@ -175,7 +175,14 @@ func (d *specDoc) validate(schema, v any, at string) []string {
 	return nil
 }
 
+var supportedKeywords = []string{"$ref", "anyOf", "type", "properties", "required", "items", "additionalProperties", "format", "contentEncoding", "description", "title", "$schema", "examples", "default"}
+
 func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
+	for k := range s {
+		if !slices.Contains(supportedKeywords, k) {
+			return []string{at + ": the OpenAPI document uses the schema keyword " + k + ", which the wire gate does not check"}
+		}
+	}
 	if ref, ok := s["$ref"].(string); ok {
 		name, found := strings.CutPrefix(ref, schemaRef)
 		if !found || d.schema(name) == nil {
@@ -254,6 +261,10 @@ func (d *specDoc) validateFields(s map[string]any, x map[string]any, at string) 
 			}
 		case map[string]any:
 			errs = append(errs, d.validate(extra, x[k], at+"."+k)...)
+		case nil:
+			if len(props) > 0 {
+				errs = append(errs, at+": field "+k+" is not in the OpenAPI document")
+			}
 		}
 	}
 	return errs
@@ -266,12 +277,16 @@ func mediaType(header string) string {
 
 func successStatus(status int) bool { return status >= 200 && status < 300 }
 
+func (d *specDoc) checkStream(method, path string, status int, contentType string) []string {
+	return d.checkResponse(method, path, status, contentType, nil)
+}
+
 func (d *specDoc) checkResponse(method, path string, status int, contentType string, body []byte) []string {
 	op, known := d.operation(method, path)
 	if status >= 400 || !known && !successStatus(status) {
 		errs := d.checkJSON(errorBodyName, contentType, body)
 		if len(errs) == 0 {
-			errs = checkErrorStatus(status, body)
+			errs = checkErrorStatus(status, known, body)
 		}
 		return errs
 	}
@@ -387,6 +402,9 @@ func (w wireTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	label := fmt.Sprintf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
 	contentType := resp.Header.Get("Content-Type")
 	if mediaType(contentType) == "text/event-stream" && successStatus(resp.StatusCode) {
+		for _, m := range doc.checkStream(req.Method, req.URL.Path, resp.StatusCode, contentType) {
+			w.rep.add(label + ": " + m)
+		}
 		resp.Body = &frameBody{rc: resp.Body, check: func(event, data string) {
 			for _, m := range doc.checkFrame(event, data) {
 				w.rep.add(label + " frame: " + m)
