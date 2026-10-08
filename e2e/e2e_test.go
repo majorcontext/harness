@@ -134,9 +134,10 @@ func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc 
 	})
 }
 
-// freeAddr returns a localhost address that was free a moment ago. There is a
-// tiny window between closing the probe listener and the subprocess binding;
-// acceptable for a local test harness.
+// freeAddr returns a localhost address that was free a moment ago. The port
+// can be taken between closing the probe listener and the subprocess binding,
+// so a caller starts serve through startServeProc, which starts again on a new
+// port when the bind fails.
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "localhost:0")
