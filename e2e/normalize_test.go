@@ -436,6 +436,7 @@ func mustDecode[T any](t *testing.T, raw string) T {
 
 func TestNormalize(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	toolReq := func(ids ...string) harnesstest.Request {
 		var parts []harnesstest.Part
 		for _, id := range ids {
@@ -511,6 +512,7 @@ func TestNormalize(t *testing.T) {
 
 func TestNormalizeCalls(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	tests := []struct {
 		name    string
 		body    string
@@ -567,6 +569,7 @@ func TestNormalizeCalls(t *testing.T) {
 
 func TestInvariants(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	call := func(id string) string {
 		return `{"id":"m` + id + `","role":"assistant","parts":[{"type":"tool_call","call_id":"` + id + `","name":"bash"}]}`
 	}
@@ -624,6 +627,7 @@ func TestInvariants(t *testing.T) {
 
 func TestGroupByConversation(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	req := func(root, last string) harnesstest.Request {
 		msgs := []harnesstest.Message{{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: root}}}}
 		if last != "" {

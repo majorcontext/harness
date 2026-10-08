@@ -58,6 +58,7 @@ func withToken(env map[string]string, token string) map[string]string {
 
 func TestStartServeProcMovesOffATakenPort(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	first := startServe(t, t.TempDir(), writeGoalConfig(t, "http://127.0.0.1:1"))
 	picks := []string{first.addr}
 	pick := func(t *testing.T) string {

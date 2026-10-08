@@ -111,6 +111,7 @@ func coverTotal(dir string) (string, error) {
 
 func TestCoverRows(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	in := "\tgithub.com/majorcontext/harness\t\tcoverage: 12.5% of statements\n" +
 		"\tgithub.com/majorcontext/harness/provider/anthropic\t\tcoverage: 68.7% of statements\n"
 	want := "### Contract suite coverage\n\nTotal: 38.2%\n\n| Package | Statements covered |\n| --- | --- |\n" +

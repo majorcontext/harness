@@ -203,6 +203,7 @@ func shellGroup(t *testing.T, script string) (g *procGroup, grandchild int) {
 
 func TestKillRemovesDescendants(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	var leader, child int
 	t.Run("body", func(t *testing.T) {
 		var g *procGroup
@@ -215,6 +216,7 @@ func TestKillRemovesDescendants(t *testing.T) {
 
 func TestTerminateKillsAProcessThatIgnoresSIGTERM(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	g, child := shellGroup(t, "trap '' TERM; sleep 600 & echo $!; wait")
 	if err := g.stopGracefully(100 * time.Millisecond); err == nil {
 		t.Fatal("stopGracefully = nil for a process that ignores SIGTERM, want an error")
@@ -225,6 +227,7 @@ func TestTerminateKillsAProcessThatIgnoresSIGTERM(t *testing.T) {
 
 func TestServeProcessesDieWithTheirTest(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	var pids []int
 	t.Run("body", func(t *testing.T) {
 		fake := harnesstest.New(t)
@@ -245,6 +248,7 @@ func TestServeProcessesDieWithTheirTest(t *testing.T) {
 
 func TestCleanupSendsSIGTERMBeforeSIGKILL(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	marker := filepath.Join(t.TempDir(), "got-term")
 	t.Run("body", func(t *testing.T) {
 		shellGroup(t, "trap 'touch "+marker+"; exit 0' TERM; sleep 600 & echo $!; while :; do sleep 0.01; done")

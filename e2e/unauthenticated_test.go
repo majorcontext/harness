@@ -54,6 +54,7 @@ func TestServeNonLoopbackNoTokenFailsClosed(t *testing.T) {
 // -unauthenticated flag.
 func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	stderr, dialAddr := startNonLoopbackServe(t, map[string]string{
 		"HARNESS_SESSION_DIR": t.TempDir(),
 		"HARNESS_CONFIG":      writeGoalConfig(t, "http://127.0.0.1:1"),
@@ -83,6 +84,7 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 // flag) opts in exactly the same way, against the real binary.
 func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	_, dialAddr := startNonLoopbackServe(t, map[string]string{
 		"HARNESS_SESSION_DIR":     t.TempDir(),
 		"HARNESS_CONFIG":          writeGoalConfig(t, "http://127.0.0.1:1"),

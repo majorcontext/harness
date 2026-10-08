@@ -88,6 +88,7 @@ func TestContractRuntimeHealth(t *testing.T) {
 
 func TestContractRuntimeSessionSyncUnknownValue(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	cfgPath := writeGoalConfigWith(t, "http://127.0.0.1:1", map[string]any{"session_sync": "bogus"})
 	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
 	defer cancel()

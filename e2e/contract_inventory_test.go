@@ -151,6 +151,7 @@ var knownGaps = []struct{ feature, reason string }{}
 
 func TestContractInventory(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	rows := contractRowNames(t)
 	seen := map[string]bool{}
 	mapped := map[string]bool{}

@@ -33,6 +33,9 @@ func runtimeWorkdir(t *testing.T, files map[string]string) string {
 // environment, so the rows of a host share the process.
 func onHosts(t *testing.T, fn func(t *testing.T, h host)) {
 	t.Helper()
+	if os.Getenv(runtimeEnv) == "" {
+		t.Parallel()
+	}
 	for _, h := range []host{serveHost, runtimeHost} {
 		if h.runtime && os.Getenv(runtimeEnv) == "" {
 			continue

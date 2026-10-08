@@ -7,7 +7,6 @@ import (
 )
 
 func TestContractModelTool(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "")
 	model := func(kv ...any) harnesstest.ToolCall { return ftTool("model", ftArgs(kv...)) }
 	runScenarios(t, []scenario{{
 		name: "model_tool_reports_lists_and_switches_the_model",

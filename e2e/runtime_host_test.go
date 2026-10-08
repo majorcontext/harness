@@ -127,7 +127,7 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) (name string, se
 					expectPendingFailure(t, row)
 					return
 				}
-				if !serial && !pending {
+				if (!serial || !h.runtime) && !pending {
 					t.Parallel()
 				}
 				obs := run(t, sc)
@@ -256,6 +256,7 @@ func goldenNames(t *testing.T, dir string) []string {
 // each re-golden row has a runtime golden, and that each citation holds.
 func TestRuntimeRows(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	spec, err := os.ReadFile(filepath.Join("..", "docs", "architecture.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -286,6 +287,7 @@ func TestRuntimeRows(t *testing.T) {
 
 func TestCiteErrors(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	const spec = "line one\nline two"
 	for _, tc := range []struct {
 		name string
