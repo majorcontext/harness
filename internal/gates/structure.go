@@ -90,7 +90,7 @@ var nodeRules = []nodeRule{
 		name:   "single_error_envelope",
 		detail: "only internal/server and the serve token check build the error body (spec: Errors)",
 		match:  literalOf(modulePath+"/protocol", "ErrorBody", "Error"),
-		allow:  []string{"protocol/", "internal/server/server.go", "cmd/harness/serve.go"},
+		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer"},
 	},
 	{
 		name:   "single_route_mount",
@@ -114,7 +114,7 @@ var nodeRules = []nodeRule{
 		name:   "engine_context_creator",
 		detail: "only the model API backend creates message.EngineContext, from the runtime's banner and logged parts (AGENTS.md: Invariants)",
 		match:  literalOf(modulePath+"/internal/message", "EngineContext"),
-		allow:  []string{"internal/message/", "internal/backend/modelapi/convert.go", "internal/backend/modelapi/modelapi.go"},
+		allow:  []string{"internal/message/", "internal/backend/modelapi/convert.go#toMessage", "internal/backend/modelapi/modelapi.go#request"},
 	},
 }
 

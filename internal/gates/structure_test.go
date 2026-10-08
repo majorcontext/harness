@@ -85,7 +85,17 @@ var structureCases = []struct {
 		name: "writers_in_their_owners_pass",
 		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
 			"internal/session/actor.go": goFile("", "func appendCtx(s S) {\n\ts.Append(1, 2, 3)\n\ts.Apply(1)\n}"),
-			"internal/server/server.go": goFile(`import ("net/http"; "github.com/majorcontext/harness/protocol")`, "func New() {\n\t_ = protocol.ErrorBody{}\n\t_ = http.NewServeMux()\n}")},
+			"internal/server/server.go": goFile(`import ("net/http"; "github.com/majorcontext/harness/protocol")`, "func errorBody() {\n\t_ = protocol.ErrorBody{}\n}\nfunc New() {\n\t_ = http.NewServeMux()\n}")},
+	},
+	{
+		name: "the_error_body_and_the_engine_context_are_built_in_another_function_of_their_owner_file",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
+			"internal/server/server.go":             goFile(`import "github.com/majorcontext/harness/protocol"`, "func errorBody() { _ = protocol.ErrorBody{} }\nfunc New() { _ = protocol.ErrorBody{} }"),
+			"cmd/harness/serve.go":                  file("package main\n\nimport \"github.com/majorcontext/harness/protocol\"\n\nfunc bearer() { _ = protocol.Error{} }\nfunc other() { _ = protocol.Error{} }\n"),
+			"internal/backend/modelapi/convert.go":  goFile(`import "github.com/majorcontext/harness/internal/message"`, "func toMessage() { _ = &message.EngineContext{} }\nfunc other() { _ = &message.EngineContext{} }"),
+			"internal/backend/modelapi/modelapi.go": goFile(`import "github.com/majorcontext/harness/internal/message"`, "func request() { _ = &message.EngineContext{} }\nfunc Run() { _ = &message.EngineContext{} }")},
+		want: []string{"single_error_envelope:internal/server/server.go", "single_error_envelope:cmd/harness/serve.go",
+			"engine_context_creator:internal/backend/modelapi/convert.go", "engine_context_creator:internal/backend/modelapi/modelapi.go"},
 	},
 	{
 		name: "a_stray_write_or_route_in_an_owner_file_fails",
