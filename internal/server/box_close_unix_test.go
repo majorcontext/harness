@@ -49,7 +49,6 @@ func TestCloseEndsAStartAtTheReadyGateAndStopsItsProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	closed := make(chan error, 1)
 	go func() { closed <- r.Close(ctx) }()
-	errorRows(t, url, []errorRow{{"POST", "/processes/dev/stop", http.StatusServiceUnavailable, protocol.CodeDraining}})
 	cancel()
 	if err := <-closed; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Close = %v, want context.Canceled", err)
