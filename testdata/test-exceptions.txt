@@ -1,6 +1,6 @@
 banner_test.go Options.Version empty is Go API: serve always passes a version, so no row runs without the engine banner
 codex_test.go ModelTransport is a Go API option with no serve equivalent; it supplies the key and dials the websocket
-commands_test.go a panicking command operation, a typed command during Close, and the route walk of spec Contract source reach no driver
+commands_test.go a panicking command operation and a typed command during Close reach no driver
 runtime_test.go fake-backend helpers of the synctest race tests; New refuses runtime-ignored keys only in the Go API; no harnesstest reply records an item and then fails
 session_test.go live frames are ephemeral and goldens hold none; a full subscriber dropping deltas is a race
 tools_test.go Options.Tools and Restrict are Go API with no serve equivalent; an embedder tool name cannot be written in the serve config, so no contract row reaches the New collision with a built-in name

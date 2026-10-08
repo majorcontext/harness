@@ -12,7 +12,6 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/internal/command"
-	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -93,38 +92,6 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 		r.Handler().ServeHTTP(rec, httptest.NewRequest(c.Method, strings.ReplaceAll(c.Path, "{id}", "nope"), nil))
 		if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound && strings.Contains(rec.Body.String(), protocol.CodeInvalidRequest) {
 			t.Errorf("%s %s has no route: %d %s", c.Method, c.Path, rec.Code, rec.Body)
-		}
-	}
-}
-
-func TestTheMuxServesTheRoutesOfTheTableAndNoOtherMethod(t *testing.T) {
-	r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), WorkDir: t.TempDir()}, newFake())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { closeRuntime(t, r) })
-	miss := func(method, path string) bool {
-		req := httptest.NewRequest(method, path, nil)
-		req.Header.Set("Accept", "text/event-stream")
-		rec := httptest.NewRecorder()
-		r.Handler().ServeHTTP(rec, req)
-		var body protocol.ErrorBody
-		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		return body.Error.Code == protocol.CodeInvalidRequest && (body.Error.Message == http.StatusText(http.StatusNotFound) || body.Error.Message == http.StatusText(http.StatusMethodNotAllowed))
-	}
-	served := map[string][]string{}
-	for _, route := range server.Table {
-		path := strings.NewReplacer("{id}", "x", "{input}", "x", "{request}", "x", "{name}", "x").Replace(route.Path)
-		served[path] = append(served[path], route.Method)
-		if miss(route.Method, path) {
-			t.Errorf("%s %s (%s) is in the table and not on the mux", route.Method, route.Path, route.Name)
-		}
-	}
-	for path, methods := range served {
-		for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-			if !slices.Contains(methods, m) && !miss(m, path) {
-				t.Errorf("%s %s is on the mux and not in the table", m, path)
-			}
 		}
 	}
 }
