@@ -274,6 +274,10 @@ type printer struct {
 	mu    sync.Mutex
 	// followers holds each child that the run follows, by session ID.
 	followers map[string]*follower
+	// unsettled holds the followed children that the log of the root session
+	// has not recorded as settled. A child settles in the log of its parent
+	// together with its report, so the run does not finish before it.
+	unsettled map[string]bool
 	children  sync.WaitGroup
 	// closing closes when the run has settled: a follower then prints up to
 	// the head that its child holds and returns.
@@ -311,6 +315,7 @@ func (p *printer) stream(ctx context.Context, s *harness.Session, after uint64, 
 		}
 		p.handle(p.rootID, ev)
 		p.follow(ctx, ev)
+		p.track(ev)
 		if !ev.Ephemeral && p.finished(s, ev, command) {
 			return nil
 		}
@@ -337,8 +342,45 @@ func (p *printer) finished(s *harness.Session, ev protocol.Event, command bool) 
 	if command {
 		return ev.Kind == "command.recorded" && commandFinal(ev) && settled(s.View())
 	}
+	if p.waiting() {
+		return false
+	}
 	v := viewAt(s, ev.Seq)
 	return settled(v) && ev.Seq >= v.HeadSeq
+}
+
+// track records the spawn and the settlement of a task child of the root
+// session.
+func (p *printer) track(ev protocol.Event) {
+	if p.open == nil || ev.Kind != "child.spawned" && ev.Kind != "child.settled" {
+		return
+	}
+	var c struct {
+		ChildID string `json:"child_id"`
+	}
+	if json.Unmarshal(ev.Data, &c) != nil || c.ChildID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if ev.Kind == "child.settled" {
+		delete(p.unsettled, c.ChildID)
+		return
+	}
+	if p.unsettled == nil {
+		p.unsettled = map[string]bool{}
+	}
+	p.unsettled[c.ChildID] = true
+}
+
+// waiting reports whether a followed child has not settled. Its settlement
+// is the next record of the root session, and it queues the report of the
+// child, so the run neither finishes before the child nor misses the turn of
+// the report.
+func (p *printer) waiting() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.unsettled) > 0
 }
 
 // viewAt returns the view of s once it holds seq. The actor publishes a view

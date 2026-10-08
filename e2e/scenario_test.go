@@ -11,8 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 var updateGoldens = flag.Bool("update", false, "rewrite the e2e/testdata/runtime goldens from the serve host")
@@ -55,6 +57,13 @@ type setGoal struct {
 }
 type release struct{ step string }
 type awaitRequests struct{ n int }
+
+// awaitQueued waits until session as holds n queued inputs: a child report
+// that joins a busy session at its next boundary has then reached it.
+type awaitQueued struct {
+	as string
+	n  int
+}
 
 type restart struct{ kill bool }
 type expectQueued struct {
@@ -167,6 +176,13 @@ func requestSummary(reqs []harnesstest.Request) string {
 		fmt.Fprintf(&b, "\n  %d: last user text %q", i+1, req.LastUserText())
 	}
 	return b.String()
+}
+func (a awaitQueued) run(t *testing.T, r *run) {
+	t.Helper()
+	id := r.id(t, a.as)
+	testpoll.Until(t, waitBound, fmt.Sprintf("session %s holds fewer than %d queued inputs", a.as, a.n), func() bool {
+		return len(r.drv.Queued(t, id)) >= a.n
+	}, 10*time.Millisecond)
 }
 func (a expectQueued) run(t *testing.T, r *run) {
 	if got := r.drv.Queued(t, r.id(t, a.as)); !slices.Equal(got, a.texts) {
