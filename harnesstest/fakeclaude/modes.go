@@ -111,8 +111,9 @@ var basicModes = map[string]mode{
 	"exit_on_interrupt":        hangAfterText,
 	"crash":                    crashAfter(),
 	"fast_no_drain":            frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
-	"error":                    frames(result("error_during_execution", true, "fake failure", 11, 3)),
-	"rate_limit_error":         frames(result("error_during_execution", true, "rate_limit_error: please retry later", 6, 1)),
+	"error":                    frames(failed(11, 3, "fake failure")),
+	"rate_limit_error":         frames(failed(6, 1, "rate_limit_error: please retry later")),
+	"credential_error":         frames(failed(6, 1, "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.")),
 }
 
 func hangAfterText(f *fake) {
@@ -137,6 +138,6 @@ var onInterrupt = map[string][]obj{
 	"tool_result_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"})),
 		user(toolResult("toolu_i", "ok\n", false))},
 	"success_on_interrupt":     {say("Finished anyway."), success("Finished anyway.", 7, 2)},
-	"placeholder_on_interrupt": {success("", 0, 0).set("num_turns", 0), result("error_during_execution", true, "", 7, 2)},
+	"placeholder_on_interrupt": {success("", 0, 0).set("num_turns", 0), failed(7, 2, interrupted)},
 	"exit_on_interrupt":        {},
 }

@@ -22,4 +22,3 @@ fake claudecode system/status * compaction follows a long conversation, and the 
 fake claudecode user:string * the compaction summary is a user frame with text content; headless runs refuse /compact
 fake claudecode system/hook_started * the recording runs without hooks; a configured hook prints this frame
 fake claudecode system/task_notification * a background task prints this frame, and the recording starts none
-fake claudecode result/error_during_execution result the CLI reports the failure of an interrupted or failed turn in errors and sends no result text

@@ -426,7 +426,8 @@ func (a claudeToolCall) run(t *testing.T, r *run) {
 var fakeBinPath = regexp.MustCompile(`"[^"\s]*fakeclaude"`)
 
 // claudeSession records GET /session/{id} without the journal seq, with the
-// wall-clock capture time of the subscription usage replaced by a marker, and
+// wall-clock capture time of the subscription usage and the retry time of a
+// paused goal replaced by a marker, and
 // with the path of the fakeclaude binary in last_turn.error masked.
 type claudeSession struct{ as string }
 
@@ -435,6 +436,9 @@ func (a claudeSession) run(t *testing.T, r *run) {
 	if body, ok := res.Body.(map[string]any); ok {
 		if sub, ok := body["subscription_usage"].(map[string]any); ok && sub["captured_at"] != json.Number("0") {
 			sub["captured_at"] = "<time>"
+		}
+		if goal, ok := body["goal"].(map[string]any); ok && goal["retry_at"] != nil {
+			goal["retry_at"] = "<time>"
 		}
 		if last, ok := body["last_turn"].(map[string]any); ok {
 			if msg, ok := last["error"].(string); ok {

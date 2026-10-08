@@ -20,6 +20,7 @@ type envelope struct {
 	IsError         bool                  `json:"is_error,omitempty"`
 	NumTurns        *int                  `json:"num_turns,omitempty"`
 	Result          string                `json:"result,omitempty"`
+	Errors          []string              `json:"errors,omitempty"`
 	LocalCommand    string                `json:"local_command,omitempty"`
 	Usage           *usage                `json:"usage,omitempty"`
 	TotalCostUSD    float64               `json:"total_cost_usd,omitempty"`
@@ -217,10 +218,20 @@ func toolResults(m wireMessage, names map[string]string) []eventlog.Part {
 	return parts
 }
 
+// failure is the text of a failed result. A result that carries text, such as
+// a model error, reports it in result; an interrupted or failed run reports
+// it in errors and sends no result text.
+func (e envelope) failure() string {
+	if e.Result != "" {
+		return e.Result
+	}
+	return strings.Join(e.Errors, "; ")
+}
+
 // retryable reports whether a failed result is transient. A credential
 // failure is refused, not busy, so it is not.
-func retryable(subtype, result string) bool {
-	hay := strings.ToLower(subtype + " " + result)
+func retryable(subtype, failure string) bool {
+	hay := strings.ToLower(subtype + " " + failure)
 	switch {
 	case strings.Contains(hay, "credential resolution failed"):
 		return false

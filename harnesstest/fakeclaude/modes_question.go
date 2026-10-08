@@ -151,7 +151,7 @@ func resumeParkedQuestion(f *fake, state string) {
 		}
 		f.emit(
 			user(textBlock("[Request interrupted by user]")),
-			obj{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 2, "stop_reason": nil},
+			obj{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 2, "stop_reason": nil, "errors": []string{interrupted}},
 		)
 		questionMirrorFrame(f, "dismissal-tail")
 		os.Exit(1)

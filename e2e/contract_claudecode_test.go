@@ -180,6 +180,12 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 	row := func(name, mode string, more ...action) scenario {
 		return scenario{name: name, driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}
 	}
+	goalRow := func(name, mode string) scenario {
+		return scenario{name: name, driver: claudeLaneDriver(mode), actions: []action{
+			create{as: "a"}, setGoal{as: "a", condition: "say done"}, waitIdle{as: "a"},
+			claudeSession{as: "a"}, claudeInvocations{as: "a"},
+		}}
+	}
 	session := claudeSession{as: "a"}
 	runScenarios(t, []scenario{
 		row("claudecode_thinking_block_is_reasoning", "thinking", session),
@@ -190,6 +196,8 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 		row("claudecode_cli_compaction_is_logged", "compact_boundary", claudeJournalEvents{as: "a", prefix: "compaction."}, session),
 		row("claudecode_error_result_fails_turn", "error", session, claudeInvocations{as: "a"}),
 		row("claudecode_cli_exit_runs_once", "crash", session, claudeInvocations{as: "a"}),
+		goalRow("claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors", "error"),
+		goalRow("claudecode_credential_refusal_in_errors_fails_a_goal", "credential_error"),
 		row("claudecode_rate_limit_event_reaches_subscription_usage", "rate_limit_event", session),
 		row("claudecode_context_window_from_model_usage", "per_call_usage", session),
 	})

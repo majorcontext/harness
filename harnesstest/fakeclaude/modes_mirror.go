@@ -139,7 +139,7 @@ func logInterrupt(mode string) {
 		appendFile(path, "interrupt\n")
 		out, ok := onInterrupt[mode]
 		if !ok || (len(out) > 0 && out[len(out)-1]["type"] != "result") {
-			out = append(out, result("error_during_execution", true, "", 7, 2))
+			out = append(out, failed(7, 2, interrupted))
 		}
 		for _, v := range out {
 			b, _ := json.Marshal(v)
