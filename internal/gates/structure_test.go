@@ -172,3 +172,24 @@ func TestWireClientRule(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderBranchRule(t *testing.T) {
+	files := fstest.MapFS{
+		"internal/turn/a.go": goFile("", "const fam = \"claude-code\"\nfunc Literal(p string) bool { return p == \"anthropic\" }\nfunc Const(p string) bool { return p != fam }\nfunc Switch(p string) {\n\tswitch p {\n\tcase \"codex\":\n\t}\n}\nfunc Other(p string) bool { return p == \"mistral\" || p == \"\" }\nfunc Same(a, b string) bool { return a == b }"),
+		"config/c.go":        goFile("", "func V(p string) bool { return p == \"openai\" }"),
+		"x.go":               goFile("", "func Listed(p string) bool { return p == \"codex\" }\nfunc Gone() {}"),
+	}
+	srcs, err := parseSources(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, v := range checkProviderBranches(srcs, []string{"config/"}, map[string]string{"x.go#Listed": "d", "x.go#Gone": "d"}) {
+		got = append(got, v.Path)
+	}
+	slices.Sort(got)
+	want := []string{"internal/turn/a.go#Const", "internal/turn/a.go#Literal", "internal/turn/a.go#Switch", "x.go#Gone"}
+	if !slices.Equal(got, want) {
+		t.Errorf("violations = %v, want %v", got, want)
+	}
+}
