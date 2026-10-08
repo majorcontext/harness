@@ -11,6 +11,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -46,6 +51,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -75,10 +85,7 @@
               "kind": "tool_use",
               "tool_name": "mcp",
               "tool_input": {
-                "action": "select",
-                "tools": [
-                  "mcp__weather__forecast"
-                ]
+                "action": "status"
               },
               "tool_use_id": "toolu#1"
             }
@@ -89,7 +96,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions\"}",
+              "text": "{\"servers\":[{\"name\":\"docs\",\"connected\":false,\"attempts\":1,\"parked\":false,\"reason\":\"initialize failed\"},{\"name\":\"weather\",\"connected\":true,\"attempts\":1,\"parked\":false}]}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -119,10 +126,7 @@
             "call_id": "toolu#1",
             "name": "mcp",
             "arguments": {
-              "action": "select",
-              "tools": [
-                "mcp__weather__forecast"
-              ]
+              "action": "status"
             }
           }
         ]
@@ -134,7 +138,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"selected\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions\"}"
+            "content": "{\"servers\":[{\"name\":\"docs\",\"connected\":false,\"attempts\":1,\"parked\":false,\"reason\":\"initialize failed\"},{\"name\":\"weather\",\"connected\":true,\"attempts\":1,\"parked\":false}]}"
           }
         ]
       },

@@ -40,8 +40,10 @@ func Reserved(name string) bool {
 }
 
 // Source connects every configured server on first use and gives the tools
-// of the connected servers to each model call. A server that fails stays
-// down until the model asks the mcp tool to connect it.
+// of the connected servers to each model call. A server that fails retries
+// in the background, and the prompt names it while it is down. After
+// maxRetries failed retries it stays down until the model asks the mcp tool
+// to connect it.
 type Source struct {
 	specs map[string]config.MCPServerSpec
 	names []string
@@ -61,6 +63,7 @@ type Source struct {
 	mu      sync.Mutex
 	closed  bool
 	servers map[string]*server
+	health  map[string]*health
 	// reached holds the servers that the first connect reached. Only they
 	// give instructions, so each prompt stays stable.
 	reached []string
@@ -82,9 +85,9 @@ func New(cfg config.Config) *Source {
 	}
 	s := &Source{specs: cfg.MCPServers, names: slices.Sorted(maps.Keys(cfg.MCPServers)), mode: cfg.MCPToolLoading,
 		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold), dialing: map[string]*sync.Mutex{},
-		ready: make(chan struct{}), servers: map[string]*server{}}
+		ready: make(chan struct{}), servers: map[string]*server{}, health: map[string]*health{}}
 	for _, name := range s.names {
-		s.dialing[name] = &sync.Mutex{}
+		s.dialing[name], s.health[name] = &sync.Mutex{}, &health{}
 		s.defers = s.defers || s.loading(name) != "eager"
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
@@ -119,16 +122,23 @@ func (s *Source) wait(ctx context.Context) bool {
 	s.start.Do(func() {
 		s.group.Go(func() {
 			var wg sync.WaitGroup
+			var okMu sync.Mutex
+			first := map[string]bool{}
 			for _, name := range s.names {
 				wg.Go(func() {
 					if err := s.connect(s.ctx, name); err != nil {
 						slog.Warn("mcp: server did not connect", "server", name, "err", hide(name, err))
+						s.group.Go(func() { s.retry(name) })
+						return
 					}
+					okMu.Lock()
+					first[name] = true
+					okMu.Unlock()
 				})
 			}
 			wg.Wait()
 			s.mu.Lock()
-			s.reached = slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return !s.servers[n].up() })
+			s.reached = slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return !first[n] })
 			s.mu.Unlock()
 			close(s.ready)
 		})
@@ -150,16 +160,19 @@ func (s *Source) connect(ctx context.Context, name string) error {
 		return nil
 	}
 	sv, err := dial(ctx, s.specs[name])
-	if err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	h := s.health[name]
+	h.attempts++
+	switch {
+	case err != nil:
+		h.reason = connectReason(err)
+		return err
+	case s.closed:
 		_ = sv.client.Close()
 		return errors.New("mcp: closed")
 	}
-	s.servers[name] = sv
+	s.servers[name], h.reason, h.parked = sv, "", false
 	return nil
 }
 
@@ -201,7 +214,7 @@ func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowe
 		return turn.Toolset{}
 	}
 	s.mu.Lock()
-	servers, reached := maps.Clone(s.servers), s.reached
+	servers, reached, down := maps.Clone(s.servers), s.reached, s.unavailable()
 	s.mu.Unlock()
 	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
 	var all []remote
@@ -239,7 +252,7 @@ func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowe
 		head = append(head, slices.DeleteFunc([]turn.Tool{lister{s}, reader{s}}, func(t turn.Tool) bool { return !ok(t.Spec().Name) })...)
 	}
 	ts.Tools = append(head, ts.Tools...)
-	ts.Prompt = strings.Trim(s.instructions(servers, reached, ok)+"\n\n"+catalog(deferred), "\n")
+	ts.Prompt = strings.Join(slices.DeleteFunc([]string{s.instructions(servers, reached, ok), catalog(deferred), down}, func(p string) bool { return p == "" }), "\n\n")
 	return ts
 }
 
