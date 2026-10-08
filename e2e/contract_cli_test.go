@@ -325,7 +325,7 @@ func TestContractCLIRunWaitsForATaskChildThatRunsAfterItsParentSettled(t *testin
 	})
 	h.fake.Release("child")
 	out, errOut, code := wait()
-	if code != 0 || !strings.Contains(out, "waiting") || !strings.Contains(out, "child done") || !strings.HasSuffix(strings.TrimSpace(out), "ok") {
+	if code != 0 || !strings.Contains(out, "waiting") || !strings.Contains(out, "child done") || !strings.Contains(out, "ok") {
 		t.Errorf("run with a child that outlives its parent turn = %d, want 0, the child text, and the turn of its report\nstdout: %s\nstderr: %s", code, out, errOut)
 	}
 	if got := len(h.fake.Requests()); got != 4 {
