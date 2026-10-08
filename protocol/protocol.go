@@ -11,8 +11,10 @@ const (
 	StatusIdle    = "idle"
 	StatusRunning = "running"
 	StatusWaiting = "waiting"
-	// StatusRetrying appears only in status frames.
-	StatusRetrying = "retrying"
+	// StatusRetrying, StatusCompacting, and StatusCompactionFailed appear only in status frames.
+	StatusRetrying         = "retrying"
+	StatusCompacting       = "compacting"
+	StatusCompactionFailed = "compaction_failed"
 )
 
 // Input deliveries. An input with no delivery is steer.
@@ -298,8 +300,8 @@ type ItemFrame struct {
 }
 
 // StatusFrame is the data of a status frame. A retrying turn waits until
-// NextAt before its attempt number Attempt. An item that the failed attempt
-// started never completes.
+// NextAt before its attempt number Attempt; an item that the failed attempt started never completes.
+// A compacting frame, and the frame that ends it, carry the ID of the compaction in TurnID.
 type StatusFrame struct {
 	Status  string    `json:"status"`
 	TurnID  string    `json:"turn_id"`

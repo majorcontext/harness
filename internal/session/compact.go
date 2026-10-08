@@ -7,6 +7,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // ErrBusy reports a Compact while a turn or a compaction runs, or inputs wait.
@@ -85,6 +86,7 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 		r.waiters = append(r.waiters, done)
 	}
 	a.run = r
+	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: id})
 	a.spawn(func() {
 		summary, usage, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		c.Summary, c.Usage = a.indexed(summary, metas), usage
@@ -138,5 +140,10 @@ func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error
 	if runErr != nil {
 		appendErr = a.recordUsage(c.Usage)
 	}
+	status := protocol.StatusIdle
+	if runErr != nil || appendErr != nil {
+		status = protocol.StatusCompactionFailed
+	}
+	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: status, TurnID: r.id})
 	a.finishRun(r, runErr, appendErr, func() error { return a.settle(false) })
 }

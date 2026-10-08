@@ -406,6 +406,8 @@ Session status derives from the turn and the open requests:
 
 `retrying` is not a session status. A turn that waits for backoff sends an ephemeral `status` frame with `retrying`, `attempt`, and `next_at`, and the session stays `running`.
 
+A compaction that the actor runs as its own run, automatic or from `Compact`, sends an ephemeral `status` frame with `compacting` when it starts, and one frame when it ends: `idle` when the summary is appended, or `compaction_failed` when it is not. Each of the three frames carries the compaction ID in `turn_id`. The session stays `idle` during the run, and the frames are never stored. This is parity with the engine, which sent `compaction.started`, and `compaction.failed` for any failure, as live-only events (Andy 2026-10-08, parity). A compaction inside a turn sends no such frame.
+
 The actor has one run at a time. A run is a turn, a compaction, or a goal evaluation, and all three end through one path that answers the waiters of the run and then starts the next work. Status derives from the turn alone, so `idle` also holds while a compaction or an evaluation runs, and `running` always has a `turn_id`. A command acts on each kind of run like this:
 
 | Command | Turn | Compaction | Evaluation |
