@@ -40,7 +40,13 @@ type nodeRule struct {
 	allow        []string
 }
 
-var storeWriters = []string{"internal/session/actor.go", "runtime.go", "sync.go", "cmd/harness/storelog.go", "storetest/"}
+var storeWriters = []string{
+	"internal/session/actor.go#appendCtx", "internal/session/actor.go#fence",
+	"runtime.go#Append", "runtime.go#PutBlob",
+	"sync.go#ApplySync", "sync.go#fenceEpoch",
+	"cmd/harness/storelog.go#Append", "cmd/harness/storelog.go#PutBlob",
+	"storetest/",
+}
 
 var nodeRules = []nodeRule{
 	{
@@ -59,13 +65,13 @@ var nodeRules = []nodeRule{
 		name:   "single_blob_writer",
 		detail: "only the session, the runtime, ApplySync, and the store wrappers call Store.PutBlob (spec: Inputs, Store)",
 		match:  callsMethod("PutBlob", 4),
-		allow:  append([]string{"session.go"}, storeWriters...),
+		allow:  append([]string{"session.go#Submit"}, storeWriters...),
 	},
 	{
 		name:   "single_applier",
 		detail: "only the session actor applies a record to State (spec: Apply)",
 		match:  callsMethod("Apply", 1),
-		allow:  []string{"internal/eventlog/", "internal/session/actor.go"},
+		allow:  []string{"internal/eventlog/", "internal/session/actor.go#appendCtx", "internal/session/actor.go#replay"},
 	},
 	{
 		name:   "single_error_envelope",
@@ -75,9 +81,21 @@ var nodeRules = []nodeRule{
 	},
 	{
 		name:   "single_route_mount",
-		detail: "only internal/server mounts the routes of the API (spec: Routes, Contract source)",
-		match:  mountsRoutes,
-		allow:  []string{"internal/server/", "internal/backend/external/tools.go"},
+		detail: "only the muxes of internal/server mount the routes of the API, from server.Table (spec: Routes, Contract source)",
+		match:  mountsRoutes("HandleFunc", "Handle"),
+		allow: []string{
+			"internal/server/reads.go#NewReads", "internal/server/routes.go#bind",
+			"internal/backend/external/tools.go#ServeTools",
+		},
+	},
+	{
+		name:   "single_route_mux",
+		detail: "only internal/server creates the mux of the API (spec: Routes, Contract source)",
+		match:  mountsRoutes("NewServeMux"),
+		allow: []string{
+			"internal/server/server.go#New", "internal/server/reads.go#NewReads",
+			"internal/backend/external/tools.go#ServeTools",
+		},
 	},
 	{
 		name:   "engine_context_creator",
@@ -122,19 +140,21 @@ func callsMethod(name string, minArgs int) func(ast.Node, map[string]string) boo
 	}
 }
 
-func mountsRoutes(n ast.Node, imports map[string]string) bool {
-	call, ok := n.(*ast.CallExpr)
-	if !ok {
-		return false
+func mountsRoutes(names ...string) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, imports map[string]string) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := selectorOf(call.Fun)
+		if !ok || !slices.Contains(names, sel.Sel.Name) {
+			return false
+		}
+		if id, isPkg := sel.X.(*ast.Ident); isPkg && imports[id.Name] == "net/http" {
+			return true
+		}
+		return sel.Sel.Name == "HandleFunc" || len(call.Args) == 2
 	}
-	sel, ok := selectorOf(call.Fun)
-	if !ok {
-		return false
-	}
-	if id, isPkg := sel.X.(*ast.Ident); isPkg && imports[id.Name] == "net/http" {
-		return sel.Sel.Name == "NewServeMux" || sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc"
-	}
-	return sel.Sel.Name == "HandleFunc" || (sel.Sel.Name == "Handle" && len(call.Args) == 2)
 }
 
 func allows(allow []string, file, fn string) bool {
