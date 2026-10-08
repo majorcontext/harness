@@ -131,6 +131,9 @@ func SpecErrorStatuses(spec string) (map[string]int, error) {
 	section, _, _ = strings.Cut(section, "\n### ")
 	out := map[string]int{}
 	for _, m := range errorRowRE.FindAllStringSubmatch(section, -1) {
+		if _, dup := out[m[1]]; dup {
+			return nil, fmt.Errorf("the Errors table of the spec holds the code %q twice", m[1])
+		}
 		out[m[1]], _ = strconv.Atoi(m[2])
 	}
 	if len(out) == 0 {

@@ -60,6 +60,8 @@ func TestContractReadHandler(t *testing.T) {
 				{http.MethodPut, session + "/goal", "", http.StatusMethodNotAllowed},
 				{http.MethodDelete, session + "/goal", "", http.StatusMethodNotAllowed},
 				{http.MethodPost, "/processes/p/start", "", http.StatusMethodNotAllowed},
+				{http.MethodPost, "/processes/p/stop", "", http.StatusMethodNotAllowed},
+				{http.MethodPost, "/processes/p/restart", "", http.StatusMethodNotAllowed},
 				{http.MethodGet, "/models", "", http.StatusNotFound},
 				{http.MethodGet, "/health", "", http.StatusNotFound},
 				{http.MethodGet, "/nowhere", "", http.StatusNotFound},
