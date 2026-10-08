@@ -45,7 +45,7 @@ These are pointers. Open the section named, read the current text, and check the
 | Public API is the packages that `Public packages` lists; the rest is `internal/` | `Public packages`, `Internal packages` |
 | Import graph frozen by `depguard` | `Internal packages`, `.golangci.yml` |
 | Wire types are generated from `protocol` | `Contract source` |
-| Contract tests only; no `time.Sleep`; `synctest` for time | `Tests and guardrails`, `CI gates` |
+| Tests live where `Contract suite` and `Unit tests` allow; no `time.Sleep`; `synctest` for time | `Tests and guardrails`, `CI gates` |
 | No history in comments or tests | `CI gates`, root `AGENTS.md` |
 | Routes that boxes forwards stay 1:1 with the harness route | `Boxes integration`, boxes `docs/rearchitecture.md` |
 
