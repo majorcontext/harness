@@ -82,7 +82,7 @@ func spawnChildren(f *fake, prompts []string) {
 	f.emit(say("Delegating."))
 	srv, ok := hostedServer()
 	if !ok {
-		f.emit(result("error_during_execution", true, "no harness server in --mcp-config", 0, 0))
+		f.emit(failed(0, 0, "no harness server in --mcp-config"))
 		return
 	}
 	for _, p := range prompts {
@@ -91,7 +91,7 @@ func spawnChildren(f *fake, prompts []string) {
 			err = awaitEnded(srv, id)
 		}
 		if err != nil {
-			f.emit(result("error_during_execution", true, err.Error(), 0, 0))
+			f.emit(failed(0, 0, err.Error()))
 			return
 		}
 	}

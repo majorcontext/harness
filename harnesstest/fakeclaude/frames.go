@@ -59,6 +59,18 @@ func result(subtype string, isError bool, text string, in, out int) obj {
 	}
 }
 
+// failed is the result of a run that failed or was interrupted: the CLI
+// reports the failure in errors and sends no result text.
+func failed(in, out int, errs ...string) obj {
+	return obj{
+		"type": "result", "subtype": "error_during_execution", "is_error": true,
+		"errors": errs, "usage": tokens(in, out),
+	}
+}
+
+// interrupted is the diagnostic that the CLI reports for a run that a signal ended.
+const interrupted = "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"
+
 func success(text string, in, out int) obj { return result("success", false, text, in, out) }
 
 func rateLimitEvent(info obj) obj {

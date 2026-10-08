@@ -70,7 +70,7 @@ func awaitQueued(f *fake) (string, bool) {
 			}
 		}
 	}
-	f.emit(result("error_during_execution", true, "window gate never opened", 0, 0))
+	f.emit(failed(0, 0, "window gate never opened"))
 	os.Exit(1)
 	return "", false
 }

@@ -177,8 +177,9 @@ func (r *run) outcome(err, exit error) error {
 		return err
 	}
 	if res := r.result; res.IsError {
-		err = fmt.Errorf("claudecode: the turn failed (%s): %s", res.Subtype, res.Result)
-		if retryable(res.Subtype, res.Result) {
+		failure := res.failure()
+		err = fmt.Errorf("claudecode: the turn failed (%s): %s", res.Subtype, failure)
+		if retryable(res.Subtype, failure) {
 			err = fmt.Errorf("%w: %w", turn.ErrRetryable, err)
 		}
 	}
