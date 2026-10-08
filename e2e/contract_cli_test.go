@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // cliHost is a working directory, a session dir, and a config that point the
@@ -33,22 +34,36 @@ func newCLIHost(t *testing.T, extra map[string]any, steps ...harnesstest.Step) *
 // run runs the harness binary with args and returns its output and exit code.
 func (h *cliHost) run(args ...string) (stdout, stderr string, code int) {
 	h.t.Helper()
+	return h.start(args...)()
+}
+
+// start starts the harness binary with args, and returns the wait for its
+// output and exit code.
+func (h *cliHost) start(args ...string) (wait func() (stdout, stderr string, code int)) {
+	h.t.Helper()
 	ctx, cancel := context.WithTimeout(h.t.Context(), waitBound)
-	defer cancel()
 	cmd := exec.CommandContext(ctx, harnessBin, args...)
 	cmd.Dir = h.work
 	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
-	err := cmd.Run()
-	var exit *exec.ExitError
-	switch {
-	case errors.As(err, &exit):
-		code = exit.ExitCode()
-	case err != nil:
+	if err := cmd.Start(); err != nil {
+		cancel()
 		h.t.Fatalf("run %v: %v", args, err)
 	}
-	return out.String(), errOut.String(), code
+	return func() (string, string, int) {
+		defer cancel()
+		code := 0
+		err := cmd.Wait()
+		var exit *exec.ExitError
+		switch {
+		case errors.As(err, &exit):
+			code = exit.ExitCode()
+		case err != nil:
+			h.t.Fatalf("run %v: %v", args, err)
+		}
+		return out.String(), errOut.String(), code
+	}
 }
 
 // sessionID reads the ID that a run prints on stderr.
@@ -290,6 +305,31 @@ func TestContractCLIRunPrintsTheOutputOfATaskChild(t *testing.T) {
 	out, errOut, code := h.run("run", "-p", "delegate")
 	if code != 0 || !strings.Contains(out, "child says hello") || !strings.Contains(out, "waiting") {
 		t.Errorf("run with a task child = %d, want 0 and the text of the parent and of the child on stdout\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
+func TestContractCLIRunWaitsForATaskChildThatRunsAfterItsParentSettled(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, delegation("general-purpose", childDone)...)
+	wait := h.start("run", "-p", "delegate")
+	if !h.fake.AwaitRequests(3, waitBound) {
+		t.Fatalf("waited %s for the spawn, the child, and the acknowledgement; saw %d requests", waitBound, len(h.fake.Requests()))
+	}
+	testpoll.Until(t, waitBound, "the parent has not ended its turn", func() bool {
+		for _, data := range dirBytes(t, h.dir) {
+			if strings.Contains(data, `"k":"turn.ended"`) {
+				return true
+			}
+		}
+		return false
+	})
+	h.fake.Release("child")
+	out, errOut, code := wait()
+	if code != 0 || !strings.Contains(out, "waiting") || !strings.Contains(out, "child done") || !strings.Contains(out, "ok") {
+		t.Errorf("run with a child that outlives its parent turn = %d, want 0, the child text, and the turn of its report\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if got := len(h.fake.Requests()); got != 4 {
+		t.Errorf("model requests = %d, want 4: the report of the child reached the parent", got)
 	}
 }
 

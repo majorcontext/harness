@@ -103,9 +103,10 @@ func onKid(build func(kid string) []map[string]any) func(harnesstest.Request) []
 	return func(r harnesstest.Request) []map[string]any { return build(kidOf(r)) }
 }
 
-// delegation is the model script of a parent that spawns one child of agent.
-// The child holds its reply until the scenario releases the step child, so its
-// report never rides on the request that follows the spawn.
+// delegation is the model script of a parent that spawns one child of agent
+// and answers with child. A child reply with Block holds until the scenario
+// releases the step child, so its report never rides on the request that
+// follows the spawn; a reply without Block lets the child settle on its own.
 func delegation(agent string, child harnesstest.Reply, more ...harnesstest.Step) []harnesstest.Step {
 	steps := []harnesstest.Step{
 		taskStep("delegate", userStarts("delegate"), fixed(spawn(agent, "child work"))),
