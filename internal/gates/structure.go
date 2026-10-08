@@ -33,7 +33,8 @@ type source struct {
 
 // nodeRule forbids the nodes that match, except in the files and functions of
 // allow. An entry of allow is a file, a directory that ends in "/", or
-// "file#Func".
+// "file#Func". The entry "file#" names the declarations of the file outside any
+// function.
 type nodeRule struct {
 	name, detail string
 	match        func(n ast.Node, imports map[string]string) bool
@@ -54,6 +55,18 @@ var nodeRules = []nodeRule{
 		detail: "modelmeta.ContextWindow is read only by the model API backend's Capabilities (spec: Backend)",
 		match:  selectsImport(modulePath+"/internal/modelmeta", "ContextWindow"),
 		allow:  []string{"internal/modelmeta/", "internal/backend/modelapi/modelapi.go#Capabilities"},
+	},
+	{
+		name:   "context_window_config",
+		detail: "Config.ContextWindowTokens is read only to build the model API backend, whose Capabilities resolves the window (spec: Backend)",
+		match:  selectsField("ContextWindowTokens"),
+		allow:  []string{"config/", "internal/backend/router.go#New"},
+	},
+	{
+		name:   "context_window_default",
+		detail: "the default context window of 128000 tokens is written only by the model API backend and the modelmeta table (spec: Backend)",
+		match:  intLiteral(128000),
+		allow:  []string{"internal/modelmeta/", "internal/backend/modelapi/modelapi.go#", "internal/gates/structure.go#"},
 	},
 	{
 		name:   "single_appender",
@@ -108,6 +121,24 @@ var nodeRules = []nodeRule{
 func selectorOf(n ast.Node) (*ast.SelectorExpr, bool) {
 	sel, ok := n.(*ast.SelectorExpr)
 	return sel, ok
+}
+
+func selectsField(name string) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, _ map[string]string) bool {
+		sel, ok := selectorOf(n)
+		return ok && sel.Sel.Name == name
+	}
+}
+
+func intLiteral(value int64) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, _ map[string]string) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.INT {
+			return false
+		}
+		v, err := strconv.ParseInt(lit.Value, 0, 64)
+		return err == nil && v == value
+	}
 }
 
 func selectsImport(pkg string, names ...string) func(ast.Node, map[string]string) bool {

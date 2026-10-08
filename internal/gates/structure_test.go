@@ -61,6 +61,19 @@ var structureCases = []struct {
 		want: []string{"context_window_resolver:internal/backend/modelapi/modelapi.go"},
 	},
 	{
+		name: "the_configured_window_is_read_outside_the_backend_construction",
+		files: fstest.MapFS{"config/c.go": goFile("", "func F(c C) { _ = c.ContextWindowTokens }"), "x.go": goFile("", "func G(c C) { _ = c.ContextWindowTokens }"),
+			"internal/backend/router.go": goFile("", "func New(c C) { _ = c.ContextWindowTokens }\nfunc Other(c C) { _ = c.ContextWindowTokens }")},
+		want: []string{"context_window_config:internal/backend/router.go", "context_window_config:x.go"},
+	},
+	{
+		name: "the_default_window_is_written_outside_the_backend_and_the_table",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", "var w = 128000\nvar v = 128_000\nvar u = 128001"),
+			"internal/modelmeta/t.go":               goFile("", "var t = 128000"),
+			"internal/backend/modelapi/modelapi.go": goFile("", "const d = 128000\nfunc Capabilities() int { return 128000 }")},
+		want: []string{"context_window_default:internal/backend/modelapi/modelapi.go", "context_window_default:x.go", "context_window_default:x.go"},
+	},
+	{
 		name: "writers_and_mounts_outside_their_owners_fail",
 		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
 			"internal/a/a.go": goFile(`import ("net/http"; "github.com/majorcontext/harness/protocol"; "github.com/majorcontext/harness/internal/message")`,
