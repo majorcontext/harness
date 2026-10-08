@@ -94,7 +94,7 @@ const (
 	specAnswerReceipt = "an answer replies 202 {seq, status}, a dismissal 204"
 
 	specStopped        = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
-	specInterrupt      = "`interrupt` stops the running turn only. The next queued input then starts"
+	specInterrupt      = "`interrupt` stops the running turn. The next queued input then starts"
 	specSameBody       = "| Same id, same body | `200` with the original receipt |"
 	specOtherBody      = "| Same id, other body | `409 input_conflict` |"
 	specTurnMismatch   = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
@@ -141,7 +141,7 @@ const (
 	specWindow          = "of the window of the session model, or of the window of the reading when the model reports none"
 	specFailedSummary   = "A failed summary appends nothing, and the turn starts on the full history."
 	specOpenStarts      = "The next owner thus runs the input that waited for a stopped summary"
-	specInterruptTable  = "| `Interrupt` | Stops the turn | Stops it and appends nothing | Stops nothing |"
+	specInterruptTable  = "| `Interrupt` | Stops the turn, and ends an active goal | Stops it and appends nothing | Stops nothing |"
 	specCompactBusy     = "| `Compact` | `session_busy` | `session_busy` | `session_busy` |"
 	specOverflowTwice   = "With no new input in the turn, a second overflow fails it"
 	specFailedRuns      = "After any other failed turn, the next queued input runs, as after a completed turn."
@@ -470,6 +470,8 @@ var runtimeRows = map[string]runtimeRow{
 	"goal_impossible_verdict_fails_the_goal":                                 reGolden(specView, specGoalImpossible, specGoalPrompt),
 	"goal_set_on_a_busy_session_judges_the_running_turn":                     reGolden(specView, specGoalBusy),
 	"goal_clear_and_input_during_a_goal_turn":                                reGolden(specView, specGoalClear, specGoalWithdraw),
+	"interrupt_during_a_goal_turn_ends_the_goal":                             sameAsServe(),
+	"goal_set_after_an_interrupt_runs_normally":                              sameAsServe(),
 	"interrupt_during_goal_evaluation_keeps_the_goal":                        reGolden(specView, specErrors, specGoalInterrupted, specCompactBusy),
 	"goal_judges_the_last_turn_after_a_restart":                              reGolden(specView, specGoalRestart),
 	"claudecode_child_and_goal_sessions_ask_no_question":                     reGolden(specTaskInputs, specChildReport, specChildNoGoal, specAskRule),

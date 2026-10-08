@@ -64,6 +64,46 @@ func TestContractSessionGoals(t *testing.T) {
 	})
 }
 
+func TestContractSessionGoalInterrupt(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "interrupt_during_a_goal_turn_ends_the_goal",
+			model: []harnesstest.Step{
+				{Name: "slow", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working", Block: true}},
+				evaluatorStep("judge", "NOT MET: more", true),
+				agentStep("rest", "ok", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 3},
+				awaitRequests{n: 1},
+				enqueueNext{as: "a", text: "hi"},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+		{
+			name: "goal_set_after_an_interrupt_runs_normally",
+			model: []harnesstest.Step{
+				{Name: "slow", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working", Block: true}},
+				agentStep("work", "done", true),
+				evaluatorStep("judge", "MET: ok", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 3},
+				awaitRequests{n: 1},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 3},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+	})
+}
+
 func TestContractSessionGoalEvaluation(t *testing.T) {
 	held := func(name string, matcher harnesstest.Matcher) harnesstest.Step {
 		return harnesstest.Step{Name: name, Match: matcher, Reply: harnesstest.Reply{Text: "MET: ok", Block: true}}

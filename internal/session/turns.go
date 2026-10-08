@@ -411,9 +411,22 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	case r == nil || turnID != "" && turnID != r.id:
 		reply(struct{}{}, ErrTurnMismatch)
 	default:
+		if err := a.endGoal(r, why); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
 		r.cancel(why)
 		r.waiters = append(r.waiters, replyAppend(reply))
 	}
+}
+
+// endGoal clears an active goal when a user stop ends its turn r, and
+// withdraws the queued goal inputs, so no goal turn starts after the stop.
+func (a *Actor) endGoal(r *running, why error) error {
+	if g, _ := a.state.Goal(); !errors.Is(why, errStopTurn) || r.kind != kindTurn || g.State != eventlog.GoalActive {
+		return nil
+	}
+	return a.append(append(a.withdrawGoal(), eventlog.GoalChanged{State: eventlog.GoalCleared, Reason: goalInterrupted})...)
 }
 
 // Release hands the session off: it suspends the running turn at an item
