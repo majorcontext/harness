@@ -42,6 +42,7 @@ func (h host) open(t *testing.T, configPath string, env map[string]string, args 
 type laneHost interface {
 	driver
 	awaitAssistantText(t *testing.T, id, text string)
+	awaitAdmitted(t *testing.T, id, text string, n int)
 	resolveQuestion(t *testing.T, id, callID string, res resolution) callResult
 	journalEvents(t *testing.T, id, prefix string) []any
 	messageParents(t *testing.T, id string) callResult

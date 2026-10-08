@@ -98,33 +98,30 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 
 func TestContractClaudeCodeChildReport(t *testing.T) {
 	settled := []action{waitIdle{as: "a"}, claudeInputs{as: "a"}}
+	reported := func(n int) []action {
+		return append([]action{
+			create{as: "a"},
+			submit{as: "a", text: "delegate"},
+			claudeAwaitAdmitted{as: "a", text: "A background task you started has finished", n: n},
+			claudeCloseWindow{},
+			claudeAwaitText{as: "a", text: "noted"},
+		}, settled...)
+	}
 	runScenarios(t, []scenario{
 		{
-			name:   "claudecode_child_report_waits_for_the_next_turn",
-			driver: claudeLaneDriver("child_report"),
-			actions: append([]action{
-				create{as: "a"},
-				submit{as: "a", text: "delegate"},
-				claudeAwaitText{as: "a", text: "noted"},
-			}, settled...),
+			name:    "claudecode_child_report_waits_for_the_next_turn",
+			driver:  claudeLaneDriver("child_report"),
+			actions: reported(1),
 		},
 		{
-			name:   "claudecode_child_reports_share_the_next_turn",
-			driver: claudeLaneDriver("child_reports"),
-			actions: append([]action{
-				create{as: "a"},
-				submit{as: "a", text: "delegate"},
-				claudeAwaitText{as: "a", text: "noted"},
-			}, settled...),
+			name:    "claudecode_child_reports_share_the_next_turn",
+			driver:  claudeLaneDriver("child_reports"),
+			actions: reported(2),
 		},
 		{
-			name:   "claudecode_long_child_result_has_no_readable_handle",
-			driver: claudeLaneDriver("child_report_long"),
-			actions: append([]action{
-				create{as: "a"},
-				submit{as: "a", text: "delegate"},
-				claudeAwaitText{as: "a", text: "noted"},
-			}, settled...),
+			name:    "claudecode_long_child_result_has_no_readable_handle",
+			driver:  claudeLaneDriver("child_report_long"),
+			actions: reported(1),
 		},
 		{
 			name:   "claudecode_queued_prompt_and_child_report_share_a_turn",
@@ -135,6 +132,8 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 				claudeAwaitText{as: "a", text: "Delegating."},
 				enqueueNext{as: "a", text: "next step"},
 				writeFile{path: "child.gate", body: "open\n"},
+				claudeAwaitAdmitted{as: "a", text: "A background task you started has finished", n: 1},
+				claudeCloseWindow{},
 				claudeAwaitText{as: "a", text: "noted"},
 			}, settled...),
 		},
@@ -316,6 +315,7 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
 				claudeAwaitText{as: "a", text: "WAITING_FOR_QUEUE"},
 				enqueue{as: "a", text: "second"},
+				claudeCloseWindow{},
 				waitIdle{as: "a"},
 				claudeSession{as: "a"},
 				claudeInputs{as: "a"},

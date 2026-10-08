@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"time"
 )
 
@@ -43,8 +44,10 @@ func queueInjection(f *fake) {
 	f.emit(queueResult(text))
 }
 
-// awaitQueued reads one queued message from stdin. It gives up after a
-// bound, so a driver that never writes fails the test instead of hanging it.
+// awaitQueued reads one queued message from stdin. It stops waiting when the
+// test opens the window gate, so a test that asserts no message arrives
+// closes the window itself instead of waiting out a clock. A test that never
+// opens the gate gets an error result and a non-zero exit after a bound.
 func awaitQueued(f *fake) (string, bool) {
 	line := make(chan string, 1)
 	go func() {
@@ -52,12 +55,24 @@ func awaitQueued(f *fake) (string, bool) {
 			line <- l
 		}
 	}()
-	select {
-	case l := <-line:
-		return queuedContent(l)
-	case <-time.After(3 * time.Second):
-		return "", false
+	for deadline := time.Now().Add(gateWait); time.Now().Before(deadline); time.Sleep(gatePoll) {
+		select {
+		case l := <-line:
+			return queuedContent(l)
+		default:
+		}
+		if gateOpen(windowGateFile) {
+			select {
+			case l := <-line:
+				return queuedContent(l)
+			default:
+				return "", false
+			}
+		}
 	}
+	f.emit(result("error_during_execution", true, "window gate never opened", 0, 0))
+	os.Exit(1)
+	return "", false
 }
 
 // steer runs a tool and reads one input line while the tool runs, as the
