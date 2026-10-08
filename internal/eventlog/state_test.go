@@ -39,6 +39,11 @@ func result(turn, item, id string) Event {
 		{Type: PartToolResult, CallID: id, Text: "ok"}}}}
 }
 
+func resultBlob(turn, item, id, key string) Event {
+	return ItemCompleted{ItemID: item, TurnID: turn, Message: Message{Role: RoleTool, Parts: []Part{
+		{Type: PartToolResult, CallID: id, Text: "ok", Blobs: []Part{{Type: PartBlob, MediaType: "image/png", BlobKey: key, Bytes: 4}}}}}}
+}
+
 func end(turn string, r StopReason, cause Cause) Event {
 	return TurnEnded{TurnID: turn, StopReason: r, Cause: cause}
 }
@@ -152,6 +157,8 @@ var applyRows = []struct {
 	{"a turn starts only from queued inputs", with(base, start("t1", "x")), "input x is unknown", view{}},
 	{"an item needs its turn running", with(running, call("t2", "i1", "c1")), "turn t2 is not running", view{}},
 	{"a tool result closes its call", with(calling, result("t1", "i2", "c1"), end("t1", StopCompleted, "")), "", view{Status: StatusIdle}},
+	{"a tool result holds blob parts with a key", with(calling, resultBlob("t1", "i2", "c1", "toolblob-1"), end("t1", StopCompleted, "")), "", view{Status: StatusIdle}},
+	{"a tool result blob needs a key", with(calling, resultBlob("t1", "i2", "c1", "")), "tool result c1 has a blob 0 that is not a blob part with a blob_key", view{}},
 	{"a tool call gets one result", with(calling, result("t1", "i2", "c1"), result("t1", "i3", "c1")), "no open tool call c1", view{}},
 	{"a tool call id is open once", with(calling, call("t1", "i2", "c1")), "tool call c1 is open", view{}},
 	{"a turn does not end with an unanswered tool call", with(calling, end("t1", StopCompleted, "")), "tool call c1 has no result", view{}},

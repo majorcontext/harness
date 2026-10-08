@@ -26,8 +26,15 @@ func toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (messa
 		case eventlog.PartToolCall:
 			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
 		case eventlog.PartToolResult:
-			out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError,
-				Content: message.Parts{&message.Text{Text: p.Text}}})
+			content := message.Parts{&message.Text{Text: p.Text}}
+			for _, b := range p.Blobs {
+				data, err := readBlob(ctx, req, b.BlobKey)
+				if err != nil {
+					return message.Message{}, fmt.Errorf("modelapi: tool result image %s: %w", b.BlobKey, err)
+				}
+				content = append(content, &message.Blob{MediaType: b.MediaType, Data: data})
+			}
+			out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError, Content: content})
 		case eventlog.PartBlob:
 			data, err := readBlob(ctx, req, p.BlobKey)
 			if err != nil {

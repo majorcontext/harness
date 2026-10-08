@@ -35,6 +35,10 @@ type wireBlock struct {
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
 	IsError   bool            `json:"is_error"`
+	Source    struct {
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+	} `json:"source"`
 }
 
 func decodeRequest(body []byte) (Request, error) {
@@ -64,7 +68,7 @@ func decodeRequest(body []byte) (Request, error) {
 			case "tool_result":
 				msg.Parts = append(msg.Parts, Part{
 					Kind: "tool_result", Text: joinText(b.Content), ToolName: toolNames[b.ToolUseID],
-					ToolUseID: b.ToolUseID, IsError: b.IsError,
+					ToolUseID: b.ToolUseID, IsError: b.IsError, Images: imageURIs(b.Content),
 				})
 			}
 		}
@@ -81,6 +85,17 @@ func blocks(raw json.RawMessage) []wireBlock {
 	var bs []wireBlock
 	_ = json.Unmarshal(raw, &bs)
 	return bs
+}
+
+// imageURIs is the data URI of each image block of raw, in order.
+func imageURIs(raw json.RawMessage) []string {
+	var uris []string
+	for _, b := range blocks(raw) {
+		if b.Type == "image" {
+			uris = append(uris, "data:"+b.Source.MediaType+";base64,"+b.Source.Data)
+		}
+	}
+	return uris
 }
 
 func joinText(raw json.RawMessage) string {

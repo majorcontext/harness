@@ -1,8 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/toolresult"
@@ -27,6 +30,17 @@ func (t *turnRun) Item(m eventlog.Message) error {
 	t.item = ""
 	_, err := call(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.item(t.r, id, m)) })
 	return err
+}
+
+// Attach stores data under a key that its digest names, so a repeat of the same
+// bytes is one blob. The Store holds the blob before the record that names it.
+func (t *turnRun) Attach(mediaType string, data []byte) (eventlog.Part, error) {
+	sum := sha256.Sum256(data)
+	key := "toolblob-" + hex.EncodeToString(sum[:])
+	if err := t.a.cfg.Store.PutBlob(t.a.cfg.Base, key, bytes.NewReader(data)); err != nil {
+		return eventlog.Part{}, err
+	}
+	return eventlog.Part{Type: eventlog.PartBlob, MediaType: mediaType, BlobKey: key, Bytes: len(data)}, nil
 }
 
 // Started announces a new item and makes it the item of the next Item.

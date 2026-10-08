@@ -34,6 +34,9 @@ func (r *recorder) Started() string {
 	r.started++
 	return fmt.Sprintf("item_%d", r.started)
 }
+func (*recorder) Attach(string, []byte) (eventlog.Part, error) {
+	return eventlog.Part{}, nil
+}
 func (*recorder) Alive()                   {}
 func (*recorder) Telemetry(turn.Telemetry) {}
 func (r *recorder) Steer() ([]eventlog.Message, error) {

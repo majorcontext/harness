@@ -42,7 +42,7 @@ const (
 	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued."
 	specHandoffResume = "A suspended turn has no open tool call, so the next owner resumes it automatically."
 	specQueue         = "(queue: next turn; steer: next item boundary)"
-	specMCPText       = "By design, an error has no `engine:` prefix, a call to a tool that is not there reads `no such tool available`, binary content becomes text"
+	specMCPText       = "By design, an error has no `engine:` prefix, a call to a tool that is not there reads `no such tool available`"
 	specMCPNotice     = "The notice is part of the system prompt where the engine pinned it as a message"
 	specGoalDeferred  = "The deferred and parked rows are deleted."
 	specCursor        = "One per-session `seq` serves paging and SSE resume."
@@ -81,7 +81,7 @@ const (
 	specNoReader     = "A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call."
 	specRetainIndex  = "Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds."
 	specFileCap      = "A file-size cap of 20 MiB bounds one file:"
-	specImageLine    = "`read_file` reads an image as one summary line."
+	specToolImages   = "A reader of the history that shows text (`View.Messages`, `get_conversation_history`, the `log` of `task`) shows the text of the result and no blob."
 	specProfileSkip  = "A file that is not valid is skipped with a WARN log line."
 	specProfileModel = "`model` (a ref or an alias; omitted or `inherit` keeps the model of the parent)"
 	specProfileColor = "`color` is read and ignored"
@@ -199,7 +199,8 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_hooks_run_for_each_call_of_a_batch":                              sameAsServe(),
 	"file_tools_size_cap":                                                    reGolden(specFileCap),
 	"bash_output_and_exit_status":                                            sameAsServe(),
-	"read_file_returns_an_image":                                             reGolden(specImageLine),
+	"read_file_returns_an_image":                                             reGolden(specToolImages),
+	"a_tool_result_image_reaches_the_model_after_a_restart":                  sameAsServe(),
 	"write_guard_belongs_to_one_session":                                     sameAsServe(),
 	"mcp_tool_action_refusals":                                               reGolden(specMCPNotice, specMCPText),
 	"mcp_refused_call_hides_the_response_body":                               reGolden(specMCPNoLeak, specMCPText),
@@ -339,7 +340,7 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_lazy_call_without_select_loads_the_tool":                            sameAsServe(),
 	"mcp_lazy_search_select_then_call":                                       sameAsServe(),
 	"mcp_lazy_select_reports_each_name":                                      sameAsServe(),
-	"mcp_non_text_results_become_text_and_blobs":                             reGolden(specMCPText),
+	"mcp_non_text_results_become_text_and_blobs":                             reGolden(specToolImages),
 	"mcp_paged_tool_list_is_merged":                                          sameAsServe(),
 	"mcp_per_server_tool_loading_overrides_global":                           sameAsServe(),
 	"mcp_resources_list_and_read":                                            reGolden(specMCPText),

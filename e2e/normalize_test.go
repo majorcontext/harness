@@ -89,6 +89,7 @@ type normReqPart struct {
 	ToolInput map[string]any `json:"tool_input,omitempty"`
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	IsError   bool           `json:"is_error,omitempty"`
+	Images    []string       `json:"images,omitempty"`
 }
 
 type normMessage struct {
@@ -297,7 +298,7 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 			for _, p := range m.Parts {
 				nm.Parts = append(nm.Parts, normReqPart{
 					Kind: p.Kind, Text: n.mask(p.Text), ToolName: p.ToolName, ToolInput: scrubInput(n, p.ToolInput),
-					ToolUseID: n.id(p.ToolUseID), IsError: p.IsError,
+					ToolUseID: n.id(p.ToolUseID), IsError: p.IsError, Images: p.Images,
 				})
 			}
 			nr.Messages = append(nr.Messages, nm)

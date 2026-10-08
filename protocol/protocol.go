@@ -57,10 +57,18 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// ToolResult is what a tool call returns to the model.
+// Blob is binary content of a tool result, such as an image.
+type Blob struct {
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
+// ToolResult is what a tool call returns to the model. The model reads each
+// blob after the text.
 type ToolResult struct {
 	Text    string `json:"text"`
 	IsError bool   `json:"is_error,omitempty"`
+	Blobs   []Blob `json:"blobs,omitempty"`
 }
 
 // Usage counts tokens.

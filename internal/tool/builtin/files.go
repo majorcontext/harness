@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 const (
@@ -49,38 +51,42 @@ const readFileSchema = `{
 }`
 
 func (d dir) readFile() tool {
-	return newTool("read_file", "Read a file and return its content with line numbers (N→ prefixes). A recognized image file (PNG, JPEG, GIF, WebP) is returned as one line that names its type, size, and pixel dimensions, not its content. Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
-		readFileSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
+	return newResultTool("read_file", "Read a file and return its content with line numbers (N→ prefixes). A recognized image file (PNG, JPEG, GIF, WebP) is returned as an image where the current provider supports tool-result images. Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
+		readFileSchema, func(ctx context.Context, args json.RawMessage) (protocol.ToolResult, error) {
 			var in struct {
 				Path   string `json:"path"`
 				Offset int    `json:"offset"`
 				Limit  int    `json:"limit"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil || in.Path == "" {
-				return "", errors.New("read_file: missing path argument")
+				return protocol.ToolResult{}, errors.New("read_file: missing path argument")
 			}
 			path := d.resolve(in.Path)
 			info, err := os.Stat(path)
 			if err != nil {
-				return "", fmt.Errorf("read_file: %w", err)
+				return protocol.ToolResult{}, fmt.Errorf("read_file: %w", err)
 			}
 			if info.IsDir() {
-				return "", fmt.Errorf("read_file: %s is a directory", path)
+				return protocol.ToolResult{}, fmt.Errorf("read_file: %s is a directory", path)
 			}
 			release, err := d.mem.reserve(ctx, info.Size())
 			if err != nil {
-				return "", fmt.Errorf("read_file: %w", err)
+				return protocol.ToolResult{}, fmt.Errorf("read_file: %w", err)
 			}
 			defer release()
 			c, err := readContent(path)
 			if err != nil {
-				return "", fmt.Errorf("read_file: %s: %w", path, err)
+				return protocol.ToolResult{}, fmt.Errorf("read_file: %s: %w", path, err)
 			}
 			if c.image {
 				d.read.record(path, c.data)
-				return fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", c.mediaType, len(c.data), c.width, c.height), nil
+				return protocol.ToolResult{
+					Text:  fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", c.mediaType, len(c.data), c.width, c.height),
+					Blobs: []protocol.Blob{{MediaType: c.mediaType, Data: c.data}},
+				}, nil
 			}
-			return d.lines(path, c.data, in.Offset, in.Limit)
+			text, err := d.lines(path, c.data, in.Offset, in.Limit)
+			return protocol.ToolResult{Text: text}, err
 		})
 }
 
