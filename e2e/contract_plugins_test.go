@@ -234,6 +234,14 @@ func TestContractPluginHooks(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
+			name:   "plugin_chat_params_hook_sets_the_cap_and_sampling_of_a_model_call",
+			config: pluginConfig(t, map[string]any{"chat_params": map[string]any{"max_tokens": 77, "temperature": 0.25, "top_p": 0.5}}),
+			model: []harnesstest.Step{{Name: "tuned", Match: func(r harnesstest.Request) bool {
+				return r.MaxTokens == 77 && r.Temperature != nil && *r.Temperature == 0.25 && r.TopP != nil && *r.TopP == 0.5
+			}, Reply: harnesstest.Reply{Text: "tuned"}}},
+			actions: oneTurn,
+		},
+		{
 			name:   "plugin_event_and_after_hook_payloads",
 			config: cfg,
 			model: toolChain(

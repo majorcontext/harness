@@ -101,6 +101,8 @@ type Config struct {
 	Limits turn.Limits
 	// MaxTokens caps the response of each model call of a turn. Zero: the backend default.
 	MaxTokens int
+	// Params runs the chat.params hooks before each model call of a turn. nil: none.
+	Params func(ctx context.Context, p turn.CallParams) turn.CallParams
 	// Threshold is the share of the context window at which the next turn compacts first.
 	Threshold float64
 	// KeepTurns is the number of newest turns that a compaction keeps.

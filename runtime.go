@@ -343,6 +343,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Retain:          r.workDir != "",
 		Prompt:          sp.system,
 		Appended:        r.appended(id, plug),
+		Params:          chatParams(plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
 		MaxTokens:       r.maxTokens,
@@ -691,3 +692,10 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
 func (r *Runtime) Models() []protocol.Model { return r.models.List() }
+
+func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) turn.CallParams {
+	if plug == nil {
+		return nil
+	}
+	return plug.ChatParams
+}

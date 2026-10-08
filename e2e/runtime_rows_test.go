@@ -71,7 +71,7 @@ const (
 	specGoalFailed   = "An error the user must fix yields `failed`."
 	specNoParkedGoal = "There is no deferred goal and no parked goal."
 
-	specPromptSwitch = "At the switch, the `runtime_prompt` contract rows change in three ways"
+	specPromptSwitch = "At the switch, the `runtime_prompt` contract rows change in two ways"
 	specBadFileSkip  = "a bad file degrades instead of failing the turn"
 	specNoBatching   = "no batching segment follows the base prompt"
 	specBlankJoin    = "The runtime joins them with a blank line."
@@ -368,6 +368,7 @@ var runtimeRows = map[string]runtimeRow{
 	"persisted_queue_dispatches_after_deferred_arm":                        deletedBy(specGoalDeferred),
 	"plugin_after_hook_sees_output":                                        sameAsServe(),
 	"plugin_before_hook_rewrites_and_blocks":                               sameAsServe(),
+	"plugin_chat_params_hook_sets_the_cap_and_sampling_of_a_model_call":    sameAsServe(),
 	"plugin_shell_env_hook_sets_the_environment_of_a_bash_command":         sameAsServe(),
 	"plugin_boxes_style_command_and_dir":                                   sameAsServe(),
 	"plugin_crash_mid_call_session_continues":                              reGolden(specView),

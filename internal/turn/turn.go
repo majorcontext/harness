@@ -93,6 +93,20 @@ type Request struct {
 	BannerAt int
 	// Blob reads the bytes of a blob part.
 	Blob func(ctx context.Context, key string) ([]byte, error)
+	// Params changes the model, the output cap, and the sampling of each
+	// model call of a backend that does not own the loop. nil: none.
+	Params func(ctx context.Context, p CallParams) CallParams
+	// Temperature and TopP are the sampling values of a call. nil: the provider default.
+	Temperature, TopP *float64
+}
+
+// CallParams are the parameters of one model call that a Params hook changes.
+// An empty Model keeps the model of the call.
+type CallParams struct {
+	Model       string
+	MaxTokens   int
+	Temperature *float64
+	TopP        *float64
 }
 
 // Delta is a piece of an item that is not complete yet.
@@ -214,13 +228,13 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
-		if m, set := to.Settings(); m != "" {
-			if b.Capabilities(m).OwnsLoop != caps.OwnsLoop {
-				return fmt.Errorf("turn: the model changed to %s, which another kind of backend runs, so this turn cannot call it", m)
-			}
-			req.Model, req.Settings = m, set
+		if err := adopt(b, caps, to, &req); err != nil {
+			return err
 		}
 		s, call := &sink{Turn: to}, req
+		if err := applyParams(step, b, caps, req, &call); err != nil {
+			return err
+		}
 		t := describe(step, &call, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
@@ -377,4 +391,32 @@ func (s *sink) Steer() ([]eventlog.Message, error) {
 	in, err := s.Turn.Steer()
 	s.items = append(s.items, in...)
 	return in, err
+}
+
+// applyParams runs the Params hook of req and sets its result on call.
+func applyParams(ctx context.Context, b Backend, caps Capabilities, req Request, call *Request) error {
+	if req.Params == nil || caps.OwnsLoop {
+		return nil
+	}
+	p := req.Params(ctx, CallParams{Model: req.Model, MaxTokens: req.MaxTokens})
+	if p.Model != "" && p.Model != req.Model {
+		if b.Capabilities(p.Model).OwnsLoop {
+			return fmt.Errorf("turn: a chat.params hook set the model to %s, which another kind of backend runs, so this turn cannot call it", p.Model)
+		}
+		call.Model = p.Model
+	}
+	call.MaxTokens, call.Temperature, call.TopP = p.MaxTokens, p.Temperature, p.TopP
+	return nil
+}
+
+// adopt sets the model and settings that the session has now on req. It fails
+// when the model needs another kind of backend than caps.
+func adopt(b Backend, caps Capabilities, to Turn, req *Request) error {
+	if m, set := to.Settings(); m != "" {
+		if b.Capabilities(m).OwnsLoop != caps.OwnsLoop {
+			return fmt.Errorf("turn: the model changed to %s, which another kind of backend runs, so this turn cannot call it", m)
+		}
+		req.Model, req.Settings = m, set
+	}
+	return nil
 }

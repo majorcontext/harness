@@ -162,6 +162,25 @@ func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []s
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
 }
 
+// ChatParams runs the chat.params chain for one model call. An empty model in
+// the result keeps p.Model; a nil sampling value keeps the provider default.
+func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallParams {
+	in := plugin.ChatParams{Temperature: p.Temperature, TopP: p.TopP}
+	if p.MaxTokens > 0 {
+		in.MaxTokens = &p.MaxTokens
+	}
+	in.Model, _ = message.ParseModelRef(p.Model)
+	out := s.host.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.id, Params: in})
+	if !out.Model.IsZero() {
+		p.Model = out.Model.String()
+	}
+	if out.MaxTokens != nil {
+		p.MaxTokens = *out.MaxTokens
+	}
+	p.Temperature, p.TopP = out.Temperature, out.TopP
+	return p
+}
+
 // ShellEnv returns the variables that the shell.env hooks add to a bash command.
 func (s *Session) ShellEnv(ctx context.Context, command string) map[string]string {
 	return s.host.ShellEnv(ctx, &plugin.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.workDir})
