@@ -60,7 +60,13 @@
           {
             "type": "text",
             "text": "WAITING_FOR_QUEUE"
-          },
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
           {
             "type": "tool_call",
             "call_id": "toolu#2",
@@ -72,7 +78,7 @@
         ]
       },
       {
-        "id": "msg#5",
+        "id": "msg#6",
         "role": "tool",
         "parts": [
           {
@@ -83,7 +89,7 @@
         ]
       },
       {
-        "id": "msg#6",
+        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
@@ -93,7 +99,7 @@
         ]
       },
       {
-        "id": "msg#7",
+        "id": "msg#8",
         "role": "user",
         "parts": [
           {
@@ -103,7 +109,7 @@
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#9",
         "role": "assistant",
         "parts": [
           {
@@ -113,7 +119,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {
@@ -127,7 +133,7 @@
         ]
       },
       {
-        "id": "msg#10",
+        "id": "msg#11",
         "role": "tool",
         "parts": [
           {
@@ -138,7 +144,7 @@
         ]
       },
       {
-        "id": "msg#11",
+        "id": "msg#12",
         "role": "assistant",
         "parts": [
           {
@@ -217,7 +223,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 27,
+        "head_seq": 28,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

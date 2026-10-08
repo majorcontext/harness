@@ -1,9 +1,11 @@
 package gates
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -167,55 +169,159 @@ func fakeClaudeModes(t *testing.T, bin string) []string {
 	return strings.Fields(string(out))
 }
 
+const (
+	claudeUserLine    = `{"type":"user","message":{"role":"user","content":"hi"}}`
+	claudeAnswerLine  = `{"type":"control_response","response":{"subtype":"success","request_id":"req-1","response":{"behavior":"allow"}}}`
+	claudeDismissLine = `{"type":"control_response","response":{"subtype":"success","request_id":"req-1","response":{"behavior":"deny","message":"dismissed","interrupt":true}}}`
+	claudeMirrorDir   = "../../harnesstest/fakeclaude/testdata/"
+	claudeRunBound    = 30 * time.Second
+)
+
+// fakeClaudeHangs holds the modes that print and then wait for a signal. The
+// driver sends SIGINT after their first frame, so the frames of the
+// interrupted turn reach the gate.
+var fakeClaudeHangs = map[string]bool{
+	"hang_after_text": true, "hang_after_listing": true, "hang_in_tool": true,
+	"tool_on_interrupt": true, "tool_result_on_interrupt": true, "success_on_interrupt": true,
+	"placeholder_on_interrupt": true, "exit_on_interrupt": true,
+}
+
 // fakeClaudeExitsByDesign holds the modes that end with an error or print no
 // frame on purpose, or that need an MCP server this driver does not run.
 var fakeClaudeExitsByDesign = map[string]bool{"crash": true, "crash_before_init": true, "mcp": true}
 
-// fakeClaudeFrames runs the fake in one mode with one user line on stdin and
-// returns the frames it printed before it ended or the deadline passed.
-func fakeClaudeFrames(t *testing.T, bin, mode string) []byte {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// claudeSpawn is one process of a scenario: the lines it reads on stdin, and
+// whether the driver interrupts it after its first frame.
+type claudeSpawn struct {
+	stdin   []string
+	signal  bool
+	nonzero bool
+}
+
+// claudeRun is a sequence of spawns of one mode that share one state file, as
+// the harness resumes a session with a new process.
+type claudeRun struct {
+	mode   string
+	env    []string
+	spawns []claudeSpawn
+}
+
+// claudeRuns lists the runs that show every frame a mode can print: one
+// spawn for most modes, a park and a resume for each question mode, a
+// dismissed question, two spawns for the mirror, a queued line for the modes
+// that read one, and an interrupt for the modes that hang.
+func claudeRuns(modes []string) []claudeRun {
+	queued := []string{claudeUserLine, claudeUserLine}
+	var runs []claudeRun
+	for _, mode := range append([]string{""}, modes...) {
+		one := claudeRun{mode: mode, spawns: []claudeSpawn{{stdin: []string{claudeUserLine}, nonzero: fakeClaudeExitsByDesign[mode]}}}
+		switch {
+		case fakeClaudeHangs[mode]:
+			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}, signal: true, nonzero: true}}
+		case strings.HasPrefix(mode, "question"):
+			resume := claudeSpawn{stdin: []string{claudeAnswerLine}}
+			if mode == "question_continues" {
+				resume.stdin = []string{claudeAnswerLine, claudeUserLine}
+			}
+			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}}, resume}
+			if mode == "question" {
+				runs = append(runs, claudeRun{mode: mode, spawns: []claudeSpawn{{stdin: []string{claudeUserLine}}, {stdin: []string{claudeDismissLine}, nonzero: true}}})
+			}
+		case mode == "mirror":
+			one.env = []string{"FAKE_CLAUDE_MIRROR_FIXTURE=" + claudeMirrorDir + "run1.stdout.jsonl," + claudeMirrorDir + "run2.stdout.jsonl"}
+			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}}, {stdin: []string{claudeUserLine}}}
+		case mode == "queue_injection" || mode == "steer":
+			one.spawns = []claudeSpawn{{stdin: queued}}
+		}
+		runs = append(runs, one)
+	}
+	return runs
+}
+
+func runClaudeSpawn(ctx context.Context, bin string, env []string, sp claudeSpawn) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin)
-	state := filepath.Join(t.TempDir(), "state")
-	cmd.Env = append(os.Environ(), "FAKE_CLAUDE_MODE="+mode, "FAKE_CLAUDE_STATE="+state,
-		"CLAUDE_CONFIG_DIR="+t.TempDir(), "FAKE_CLAUDE_MIRROR_FIXTURE=../../harnesstest/fakeclaude/testdata/run1.stdout.jsonl")
-	cmd.Stdin = strings.NewReader(`{"type":"user","message":{"role":"user","content":"hi"}}` + "\n")
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(strings.Join(sp.stdin, "\n") + "\n")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	r := bufio.NewReader(stdout)
 	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil && ctx.Err() == nil && !fakeClaudeExitsByDesign[mode] {
-		t.Errorf("fakeclaude mode %q: %v", mode, err)
+	if sp.signal {
+		first, err := r.ReadBytes('\n')
+		out.Write(first)
+		if err != nil {
+			_ = cmd.Wait()
+			return out.Bytes(), errors.New("printed no frame before the signal")
+		}
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			_ = cmd.Wait()
+			return out.Bytes(), errors.New("ended before the signal; remove it from fakeClaudeHangs")
+		}
 	}
-	if out.Len() == 0 && !fakeClaudeExitsByDesign[mode] {
-		t.Errorf("fakeclaude mode %q printed no frames", mode)
+	rest, _ := io.ReadAll(r)
+	out.Write(rest)
+	werr := cmd.Wait()
+	if ctx.Err() != nil {
+		return out.Bytes(), errors.New("did not end; add it to fakeClaudeHangs")
 	}
-	return out.Bytes()
+	if _, exit := errors.AsType[*exec.ExitError](werr); werr != nil && (!exit || !sp.nonzero) {
+		return out.Bytes(), werr
+	}
+	return out.Bytes(), nil
+}
+
+func runClaude(t *testing.T, bin string, run claudeRun) [][]byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), claudeRunBound)
+	defer cancel()
+	dir := t.TempDir()
+	env := append(os.Environ(), "FAKE_CLAUDE_MODE="+run.mode, "FAKE_CLAUDE_STATE="+filepath.Join(dir, "state"),
+		"FAKE_CLAUDE_SIGNAL_LOG="+filepath.Join(dir, "signal"), "CLAUDE_CONFIG_DIR="+filepath.Join(dir, "cfg"),
+		"FAKE_CLAUDE_MIRROR_FIXTURE="+claudeMirrorDir+"run1.stdout.jsonl")
+	env = append(env, run.env...)
+	var outs [][]byte
+	for i, sp := range run.spawns {
+		out, err := runClaudeSpawn(ctx, bin, env, sp)
+		if err != nil {
+			t.Errorf("fakeclaude mode %q spawn %d: %v", run.mode, i+1, err)
+		}
+		if len(out) == 0 && !fakeClaudeExitsByDesign[run.mode] {
+			t.Errorf("fakeclaude mode %q spawn %d printed no frames", run.mode, i+1)
+		}
+		outs = append(outs, out)
+	}
+	return outs
 }
 
 func fakeClaudeShape(t *testing.T) Shape {
 	t.Helper()
 	bin := buildFakeClaude(t)
-	modes := append([]string{""}, fakeClaudeModes(t, bin)...)
-	frames := make([][]byte, len(modes))
+	runs := claudeRuns(fakeClaudeModes(t, bin))
+	frames := make([][][]byte, len(runs))
 	var wg sync.WaitGroup
-	for i, mode := range modes {
+	for i, run := range runs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			frames[i] = fakeClaudeFrames(t, bin, mode)
+			frames[i] = runClaude(t, bin, run)
 		}()
 	}
 	wg.Wait()
 	s := Shape{}
-	for _, data := range frames {
-		events, err := DecodeJSONL(data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, ev := range events {
-			ClaudeCodeWire.Observe(s, ev)
+	for _, spawns := range frames {
+		for _, data := range spawns {
+			events, err := DecodeJSONL(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ev := range events {
+				ClaudeCodeWire.Observe(s, ev)
+			}
 		}
 	}
 	return s
