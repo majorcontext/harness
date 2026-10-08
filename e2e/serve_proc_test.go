@@ -78,8 +78,8 @@ func TestStartServeProcMovesOffATakenPort(t *testing.T) {
 	}
 }
 
-// waitOwned polls until the started process answers with its own token and
-// has opened its stored sessions. It reports false when the process exited on
+// waitOwned polls until the started process has bound its port, answers with
+// its own token and has opened its stored sessions. It reports false when the process exited on
 // a taken port, and fails the test on any other exit or on the deadline. Real
 // cross-process startup: poll on a short interval bounded by a deadline
 // (synctest N/A).
@@ -88,6 +88,9 @@ func (p *serveProc) waitOwned() bool {
 	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		if !p.alive() {
 			return true
+		}
+		if !strings.Contains(p.stderr.String(), `"serve start"`) {
+			return false
 		}
 		req, err := http.NewRequest(http.MethodGet, "http://"+p.addr+"/sessions", nil)
 		if err != nil {
