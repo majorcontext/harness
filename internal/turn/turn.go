@@ -153,6 +153,8 @@ type Sink interface {
 	SaveState(backend string, s Snapshot) error
 	// Compacted records that the backend compacted its own context.
 	Compacted(summary string) error
+	// Status sends an ephemeral status frame of the running turn.
+	Status(f protocol.StatusFrame)
 	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.
 	Ask(callID, kind string, payload json.RawMessage) error
 	Resolution(id string) (eventlog.RequestResolved, bool)
@@ -184,7 +186,6 @@ type Turn interface {
 	Started() string
 	// Attach stores a blob of a tool result and returns the blob part that names it.
 	Attach(mediaType string, data []byte) (eventlog.Part, error)
-	Status(f protocol.StatusFrame)
 	// Settings returns the model and settings of the session now, or "".
 	Settings() (string, eventlog.Settings)
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)

@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // run is one CLI run: it maps the frames of the CLI to items of the turn.
@@ -63,6 +64,8 @@ type run struct {
 	lastCall   *usage
 	compact    string
 	sawCompact bool
+	// compacting reports a compaction that the CLI started and did not settle.
+	compacting bool
 }
 
 // dismissing reports a run that only denies the parked call.
@@ -129,6 +132,7 @@ func (r *run) finish(ctx context.Context, err error) error {
 		r.proc.Interrupt()
 	}
 	exit := r.proc.Finish(grace, r.tail)
+	r.settleCompaction(protocol.StatusCompactionFailed)
 	if r.stopped {
 		err = stopError(err, context.Cause(ctx), r.result)
 	}
@@ -302,7 +306,17 @@ func (r *run) system(env envelope) error {
 		if reset {
 			return r.save()
 		}
+	case "status":
+		switch {
+		case env.Status == "compacting":
+			r.compacting = true
+			r.out.Status(protocol.StatusFrame{Status: protocol.StatusCompacting})
+		case env.CompactResult != "" && env.CompactResult != "success":
+			r.compacting = false
+			r.out.Status(protocol.StatusFrame{Status: protocol.StatusCompactionFailed})
+		}
 	case "compact_boundary":
+		r.settleCompaction(protocol.StatusRunning)
 		r.sawCompact = true
 		r.compact = "Claude Code compacted its context."
 		if m := env.CompactMetadata; m != nil {
@@ -337,6 +351,15 @@ func (r *run) compacted(env envelope) (isSummary bool, err error) {
 		summary, isSummary = s, true
 	}
 	return isSummary, r.out.Compacted(summary)
+}
+
+// settleCompaction ends the compaction that the CLI started with one status
+// frame, or sends none when the CLI started none.
+func (r *run) settleCompaction(status string) {
+	if r.compacting {
+		r.compacting = false
+		r.out.Status(protocol.StatusFrame{Status: status})
+	}
 }
 
 func (r *run) assistant(env envelope) error {

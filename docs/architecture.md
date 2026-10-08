@@ -406,7 +406,7 @@ Session status derives from the turn and the open requests:
 
 `retrying` is not a session status. A turn that waits for backoff sends an ephemeral `status` frame with `retrying`, `attempt`, and `next_at`, and the session stays `running`.
 
-A compaction that the actor runs as its own run, automatic or from `Compact`, sends an ephemeral `status` frame with `compacting` when it starts, and one frame when it ends: `idle` when the summary is appended, or `compaction_failed` when it is not. Each of the three frames carries the compaction ID in `turn_id`. The session stays `idle` during the run, and the frames are never stored. This is parity with the engine, which sent `compaction.started`, and `compaction.failed` for any failure, as live-only events (Andy 2026-10-08, parity). A compaction inside a turn sends no such frame.
+A compaction that the actor runs as its own run, automatic or from `Compact`, sends an ephemeral `status` frame with `compacting` when it starts, and one frame when it ends: `idle` when the summary is appended, or `compaction_failed` when it is not. Each of the three frames carries the compaction ID in `turn_id`. The session stays `idle` during the run, and the frames are never stored. This is parity with the engine, which sent `compaction.started`, and `compaction.failed` for any failure, as live-only events (Andy 2026-10-08, parity). A compaction inside a turn sends no such frame, except a compaction of the Claude Code CLI. When the CLI reports that it compacts, the turn sends a `status` frame with `compacting`. The turn then sends `running` when the CLI reports the compact boundary, before the summary is appended as `compaction.applied`, or `compaction_failed` when the CLI reports a compact result that is not a success, or when the CLI ends the turn with no compact boundary. The session stays `running`, and each of these frames carries the turn ID in `turn_id`. This is parity with the engine, which sent `compaction.started` on the CLI status `compacting` and `compaction.failed` for these two failures (Andy 2026-10-08, parity).
 
 The actor has one run at a time. A run is a turn, a compaction, or a goal evaluation, and all three end through one path that answers the waiters of the run and then starts the next work. Status derives from the turn alone, so `idle` also holds while a compaction or an evaluation runs, and `running` always has a `turn_id`. A command acts on each kind of run like this:
 
@@ -682,6 +682,7 @@ type Sink interface {
 	State(backend string) (Snapshot, error)  // the saved state, or the zero Snapshot
 	SaveState(backend string, s Snapshot) error // stores only the entries that the saved ones lack
 	Compacted(summary string) error
+	Status(f protocol.StatusFrame) // ephemeral frame
 	Ask(callID, kind string, payload json.RawMessage) error // open a request on an open tool call
 	Resolution(id string) (eventlog.RequestResolved, bool)  // the record that closed it
 }
@@ -693,7 +694,6 @@ The turn loop reports through one `Turn`, which the actor binds to the turn. No 
 type Turn interface {
 	Sink
 	Started() string               // announces an item and returns its ID; the next Item records under it
-	Status(f protocol.StatusFrame) // ephemeral frame
 	Settings() (string, eventlog.Settings) // the model and settings that the session holds now; "" after the turn stops
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
