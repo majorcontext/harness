@@ -122,21 +122,24 @@ func (s *Source) wait(ctx context.Context) bool {
 	s.start.Do(func() {
 		s.group.Go(func() {
 			var wg sync.WaitGroup
+			var okMu sync.Mutex
+			first := map[string]bool{}
 			for _, name := range s.names {
 				wg.Go(func() {
 					if err := s.connect(s.ctx, name); err != nil {
 						slog.Warn("mcp: server did not connect", "server", name, "err", hide(name, err))
+						s.group.Go(func() { s.retry(name) })
+						return
 					}
+					okMu.Lock()
+					first[name] = true
+					okMu.Unlock()
 				})
 			}
 			wg.Wait()
 			s.mu.Lock()
-			s.reached = slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return !s.servers[n].up() })
-			down := slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return s.servers[n].up() })
+			s.reached = slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return !first[n] })
 			s.mu.Unlock()
-			for _, name := range down {
-				s.group.Go(func() { s.retry(name) })
-			}
 			close(s.ready)
 		})
 	})

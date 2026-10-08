@@ -54,9 +54,14 @@ func (s *Source) retry(name string) {
 		slog.Warn("mcp: retry did not connect", "server", name, "err", hide(name, err))
 	}
 	s.mu.Lock()
-	s.health[name].parked = true
+	parked := !s.servers[name].up()
+	if parked {
+		s.health[name].parked = true
+	}
 	s.mu.Unlock()
-	slog.Warn("mcp: server parked; the mcp tool can connect it", "server", name)
+	if parked {
+		slog.Warn("mcp: server parked; the mcp tool can connect it", "server", name)
+	}
 }
 
 // unavailable renders the prompt line that names each server that is not
