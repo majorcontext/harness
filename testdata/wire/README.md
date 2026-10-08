@@ -1,6 +1,6 @@
 # Recorded wire streams
 
-These files are real model streams, recorded on 2026-10-08 and scrubbed. `TestWireDoublesMatchTheRealWire` in `internal/gates` checks the test doubles (`harnesstest` and `harnesstest/fakeclaude`) and the harness parsers against them.
+These files are real model streams, recorded on 2026-10-08 and scrubbed. `TestWireDoublesMatchTheRealWire` in `internal/gates` is the one check of the test doubles (`harnesstest` and `harnesstest/fakeclaude`) and the harness parsers against them. It drives every `fakeclaude` mode, including the resume of a parked question, the second process of the mirror, and a SIGINT after the first frame of a mode that hangs.
 
 | Files | Source |
 | --- | --- |
@@ -11,7 +11,7 @@ These files are real model streams, recorded on 2026-10-08 and scrubbed. `TestWi
 
 A `.sse` file is the response body of a streaming request. A `.jsonl` file is the stdout of the CLI; strings longer than 300 bytes are cut. An `.error.json` file holds the status and body of a failed request.
 
-Scrubbing (`internal/wirescrub`) replaces ids, request ids, session and account ids, emails, home paths, signatures, encrypted content, and token-like text with stable placeholders. It keeps the structure and every field name. The gate fails when a recording holds text that the scrubber would replace.
+Scrubbing (`internal/wirescrub`) replaces ids, request ids, session and account ids, emails, home paths, temporary, socket, and pid paths, signatures, encrypted content, and token-like text with stable placeholders. It keeps the structure and every field name. The gate fails when a recording holds text that the scrubber would replace.
 
 `allowed.txt` lists the reviewed exceptions: fields and kinds that a double or a parser has and that no recording holds, each with its reason. The gate fails on an exception that no check needs.
 

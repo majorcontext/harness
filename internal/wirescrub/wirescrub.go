@@ -25,6 +25,13 @@ var (
 	secret     = regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{8,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]*)?`)
 	opaque     = regexp.MustCompile(`"(signature|encrypted_content|obfuscation|accountUuid|organizationUuid|account_id|organization_id|email|user_id|userID|organizationName|displayName)"\s*:\s*"([^"\\]*)"`)
 	worktree   = regexp.MustCompile(`/(?:Users|home)/[A-Za-z0-9._-]+`)
+	localPath  = regexp.MustCompile(`(?:/private)?/(?:tmp|var/folders|run/user)/[^\s"'\\]+|/[^\s"'\\]+\.(?:sock|pid)\b`)
+)
+
+const (
+	localPathPrefix = "/tmp/fixture/"
+	emailSuffix     = "@example.com"
+	uuidPrefix      = "00000000-0000-4000-8000-"
 )
 
 // Scrubber maps each distinct identifier to one placeholder. One Scrubber
@@ -84,7 +91,16 @@ func (s *Scrubber) Bytes(data []byte) []byte { return []byte(s.String(string(dat
 func (s *Scrubber) String(text string) string {
 	text = secret.ReplaceAllString(text, "REDACTED")
 	text = email.ReplaceAllStringFunc(text, func(m string) string {
-		return s.placeholder("email", m, "user%d@example.com")
+		if strings.HasSuffix(m, emailSuffix) {
+			return m
+		}
+		return s.placeholder("email", m, "user%d"+emailSuffix)
+	})
+	text = localPath.ReplaceAllStringFunc(text, func(m string) string {
+		if strings.HasPrefix(m, localPathPrefix) {
+			return m
+		}
+		return s.placeholder("path", m, localPathPrefix+"%d")
 	})
 	for _, l := range s.extra {
 		text = strings.ReplaceAll(text, l, "/home/u")
@@ -92,14 +108,17 @@ func (s *Scrubber) String(text string) string {
 	text = worktree.ReplaceAllString(text, "/home/u")
 	text = opaque.ReplaceAllStringFunc(text, func(m string) string {
 		sub := opaque.FindStringSubmatch(m)
-		if sub[2] == "" {
+		if sub[2] == "" || strings.Contains(sub[2], Marker) || strings.HasSuffix(sub[2], emailSuffix) {
 			return m
 		}
 		repl := s.placeholder("opaque:"+sub[1], sub[2], strings.ToUpper(sub[1])+"_"+Marker+"_%d")
 		return strings.Replace(m, `"`+sub[2]+`"`, `"`+repl+`"`, 1)
 	})
 	text = uuid.ReplaceAllStringFunc(text, func(m string) string {
-		return s.placeholder("uuid", strings.ToLower(m), "00000000-0000-4000-8000-%012d")
+		if strings.HasPrefix(m, uuidPrefix) {
+			return m
+		}
+		return s.placeholder("uuid", strings.ToLower(m), uuidPrefix+"%012d")
 	})
 	return prefixedID.ReplaceAllStringFunc(text, func(m string) string {
 		sub := prefixedID.FindStringSubmatch(m)
@@ -121,8 +140,13 @@ func Leaks(data []byte) []string {
 		}
 	}
 	for _, m := range email.FindAllString(text, -1) {
-		if !strings.HasSuffix(m, "@example.com") {
+		if !strings.HasSuffix(m, emailSuffix) {
 			out = append(out, "email address")
+		}
+	}
+	for _, m := range localPath.FindAllString(text, -1) {
+		if !strings.HasPrefix(m, localPathPrefix) {
+			out = append(out, "temporary, socket, or pid file path")
 		}
 	}
 	for _, m := range worktree.FindAllString(text, -1) {
@@ -131,7 +155,7 @@ func Leaks(data []byte) []string {
 		}
 	}
 	for _, m := range uuid.FindAllString(text, -1) {
-		if !strings.HasPrefix(m, "00000000-0000-4000-8000-") {
+		if !strings.HasPrefix(m, uuidPrefix) {
 			out = append(out, "unmapped uuid")
 		}
 	}
@@ -141,7 +165,7 @@ func Leaks(data []byte) []string {
 		}
 	}
 	for _, m := range opaque.FindAllStringSubmatch(text, -1) {
-		if m[2] != "" && !strings.Contains(m[2], Marker) && !strings.HasSuffix(m[2], "@example.com") {
+		if m[2] != "" && !strings.Contains(m[2], Marker) && !strings.HasSuffix(m[2], emailSuffix) {
 			out = append(out, "unmapped value of "+m[1])
 		}
 	}

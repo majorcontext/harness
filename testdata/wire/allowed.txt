@@ -22,3 +22,4 @@ fake claudecode system/status * compaction follows a long conversation, and the 
 fake claudecode user:string * the compaction summary is a user frame with text content; headless runs refuse /compact
 fake claudecode system/hook_started * the recording runs without hooks; a configured hook prints this frame
 fake claudecode system/task_notification * a background task prints this frame, and the recording starts none
+fake claudecode control_request * the CLI sends a permission request only through the stdio permission prompt of a question flow, and the recorder runs no such flow
