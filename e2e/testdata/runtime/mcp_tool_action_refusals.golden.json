@@ -97,7 +97,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: unknown action \"search\" (want \"connect\")",
+              "text": "mcp: unknown action \"search\" (want \"status\" or \"connect\")",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -163,7 +163,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: unknown action \"search\" (want \"connect\")",
+              "text": "mcp: unknown action \"search\" (want \"status\" or \"connect\")",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -254,7 +254,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: unknown action \"search\" (want \"connect\")",
+              "text": "mcp: unknown action \"search\" (want \"status\" or \"connect\")",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -350,7 +350,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "mcp: unknown action \"search\" (want \"connect\")"
+            "content": "mcp: unknown action \"search\" (want \"status\" or \"connect\")"
           }
         ]
       },

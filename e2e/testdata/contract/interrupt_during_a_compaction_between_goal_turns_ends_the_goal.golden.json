@@ -10,7 +10,6 @@
         "goal",
         "grep",
         "ls",
-        "mcp",
         "model",
         "process",
         "read_file",
@@ -25,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             },
             {
               "kind": "text",
@@ -45,7 +44,6 @@
         "goal",
         "grep",
         "ls",
-        "mcp",
         "model",
         "process",
         "read_file",
@@ -60,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             },
             {
               "kind": "text",
@@ -72,15 +70,8 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "tool_use",
-              "tool_name": "mcp",
-              "tool_input": {
-                "action": "select",
-                "tools": [
-                  "mcp__weather__forecast"
-                ]
-              },
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "re one"
             }
           ]
         },
@@ -88,10 +79,58 @@
           "role": "user",
           "parts": [
             {
-              "kind": "tool_result",
-              "text": "{\"selected\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions\"}",
-              "tool_name": "mcp",
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "say done"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\none\n\nASSISTANT:\nre one\n\nUSER:\nsay done\n\nASSISTANT:\nworking"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re one"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
             }
           ]
         }
@@ -106,7 +145,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "go"
+            "text": "one"
           }
         ]
       },
@@ -115,26 +154,18 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "mcp",
-            "arguments": {
-              "action": "select",
-              "tools": [
-                "mcp__weather__forecast"
-              ]
-            }
+            "type": "text",
+            "text": "re one"
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "tool",
+        "role": "user",
         "parts": [
           {
-            "type": "tool_result",
-            "call_id": "toolu#1",
-            "content": "{\"selected\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions\"}"
+            "type": "text",
+            "text": "say done"
           }
         ]
       },
@@ -144,10 +175,45 @@
         "parts": [
           {
             "type": "text",
-            "text": "done"
+            "text": "working"
           }
         ]
       }
     ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 900,
+          "window": 1000
+        },
+        "created_at": "\u003ctime\u003e",
+        "goal": {
+          "condition": "say done",
+          "max_turns": 3,
+          "reason": "interrupted",
+          "state": "cleared",
+          "turns": 1
+        },
+        "head_seq": 17,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 905,
+          "output_tokens": 2
+        }
+      }
+    }
   }
 }

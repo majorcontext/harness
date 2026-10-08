@@ -36,6 +36,7 @@ const (
 	// goalMaxPauses bounds the pauses between verdicts.
 	goalMaxPauses        = 6
 	goalRetriesExhausted = "retries_exhausted"
+	goalInterrupted      = "interrupted"
 	// partBytes and transcriptBytes bound the transcript of the evaluator,
 	// which keeps the newest messages.
 	partBytes       = 4096
