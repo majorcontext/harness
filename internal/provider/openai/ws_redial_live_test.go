@@ -21,7 +21,7 @@
 //
 // Run (needs a box whose egress proxy injects a real Codex credential):
 //
-//	HARNESS_LIVE=1 go test -tags live -run TestCodexChain -v ./provider/openai/
+//	HARNESS_LIVE=1 go test -tags live -run TestCodexChain -v ./internal/provider/openai/
 //
 // Env:
 //

@@ -212,6 +212,8 @@ func TestDeletedReferenceRule(t *testing.T) {
 		"h.go":                  file("package p\n\nimport _ \"github.com/majorcontext/harness/internal/message\"\n// internal/backend/claudecode and mcpserver-free\n"),
 		"owed.go":               file("package p\n\n// engine/mcp_search.go\n"),
 		"i.go":                  file("package p\n\n// see engine.streamTurn for the loop\n"),
+		"j.go":                  file("package p\n\nimport _ \"github.com/majorcontext/harness/provider/openai\"\n"),
+		"k.go":                  file("package p\n\nimport _ \"github.com/majorcontext/harness/internal/provider/openai\"\n"),
 		"internal/gates/x.go":   file("package p\n\n// engine/goal.go\n"),
 		"testdata/ignored/x.go": file("package p\n\n// engine/goal.go\n"),
 	}
@@ -224,7 +226,7 @@ func TestDeletedReferenceRule(t *testing.T) {
 		got = append(got, v.Path)
 	}
 	slices.Sort(got)
-	want := []string{"a.go", "b.go", "c.go", "e.go", "f_test.go", "g.go", "gone.go", "i.go"}
+	want := []string{"a.go", "b.go", "c.go", "e.go", "f_test.go", "g.go", "gone.go", "i.go", "j.go"}
 	if !slices.Equal(got, want) {
 		t.Errorf("violations = %v, want %v", got, want)
 	}
