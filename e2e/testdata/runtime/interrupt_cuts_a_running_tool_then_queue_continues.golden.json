@@ -84,7 +84,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "interrupted before a result was recorded; check whether it took effect before running it again",
+              "text": "bash: aborted: context canceled",
               "tool_name": "bash",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -132,7 +132,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "interrupted before a result was recorded; check whether it took effect before running it again"
+            "content": "bash: aborted: context canceled"
           }
         ]
       },

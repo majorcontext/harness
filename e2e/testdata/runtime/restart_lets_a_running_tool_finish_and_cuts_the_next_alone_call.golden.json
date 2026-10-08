@@ -75,9 +75,9 @@
             },
             {
               "kind": "tool_use",
-              "tool_name": "bash",
+              "tool_name": "goal",
               "tool_input": {
-                "command": "echo two"
+                "action": "status"
               },
               "tool_use_id": "toolu#2"
             }
@@ -94,9 +94,10 @@
             },
             {
               "kind": "tool_result",
-              "text": "two\n",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#2"
+              "text": "cut off before a result was recorded; check whether it took effect before running it again",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#2",
+              "is_error": true
             },
             {
               "kind": "text",
@@ -134,9 +135,9 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "bash",
+            "name": "goal",
             "arguments": {
-              "command": "echo two"
+              "action": "status"
             }
           }
         ]
@@ -159,7 +160,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "two\n"
+            "is_error": true,
+            "content": "cut off before a result was recorded; check whether it took effect before running it again"
           }
         ]
       },

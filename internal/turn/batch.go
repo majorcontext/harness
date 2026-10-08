@@ -39,6 +39,7 @@ type outcome struct {
 type batch struct {
 	ctx, step context.Context
 	run       func(context.Context, protocol.ToolCall) protocol.ToolResult
+	join      func(context.Context, protocol.ToolCall, protocol.ToolResult) protocol.ToolResult
 	alone     func(name string) bool
 	key       func(c protocol.ToolCall) string
 	calls     []protocol.ToolCall
@@ -48,14 +49,15 @@ type batch struct {
 
 // runBatch runs calls, at most maxParallel at once, and gives the result of
 // each call that ran to emit in call order as soon as it and every earlier
-// call have ended. When ctx ends, it returns the cause and records no more
-// result. When only step ends, running calls finish, no new call starts, and
+// call have ended, after the Join of the hooks. When ctx ends, every running
+// call is canceled and none starts; the result of each call that ran is still
+// recorded in call order, and the cause is returned. When only step ends, running calls finish, no new call starts, and
 // the cause of step is returned unless every call ran. It returns after
 // every call it started has ended.
 func runBatch(ctx, step context.Context, t runner, calls []protocol.ToolCall, emit func(i int, r protocol.ToolResult) error) error {
 	wctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	b := &batch{ctx: wctx, step: step, run: t.run, alone: t.alone, key: t.key, calls: calls,
+	b := &batch{ctx: wctx, step: step, run: t.run, join: t.join, alone: t.alone, key: t.key, calls: calls,
 		outs: make([]outcome, len(calls)), done: make([]chan struct{}, len(calls))}
 	for i := range b.done {
 		b.done[i] = make(chan struct{})
@@ -84,15 +86,15 @@ func runBatch(ctx, step context.Context, t runner, calls []protocol.ToolCall, em
 func (b *batch) collect(ctx context.Context, emit func(i int, r protocol.ToolResult) error) error {
 	for i := range b.calls {
 		<-b.done[i]
-		if ctx.Err() != nil {
-			return context.Cause(ctx)
-		}
 		if !b.outs[i].ran {
 			continue
 		}
-		if err := emit(i, b.outs[i].res); err != nil {
+		if err := emit(i, b.join(ctx, b.calls[i], b.outs[i].res)); err != nil {
 			return err
 		}
+	}
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
 	}
 	return nil
 }

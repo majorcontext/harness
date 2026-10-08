@@ -34,6 +34,13 @@ type Hooks interface {
 	After(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
 }
 
+// Joiner is a Hooks that also changes the result of each call once, in call
+// order, after every After hook ran. A batch calls Join as it records the
+// result, so a Join keeps state without a lock against the other calls.
+type Joiner interface {
+	Join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
+}
+
 // Source gives tools that can change between the model calls of a turn.
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
@@ -99,6 +106,16 @@ func (c chain) After(ctx context.Context, call protocol.ToolCall, r protocol.Too
 	return r
 }
 
+// Join runs the Join of each Hooks that has one, in order.
+func (c chain) Join(ctx context.Context, call protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	for _, h := range c {
+		if j, ok := h.(Joiner); ok {
+			r = j.Join(ctx, call, r)
+		}
+	}
+	return r
+}
+
 // runner runs the calls of one model call between the hooks of its Toolset.
 type runner struct {
 	runnable []Tool
@@ -109,6 +126,13 @@ func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResul
 	return runTool(ctx, t.runnable, t.hooks, c)
 }
 
+func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	if j, ok := t.hooks.(Joiner); ok {
+		return j.Join(ctx, c, r)
+	}
+	return r
+}
+
 func (t runner) find(name string) Tool {
 	if i := slices.IndexFunc(t.runnable, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
 		return t.runnable[i]
@@ -116,12 +140,27 @@ func (t runner) find(name string) Tool {
 	return nil
 }
 
-func (t runner) alone(name string) bool {
+// alone reports whether the tool name runs Alone. A tool whose Spec panics is
+// Alone, so that its panic reaches the result of its own call.
+func (t runner) alone(name string) (alone bool) {
+	defer func() {
+		if recover() != nil {
+			alone = true
+		}
+	}()
 	_, ok := t.find(name).(Alone)
 	return ok
 }
 
-func (t runner) key(c protocol.ToolCall) string {
+// key returns the key of c. A tool whose Key or Spec panics gets one key per
+// tool name, so that its calls run one at a time and the panic reaches the
+// result of its own call.
+func (t runner) key(c protocol.ToolCall) (key string) {
+	defer func() {
+		if recover() != nil {
+			key = "panicking-key:" + c.Name
+		}
+	}()
 	if k, ok := t.find(c.Name).(Keyed); ok {
 		return k.Key(c)
 	}

@@ -24,8 +24,8 @@ func (a *Actor) source(r *running) turn.Source {
 
 // actorTools are the tools that read the session itself. A turn of a backend
 // that owns its loop gets the history tool, which no allow list hides. A
-// harness-loop turn gets read_tool_result and retains each result after the
-// other hooks, so the blob holds the text that the model would see, unless
+// harness-loop turn gets read_tool_result and retains each result in call
+// order, after the other hooks, so the blob holds the text that the model would see, unless
 // Config.Retain is off or the allowed tools omit read_tool_result.
 type actorTools struct {
 	a *Actor
@@ -50,7 +50,11 @@ func (actorTools) Before(_ context.Context, c protocol.ToolCall) (protocol.ToolC
 	return c, ""
 }
 
-func (s actorTools) After(_ context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+func (actorTools) After(_ context.Context, _ protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	return r
+}
+
+func (s actorTools) Join(_ context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
 	return s.a.retain(s.r, c.Name, r)
 }
 

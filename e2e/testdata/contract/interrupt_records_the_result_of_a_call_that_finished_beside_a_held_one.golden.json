@@ -64,9 +64,10 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "mcp__gate__hold",
+            "name": "write_file",
             "arguments": {
-              "id": "b"
+              "content": "w",
+              "path": "w.txt"
             }
           }
         ]
@@ -90,8 +91,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "is_error": true,
-            "content": "mcp: server \"gate\": call failed: request failed"
+            "content": "wrote 1 bytes to \u003cworkdir\u003e/w.txt"
           }
         ]
       }
