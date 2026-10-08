@@ -161,10 +161,10 @@ func TestPermanentErrorMessageFormat(t *testing.T) {
 
 // TestPermanentAndRetryableAreMutuallyExclusive guards the structural
 // boundary between the two classifications: an error marked permanent must
-// never also report as retryable, and vice versa, since promptTurnWithRetry
-// (engine/goal.go) chooses mutually exclusive branches — a fail-fast, single
-// attempt for permanent versus a bounded, backed-off retry loop for
-// retryable — off exactly this pair of predicates.
+// never also report as retryable, and vice versa, since the turn loop
+// chooses mutually exclusive branches — a fail-fast, single attempt for
+// permanent versus a bounded, backed-off retry loop for retryable — off
+// exactly this pair of predicates.
 func TestPermanentAndRetryableAreMutuallyExclusive(t *testing.T) {
 	permanent := MarkPermanent(errors.New("bad request"))
 	if _, ok := AsRetryable(permanent); ok {

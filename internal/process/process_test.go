@@ -1,8 +1,7 @@
 // These tests exercise Manager with real `sh` subprocesses — deliberately:
 // the subprocess machinery (process groups, ready-line detection, death
 // detection) is exactly what's under test, the sanctioned exception to
-// "never spawn real subprocess fixtures" in AGENTS.md (see
-// engine/bash_pipe_test.go for the precedent). Long-lived fixture
+// "never spawn real subprocess fixtures" in AGENTS.md. Long-lived fixture
 // processes print a ready line, if any, and then `sleep` (Manager does not
 // wire a managed process's stdin, so a script waiting on stdin would spin
 // on an immediate EOF from /dev/null instead of actually blocking) so a

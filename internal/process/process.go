@@ -4,9 +4,8 @@
 // file, with an optional "ready" gate a caller can block on.
 //
 // *Manager is a box-scoped singleton, built once per harness process and
-// shared across every session it hosts — exactly like engine.MCPManager
-// (see that type's doc comment). It is keyed by declared process name;
-// every session sharing a Manager sees the same live process state.
+// shared across every session it hosts. It is keyed by declared process
+// name; every session sharing a Manager sees the same live process state.
 package process
 
 import (
@@ -78,13 +77,11 @@ var ErrUnknownProcess = errors.New("process: unknown process")
 // errors.Is.
 var ErrNotStarted = errors.New("process: process not started")
 
-// defaultReadyTimeout is Def.ReadyTimeout's fallback when unset (<= 0),
-// mirroring engine.MCPManager's ConnectTimeout default pattern.
+// defaultReadyTimeout is Def.ReadyTimeout's fallback when unset (<= 0).
 const defaultReadyTimeout = 60 * time.Second
 
 // processWaitDelay bounds how long cmd.Wait may block on the command's
-// output pipes once the process itself has exited — the same hazard (and
-// the same fix) as engine/bash.go's bashWaitDelay: cmd.Stdout/Stderr here
+// output pipes once the process itself has exited: cmd.Stdout/Stderr here
 // are not *os.File (they fan out to the log file and the ready-regex
 // watcher), which forces os/exec to copy through a goroutine that only
 // unblocks on pipe EOF. A backgrounded grandchild holding the write end
@@ -292,9 +289,8 @@ func (m *Manager) Start(ctx context.Context, name string) (Status, error) {
 	return p.awaitReady(ctx, def.ReadyTimeout)
 }
 
-// Stop terminates name's process (unix: SIGKILL the whole process group,
-// mirroring engine/bash_unix.go's Setpgid/kill-pgroup pattern, so a
-// backgrounded grandchild dies with it; non-unix: a plain Kill), waits for
+// Stop terminates name's process (unix: SIGKILL the whole process group, so
+// a backgrounded grandchild dies with it; non-unix: a plain Kill), waits for
 // it to be reaped, and records the exit. A name with no active process is
 // a no-op that returns its last known (or zero) status, not an error —
 // Stop is meant to be safe to call speculatively (e.g. from Restart).
@@ -488,7 +484,7 @@ func (m *Manager) Undeclare(name string) error {
 }
 
 // Close stops every currently-active process, bounded by ctx. Intended for
-// process shutdown, mirroring engine.MCPManager.Close.
+// process shutdown.
 func (m *Manager) Close(ctx context.Context) {
 	m.mu.Lock()
 	names := make([]string, 0, len(m.procs))

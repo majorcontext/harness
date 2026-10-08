@@ -14,7 +14,7 @@ import (
 // TestStreamHTTPErrorClassification is the red-first test for GitHub issue
 // #79: an OpenAI HTTP 429 (rate limit) or any 5xx must come back from Stream
 // marked provider.RetryableError so the goal loop's long backoff
-// (engine/goal.go) can apply — mirroring provider/anthropic's classifyStatus
+// can apply — mirroring provider/anthropic's classifyStatus
 // (see its TestStreamHTTPErrorClassification). Every other status (400s,
 // auth) must stay unmarked, so it keeps failing fast exactly as before.
 func TestStreamHTTPErrorClassification(t *testing.T) {

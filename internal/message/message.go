@@ -100,11 +100,10 @@ type Message struct {
 // same on the wire, so nil here introduces no new shape for a downstream
 // consumer to learn.
 //
-// Session.append (engine/engine.go) calls this on every message before it
-// enters a session's history — user, assistant, and tool messages alike,
-// regardless of source (a shipped provider adapter, a plugin's generate
-// call, or a test's scripted provider) — which is the one ingest choke
-// point every message passes through.
+// Every message passes through this call before it enters a session's
+// history — user, assistant, and tool messages alike, regardless of source
+// (a shipped provider adapter, a plugin's generate call, or a test's
+// scripted provider) — which makes it the one ingest choke point.
 //
 // # A ProviderData entry has the exact same invalid-but-non-empty footgun
 //
@@ -137,10 +136,9 @@ type Message struct {
 //
 // The case below is this function's primary fix. It replaces an empty
 // Content with NoToolOutputText in place. Every LIVE message passes
-// through Normalize at Session.append, and engine.LoadSession calls
-// Normalize on every message it replays from a session log, so a
-// poisoned message is already repaired by the time anything downstream
-// sees it. SafeContent's own check is the marshal/transcode-time backstop
+// through Normalize on append, and a replay of a session log calls
+// Normalize on every message it reads, so a poisoned message is already
+// repaired by the time anything downstream sees it. SafeContent's own check is the marshal/transcode-time backstop
 // for a producer that bypasses Normalize entirely.
 func (m *Message) Normalize() {
 	for _, p := range m.Parts {
@@ -336,10 +334,9 @@ func (tr ToolResult) isEmpty() bool {
 //
 // The primary fix is a canonical-layer guarantee: Message.Normalize applies
 // it in place at the one ingest choke point every LIVE-appended message
-// passes through (Session.append), and engine.LoadSession applies the same
-// Normalize call to every message it replays from a session log, so a
-// resumed session repairs an old, unpatched empty ToolResult exactly like a
-// live one. SafeContent is the second enforcement point: every transcoder
+// passes through, and a replay of a session log applies the same Normalize
+// call to every message it reads, so a resumed session repairs an old,
+// unpatched empty ToolResult exactly like a live one. SafeContent is the second enforcement point: every transcoder
 // (anthropic, openaicompat, openai) calls it directly when building a
 // tool_result wire block, rather than reading Content unchecked. This is
 // deliberate belt-and-suspenders, not redundancy — Normalize cannot reach a

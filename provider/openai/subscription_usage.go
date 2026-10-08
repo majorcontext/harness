@@ -20,9 +20,8 @@ import (
 //
 // This is a naming convention, not something buildsResponsesAdapter or any
 // other config validation enforces — the same "the operator's own key IS
-// the signal" precedent engine.ClaudeCodeProviderFamily documents for the
-// Claude Code delegated backend, applied here because nothing in a
-// provider.Request or an HTTP response can otherwise tell this package
+// the signal" precedent of the Claude Code delegated backend, applied here
+// because nothing in a provider.Request or an HTTP response can otherwise tell this package
 // "this endpoint is the ChatGPT Codex backend" without adding a dedicated
 // config field for a single conventionally-named deployment.
 const CodexFamily = "codex"
@@ -45,8 +44,7 @@ func codexWindowLabel(minutes int64) string {
 
 // codexHeaderFloat parses header key h.Get(key) as a float64, returning
 // ok=false for an absent or unparseable value — the same permissive-
-// decoding posture engine/claude_code_backend.go takes with the sibling
-// subscription lane: a header this file cannot parse is treated as absent,
+// decoding posture of the sibling subscription lane: a header this file cannot parse is treated as absent,
 // never a hard failure.
 func codexHeaderFloat(h http.Header, key string) (float64, bool) {
 	v := h.Get(key)

@@ -28,8 +28,7 @@ type SubscriptionUsage struct {
 	CapturedAt int64 `json:"captured_at"`
 	// SessionCostUSD is this session's cumulative dollar cost across every
 	// completed "claude"-lane delegated turn, summed turn over turn from
-	// the `claude` CLI's own per-turn total_cost_usd accounting (see
-	// engine/claude_code_backend.go's claudeCodeEnvelope.TotalCostUSD).
+	// the `claude` CLI's own per-turn total_cost_usd accounting.
 	// Always nil for provider "codex": neither its headers nor its
 	// codex.rate_limits event carries a cost figure.
 	//

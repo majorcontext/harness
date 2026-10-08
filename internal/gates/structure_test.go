@@ -193,3 +193,32 @@ func TestProviderBranchRule(t *testing.T) {
 		t.Errorf("violations = %v, want %v", got, want)
 	}
 }
+
+func TestDeletedReferenceRule(t *testing.T) {
+	files := fstest.MapFS{
+		"a.go":                  file("package p\n\n// see engine/goal.go for the loop\n"),
+		"b.go":                  file("package p\n\n// the shape engine.Session.append persists\n"),
+		"c.go":                  file("package p\n\nvar s = \"server/handlers.go\"\n"),
+		"d.go":                  file("package p\n\n// internal/server/server.go, cmd/harness/serve.go, engine-context, and the engine's loop\n"),
+		"e.go":                  file("package p\n\nimport _ \"github.com/majorcontext/harness/message\"\n"),
+		"f_test.go":             file("package p\n\n// mirrors engine/bash.go\n"),
+		"g.go":                  file("package p\n\n// the old provider/claudecode adapter\n"),
+		"h.go":                  file("package p\n\nimport _ \"github.com/majorcontext/harness/internal/message\"\n// internal/backend/claudecode and mcpserver-free\n"),
+		"owed.go":               file("package p\n\n// engine/mcp_search.go\n"),
+		"internal/gates/x.go":   file("package p\n\n// engine/goal.go\n"),
+		"testdata/ignored/x.go": file("package p\n\n// engine/goal.go\n"),
+	}
+	var got []string
+	vs, err := CheckDeletedReferences(files, map[string]string{"owed.go": "d", "gone.go": "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range vs {
+		got = append(got, v.Path)
+	}
+	slices.Sort(got)
+	want := []string{"a.go", "b.go", "c.go", "e.go", "f_test.go", "g.go", "gone.go"}
+	if !slices.Equal(got, want) {
+		t.Errorf("violations = %v, want %v", got, want)
+	}
+}

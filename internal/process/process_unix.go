@@ -9,16 +9,13 @@ import (
 	"time"
 )
 
-// killGroupWindow bounds killProcess's retry loop on unix, mirroring
-// engine/bash_unix.go's bashGroupKillWindow (see its doc comment for why a
-// single kill(-pgid, SIGKILL) is not always enough — a straggler
-// grandchild forked just as the signal is delivered can miss it). Var so
-// tests can shrink it.
+// killGroupWindow bounds killProcess's retry loop on unix. A single
+// kill(-pgid, SIGKILL) is not always enough: a straggler grandchild forked
+// just as the signal is delivered can miss it. Var so tests can shrink it.
 var killGroupWindow = 200 * time.Millisecond
 
 // configureProcessGroup runs the process in its own process group
-// (Setpgid) so killProcess below can SIGKILL the whole tree as a unit —
-// the same reasoning as engine/bash_unix.go's configureProcessGroup: a
+// (Setpgid) so killProcess below can SIGKILL the whole tree as a unit: a
 // managed dev server that backgrounds a grandchild must not leave it
 // orphaned when stopped.
 func configureProcessGroup(cmd *exec.Cmd) {
@@ -26,9 +23,8 @@ func configureProcessGroup(cmd *exec.Cmd) {
 }
 
 // killProcess SIGKILLs pid's whole process group, retrying for a short
-// bounded window until the group is confirmed empty (ESRCH) — see
-// engine/bash_unix.go's killProcessGroup for the exact race this guards
-// against.
+// bounded window until the group is confirmed empty (ESRCH), which guards
+// against a straggler forked as the signal is delivered.
 func killProcess(_ *exec.Cmd, pid int) {
 	if pid <= 0 {
 		return

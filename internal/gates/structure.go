@@ -334,6 +334,11 @@ func CheckStructure(fsys fs.FS, spec string) ([]Violation, error) {
 	}
 	out = append(out, api...)
 	out = append(out, checkProviderBranches(srcs, providerOwners, providerAllow)...)
+	deleted, err := CheckDeletedReferences(fsys, deletedRefAllow)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, deleted...)
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		return a.Rule+a.Path+a.Detail < b.Rule+b.Path+b.Detail
