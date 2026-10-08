@@ -40,7 +40,13 @@ jobs:
 
             This is a Go agent harness (runtime, provider transcoders, plugin
             protocol). Read the root AGENTS.md first. Then read every scoped
-            AGENTS.md that governs a changed path. Review with these priorities:
+            AGENTS.md that governs a changed path. Then read
+            .github/skills/architecture-review/SKILL.md and apply it: judge the
+            change against the architecture as a whole (docs/architecture.md),
+            not the diff alone, and cite the spec line for each architecture
+            finding. Review with these priorities:
+            - Architecture as a whole: apply every question of the architecture-review
+              skill
             - Race conditions, deadlocks, missing synchronization — the runtime,
               plugin host, and streams are heavily concurrent
             - Protocol correctness (plugin JSON-RPC framing, hook chaining
