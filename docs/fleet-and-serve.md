@@ -55,7 +55,7 @@ and can run again when the provider recovers. A parent that treats the wall
 as an ordinary failure starts a replacement into the same wall. Three layers
 carry the fact:
 
-- The adapter classifies it. `provider/anthropic` and `provider/openai`
+- The adapter classifies it. `internal/provider/anthropic` and `internal/provider/openai`
   return `provider.Error{Kind: ErrKindProviderExhausted, RecoverHint}` for the
   message shapes of a spent supply. A per-minute throttle is not a spent
   supply. Matching on message text is allowed only inside the adapter.

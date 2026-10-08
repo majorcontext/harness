@@ -175,15 +175,15 @@ func TestWireClientRule(t *testing.T) {
 
 func TestProviderBranchRule(t *testing.T) {
 	files := fstest.MapFS{
-		"internal/turn/a.go":              goFile("", "const fam = \"claude-code\"\nfunc Literal(p string) bool { return p == \"anthropic\" }\nfunc Const(p string) bool { return p != fam }\nfunc Switch(p string) {\n\tswitch p {\n\tcase \"codex\":\n\t}\n}\nfunc Other(p string) bool { return p == \"mistral\" || p == \"\" }\nfunc Same(a, b string) bool { return a == b }"),
-		"config/c.go":                     goFile("", "func V(p string) bool { return p == \"openai\" }"),
-		"internal/modelmeta/modelmeta.go": goFile("", "func ContextWindow(p string) int {\n\tswitch p {\n\tcase \"amazon-bedrock\":\n\t}\n\treturn 0\n}"),
-		"internal/turn/b.go":              goFile("import (\"slices\"; \"strings\")", "func InList(p string) bool { return slices.Contains([]string{\"codex\"}, p) }\nfunc Prefix(p string) bool { return strings.HasPrefix(p, \"claude-code/\") }\nfunc Bedrock(p string) bool { return p == \"amazon-bedrock\" }\nfunc Fields(a, b X) bool { return a.Family == b.Family }\nfunc Map() { _ = map[string]int{\"codex\": 1} }"),
-		"provider/openai/x.go":            goFile("", "const Family = \"openai\"\nconst CodexFamily = \"codex\""),
-		"provider/anthropic/x.go":         goFile("", "const Family = \"anthropic\""),
-		"internal/modelmeta/names.go":     goFile("", "const claudeCodeProvider = \"claude-code\""),
-		"internal/turn/c.go":              goFile("", "func Own(a, b X) bool { return a.Family == b.Family }"),
-		"x.go":                            goFile("", "func Listed(p string) bool { return p == \"codex\" }\nfunc Gone() {}"),
+		"internal/turn/a.go":               goFile("", "const fam = \"claude-code\"\nfunc Literal(p string) bool { return p == \"anthropic\" }\nfunc Const(p string) bool { return p != fam }\nfunc Switch(p string) {\n\tswitch p {\n\tcase \"codex\":\n\t}\n}\nfunc Other(p string) bool { return p == \"mistral\" || p == \"\" }\nfunc Same(a, b string) bool { return a == b }"),
+		"config/c.go":                      goFile("", "func V(p string) bool { return p == \"openai\" }"),
+		"internal/modelmeta/modelmeta.go":  goFile("", "func ContextWindow(p string) int {\n\tswitch p {\n\tcase \"amazon-bedrock\":\n\t}\n\treturn 0\n}"),
+		"internal/turn/b.go":               goFile("import (\"slices\"; \"strings\")", "func InList(p string) bool { return slices.Contains([]string{\"codex\"}, p) }\nfunc Prefix(p string) bool { return strings.HasPrefix(p, \"claude-code/\") }\nfunc Bedrock(p string) bool { return p == \"amazon-bedrock\" }\nfunc Fields(a, b X) bool { return a.Family == b.Family }\nfunc Map() { _ = map[string]int{\"codex\": 1} }"),
+		"internal/provider/openai/x.go":    goFile("", "const Family = \"openai\"\nconst CodexFamily = \"codex\""),
+		"internal/provider/anthropic/x.go": goFile("", "const Family = \"anthropic\""),
+		"internal/modelmeta/names.go":      goFile("", "const claudeCodeProvider = \"claude-code\""),
+		"internal/turn/c.go":               goFile("", "func Own(a, b X) bool { return a.Family == b.Family }"),
+		"x.go":                             goFile("", "func Listed(p string) bool { return p == \"codex\" }\nfunc Gone() {}"),
 	}
 	srcs, err := parseSources(files)
 	if err != nil {

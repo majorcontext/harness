@@ -1,6 +1,6 @@
 # Image clamp
 
-Read the root AGENTS.md. Read `provider/AGENTS.md` before changing adapter limits.
+Read the root AGENTS.md. Read `internal/provider/AGENTS.md` before changing adapter limits.
 
 - `Clamp` repairs a throwaway request. It never mutates canonical history.
 - Return the original slice without allocation when no image changes.

@@ -217,7 +217,7 @@ Free to change.
 
 The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, and only `internal/backend` builds a provider wire.
 
-Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it), `mcp`, `plugin`, `skill`, `command`, and `process`, as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
+Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it), `mcp`, `plugin`, `skill`, `command`, `process`, and `provider` (the wire adapters of the model API backend), as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 

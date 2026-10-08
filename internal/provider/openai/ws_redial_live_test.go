@@ -4,7 +4,7 @@
 // is a Codex Responses response ID usable from a DIFFERENT websocket
 // connection than the one that produced it?
 //
-// provider/AGENTS.md keeps lineage "keyed by the session pool entry" and
+// internal/provider/AGENTS.md keeps lineage "keyed by the session pool entry" and
 // wsPool.invalidate drops lineage with the socket, so an idle or aged
 // connection costs a full history re-send. That cost is only unavoidable if
 // the server's response state is genuinely CONNECTION-scoped. This test

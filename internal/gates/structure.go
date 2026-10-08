@@ -18,12 +18,7 @@ const modulePath = "github.com/majorcontext/harness"
 // publicAllow lists the packages that are public and that the Public packages
 // table of the spec does not list. An entry that stops being a violation
 // fails, so the list shrinks to nothing.
-var publicAllow = map[string]string{
-	"provider":              "2026-10-08: the wire clients are public, and the table lists no provider package; the spec text on provider/ is owed",
-	"provider/anthropic":    "2026-10-08: see provider",
-	"provider/openai":       "2026-10-08: see provider",
-	"provider/openaicompat": "2026-10-08: see provider",
-}
+var publicAllow = map[string]string{}
 
 // providerOwners lists the places where a provider name is data: the functions
 // of config that validate the provider entries and map an entry with no type
@@ -37,7 +32,7 @@ var providerOwners = []string{
 	"internal/backend/router.go#New", "internal/backend/router.go#client",
 	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models",
 	"internal/modelmeta/internal/genctx/main.go#",
-	"provider/",
+	"internal/provider/",
 }
 
 // providerAllow lists the functions that branch on a provider name against
@@ -51,9 +46,7 @@ var providerAllow = map[string]string{
 // deletedRefAllow lists the files that still name a deleted path, each with
 // the dated reason. An entry that stops being a violation fails, so the list
 // shrinks to nothing.
-var deletedRefAllow = map[string]string{
-	"config/config.go": "2026-10-08: the cleanup of the config references removes these",
-}
+var deletedRefAllow = map[string]string{}
 
 type source struct {
 	path    string

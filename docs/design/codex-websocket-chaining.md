@@ -386,7 +386,7 @@ A successful full-request recovery after `previous_response_not_found` reports
 `request_mode=full` reports that the call re-sent every input item uncached.
 It does not report the cause. A refused call therefore also names one reason
 (`provider.ChainRefusal`), and a chained call names none. The pool computes
-the reason where it makes the decision (`provider/openai/ws_pool.go`).
+the reason where it makes the decision (`internal/provider/openai/ws_pool.go`).
 
 | Reason | Cause | `chain_refusal_detail` | `chain_refusal_item` |
 |---|---|---|---|
@@ -429,7 +429,7 @@ tuning question, not an assembly defect.
 is only computed on a call that reaches the WebSocket path, and most idle loss
 never gets there.
 
-`provider/openai/ws_redial_live_test.go` measures the pooled connection's real
+`internal/provider/openai/ws_redial_live_test.go` measures the pooled connection's real
 idle life at 60 to 90 seconds, because the server closes an unread connection
 with `keepalive ping timeout` and this pool leaves an idle connection with no
 reader. `wsDefaultIdleTimeout` is 5 minutes. A gap between those two bounds is
@@ -558,7 +558,7 @@ state.
 
 Update these documents with implemented behavior:
 
-- `provider/AGENTS.md`: Codex-only lineage and full-fallback invariants.
+- `internal/provider/AGENTS.md`: Codex-only lineage and full-fallback invariants.
 - `engine/AGENTS.md`: bounded prewarm ownership and no-turn accounting.
 
 ## Rollout

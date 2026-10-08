@@ -1,6 +1,6 @@
 # Message
 
-Read the root AGENTS.md. Read `provider/AGENTS.md` for wire adapters.
+Read the root AGENTS.md. Read `internal/provider/AGENTS.md` for wire adapters.
 
 - Opaque provider data carries a family tag. A different family drops it at transcode.
 - Keep tool-call IDs provider-neutral. Adapters own wire-ID mapping.

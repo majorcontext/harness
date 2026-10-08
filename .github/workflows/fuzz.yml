@@ -43,13 +43,13 @@ jobs:
             package: ./internal/skill/
             target: FuzzParseFrontmatter
           - id: anthropic-streamdecode
-            package: ./provider/anthropic/
+            package: ./internal/provider/anthropic/
             target: FuzzStreamDecode
           - id: openai-streamdecode
-            package: ./provider/openai/
+            package: ./internal/provider/openai/
             target: FuzzStreamDecode
           - id: openaicompat-streamdecode
-            package: ./provider/openaicompat/
+            package: ./internal/provider/openaicompat/
             target: FuzzStreamDecode
     steps:
       - uses: actions/checkout@v5

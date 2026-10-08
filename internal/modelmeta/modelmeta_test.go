@@ -140,7 +140,7 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 		refString string
 		want      int
 	}{
-		// Direct vendor route: internal/provider/anthropic/<model-id>.
+		// Direct vendor route: provider/anthropic/<model-id>.
 		{"anthropic/anthropic/claude-fable-5", 1_000_000},
 		{"anthropic/anthropic/claude-opus-5", 1_000_000},
 		{"anthropic/anthropic/claude-haiku-4-5-20251001", 200_000},
