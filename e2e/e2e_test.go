@@ -216,7 +216,7 @@ func (p *serveProc) send(method, path string, body any) (*http.Response, []byte,
 		p.t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+p.token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := wireClient(p.t, http.DefaultClient).Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

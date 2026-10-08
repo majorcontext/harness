@@ -29,7 +29,7 @@ func serveRequest(t *testing.T, p *serveProc, method, path, auth, origin string)
 	if origin != "" {
 		req.Header.Set("Origin", origin)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := wireClient(t, http.DefaultClient).Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v\nserve stderr:\n%s", method, path, err, p.stderr.String())
 	}
