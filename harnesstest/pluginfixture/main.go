@@ -78,6 +78,15 @@ var config struct {
 	RecallBlobs bool   `json:"recall_blobs"`
 	Model       bool   `json:"model"`
 	ExtraTool   string `json:"extra_tool"`
+	// ShellEnv, as NAME=value, subscribes the plugin to shell.env and sets
+	// that variable for every shell command.
+	ShellEnv string `json:"shell_env"`
+	// ChatParams subscribes the plugin to chat.params and sets these values on every model call.
+	ChatParams *struct {
+		MaxTokens   int     `json:"max_tokens"`
+		Temperature float64 `json:"temperature"`
+		TopP        float64 `json:"top_p"`
+	} `json:"chat_params"`
 	// Serve adds a system segment with the serve_url and run_token of initialize.
 	Serve bool `json:"serve"`
 }
@@ -152,12 +161,30 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		serveInfo.URL, serveInfo.Token = init.ServeURL, init.RunToken
 		rawConfig = init.Config
 		_ = json.Unmarshal(init.Config, &config)
+		m := maps.Clone(manifest)
 		if config.ExtraTool != "" {
-			m := maps.Clone(manifest)
 			m["tools"] = append(slices.Clone(manifest["tools"].([]toolSpec)), toolSpec{config.ExtraTool, "An extra tool.", json.RawMessage(objectSchema)})
-			return m, nil
 		}
-		return manifest, nil
+		if config.ShellEnv != "" {
+			m["hooks"] = append(slices.Clone(manifest["hooks"].([]string)), "shell.env")
+		}
+		if config.ChatParams != nil {
+			m["hooks"] = append(slices.Clone(m["hooks"].([]string)), "chat.params")
+		}
+		return m, nil
+	case "hook/chat.params":
+		var req struct {
+			Params map[string]any `json:"params"`
+		}
+		_ = json.Unmarshal(params, &req)
+		if req.Params == nil {
+			req.Params = map[string]any{}
+		}
+		req.Params["max_tokens"], req.Params["temperature"], req.Params["top_p"] = config.ChatParams.MaxTokens, config.ChatParams.Temperature, config.ChatParams.TopP
+		return map[string]any{"params": req.Params}, nil
+	case "hook/shell.env":
+		name, value, _ := strings.Cut(config.ShellEnv, "=")
+		return map[string]any{"env": map[string]string{name: value}}, nil
 	case "hook/system.transform":
 		return systemTransform(params), nil
 	case "hook/tool.execute.before":

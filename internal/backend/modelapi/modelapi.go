@@ -186,7 +186,8 @@ func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
 	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, ServiceTier: req.Settings.ServiceTier,
-		SessionKey: req.SessionID}
+		SessionKey:  req.SessionID,
+		Temperature: req.Temperature, TopP: req.TopP}
 	if req.Instructions != "" {
 		preq.System = []string{req.Instructions}
 	}

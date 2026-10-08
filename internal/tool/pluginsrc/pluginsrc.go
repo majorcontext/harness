@@ -33,9 +33,10 @@ type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error
 
 // Plugins starts the configured plugins once for each runtime.
 type Plugins struct {
-	specs   []config.PluginSpec
-	opts    plugin.Options
-	workDir string
+	specs     []config.PluginSpec
+	opts      plugin.Options
+	workDir   string
+	cachePath string
 
 	// host is set once, by the first successful Start.
 	host   atomic.Pointer[plugin.Host]
@@ -48,41 +49,55 @@ func New(cfg config.Config, workDir string, history History, blob Blob, serveURL
 	if len(cfg.Plugins) == 0 {
 		return nil
 	}
-	return &Plugins{specs: cfg.Plugins, workDir: workDir,
+	return &Plugins{specs: cfg.Plugins, workDir: workDir, cachePath: cfg.PluginCache,
 		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob},
 			ServeURL: serveURL, RunToken: runToken}}
 }
 
-// Start reads the manifest of each plugin with one bounded probe, once. The
-// warm process of a plugin starts on its first hook or tool call. taken
-// reports a tool name that another tool has. After an error, the next call
-// tries again.
-func (p *Plugins) Start(ctx context.Context, taken func(string) bool) error {
+// Start reads the manifest of each plugin once: from the manifest cache when
+// the plugin has not changed since its last probe, else with one bounded probe.
+// With refresh, it always probes. The warm process of a plugin starts on its
+// first hook or tool call. taken reports a tool name that another tool has.
+// After an error, the next call tries again.
+func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.host.Load() != nil {
 		return nil
 	}
+	c := &cache{Entries: map[string]cacheEntry{}}
+	if p.cachePath != "" {
+		var err error
+		if c, err = loadCache(p.cachePath); err != nil {
+			return fmt.Errorf("plugin cache: %w", err)
+		}
+	}
+	probe := func(spec plugin.Spec) (plugin.Manifest, error) {
+		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		defer cancel()
+		return plugin.ProbeSpec(pctx, spec)
+	}
 	specs := make([]plugin.Spec, len(p.specs))
 	names := map[string]bool{}
+	dirty := false
 	for i, ps := range p.specs {
-		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config}
-		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
-		m, err := plugin.ProbeSpec(pctx, specs[i])
-		cancel()
+		m, changed, err := c.manifest(probe, ps, refresh)
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", ps.Name, err)
 		}
-		if m.Name != ps.Name {
-			return fmt.Errorf("plugin %s: manifest name %q does not match the config", ps.Name, m.Name)
-		}
+		dirty = dirty || changed
 		for _, d := range m.Tools {
 			if d.Name == "" || names[d.Name] || taken(d.Name) {
 				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ps.Name, d.Name)
 			}
 			names[d.Name] = true
 		}
-		specs[i].Manifest = m
+		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config, Manifest: m}
+	}
+	if dirty && p.cachePath != "" {
+		if err := c.save(p.cachePath); err != nil {
+			return fmt.Errorf("plugin cache: %w", err)
+		}
 	}
 	host, err := plugin.NewHost(p.opts, specs...)
 	if err != nil {
@@ -145,6 +160,30 @@ func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []s
 	ref, _ := message.ParseModelRef(model)
 	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id, Model: ref})
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
+}
+
+// ChatParams runs the chat.params chain for one model call. An empty model in
+// the result keeps p.Model; a nil sampling value keeps the provider default.
+func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallParams {
+	in := plugin.ChatParams{Temperature: p.Temperature, TopP: p.TopP}
+	if p.MaxTokens > 0 {
+		in.MaxTokens = &p.MaxTokens
+	}
+	in.Model, _ = message.ParseModelRef(p.Model)
+	out := s.host.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.id, Params: in})
+	if !out.Model.IsZero() {
+		p.Model = out.Model.String()
+	}
+	if out.MaxTokens != nil {
+		p.MaxTokens = *out.MaxTokens
+	}
+	p.Temperature, p.TopP = out.Temperature, out.TopP
+	return p
+}
+
+// ShellEnv returns the variables that the shell.env hooks add to a bash command.
+func (s *Session) ShellEnv(ctx context.Context, command string) map[string]string {
+	return s.host.ShellEnv(ctx, &plugin.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.workDir})
 }
 
 // Untransformed returns s as a Source that runs no system.transform, for a

@@ -63,7 +63,7 @@ var (
 		for k, v := range env {
 			t.Setenv(k, v)
 		}
-		return newRuntimeDriverIn(t, configPath, ask, workDir)
+		return newRuntimeDriverIn(t, configPath, ask, workDir, env)
 	}}
 )
 

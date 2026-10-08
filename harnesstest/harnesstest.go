@@ -68,8 +68,10 @@ type Request struct {
 	ThinkingType   string
 	ThinkingBudget int
 	ServiceTier    string
-	Messages       []Message
-	Tools          []string // sorted names
+	// Temperature and TopP are nil when the request sends none. Only the Anthropic wire fills them.
+	Temperature, TopP *float64
+	Messages          []Message
+	Tools             []string // sorted names
 	// Header holds the HTTP request headers. Only NewChat fills it.
 	Header http.Header
 	// Chat-completions requests only.

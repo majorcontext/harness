@@ -205,7 +205,7 @@ func processNeedsWorkdir(t *testing.T) {
 	fake := harnesstest.New(t,
 		harnesstest.Step{Name: "start", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{processStart("dev")}}},
 		harnesstest.Step{Name: "failed", Match: harnesstest.LastToolResult("process"), Reply: harnesstest.Reply{Text: "ok"}})
-	d := newRuntimeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(devProcesses())), false, "")
+	d := newRuntimeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(devProcesses())), false, "", nil)
 	id := d.Create(t)
 	d.Submit(t, id, "run")
 	d.WaitIdle(t, id)

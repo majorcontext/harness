@@ -13,10 +13,14 @@ import (
 // Names are the names of the tools that Tools returns.
 var Names = []string{"read_file", "write_file", "edit_file", "glob", "grep", "ls", "bash"}
 
+// ShellEnv returns the variables to add to the environment of a shell command.
+type ShellEnv func(ctx context.Context, command string) map[string]string
+
 // Tools returns the file, search, and shell tools of workDir. Each call
 // returns a new set: the read guard of write_file belongs to one session.
-func Tools(workDir string) []turn.Tool {
-	d := dir{root: workDir, read: &guard{hashes: map[string][32]byte{}}, mem: &budget{limit: readBudgetBytes}}
+// env, when set, adds variables to the environment of each bash command.
+func Tools(workDir string, env ShellEnv) []turn.Tool {
+	d := dir{root: workDir, read: &guard{hashes: map[string][32]byte{}}, mem: &budget{limit: readBudgetBytes}, env: env}
 	return []turn.Tool{d.keyed(d.readFile()), d.keyed(d.writeFile()), d.keyed(d.editFile()), d.glob(), d.grep(), d.ls(), d.bash()}
 }
 
@@ -25,6 +29,7 @@ type dir struct {
 	root string
 	read *guard
 	mem  *budget
+	env  ShellEnv
 }
 
 // resolve joins a relative path to the work directory.

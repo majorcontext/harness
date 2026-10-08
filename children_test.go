@@ -212,7 +212,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 func readOnly(t *testing.T, f *family, children []protocol.Session) {
 	t.Helper()
 	req, _ := f.last(children[0].ID, "child work")
-	want := []string{"read_file", "glob", "grep", "ls"}
+	want := []string{"read_file", "glob", "grep", "ls", "session_info"}
 	var names []string
 	for _, tool := range req.Tools {
 		names = append(names, tool.Name)

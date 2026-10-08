@@ -86,7 +86,11 @@ func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session, sp *ses
 		}})
 	}
 	if r.workDir != "" {
-		files := turn.Fixed(append(builtin.Tools(r.workDir), &sessionInfoTool{r: r, session: id, prompt: sp}))
+		var env builtin.ShellEnv
+		if plug != nil {
+			env = plug.ShellEnv
+		}
+		files := turn.Fixed(append(builtin.Tools(r.workDir, env), &sessionInfoTool{r: r, session: id, prompt: sp}))
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
 			if c.OwnsLoop {
 				return nil

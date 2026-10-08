@@ -250,7 +250,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	if req.Model == "" {
 		req.Model = r.resolve("")
 	}
-	if err := r.startPlugins(ctx); err != nil {
+	if err := r.startPlugins(ctx, false); err != nil {
 		return nil, err
 	}
 	id := cmp.Or(req.ID, "ses_"+newSuffix())
@@ -295,7 +295,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	if err := r.startPlugins(ctx); err != nil {
+	if err := r.startPlugins(ctx, false); err != nil {
 		return nil, err
 	}
 	if err := r.yieldCatchUp(ctx, id); err != nil {
@@ -343,6 +343,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Retain:          r.workDir != "",
 		Prompt:          sp.system,
 		Appended:        r.appended(id, plug),
+		Params:          chatParams(plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
 		MaxTokens:       r.maxTokens,
@@ -564,7 +565,7 @@ func (r *Runtime) hold() error {
 // startPlugins reads the plugin manifests once for each runtime, as part of
 // the work that Close waits for. A plugin tool may not take the name of
 // another tool.
-func (r *Runtime) startPlugins(ctx context.Context) error {
+func (r *Runtime) startPlugins(ctx context.Context, refresh bool) error {
 	if r.plugins == nil {
 		return nil
 	}
@@ -575,14 +576,16 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
+	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) }, refresh)
 }
 
-// ProbePlugins reads the manifest of each configured plugin, as the first
-// Create or Open does, and returns each plugin with its tools and hooks. It
-// fails as that Create or Open fails. It returns nil with no plugin.
+// ProbePlugins probes each configured plugin, as the first Create or Open
+// does, and stores the manifests in the plugin cache. It returns each plugin
+// with its tools and hooks. It fails as that Create or Open fails. It returns
+// nil with no plugin. It refreshes the cache only before the first Create or
+// Open of the runtime; after that it returns the started plugins unchanged.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error) {
-	if err := r.startPlugins(ctx); err != nil {
+	if err := r.startPlugins(ctx, true); err != nil {
 		return nil, err
 	}
 	return r.pluginInfo(), nil
@@ -690,3 +693,10 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
 func (r *Runtime) Models() []protocol.Model { return r.models.List() }
+
+func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) turn.CallParams {
+	if plug == nil {
+		return nil
+	}
+	return plug.ChatParams
+}

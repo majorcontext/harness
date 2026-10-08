@@ -32,9 +32,9 @@ var generalPurpose = Profile{Name: GeneralPurpose,
 		"Do the whole task with your tools. Your final message is the only thing the parent reads, " +
 		"so make it a complete, concise report of what you found or changed."}
 
-// readOnly names the read-only file tools of the native and Claude Code
-// backends. A spawn keeps the names that the child has.
-var readOnly = []string{"read_file", "glob", "grep", "ls", "Read", "Glob", "Grep"}
+// readOnly names the read-only tools of the native and Claude Code backends:
+// the file tools and session_info. A spawn keeps the names that the child has.
+var readOnly = []string{"read_file", "glob", "grep", "ls", "session_info", "Read", "Glob", "Grep"}
 
 var explore = Profile{Name: "explore", Tools: readOnly,
 	Description: "A fast, read-only agent that finds code and answers where-is questions. It cannot edit files or run commands.",

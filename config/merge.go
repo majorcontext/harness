@@ -29,6 +29,9 @@ func mergeScalars(out, over *Config) {
 	if over.InstructionsMaxBytes != 0 {
 		out.InstructionsMaxBytes = over.InstructionsMaxBytes
 	}
+	if over.InstructionsMode != "" {
+		out.InstructionsMode = over.InstructionsMode
+	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
 	}

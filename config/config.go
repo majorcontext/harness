@@ -30,6 +30,8 @@ type Config struct {
 	// system prompt. Zero: 64 KiB. Negative: no cap. A cut file gets a marker
 	// and a WARN log line. HARNESS_INSTRUCTIONS_MAX_KB overrides it.
 	InstructionsMaxBytes int `json:"instructions_max_bytes,omitempty"`
+	// InstructionsMode "full" keeps a head and a marker for a file over the cap; else an outline follows the head.
+	InstructionsMode string `json:"instructions_mode,omitempty"`
 	// AppendSystemPrompt lists PLATFORM-owned facts the agent cannot
 	// discover, and the platform policy that depends on them. Two hard
 	// exclusions remain: project instructions belong in AGENTS.md, and tool
@@ -105,6 +107,8 @@ type Config struct {
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
 	// OwnerEpoch is the epoch of the grant of each session. 0 keeps epoch 1.
 	OwnerEpoch int `json:"owner_epoch,omitempty"`
+	// PluginCache is the file that holds the probed manifest of each plugin. Only the user file sets it.
+	PluginCache string `json:"plugin_cache,omitempty"`
 	// Sync posts each record to a control plane. Only the user file sets it.
 	Sync *SyncSpec `json:"sync,omitempty"`
 	// ContextWindowTokens is the context window of every model, in tokens,
