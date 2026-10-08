@@ -185,6 +185,13 @@ func TestContractFileToolsLimits(t *testing.T) {
 			actions: append([]action{writeFile{path: "a.txt", body: string(png)}}, oneTurn...),
 		},
 		{
+			name: "a_tool_result_image_reaches_the_model_after_a_restart",
+			model: append(toolChain(ftRead(ftArgs("path", "a.png"))),
+				harnesstest.Step{Name: "again", Match: assistantTurns(2), Reply: harnesstest.Reply{Text: "seen again"}}),
+			actions: append(append([]action{writeFile{path: "a.png", body: string(png)}}, oneTurn...),
+				restart{}, submit{as: "a", text: "again"}, waitIdle{as: "a"}),
+		},
+		{
 			name: "write_guard_belongs_to_one_session",
 			model: append(promptChain("read", ftRead(ftArgs("path", "f.txt"))),
 				promptChain("write", ftWrite("f.txt", "y"))...),

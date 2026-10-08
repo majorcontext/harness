@@ -85,9 +85,12 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "plain\n[image content, 70 bytes, image/png]\nresource: doc://x (x)\nembedded",
+              "text": "plain\nresource: doc://x (x)\nembedded",
               "tool_name": "mcp__weather__mixed",
-              "tool_use_id": "toolu#1"
+              "tool_use_id": "toolu#1",
+              "images": [
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+              ]
             }
           ]
         }
@@ -125,7 +128,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "plain\n[image content, 70 bytes, image/png]\nresource: doc://x (x)\nembedded"
+            "content": "plain\nresource: doc://x (x)\nembedded"
           }
         ]
       },

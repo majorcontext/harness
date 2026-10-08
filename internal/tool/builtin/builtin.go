@@ -45,11 +45,18 @@ func (d dir) base(path string) string {
 
 type tool struct {
 	spec protocol.ToolSpec
-	run  func(ctx context.Context, args json.RawMessage) (string, error)
+	run  func(ctx context.Context, args json.RawMessage) (protocol.ToolResult, error)
 	key  func(args json.RawMessage) string
 }
 
 func newTool(name, description, schema string, run func(context.Context, json.RawMessage) (string, error)) tool {
+	return newResultTool(name, description, schema, func(ctx context.Context, args json.RawMessage) (protocol.ToolResult, error) {
+		text, err := run(ctx, args)
+		return protocol.ToolResult{Text: text}, err
+	})
+}
+
+func newResultTool(name, description, schema string, run func(context.Context, json.RawMessage) (protocol.ToolResult, error)) tool {
 	return tool{spec: protocol.ToolSpec{Name: name, Description: description, InputSchema: json.RawMessage(schema)}, run: run}
 }
 
@@ -103,6 +110,5 @@ func (d dir) pathKey(args json.RawMessage) string {
 func (t tool) Spec() protocol.ToolSpec { return t.spec }
 
 func (t tool) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
-	text, err := t.run(ctx, call.Arguments)
-	return protocol.ToolResult{Text: text}, err
+	return t.run(ctx, call.Arguments)
 }

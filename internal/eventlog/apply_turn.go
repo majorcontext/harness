@@ -63,6 +63,9 @@ func (s *State) applyItem(e ItemCompleted) error {
 		case p.Type == PartToolResult && i < 0:
 			return illegal("no open tool call %s", p.CallID)
 		case p.Type == PartToolResult:
+			if j := slices.IndexFunc(p.Blobs, func(b Part) bool { return b.Type != PartBlob || b.BlobKey == "" }); j >= 0 {
+				return illegal("tool result %s has a blob %d that is not a blob part with a blob_key", p.CallID, j)
+			}
 			calls = slices.Delete(calls, i, i+1)
 		case p.Type != PartText && p.Type != PartReasoning:
 			return illegal("item %s has part type %q", e.ItemID, p.Type)

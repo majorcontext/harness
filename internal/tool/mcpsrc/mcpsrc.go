@@ -297,7 +297,8 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	if err != nil {
 		return protocol.ToolResult{}, hide(r.server, err)
 	}
-	return protocol.ToolResult{Text: text(res.Content), IsError: res.IsError}, nil
+	text, blobs := render(res.Content)
+	return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
 }
 
 // hide replaces every error but a server's own RPC error with a reason. A
@@ -342,25 +343,35 @@ func connectReason(err error) string {
 	return "initialize failed"
 }
 
-// text renders content as text. The result carries no binary data, so a
-// binary item becomes one line that names its size and type.
-func text(content []mcp.Content) string {
+// render splits content into text and blobs. Image and audio content and a
+// resource blob become blobs for the model. A payload that is not base64, or
+// has no bytes, becomes one line that names its type.
+func render(content []mcp.Content) (string, []protocol.Blob) {
 	var lines []string
+	var blobs []protocol.Blob
+	add := func(what, data, mime string) {
+		if b, err := base64.StdEncoding.DecodeString(data); err == nil && len(b) > 0 {
+			blobs = append(blobs, protocol.Blob{MediaType: mime, Data: b})
+			return
+		}
+		lines = append(lines, binary(what, data, mime))
+	}
 	for _, c := range content {
 		switch {
 		case c.Type == mcp.ContentTypeImage, c.Type == mcp.ContentTypeAudio:
-			lines = append(lines, binary(c.Type+" content", c.Data, c.MimeType))
+			add(c.Type+" content", c.Data, c.MimeType)
 		case c.Type == mcp.ContentTypeResourceLink:
 			lines = append(lines, fmt.Sprintf("resource: %s (%s)", c.URI, c.Name))
-		case c.Type == mcp.ContentTypeResource && c.Resource != nil && c.Resource.Blob != "":
-			lines = append(lines, binary("binary resource: "+c.Resource.URI, c.Resource.Blob, c.Resource.MimeType))
-		case c.Type == mcp.ContentTypeResource && c.Resource != nil:
+		case c.Type == mcp.ContentTypeResource && c.Resource != nil && c.Resource.Text != "":
 			lines = append(lines, c.Resource.Text)
+		case c.Type == mcp.ContentTypeResource && c.Resource != nil && c.Resource.Blob != "":
+			add("binary resource: "+c.Resource.URI, c.Resource.Blob, c.Resource.MimeType)
+		case c.Type == mcp.ContentTypeResource:
 		case c.Text != "":
 			lines = append(lines, c.Text)
 		}
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), blobs
 }
 
 func binary(what, data, mime string) string {

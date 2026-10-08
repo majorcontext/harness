@@ -239,7 +239,18 @@ func invoke(ctx context.Context, tools []Tool, c protocol.ToolCall) protocol.Too
 	return res
 }
 
-func result(c protocol.ToolCall, r protocol.ToolResult) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleTool, Parts: []eventlog.Part{
-		{Type: eventlog.PartToolResult, CallID: c.ID, Name: c.Name, Text: r.Text, IsError: r.IsError}}}
+// result builds the tool message of c. A blob with no bytes is dropped.
+func result(to Turn, c protocol.ToolCall, r protocol.ToolResult) (eventlog.Message, error) {
+	p := eventlog.Part{Type: eventlog.PartToolResult, CallID: c.ID, Name: c.Name, Text: r.Text, IsError: r.IsError}
+	for _, b := range r.Blobs {
+		if len(b.Data) == 0 {
+			continue
+		}
+		bp, err := to.Attach(b.MediaType, b.Data)
+		if err != nil {
+			return eventlog.Message{}, err
+		}
+		p.Blobs = append(p.Blobs, bp)
+	}
+	return eventlog.Message{Role: eventlog.RoleTool, Parts: []eventlog.Part{p}}, nil
 }

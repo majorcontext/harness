@@ -168,6 +168,8 @@ type Limits struct {
 type Turn interface {
 	Sink
 	Started() string
+	// Attach stores a blob of a tool result and returns the blob part that names it.
+	Attach(mediaType string, data []byte) (eventlog.Part, error)
 	Status(f protocol.StatusFrame)
 	// Settings returns the model and settings of the session now, or "".
 	Settings() (string, eventlog.Settings)
@@ -237,7 +239,10 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		req.History = append(req.History, s.items...)
 		record := func(c protocol.ToolCall, r protocol.ToolResult) error {
-			m := result(c, r)
+			m, err := result(to, c, r)
+			if err != nil {
+				return err
+			}
 			if err := to.Item(m); err != nil {
 				return err
 			}

@@ -182,7 +182,7 @@ func (s *Session) After(ctx context.Context, c protocol.ToolCall, r protocol.Too
 	}
 	out := s.host.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments,
 		Output: message.Parts{&message.Text{Text: r.Text}}})
-	return protocol.ToolResult{Text: out.Text(), IsError: r.IsError}
+	return protocol.ToolResult{Text: out.Text(), IsError: r.IsError, Blobs: r.Blobs}
 }
 
 // Appended announces the start and the end of each turn in events.

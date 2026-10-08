@@ -92,6 +92,8 @@ type Part struct {
 	ToolInput map[string]any
 	ToolUseID string
 	IsError   bool
+	// Images holds the data URI of each image block inside a tool_result.
+	Images []string
 }
 
 // LastUserText is the text of the last user message that has a text part.

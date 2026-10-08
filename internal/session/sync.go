@@ -198,6 +198,12 @@ func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][
 		}
 	case eventlog.ToolResultRetained:
 		keys = []string{e.BlobKey}
+	case eventlog.ItemCompleted:
+		for _, p := range e.Message.Parts {
+			for _, b := range p.Blobs {
+				keys = append(keys, b.BlobKey)
+			}
+		}
 	case eventlog.InputAdmitted:
 		for _, p := range e.Parts {
 			if p.Type == eventlog.PartBlob {
