@@ -178,7 +178,7 @@ func continueInTool(f *fake, answer string) {
 	f.emit(
 		user(toolResult("toolu_q", answer, false)),
 		system("init", obj{"session_id": f.sessionID}),
-		assistant(textBlock(waitingMarker)).inMessage("id", "msg_continue"),
+		assistant(textBlock(waitingMarker)).inMessage("id", "msg_marker"),
 		assistant(toolUse("toolu_c", "Bash", obj{"command": "sleep 1"})).inMessage("id", "msg_continue"),
 	)
 	text := "no second message received"

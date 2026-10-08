@@ -6,7 +6,6 @@
 parser responses response.failed|error * the Responses failed frame comes mid-stream, and no request provokes one on demand
 parser claudecode * local_command the CLI prints a local command only for a slash command that runs in the terminal; headless runs refuse them
 parser claudecode * compact_metadata+ the CLI compacts only after a long conversation, and headless /compact is refused
-parser claudecode * request+ the CLI asks for a permission only through the stdio permission prompt of a question flow
 parser claudecode * rate_limit_info.overageResetsAt the CLI sends it only while overage is active
 parser anthropic content_block_start content_block.data only a redacted thinking block carries data, and no request provokes one
 parser chat chunk error+ OpenAI-compatible gateways such as OpenRouter send a mid-stream error object; OpenAI itself does not
@@ -22,4 +21,3 @@ fake claudecode system/status * compaction follows a long conversation, and the 
 fake claudecode user:string * the compaction summary is a user frame with text content; headless runs refuse /compact
 fake claudecode system/hook_started * the recording runs without hooks; a configured hook prints this frame
 fake claudecode system/task_notification * a background task prints this frame, and the recording starts none
-fake claudecode control_request * the CLI sends a permission request only through the stdio permission prompt of a question flow, and the recorder runs no such flow

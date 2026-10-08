@@ -96,15 +96,15 @@ func (s *Scrubber) String(text string) string {
 		}
 		return s.placeholder("email", m, "user%d"+emailSuffix)
 	})
+	for _, l := range s.extra {
+		text = strings.ReplaceAll(text, l, "/home/u")
+	}
 	text = localPath.ReplaceAllStringFunc(text, func(m string) string {
 		if strings.HasPrefix(m, localPathPrefix) {
 			return m
 		}
 		return s.placeholder("path", m, localPathPrefix+"%d")
 	})
-	for _, l := range s.extra {
-		text = strings.ReplaceAll(text, l, "/home/u")
-	}
 	text = worktree.ReplaceAllString(text, "/home/u")
 	text = opaque.ReplaceAllStringFunc(text, func(m string) string {
 		sub := opaque.FindStringSubmatch(m)
