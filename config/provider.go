@@ -53,7 +53,7 @@ type Provider struct {
 
 	// BinaryPath is the Claude Code CLI executable, resolved through PATH.
 	BinaryPath string `json:"binary_path,omitempty"`
-	// ExtraArgs are appended after the flags the engine constructs.
+	// ExtraArgs are appended after the flags that the Claude Code backend constructs.
 	ExtraArgs []string `json:"extra_args,omitempty"`
 	// PermissionMode is the --permission-mode of the CLI, one of ClaudeCodePermissionModeValues.
 	PermissionMode string `json:"permission_mode,omitempty"`

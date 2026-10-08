@@ -46,8 +46,8 @@ type Config struct {
 	// entries sit at the front of the prompt-cache prefix, so a value that
 	// varies per turn or per process start (a timestamp, a pod name, a live
 	// status) re-processes the whole conversation uncached on every request,
-	// with no error to notice. Put anything that changes where a turn builds
-	// it instead, such as the process status line of internal/tool/proc.
+	// with no error to notice. The runtime has no per-turn channel for configured
+	// text, so a value that changes does not belong in this key.
 	//
 	// Merge is additive: base segments come first, then project segments.
 	// This rule differs from every other slice field. In box deployments, the
@@ -58,7 +58,7 @@ type Config struct {
 	// SkillsDirs lists the Agent Skills dirs. nil: <WorkDir>/.agents/skills. A
 	// non-empty project value replaces the user value in the merge.
 	SkillsDirs []string `json:"skills_dirs,omitempty"`
-	// AgentDefsDirs lists the engine's agent definition dirs. nil: <WorkDir>/.agents.
+	// AgentDefsDirs lists the agent definition dirs of the runtime. nil: <WorkDir>/.agents.
 	AgentDefsDirs []string `json:"agent_defs_dirs,omitempty"`
 	// CommandsDirs lists directories scanned for prompt commands (*.md files).
 	// A nil value uses <WorkDir>/.agents/commands. A non-empty project value
@@ -73,11 +73,11 @@ type Config struct {
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
 	// MaxTreeTokens stops a spawn once one session tree has used this many tokens. 0: no limit.
 	MaxTreeTokens int `json:"max_tree_tokens,omitempty"`
-	// ModelTool false disables the engine `model` session tool. nil leaves it
+	// ModelTool false disables the `model` session tool. nil leaves it
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
 	// Plugins lists the plugin processes to wire into every session's
-	// engine.Config.Hooks (see package plugin). Order matters: sync hooks
+	// turn hooks (see internal/tool/pluginsrc). Order matters: sync hooks
 	// chain across plugins in this order, each seeing the previous plugin's
 	// mutations. A nil (omitted) value disables plugins entirely. In the
 	// project-config merge a non-empty project value replaces the user
@@ -87,9 +87,9 @@ type Config struct {
 	// (plugin.Options.HTTPHeaders, e.g. workspace attribution). Maps merge
 	// key by key in the project-config merge, like Aliases and Providers.
 	PluginHTTPHeaders map[string]string `json:"plugin_http_headers,omitempty"`
-	// MCPServers declares named MCP servers the engine connects to (lazily,
+	// MCPServers declares named MCP servers the runtime connects to (lazily,
 	// on first use) and registers as namespaced tools (mcp__<server>__<tool>,
-	// the Claude Code convention — see package engine). Keyed by server name;
+	// the Claude Code convention — see internal/tool/mcpsrc). Keyed by server name;
 	// a nil (omitted) value configures no MCP servers. In the project-config
 	// merge, keys merge like Providers/Aliases (new keys from either layer
 	// are kept) but a same-name project entry replaces the user entry
@@ -97,10 +97,9 @@ type Config struct {
 	// make field-by-field merging (as Provider gets) more confusing than
 	// useful here.
 	MCPServers map[string]MCPServerSpec `json:"mcp_servers,omitempty"`
-	// Processes declares named dev/support processes the engine can
+	// Processes declares named dev/support processes the runtime can
 	// manage (start/stop/restart/status/logs) via the "process" session
-	// tool and the server's /process endpoints (see package engine's
-	// ProcessManager). Keyed by process name; a nil (omitted) value
+	// tool and the /process endpoints (see internal/tool/proc). Keyed by process name; a nil (omitted) value
 	// configures no processes. Merge rules mirror MCPServers: keys merge,
 	// but a same-name project entry replaces the user entry wholesale.
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
@@ -114,18 +113,17 @@ type Config struct {
 	// a default of 128000 tokens, and its gauge marks the window as an
 	// estimate. A context overflow error never changes the window.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
-	// PromptRetries sets engine.Config.PromptRetries: how many ADDITIONAL
-	// attempts the base interactive Prompt loop makes when a model call fails
+	// PromptRetries sets how many ADDITIONAL
+	// attempts a turn (internal/turn) makes when a model call fails
 	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a
 	// truncated stream). A nil value (the field omitted) leaves the product
 	// default of 2 in place; an explicit 0 disables the retry entirely. A
 	// *int distinguishes "unset" (2) from "0" (off) across the project-config
 	// merge, exactly like ModelTool above. Resolve it with
-	// PromptRetriesValue. It is deliberately small and short — see
-	// engine.Config.PromptRetries and streamTurnWithRetry.
+	// PromptRetriesValue. It is deliberately small and short.
 	PromptRetries *int `json:"prompt_retries,omitempty"`
-	// MaxTokensContinuations sets engine.Config.MaxTokensContinuations: how
-	// many CONSECUTIVE times the base interactive Prompt loop auto-continues
+	// MaxTokensContinuations sets how many CONSECUTIVE times a
+	// turn (internal/turn) auto-continues
 	// a turn that stopped with provider reason "max_tokens" (the provider
 	// cut the model off mid-emission) instead of settling the turn. A nil
 	// value (the field omitted) leaves the
@@ -135,20 +133,20 @@ type Config struct {
 	// like PromptRetries above. Resolve it with
 	// MaxTokensContinuationsValue.
 	MaxTokensContinuations *int `json:"max_tokens_continuations,omitempty"`
-	// StreamIdleTimeoutS sets engine.Config.StreamIdleTimeout (in seconds)
-	// for every session this process creates: how long a streamed response
-	// may go without a delta before the engine's idle-stream watchdog aborts
-	// it. Zero (omitted, the default) leaves the engine's own 5-minute
+	// StreamIdleTimeoutS sets the stream idle timeout (in seconds)
+	// of every session this process creates: how long a streamed response
+	// may go without a delta before the idle-stream watchdog of internal/turn
+	// aborts it. Zero (omitted, the default) leaves the 5-minute
 	// default in place (mirroring Codex's stream_idle_timeout_ms=300000);
 	// negative disables the watchdog entirely.
 	StreamIdleTimeoutS int `json:"stream_idle_timeout_s,omitempty"`
-	// CompactionThreshold sets engine.Config.CompactionThreshold: the
+	// CompactionThreshold sets the
 	// fraction of ContextWindowTokens at which automatic compaction
-	// triggers. Zero (omitted) defaults to 0.8 (see the engine).
+	// triggers. Zero (omitted) defaults to 0.8 (see Defaults).
 	CompactionThreshold float64 `json:"compaction_threshold,omitempty"`
-	// CompactionKeepTurns sets engine.Config.CompactionKeepTurns: how many
+	// CompactionKeepTurns sets how many
 	// of the most recent turns automatic compaction always keeps verbatim.
-	// Zero (omitted) defaults to 2 (see the engine); the effective value
+	// Zero (omitted) defaults to 2 (see Defaults); the effective value
 	// can never go below 1.
 	CompactionKeepTurns int `json:"compaction_keep_turns,omitempty"`
 	// SessionSync selects the durability mechanism for attested session-store
@@ -179,10 +177,9 @@ type Config struct {
 	// "lazy" the decision needs no catalog size, so a threshold set beside
 	// either of them is accepted and inert. It is not rejected there,
 	// because a config that switches mode back to "auto" should not have to
-	// re-supply it; 0/absent leaves engine.Config.MCPToolLoadingThreshold
-	// at zero, which the engine itself then defaults to 20
-	// (defaultMCPDeferThreshold). A count rather than a token estimate: the
-	// engine has no tokenizer on the request path. A NEGATIVE value cannot
+	// re-supply it; 0/absent leaves the threshold at its default of 20
+	// (see Defaults). A count rather than a token estimate: the
+	// runtime has no tokenizer on the request path. A NEGATIVE value cannot
 	// possibly be wired -- len(catalog) > -1 holds even for an empty
 	// catalog, so a stray minus sign would silently turn "auto" into "always
 	// defer" -- and is rejected loudly, like MCPServerSpec.ConnectTimeoutS.
