@@ -106,6 +106,9 @@ func (t modelTool) Bind(id string, _ bool) turn.Tool {
 	return t
 }
 
+// Alone makes the model tool run with no other call of its model call in flight.
+func (modelTool) Alone() {}
+
 func (t modelTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in struct{ Action, Model string }
 	if err := json.Unmarshal(c.Arguments, &in); err != nil {

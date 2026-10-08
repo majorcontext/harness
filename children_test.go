@@ -66,6 +66,22 @@ func (f *family) last(session, prefix string) (turn.Request, string) {
 	return turn.Request{}, ""
 }
 
+// resulted reports whether a request of session carried a tool result that starts with prefix.
+func (f *family) resulted(session, prefix string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, req := range f.reqs {
+		for _, m := range req.History {
+			for _, p := range m.Parts {
+				if req.SessionID == session && p.Type == eventlog.PartToolResult && strings.HasPrefix(p.Text, prefix) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // task calls the task tool n times with agent.
 func task(agent string, n int) eventlog.Message {
 	args, _ := json.Marshal(map[string]string{"agent": agent, "prompt": "child work"})
@@ -159,7 +175,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		{name: "a spawn past max_concurrent_tasks is refused", agent: "general-purpose", spawns: 2, cfg: config.Config{MaxConcurrentTasks: 1}, kids: 1,
 			child: func() []eventlog.Message { return nil },
 			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if _, got := f.last("s1", "task: max_concurrent_tasks 1"); got == "" {
+				if !f.resulted("s1", "task: max_concurrent_tasks 1") {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
 				}
 			}},

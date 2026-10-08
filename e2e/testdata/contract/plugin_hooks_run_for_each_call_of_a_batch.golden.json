@@ -6,6 +6,11 @@
       "tools": [
         "bash",
         "edit_file",
+        "fixture_config",
+        "fixture_crash",
+        "fixture_echo",
+        "fixture_fail",
+        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -24,7 +29,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "run"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -40,6 +45,11 @@
       "tools": [
         "bash",
         "edit_file",
+        "fixture_config",
+        "fixture_crash",
+        "fixture_echo",
+        "fixture_fail",
+        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -58,7 +68,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "run"
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -69,7 +83,7 @@
               "kind": "tool_use",
               "tool_name": "bash",
               "tool_input": {
-                "command": "touch tool-running; sleep 1"
+                "command": "echo rewrite-me"
               },
               "tool_use_id": "toolu#1"
             },
@@ -77,9 +91,17 @@
               "kind": "tool_use",
               "tool_name": "bash",
               "tool_input": {
-                "command": "echo two"
+                "command": "echo block-me"
               },
               "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo plain"
+              },
+              "tool_use_id": "toolu#3"
             }
           ]
         },
@@ -88,20 +110,22 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "(no output)",
+              "text": "after-hook saw: rewritten\n",
               "tool_name": "bash",
               "tool_use_id": "toolu#1"
             },
             {
               "kind": "tool_result",
-              "text": "cut off before a result was recorded; check whether it took effect before running it again",
+              "text": "blocked by fixture",
               "tool_name": "bash",
               "tool_use_id": "toolu#2",
               "is_error": true
             },
             {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "kind": "tool_result",
+              "text": "after-hook saw: plain\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3"
             }
           ]
         }
@@ -116,7 +140,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "run"
+            "text": "go"
           }
         ]
       },
@@ -129,7 +153,7 @@
             "call_id": "toolu#1",
             "name": "bash",
             "arguments": {
-              "command": "touch tool-running; sleep 1"
+              "command": "echo rewrite-me"
             }
           },
           {
@@ -137,7 +161,15 @@
             "call_id": "toolu#2",
             "name": "bash",
             "arguments": {
-              "command": "echo two"
+              "command": "echo block-me"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "bash",
+            "arguments": {
+              "command": "echo plain"
             }
           }
         ]
@@ -149,7 +181,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "(no output)"
+            "content": "after-hook saw: rewritten\n"
           }
         ]
       },
@@ -161,12 +193,23 @@
             "type": "tool_result",
             "call_id": "toolu#2",
             "is_error": true,
-            "content": "cut off before a result was recorded; check whether it took effect before running it again"
+            "content": "blocked by fixture"
           }
         ]
       },
       {
         "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "after-hook saw: plain\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
@@ -176,33 +219,5 @@
         ]
       }
     ]
-  },
-  "calls": {
-    "get_session.a": {
-      "status": 200,
-      "body": {
-        "context": {
-          "tokens": 5,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 14,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#1"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
-        }
-      }
-    }
   }
 }

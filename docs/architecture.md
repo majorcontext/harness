@@ -182,6 +182,10 @@ type Sync interface {
 // ApplySync appends b to st by the receiver rules of a Sync (see Events).
 func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error)
 
+// The calls of one model response run at the same time, so Run allows concurrent
+// calls. A Tool may also have `Alone()` (the call runs with no other call in
+// flight) or `Key(protocol.ToolCall) string` (calls with the same non-empty key
+// run one at a time, in call order).
 type Tool interface {
 	Spec() protocol.ToolSpec
 	// Run receives call.ID, stable across a resumed turn, for idempotent effects.
@@ -763,6 +767,11 @@ type Tool interface { // the same method set as harness.Tool
 	Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error)
 }
 
+// A Tool may also implement these. Alone: the call runs with no other call of
+// its model call in flight. Keyed: calls with the same non-empty key run one at a time, in call order.
+type Alone interface{ Alone() }
+type Keyed interface{ Key(c protocol.ToolCall) string }
+
 // Restrict returns the tools that names lists, or every tool when names is nil.
 func Restrict(tools []Tool, names []string) []Tool
 
@@ -782,7 +791,7 @@ type Toolset struct {
 - The runtime builds one `turn.Source` for each session when it loads the session. In order, it gives the runtime tools, with `goal` and `task` bound to the session ID and no `goal` for a child; `goal` only for a backend that does not own the loop; the file tools of the `WorkDir`, for a backend that does not own the loop; `internal/tool/mcpsrc`, except for a backend with `OwnsMCP` on a turn with no `AllowedTools`; and `internal/tool/pluginsrc`. The actor adds a last `Source`: `get_conversation_history` for a backend that owns the loop, which no `AllowedTools` list hides, and `read_tool_result` with the retention hooks for a harness loop. `turn.Sources` joins the `Source`s, and `turn.Run` takes no other tool list. Each `Source` gets the `AllowedTools` of the session for each model call and applies `turn.Restrict` once.
 - The tools of a model call keep one order from call to call, because the tools come first in the cached prefix of every provider and a changed byte invalidates the whole prefix. A `Source` returns its tools in a fixed order and never ranges over a map: `mcpsrc` orders the servers by name and the tools of a server by name.
 - `turn.Sources` chains the `turn.Hooks` of its `Source`s in order: `Before` runs in order and a deny ends the chain, and `After` runs in order.
-- The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
+- The loop runs the tool calls of a response at the same time, up to 8 at once, as the engine did (Andy, 2026-10-08, parity: tool calls run in parallel). Results reach the log in call order: a result is recorded as soon as it and every call before it have ended. A tool that is `Alone` waits for every call before it and holds back every call after it. The calls of a `Keyed` tool with one key run one at a time in call order: `read_file`, `write_file`, and `edit_file` key on the resolved path with symlinks resolved, `process` on the process name, and `task` on the target session. `goal`, `model`, and `mcp` are `Alone`. `Before` and `After` run around each call, and calls that run together run their hooks together, so a hook keeps no state across calls that it does not guard. A panic in a tool is an error result of that call. An interrupt cancels every running call and starts none; every call that ran has its own result recorded in call order, including a call that the interrupt cut short, and a call that did not start gets the result of an interrupted call. When only the step ends, as in a handoff, running calls finish and no call starts. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
 - No tool receives a session. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts.
 
 Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored; any other key skips the file. `internal/prompt.Profiles` reads `*.md` in each of `agent_defs_dirs` (default `<WorkDir>/.agents`; a relative path joins `WorkDir`; a name that two files repeat fails the load) at each spawn, beside the built-in profiles, which a file of the same name replaces. The built-in `general-purpose` allows every tool of the parent. The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan. `session_info` joins the read-only set at the switch (see Decided); it is not built yet. Tool names differ by backend, so a spawn keeps only the names of a profile that `known` accepts for the model of the child: a runtime tool, a plugin tool, an MCP tool, or a built-in tool of its model. A profile left with no tool logs a WARN line. A file that is not valid is skipped with a WARN log line. A name that two files repeat, in one directory or across `agent_defs_dirs`, fails the load, and the error names both files, with no `engine:` prefix: the spawn fails its tool call. A session that exists opens as before, with the profile of the first file of that name. A profile applies through the allowed tools of the child (`turn.Restrict`) and its body as the last segment of the system prompt of the child. The runtime reads the profile once, when it starts the child, and the spawn uses that same read for the model and the tools of the child.
@@ -794,7 +803,7 @@ With a `WorkDir`, each session of the harness loop gets the built-in tools of th
 - The runtime gives each session its own file tools in its `Source`, because the `write_file` guard belongs to one session: `write_file` overwrites only a file that the session read or wrote, with no change on disk since. As in the engine, the guard is in memory, so after `Open` the model reads a file again before it overwrites it. The tools cannot be one `Options.Tools` list for the runtime.
 - The actor builds `read_tool_result` over itself, so the tool gets its dependencies when it is built. `session.Config.Retain` turns this on, and the runtime sets it with a `WorkDir`.
 - A backend that owns the loop, such as Claude Code, gets none of the others and has no retention. It has its own tools.
-- One file-size cap of 20 MiB replaces the read budget of the engine. `read_file`, `edit_file`, and the `write_file` guard read at most that many bytes of a file and fail on a larger one. Tools run one at a time, so the cap bounds the memory of the reads.
+- A file-size cap of 20 MiB bounds one file: `read_file`, `edit_file`, and the `write_file` guard read at most that many bytes of a file and fail on a larger one. Because calls run at the same time, a budget of 64 MiB for each session also bounds the file bytes that those three hold at once (Andy, 2026-10-08, parity: the engine budget of 64 MiB, here also for `edit_file` and the guard). A call reserves the size of its file before it reads, waits in order when the budget is full, and a file above the budget takes the whole budget and reads alone. The cap alone would let 8 calls hold 160 MiB of raw bytes and a numbered copy of each.
 - `read_file` reads an image as one summary line. `bash` gets no `shell.env` additions, because the runtime does not dispatch that hook.
 
 ### Tool-result retention
@@ -802,7 +811,7 @@ With a `WorkDir`, each session of the harness loop gets the built-in tools of th
 `internal/toolresult` holds the retention of the engine and `read_tool_result`, with its limits and text.
 
 - A tool result above 16384 bytes has its secrets masked, goes to a blob, and the history holds a header with a `trh_N` handle and the first 16384 bytes. A result that fits after the mask stays inline. `read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`. Its own result is never retained.
-- The `Source` that the actor adds to an agent turn has a `turn.Hooks` that retains each result after the plugin hooks, so the blob holds the text that the model would see. The turn records the preview, and the next model call of the turn never carries the whole result. The blob is written outside the actor, and the record is appended only while the turn runs.
+- The `Source` that the actor adds to an agent turn has a `turn.Hooks` that retains each result after the plugin hooks, so the blob holds the text that the model would see. It retains in the `Join` step, which a batch runs as it records each result in call order, not in the `After` of a call that runs beside others, so handle numbers follow call order and two results never share a handle or a blob. The turn records the preview, and the next model call of the turn never carries the whole result. The blob is written outside the actor, and the record is appended only while the turn runs.
 - A `tool_result.retained` record names the blob, and `Sync` carries the blob with the record, as for `backend.state`. The handle numbers count these records, so a replay and the next owner continue the count. The blob key is the handle and the fence seq, so a fenced owner never overwrites the blob of the next owner.
 - A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call.
 - A result that would take the retained total of the session above 4 MiB keeps its preview with a notice and no handle, and nothing is written. A failed write keeps the whole result.
@@ -854,7 +863,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, which names each server that is down, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, which names each server that is down, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. The tool-batching segment of the engine is gone and nothing replaces it, so a prompt does not tell the model to put independent calls in one message. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### processes
 
@@ -908,14 +917,14 @@ The package imports only the standard library. The `config-leaf` depguard rule e
 | Agent definitions | Keep as agent profiles applied at `Spawn` |
 | Git changes | Keep as `GET /workspace/changes` in `internal/workspace` |
 | Tool-result retention, `read_tool_result` | Keep; drop the size knobs; port in phase 3 |
-| Read budget | Replace with a file-size cap |
+| Read budget | Keep at 64 MiB for each session, also for `edit_file` and the `write_file` guard, with a file-size cap of 20 MiB |
 | Snapshots, index | Replace with `Apply` over the log |
 | Box-global `events.jsonl` | Delete |
 | Worktrees, `workdir_isolation`, worktree sweep | Delete |
 | Modal guide and `scripts/modal-e2e.py` | Delete |
 | `/debug/pprof`, `/debug/goroutines` | Delete |
 | `cancel_tree` | Merged into `interrupt {tree}` |
-| `HARNESS_SEQUENTIAL_TOOLS`, read-budget and tuning knobs | Delete |
+| `HARNESS_SEQUENTIAL_TOOLS` and tuning knobs | Delete; the limit of 8 calls and the read budget are fixed |
 | `/wait`, `/request`, `/session/status`, `/event/tip` | Delete; the new API covers them |
 
 Firm deletions remove about 1.2k–1.5k lines. The persistence and provider duplication removes about 2k–4k more.

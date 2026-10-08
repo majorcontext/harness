@@ -10,6 +10,8 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
+        "mcp__gate__hold",
         "model",
         "process",
         "read_file",
@@ -24,7 +26,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -44,6 +46,8 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
+        "mcp__gate__hold",
         "model",
         "process",
         "read_file",
@@ -58,7 +62,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -71,11 +75,19 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "bash",
+              "tool_name": "mcp__gate__hold",
               "tool_input": {
-                "command": "touch tool-running; sleep 30"
+                "id": "a"
               },
               "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp__gate__hold",
+              "tool_input": {
+                "id": "b"
+              },
+              "tool_use_id": "toolu#2"
             }
           ]
         },
@@ -84,14 +96,15 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "bash: aborted: context canceled",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#1",
-              "is_error": true
+              "text": "{\"id\":\"a\"}",
+              "tool_name": "mcp__gate__hold",
+              "tool_use_id": "toolu#1"
             },
             {
-              "kind": "text",
-              "text": "second"
+              "kind": "tool_result",
+              "text": "{\"id\":\"b\"}",
+              "tool_name": "mcp__gate__hold",
+              "tool_use_id": "toolu#2"
             }
           ]
         }
@@ -106,7 +119,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "first"
+            "text": "go"
           }
         ]
       },
@@ -117,9 +130,17 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "bash",
+            "name": "mcp__gate__hold",
             "arguments": {
-              "command": "touch tool-running; sleep 30"
+              "id": "a"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "mcp__gate__hold",
+            "arguments": {
+              "id": "b"
             }
           }
         ]
@@ -131,18 +152,18 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "is_error": true,
-            "content": "bash: aborted: context canceled"
+            "content": "{\"id\":\"a\"}"
           }
         ]
       },
       {
         "id": "msg#4",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "second"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "{\"id\":\"b\"}"
           }
         ]
       },
@@ -152,7 +173,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "2"
+            "text": "done"
           }
         ]
       }

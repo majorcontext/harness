@@ -72,6 +72,9 @@ func (c control) Spec() protocol.ToolSpec {
 		`"required":["action"]}`)}
 }
 
+// Alone makes the mcp tool run with no other call of its model call in flight.
+func (control) Alone() {}
+
 func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
 	var in args
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {

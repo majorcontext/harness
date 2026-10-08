@@ -3,6 +3,7 @@ package harnesstest
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,10 +11,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/internal/mcp"
 )
@@ -44,6 +48,9 @@ type MCPTool struct {
 	Echo        bool      // answer with the call arguments as one text item
 	Cwd         bool      // answer with the base name of the server's working directory
 	RPCError    *MCPError // answer with a JSON-RPC error
+	// Gated holds each call until Release names its "id" string argument. A
+	// call whose request ends first counts for AwaitAbandoned.
+	Gated bool
 }
 
 // MCPError is a scripted JSON-RPC error.
@@ -338,6 +345,11 @@ type MCPServer struct {
 	sse      bool
 	wantAuth string
 	ready    bool
+
+	gates     map[string]chan struct{}
+	inflight  atomic.Int64
+	held      chan struct{}
+	abandoned chan struct{}
 }
 
 // NewMCPServer starts a server that serves spec until t ends. It closes each
@@ -345,7 +357,8 @@ type MCPServer struct {
 // reuse once Close ran.
 func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	t.Helper()
-	s := &MCPServer{h: &mcpHandler{spec: spec}}
+	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{},
+		held: make(chan struct{}, 64), abandoned: make(chan struct{}, 64)}
 	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
 	s.srv.Config.SetKeepAlivesEnabled(false)
 	s.srv.Start()
@@ -387,7 +400,88 @@ func (s *MCPServer) RequireAuthorization(v string) {
 	s.wantAuth = v
 }
 
-// Calls returns every tools/call and resources/read received, in order.
+// Release lets the gated call with this id, now or later, answer.
+func (s *MCPServer) Release(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.gateLocked(id)
+	select {
+	case <-g:
+	default:
+		close(g)
+	}
+}
+
+// AwaitHeld waits until n gated calls wait at the server at the same time.
+func (s *MCPServer) AwaitHeld(n int, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	for s.inflight.Load() < int64(n) {
+		select {
+		case <-s.held:
+		case <-t.C:
+			return false
+		}
+	}
+	return true
+}
+
+// AwaitAbandoned waits until n more gated calls ended their request before a release.
+func (s *MCPServer) AwaitAbandoned(n int, d time.Duration) bool {
+	return awaitSignals(s.abandoned, n, d)
+}
+
+func awaitSignals(c <-chan struct{}, n int, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	for ; n > 0; n-- {
+		select {
+		case <-c:
+		case <-t.C:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *MCPServer) gateLocked(id string) chan struct{} {
+	g, ok := s.gates[id]
+	if !ok {
+		g = make(chan struct{})
+		s.gates[id] = g
+	}
+	return g
+}
+
+// hold blocks a gated tools/call until its release. It returns false when the
+// request ends first.
+func (s *MCPServer) hold(ctx context.Context, params json.RawMessage) bool {
+	var p struct {
+		Name      string `json:"name"`
+		Arguments struct {
+			ID string `json:"id"`
+		} `json:"arguments"`
+	}
+	if json.Unmarshal(params, &p) != nil || !slices.ContainsFunc(s.h.spec.Tools, func(t MCPTool) bool { return t.Name == p.Name && t.Gated }) {
+		return true
+	}
+	s.mu.Lock()
+	g := s.gateLocked(p.Arguments.ID)
+	s.mu.Unlock()
+	s.inflight.Add(1)
+	defer s.inflight.Add(-1)
+	s.held <- struct{}{}
+	select {
+	case <-g:
+		return true
+	case <-ctx.Done():
+		s.abandoned <- struct{}{}
+		return false
+	}
+}
+
+// Calls returns every tools/call and resources/read served, in order. A gated
+// call counts when its release lets it run, so release order is the order here.
 func (s *MCPServer) Calls() []MCPCall {
 	s.h.mu.Lock()
 	defer s.h.mu.Unlock()
@@ -407,6 +501,9 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &req)
 	if status, msg := s.reject(r, req.Method); status != 0 {
 		http.Error(w, msg, status)
+		return
+	}
+	if req.Method == "tools/call" && !s.hold(r.Context(), req.Params) {
 		return
 	}
 	resp := s.h.handle(body, r.Header.Get("Authorization"))

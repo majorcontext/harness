@@ -219,7 +219,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			req.Model, req.Settings = m, set
 		}
 		s, call := &sink{Turn: to}, req
-		runTool := describe(step, &call, src, caps.OwnsLoop)
+		t := describe(step, &call, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
@@ -236,22 +236,28 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		req.History = append(req.History, s.items...)
-		for _, c := range calls {
-			if step.Err() != nil {
-				return context.Cause(step)
-			}
-			r := protocol.ToolResult{Text: notRun, IsError: true}
-			if !res.MaxTokens {
-				r = runTool(ctx, c)
-			}
-			if ctx.Err() != nil {
-				return context.Cause(ctx)
-			}
+		record := func(c protocol.ToolCall, r protocol.ToolResult) error {
 			m := result(c, r)
 			if err := to.Item(m); err != nil {
 				return err
 			}
 			req.History = append(req.History, m)
+			return nil
+		}
+		if res.MaxTokens {
+			for _, c := range calls {
+				if step.Err() != nil {
+					return context.Cause(step)
+				}
+				if ctx.Err() != nil {
+					return context.Cause(ctx)
+				}
+				if err := record(c, protocol.ToolResult{Text: notRun, IsError: true}); err != nil {
+					return err
+				}
+			}
+		} else if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
+			return err
 		}
 		switch {
 		case !res.MaxTokens:

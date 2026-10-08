@@ -34,6 +34,13 @@ type Hooks interface {
 	After(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
 }
 
+// Joiner is a Hooks that also changes the result of each call once, in call
+// order, after every After hook ran. A batch calls Join as it records the
+// result, so a Join keeps state without a lock against the other calls.
+type Joiner interface {
+	Join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
+}
+
 // Source gives tools that can change between the model calls of a turn.
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
@@ -99,9 +106,71 @@ func (c chain) After(ctx context.Context, call protocol.ToolCall, r protocol.Too
 	return r
 }
 
-// describe sets the tools, prompt, and Call of call and returns Call. all
-// describes every tool, for a backend that owns the loop.
-func describe(ctx context.Context, call *Request, src Source, all bool) func(context.Context, protocol.ToolCall) protocol.ToolResult {
+// Join runs the Join of each Hooks that has one, in order.
+func (c chain) Join(ctx context.Context, call protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	for _, h := range c {
+		if j, ok := h.(Joiner); ok {
+			r = j.Join(ctx, call, r)
+		}
+	}
+	return r
+}
+
+// runner runs the calls of one model call between the hooks of its Toolset.
+type runner struct {
+	runnable []Tool
+	hooks    Hooks
+}
+
+func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+	return runTool(ctx, t.runnable, t.hooks, c)
+}
+
+func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	if j, ok := t.hooks.(Joiner); ok {
+		return j.Join(ctx, c, r)
+	}
+	return r
+}
+
+func (t runner) find(name string) Tool {
+	if i := slices.IndexFunc(t.runnable, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
+		return t.runnable[i]
+	}
+	return nil
+}
+
+// alone reports whether the tool name runs Alone. A tool whose Spec panics is
+// Alone, so that its panic reaches the result of its own call.
+func (t runner) alone(name string) (alone bool) {
+	defer func() {
+		if recover() != nil {
+			alone = true
+		}
+	}()
+	_, ok := t.find(name).(Alone)
+	return ok
+}
+
+// key returns the key of c. A tool whose Key or Spec panics gets one key per
+// tool name, so that its calls run one at a time and the panic reaches the
+// result of its own call.
+func (t runner) key(c protocol.ToolCall) (key string) {
+	defer func() {
+		if recover() != nil {
+			key = "panicking-key:" + c.Name
+		}
+	}()
+	if k, ok := t.find(c.Name).(Keyed); ok {
+		return k.Key(c)
+	}
+	return ""
+}
+
+// describe sets the tools, prompt, and Call of call and returns the runner of
+// its calls. all describes every tool, for a backend that owns the
+// loop.
+func describe(ctx context.Context, call *Request, src Source, all bool) runner {
 	var ts Toolset
 	if src != nil {
 		ts = src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
@@ -119,11 +188,9 @@ func describe(ctx context.Context, call *Request, src Source, all bool) func(con
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
 	}
-	runnable := append(slices.Clip(ts.Tools), ts.Deferred...)
-	call.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-		return runTool(ctx, runnable, ts.Hooks, c)
-	}
-	return call.Call
+	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
+	call.Call = t.run
+	return t
 }
 
 // Restrict returns the tools that names lists, or every tool when names is nil.
