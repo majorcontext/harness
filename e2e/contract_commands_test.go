@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -21,6 +23,22 @@ var commandFiles = []action{
 // typed sends a typed line and waits until the command that it starts has ended.
 func typed(as, line string) []action {
 	return []action{command{as: as, text: line}, awaitCommands{as: as}}
+}
+
+// viaSymlinkedAncestor is the driver of a scenario whose work dir is reached
+// through a symlink to its parent.
+func viaSymlinkedAncestor(t *testing.T, h host, modelURL string) driver {
+	t.Helper()
+	real := filepath.Join(resolved(t.TempDir()), "real")
+	if err := os.MkdirAll(filepath.Join(real, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(resolved(t.TempDir()), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	cfg := writeGoalConfigWith(t, modelURL, scenarioConfig(nil))
+	return h.openIn(t, cfg, filepath.Join(link, "work"), nil)
 }
 
 func TestContractCommands(t *testing.T) {
@@ -94,6 +112,11 @@ func TestContractCommands(t *testing.T) {
 		},
 		{
 			name:    "commands_menu_lists_builtin_and_prompt_commands",
+			actions: append(append([]action{}, commandFiles...), commands{}),
+		},
+		{
+			name:    "commands_menu_lists_prompt_commands_under_a_symlinked_ancestor",
+			driver:  viaSymlinkedAncestor,
 			actions: append(append([]action{}, commandFiles...), commands{}),
 		},
 	})
