@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"time"
 )
 
@@ -45,9 +46,8 @@ func queueInjection(f *fake) {
 
 // awaitQueued reads one queued message from stdin. It stops waiting when the
 // test opens the window gate, so a test that asserts no message arrives
-// closes the window itself instead of waiting out a clock. It also gives up
-// after a bound, so a test that never opens the gate fails instead of
-// hanging.
+// closes the window itself instead of waiting out a clock. A test that never
+// opens the gate gets an error result and a non-zero exit after a bound.
 func awaitQueued(f *fake) (string, bool) {
 	line := make(chan string, 1)
 	go func() {
@@ -70,6 +70,8 @@ func awaitQueued(f *fake) (string, bool) {
 			}
 		}
 	}
+	f.emit(result("error_during_execution", true, "window gate never opened", 0, 0))
+	os.Exit(1)
 	return "", false
 }
 

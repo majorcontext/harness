@@ -102,7 +102,7 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 		return append([]action{
 			create{as: "a"},
 			submit{as: "a", text: "delegate"},
-			claudeAwaitInputs{as: "a", text: "A background task you started has finished", n: n},
+			claudeAwaitAdmitted{as: "a", text: "A background task you started has finished", n: n},
 			claudeCloseWindow{},
 			claudeAwaitText{as: "a", text: "noted"},
 		}, settled...)
@@ -132,7 +132,7 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 				claudeAwaitText{as: "a", text: "Delegating."},
 				enqueueNext{as: "a", text: "next step"},
 				writeFile{path: "child.gate", body: "open\n"},
-				claudeAwaitInputs{as: "a", text: "A background task you started has finished", n: 1},
+				claudeAwaitAdmitted{as: "a", text: "A background task you started has finished", n: 1},
 				claudeCloseWindow{},
 				claudeAwaitText{as: "a", text: "noted"},
 			}, settled...),

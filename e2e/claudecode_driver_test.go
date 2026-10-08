@@ -295,16 +295,16 @@ func (a claudeAwaitText) run(t *testing.T, r *run) {
 	claudeDriverOf(t, r).awaitAssistantText(t, r.id(t, a.as), a.text)
 }
 
-// claudeAwaitInputs blocks on the event stream until the session admitted n
+// claudeAwaitAdmitted blocks on the event stream until the session admitted n
 // inputs whose text holds text. A scenario that asserts the CLI gets no
 // message in a window waits for the input to be admitted, then opens the
 // window gate, so no real clock bounds the window.
-type claudeAwaitInputs struct {
+type claudeAwaitAdmitted struct {
 	as, text string
 	n        int
 }
 
-func (a claudeAwaitInputs) run(t *testing.T, r *run) {
+func (a claudeAwaitAdmitted) run(t *testing.T, r *run) {
 	t.Helper()
 	claudeDriverOf(t, r).awaitAdmitted(t, r.id(t, a.as), a.text, a.n)
 }
