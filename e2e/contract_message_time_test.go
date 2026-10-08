@@ -126,31 +126,34 @@ func TestContractMessageTime(t *testing.T) {
 			}
 		})
 
-		t.Run("dismissal_message_created_at_is_the_time_of_the_request_resolved_record", func(t *testing.T) {
-			fake := harnesstest.New(t)
-			drv := claudeLane{mode: "question", ask: true}.newDriver(t, h, fake.URL()).(*claudeDriver)
-			d := drv.laneHost.(*runtimeDriver)
-			id := d.Create(t)
-			d.Submit(t, id, "pick a db")
-			d.WaitIdle(t, id)
-			if res := drv.resolveQuestion(t, id, "toolu_q", resolution{dismiss: true}); res.Status != http.StatusNoContent {
-				t.Fatalf("dismiss = %d %v", res.Status, res.Body)
-			}
-			times := timesOfRecords(t, d, id)
-			want := times.resolved["toolu_q"]
-			var found bool
-			for _, m := range provPage(t, d, id) {
-				if m.ID != "msg_resolved_toolu_q" {
-					continue
-				}
-				found = true
-				if want.IsZero() || !m.CreatedAt.Equal(want) {
-					t.Errorf("dismissal created_at = %v, want the request.resolved time %v", m.CreatedAt, want)
-				}
-			}
-			if !found {
-				t.Fatal("the page holds no dismissal message")
-			}
-		})
+		t.Run("dismissal_message_created_at_is_the_time_of_the_request_resolved_record", func(t *testing.T) { dismissalTime(t, h) })
 	})
+}
+
+func dismissalTime(t *testing.T, h host) {
+	t.Helper()
+	fake := harnesstest.New(t)
+	drv := claudeLane{mode: "question", ask: true}.newDriver(t, h, fake.URL()).(*claudeDriver)
+	d := drv.laneHost.(*runtimeDriver)
+	id := d.Create(t)
+	d.Submit(t, id, "pick a db")
+	d.WaitIdle(t, id)
+	if res := drv.resolveQuestion(t, id, "toolu_q", resolution{dismiss: true}); res.Status != http.StatusNoContent {
+		t.Fatalf("dismiss = %d %v", res.Status, res.Body)
+	}
+	times := timesOfRecords(t, d, id)
+	want := times.resolved["toolu_q"]
+	var found bool
+	for _, m := range provPage(t, d, id) {
+		if m.ID != "msg_resolved_toolu_q" {
+			continue
+		}
+		found = true
+		if want.IsZero() || !m.CreatedAt.Equal(want) {
+			t.Errorf("dismissal created_at = %v, want the request.resolved time %v", m.CreatedAt, want)
+		}
+	}
+	if !found {
+		t.Fatal("the page holds no dismissal message")
+	}
 }
