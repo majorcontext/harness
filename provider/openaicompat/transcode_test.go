@@ -435,8 +435,7 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 // TestTranscodeOrphanToolCallMidHistory covers an orphan tool_call at the
 // transcoder level: an assistant tool_call with no result at all in
 // history (the turn died before the engine could execute it, or append
-// one — see
-// engine/engine.go's own primary fix), buried mid-transcript, followed by
+// one), buried mid-transcript, followed by
 // ordinary later turns. Before the transcoder called
 // message.NormalizeForWire, this produced a wire request with a
 // dangling tool_calls entry and no "tool"-role message anywhere adjacent —

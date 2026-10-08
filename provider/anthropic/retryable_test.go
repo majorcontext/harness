@@ -13,7 +13,7 @@ import (
 // TestStreamHTTPErrorClassification is the red-first test for GitHub issue
 // #61: an Anthropic HTTP 529 (overloaded_error), 429 (rate limit), or any
 // 5xx must come back from Stream marked provider.RetryableError so the goal
-// loop's long backoff (engine/goal.go) can apply — never by the engine
+// loop's long backoff can apply — never by the engine
 // string-matching "overloaded_error" out of the error text. Every other
 // status (400s, auth) must stay unmarked, so it keeps failing fast exactly
 // as before.

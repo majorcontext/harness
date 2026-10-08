@@ -1363,9 +1363,8 @@ func TestLoadMCPServers(t *testing.T) {
 		}
 	})
 	// Nit fix: a negative connect_timeout_s cannot possibly be wired
-	// (engine.connectMCPServer's `if timeout <= 0 { timeout =
-	// defaultMCPConnectTimeout }` would silently treat it as "use the
-	// default", masking what the config author actually wrote) — reject it
+	// (a non-positive timeout would silently read as "use the default",
+	// masking what the config author actually wrote) — reject it
 	// loudly, naming the server, the same "cannot possibly be wired"
 	// philosophy as validateMCPServers' other checks. 0/absent still means
 	// "use the engine default".
@@ -1381,8 +1380,7 @@ func TestLoadMCPServers(t *testing.T) {
 		}
 	})
 	// Invariant 1: connect_timeout_s round-trips through Load; absent means
-	// zero, which engine.MCPServerConfig.ConnectTimeout (via buildMCPManager,
-	// see cmd/harness/mcp.go) leaves at its own engine-side default.
+	// zero, which the MCP manager leaves at its own default.
 	t.Run("connect_timeout_s parsed", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp", "connect_timeout_s": 5}}}`)

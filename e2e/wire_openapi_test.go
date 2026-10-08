@@ -8,13 +8,15 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/gates"
+	"github.com/majorcontext/harness/internal/server"
 )
 
 const (
@@ -74,26 +76,12 @@ func (d *specDoc) operation(method, path string) (specOperation, bool) {
 	return specOperation{}, false
 }
 
-var errorRowRE = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]{3}) \\|$")
-
 var specErrorStatuses = sync.OnceValues(func() (map[string]int, error) {
 	data, err := os.ReadFile("../docs/architecture.md")
 	if err != nil {
 		return nil, err
 	}
-	_, section, found := strings.Cut(string(data), "\n### Errors\n")
-	if !found {
-		return nil, fmt.Errorf("docs/architecture.md has no Errors section")
-	}
-	section, _, _ = strings.Cut(section, "\n### ")
-	out := map[string]int{}
-	for _, m := range errorRowRE.FindAllStringSubmatch(section, -1) {
-		out[m[1]], _ = strconv.Atoi(m[2])
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("the Errors table of docs/architecture.md holds no row")
-	}
-	return out, nil
+	return gates.SpecErrorStatuses(string(data))
 })
 
 func checkErrorStatus(status int, routed bool, body []byte) []string {
@@ -175,7 +163,7 @@ func (d *specDoc) validate(schema, v any, at string) []string {
 	return nil
 }
 
-var supportedKeywords = []string{"$ref", "anyOf", "type", "properties", "required", "items", "additionalProperties", "format", "contentEncoding", "description", "title", "$schema", "examples", "default"}
+var supportedKeywords = []string{"$ref", "anyOf", "type", "properties", "required", "items", "additionalProperties", "format", "contentEncoding", "description", "title", "$schema", "examples", "default", "enum"}
 
 func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
 	for k := range s {
@@ -208,6 +196,7 @@ func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
 	switch x := v.(type) {
 	case string:
 		errs = append(errs, validateString(s, x, at)...)
+		errs = append(errs, validateEnum(s, x, at)...)
 	case map[string]any:
 		errs = append(errs, d.validateFields(s, x, at)...)
 	case []any:
@@ -218,6 +207,14 @@ func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
 		}
 	}
 	return errs
+}
+
+func validateEnum(s map[string]any, x, at string) []string {
+	enum, ok := s["enum"].([]any)
+	if !ok || slices.Contains(enum, any(x)) {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s: %q is not one of %v", at, x, enum)}
 }
 
 func validateString(s map[string]any, x, at string) []string {
@@ -276,6 +273,31 @@ func mediaType(header string) string {
 }
 
 func successStatus(status int) bool { return status >= 200 && status < 300 }
+
+// unservedByReadOnly reports whether a read-only host serves no route for the
+// request: the document has the route, and it is not a read route.
+func (d *specDoc) unservedByReadOnly(method, path string) bool {
+	op, known := d.operation(method, path)
+	return known && !slices.ContainsFunc(server.Table, func(r server.Route) bool { return r.Name == op.OperationID && r.Read })
+}
+
+// checkUnservedByReadOnly checks the answer of a read-only host to a route it
+// does not serve: 405 in the error envelope for a route that changes
+// something, and 404 for any other path.
+func checkUnservedByReadOnly(d *specDoc, method string, status int, contentType string, body []byte) []string {
+	errs := d.checkJSON(errorBodyName, contentType, body)
+	if len(errs) == 0 {
+		errs = checkErrorStatus(status, false, body)
+	}
+	want := http.StatusNotFound
+	if method != http.MethodGet {
+		want = http.StatusMethodNotAllowed
+	}
+	if status != want {
+		errs = append(errs, fmt.Sprintf("a read-only host answers %s of a route it does not serve with %d, and the spec says %d", method, status, want))
+	}
+	return errs
+}
 
 func (d *specDoc) checkStream(method, path string, status int, contentType string) []string {
 	return d.checkResponse(method, path, status, contentType, nil)
@@ -387,6 +409,9 @@ func reportOf(t *testing.T) *wireReport {
 type wireTransport struct {
 	base http.RoundTripper
 	rep  *wireReport
+	// readOnly marks a host that serves only the read routes, such as
+	// harness.ReadHandler.
+	readOnly bool
 }
 
 func (w wireTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -416,7 +441,11 @@ func (w wireTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	if err == nil {
-		for _, m := range doc.checkResponse(req.Method, req.URL.Path, resp.StatusCode, contentType, body) {
+		msgs := doc.checkResponse(req.Method, req.URL.Path, resp.StatusCode, contentType, body)
+		if w.readOnly && doc.unservedByReadOnly(req.Method, req.URL.Path) {
+			msgs = checkUnservedByReadOnly(doc, req.Method, resp.StatusCode, contentType, body)
+		}
+		for _, m := range msgs {
 			w.rep.add(label + ": " + m)
 		}
 	}
@@ -470,7 +499,17 @@ func wireClient(t *testing.T, c *http.Client) *http.Client {
 	return wireClientFor(reportOf(t), c)
 }
 
+// wireClientReadOnly is wireClient for a host that serves only the read routes.
+func wireClientReadOnly(t *testing.T, c *http.Client) *http.Client {
+	t.Helper()
+	return wrapClient(reportOf(t), c, true)
+}
+
 func wireClientFor(rep *wireReport, c *http.Client) *http.Client {
+	return wrapClient(rep, c, false)
+}
+
+func wrapClient(rep *wireReport, c *http.Client, readOnly bool) *http.Client {
 	base := c.Transport
 	if _, wrapped := base.(wireTransport); wrapped || rep == nil {
 		return c
@@ -479,6 +518,6 @@ func wireClientFor(rep *wireReport, c *http.Client) *http.Client {
 		base = http.DefaultTransport
 	}
 	clone := *c
-	clone.Transport = wireTransport{base: base, rep: rep}
+	clone.Transport = wireTransport{base: base, rep: rep, readOnly: readOnly}
 	return &clone
 }

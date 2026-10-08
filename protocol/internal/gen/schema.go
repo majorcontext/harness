@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -70,7 +72,27 @@ func components() (map[string]*jsonschema.Schema, error) {
 		}
 		adjust(def, st)
 	}
+	if err := enumerateCodes(defs); err != nil {
+		return nil, err
+	}
 	return defs, closeRequests(defs)
+}
+
+// enumerateCodes limits Error.code to the codes that the server answers with a
+// status.
+func enumerateCodes(defs map[string]*jsonschema.Schema) error {
+	def, ok := defs[reflect.TypeFor[protocol.Error]().Name()]
+	if !ok {
+		return errors.New("no schema for the error")
+	}
+	code, ok := def.Properties.Get("code")
+	if !ok {
+		return errors.New("the error has no code")
+	}
+	for _, c := range slices.Sorted(maps.Keys(server.CodeStatuses())) {
+		code.Enum = append(code.Enum, c)
+	}
+	return nil
 }
 
 // closeRequests refuses unknown fields in each type that only a request body

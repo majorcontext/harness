@@ -224,9 +224,8 @@ func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOp
 	// otherwise transcode to a dangling tool_calls entry with no paired
 	// "tool"-role message, which this wire protocol also requires
 	// immediately after (mirrors provider/anthropic/transcode.go's
-	// identical guard). engine.Session's turn loop is the primary fix and
-	// keeps its own ingest self-consistent (see engine/engine.go), but
-	// this backstops any OTHER producer of history. message.NormalizeForWire
+	// identical guard). The turn loop is the primary fix and keeps its own
+	// ingest self-consistent, but this backstops any OTHER producer of history. message.NormalizeForWire
 	// is the transcode-only repair used here — this call site builds one
 	// throwaway request and never touches the durable record, so its
 	// destructive/relocating repairs are safe here; see its doc comment

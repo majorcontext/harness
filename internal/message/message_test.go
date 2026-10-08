@@ -426,9 +426,8 @@ func jsonFieldKeys(t *testing.T, typ reflect.Type) map[string]bool {
 
 // TestMessageWithEmptyToolCallArgumentsMarshal proves the full failure
 // shape: an assistant Message carrying a ToolCall with an empty-non-nil
-// Arguments — the shape engine.Session.append persists to the session log
-// and the server journals and serves from GET /session/{id}/message —
-// marshals successfully end to end.
+// Arguments — the shape that a session appends to its log and serves from
+// GET /sessions/{id}/messages — marshals successfully end to end.
 func TestMessageWithEmptyToolCallArgumentsMarshal(t *testing.T) {
 	m := Message{
 		ID:   "msg_1",
@@ -509,10 +508,9 @@ func TestReasoningProviderDataEmptyMarshal(t *testing.T) {
 
 // TestMessageWithEmptyReasoningProviderDataMarshal proves the full failure
 // shape end to end: an assistant Message carrying a Reasoning part whose
-// provider_data entry is empty-non-nil — the shape engine.Session.append
-// persists to the session log and the server journals — marshals
-// successfully, both alone and as the []Message shape GET
-// /session/{id}/message returns.
+// provider_data entry is empty-non-nil — the shape that a session appends
+// to its log — marshals successfully, both alone and as the []Message shape
+// GET /sessions/{id}/messages returns.
 func TestMessageWithEmptyReasoningProviderDataMarshal(t *testing.T) {
 	m := Message{
 		ID:   "msg_1",
@@ -657,7 +655,7 @@ func TestToolCallInvalidTruncatedArgumentsMarshal(t *testing.T) {
 // poisoned message fails to persist and is never journaled).
 //
 // Message.Normalize is the one ingest choke point every message passes
-// through before entering a session's history (engine.Session.append), so
+// through before entering a session's history, so
 // it is where a salvaged, truncated tool call — left behind by a provider
 // stream that dies mid tool_use block, e.g. a connection drop during
 // input_json_delta accumulation, or a max_tokens cutoff mid tool-call that

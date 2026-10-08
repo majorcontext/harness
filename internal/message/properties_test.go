@@ -69,8 +69,8 @@ import (
 // up (the whole map, not one entry). The package's actual promise
 // ("retranscoding an unchanged history produces identical wire requests")
 // is scoped to messages that have gone through Normalize — the one ingest
-// choke point every persisted message passes through
-// (engine.Session.appendWithUsage) before its first marshal — so
+// choke point every persisted message passes through before its first
+// marshal — so
 // TestMessageNormalizedMarshalStable normalizes first, matching that scope
 // exactly instead of over-claiming stability for input the package never
 // promised it for.

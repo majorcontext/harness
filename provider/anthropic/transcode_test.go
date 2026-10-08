@@ -245,12 +245,10 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 }
 
 // TestTranscodeReadFileImageArrivesAsRealWireImageBlock is the read_file
-// counterpart of TestTranscodeToolCallAndResult above: engine/filetools.go's
-// read_file tool now returns exactly this shape for an image file — a Text
+// counterpart of TestTranscodeToolCallAndResult above: the read_file tool
+// returns exactly this shape for an image file — a Text
 // summary part ("image (image/png), N bytes, WxH pixels") followed by a Blob
-// part carrying the real file bytes (engine/filetools_test.go's
-// TestReadFileImagePNGReturnsTextAndBlob proves read_file itself builds this
-// shape from its own production entry point, Tool.Run). This test proves the
+// part carrying the real file bytes. This test proves the
 // OTHER half: that shape, once it reaches a tool_result, transcodes to a
 // real wire "image" content block on the Anthropic route — the only route
 // that recurses into tool-result Blobs at all (Limits.RecurseToolResults;
@@ -425,8 +423,8 @@ func TestTranscodeEmptyHistoryFails(t *testing.T) {
 
 // TestTranscodeOrphanToolUseMidHistory covers an orphan tool_use at the
 // transcoder level: an assistant tool_use with no result at all in history
-// (the turn died before the engine could execute it, or append one — see
-// engine/engine.go's own primary fix), buried mid-transcript, followed by
+// (the turn died before the engine could execute it, or append one),
+// buried mid-transcript, followed by
 // ordinary later turns. Before the transcoder called
 // message.NormalizeForWire, this produced a wire request with a
 // dangling tool_use block and no tool_result anywhere adjacent — exactly
@@ -789,7 +787,7 @@ func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *t
 // TestTranscodeCompactionDoubleRoleUserMerges is the red-first test for the
 // compaction splice shape docs/design/context-compaction.md's §2 calls out
 // as load-bearing on existing transcoder behavior, not luck: a successful
-// compaction (engine/compact.go's Session.Compact) leaves history opening
+// compaction leaves history opening
 // with two adjacent RoleUser messages — the synthesized summary, then the
 // first kept turn's user prompt — and this adapter's alternation handling
 // must merge them into a single wire "user" message rather than producing
@@ -831,8 +829,8 @@ func TestTranscodeCompactionDoubleRoleUserMerges(t *testing.T) {
 }
 
 // TestTranscodeMergesToolResultsWithInjectedUserText pins the coupling
-// mid-turn prompt-queue injection depends on (engine/engine.go's tool-call-
-// boundary queue drain, ~line 792): after tool results
+// mid-turn prompt-queue injection depends on (the tool-call boundary queue
+// drain): after tool results
 // land, the engine appends a REAL RoleUser message straight into history —
 // immediately after the RoleTool results message, with no assistant turn in
 // between. Both RoleTool and RoleUser transcode to wire role "user" here, so

@@ -115,8 +115,8 @@ func FuzzUnmarshalMessage(f *testing.F) {
 		// The "retranscoding an unchanged history produces identical wire
 		// requests" invariant (Normalize's doc comment) is promised for
 		// messages that have gone through Normalize — the one ingest choke
-		// point every persisted message passes through
-		// (engine.Session.appendWithUsage) before its first marshal. A
+		// point every persisted message passes through before its first
+		// marshal. A
 		// message that never went through Normalize is explicitly allowed to
 		// marshal differently across one reload (same doc: "Both shapes are
 		// safe ... but they are not byte-identical"), so the stability check

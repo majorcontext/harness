@@ -50,11 +50,11 @@ func isWrap(n ast.Node) bool {
 		return false
 	}
 	id, ok := call.Fun.(*ast.Ident)
-	return ok && (id.Name == "wireClient" || id.Name == "wireClientFor")
+	return ok && (id.Name == "wireClient" || id.Name == "wireClientFor" || id.Name == "wireClientReadOnly")
 }
 
 // CheckWireClients reports each HTTP client of the contract suite that
-// neither goes through wireClient nor wireClientFor, nor is held by an
+// neither goes through wireClient, wireClientFor, nor wireClientReadOnly, nor is held by an
 // allowed function. Such a client skips the check of each response against
 // protocol/openapi.json.
 func CheckWireClients(fsys fs.FS) ([]Violation, error) {
@@ -87,7 +87,7 @@ func CheckWireClients(fsys fs.FS) ([]Violation, error) {
 					return false
 				}
 				if unwrappedClient(n, imports) && !allows(wireClientOwners, p, fn) {
-					out = append(out, Violation{Path: p, Rule: "wire_client", Detail: "an HTTP client of the contract suite must come from wireClient or wireClientFor, which check each response against protocol/openapi.json"})
+					out = append(out, Violation{Path: p, Rule: "wire_client", Detail: "an HTTP client of the contract suite must come from wireClient, wireClientFor, or wireClientReadOnly, which check each response against protocol/openapi.json"})
 				}
 				return true
 			})

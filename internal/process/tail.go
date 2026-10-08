@@ -8,9 +8,7 @@ import (
 
 // tailScanCap bounds how many trailing bytes tailFile ever reads from a
 // log file, so a long-running dev server's megabytes-large log cannot
-// balloon memory just to answer "last 50 lines" — mirrors the spirit of
-// engine/bash.go's cappedWriter (bounded capture, not unbounded then
-// truncate).
+// balloon memory just to answer "last 50 lines".
 const tailScanCap = 1 << 20 // 1 MiB
 
 // tailFile returns the last n lines of the file at path. A missing file

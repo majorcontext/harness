@@ -25,6 +25,36 @@ var publicAllow = map[string]string{
 	"provider/openaicompat": "2026-10-08: see provider",
 }
 
+// providerOwners lists the places where a provider name is data: the functions
+// of config that validate the provider entries and map an entry with no type
+// by its key, the router functions that build a backend for each provider of
+// the registry, the tables of modelmeta, which are keyed by provider, and the
+// provider wires (spec: Four rules, 3; Model API backend; Contract source).
+var providerOwners = []string{
+	"config/load.go#validateAppendSystemPromptArgs",
+	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
+	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders",
+	"internal/backend/router.go#New", "internal/backend/router.go#client",
+	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models",
+	"internal/modelmeta/internal/genctx/main.go#",
+	"provider/",
+}
+
+// providerAllow lists the functions that branch on a provider name against
+// the spec, each with the dated reason. An entry that stops being a violation
+// fails, so the list shrinks to nothing.
+var providerAllow = map[string]string{
+	"modeltool.go#billing":            "2026-10-08: billing of the model tool still names the claude-code and codex families; the Problem table of the spec lists billing as a backend-by-name symptom",
+	"cmd/harness/runline.go#refuseOn": "2026-10-08: harness run still tests for the claude-code provider to refuse a command; the spec lists no such place",
+}
+
+// deletedRefAllow lists the files that still name a deleted path, each with
+// the dated reason. An entry that stops being a violation fails, so the list
+// shrinks to nothing.
+var deletedRefAllow = map[string]string{
+	"config/config.go": "2026-10-08: the cleanup of the config references removes these",
+}
+
 type source struct {
 	path    string
 	file    *ast.File
@@ -33,7 +63,8 @@ type source struct {
 
 // nodeRule forbids the nodes that match, except in the files and functions of
 // allow. An entry of allow is a file, a directory that ends in "/", or
-// "file#Func".
+// "file#Func". The entry "file#" names the declarations of the file outside any
+// function.
 type nodeRule struct {
 	name, detail string
 	match        func(n ast.Node, imports map[string]string) bool
@@ -54,6 +85,18 @@ var nodeRules = []nodeRule{
 		detail: "modelmeta.ContextWindow is read only by the model API backend's Capabilities (spec: Backend)",
 		match:  selectsImport(modulePath+"/internal/modelmeta", "ContextWindow"),
 		allow:  []string{"internal/modelmeta/", "internal/backend/modelapi/modelapi.go#Capabilities"},
+	},
+	{
+		name:   "context_window_config",
+		detail: "Config.ContextWindowTokens is read only to build the model API backend, whose Capabilities resolves the window (spec: Backend)",
+		match:  selectsField("ContextWindowTokens"),
+		allow:  []string{"config/", "internal/backend/router.go#New"},
+	},
+	{
+		name:   "context_window_default",
+		detail: "the default context window of 128000 tokens is written only by the model API backend and the modelmeta table (spec: Backend)",
+		match:  intLiteral(128000),
+		allow:  []string{"internal/modelmeta/context_windows_gen.go#", "internal/backend/modelapi/modelapi.go#", "internal/gates/structure.go#"},
 	},
 	{
 		name:   "single_appender",
@@ -77,7 +120,7 @@ var nodeRules = []nodeRule{
 		name:   "single_error_envelope",
 		detail: "only internal/server and the serve token check build the error body (spec: Errors)",
 		match:  literalOf(modulePath+"/protocol", "ErrorBody", "Error"),
-		allow:  []string{"protocol/", "internal/server/server.go", "cmd/harness/serve.go"},
+		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer"},
 	},
 	{
 		name:   "single_route_mount",
@@ -101,13 +144,31 @@ var nodeRules = []nodeRule{
 		name:   "engine_context_creator",
 		detail: "only the model API backend creates message.EngineContext, from the runtime's banner and logged parts (AGENTS.md: Invariants)",
 		match:  literalOf(modulePath+"/internal/message", "EngineContext"),
-		allow:  []string{"internal/message/", "internal/backend/modelapi/convert.go", "internal/backend/modelapi/modelapi.go"},
+		allow:  []string{"internal/message/", "internal/backend/modelapi/convert.go#toMessage", "internal/backend/modelapi/modelapi.go#request"},
 	},
 }
 
 func selectorOf(n ast.Node) (*ast.SelectorExpr, bool) {
 	sel, ok := n.(*ast.SelectorExpr)
 	return sel, ok
+}
+
+func selectsField(name string) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, _ map[string]string) bool {
+		sel, ok := selectorOf(n)
+		return ok && sel.Sel.Name == name
+	}
+}
+
+func intLiteral(value int64) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, _ map[string]string) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.INT {
+			return false
+		}
+		v, err := strconv.ParseInt(lit.Value, 0, 64)
+		return err == nil && v == value
+	}
 }
 
 func selectsImport(pkg string, names ...string) func(ast.Node, map[string]string) bool {
@@ -302,6 +363,12 @@ func CheckStructure(fsys fs.FS, spec string) ([]Violation, error) {
 		return nil, err
 	}
 	out = append(out, api...)
+	out = append(out, checkProviderBranches(srcs, providerOwners, providerAllow)...)
+	deleted, err := CheckDeletedReferences(fsys, deletedRefAllow)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, deleted...)
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		return a.Rule+a.Path+a.Detail < b.Rule+b.Path+b.Detail
