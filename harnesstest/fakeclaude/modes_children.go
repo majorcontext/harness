@@ -10,15 +10,17 @@ import (
 )
 
 const (
-	delegateText = "delegate"
-	childPrompt  = "child work"
-	reportMarker = "[tasks:"
-	reportText   = "A background task you started has finished"
-	slowSuffix   = "slow"
-	longSuffix   = "long"
-	gateFile     = "child.gate"
-	gateWait     = 20 * time.Second
-	settleWait   = 30 * time.Second
+	delegateText   = "delegate"
+	childPrompt    = "child work"
+	reportMarker   = "[tasks:"
+	reportText     = "A background task you started has finished"
+	slowSuffix     = "slow"
+	longSuffix     = "long"
+	gateFile       = "child.gate"
+	windowGateFile = "window.gate"
+	gatePoll       = 20 * time.Millisecond
+	gateWait       = 20 * time.Second
+	settleWait     = 30 * time.Second
 )
 
 // childModes run one scenario across several invocations, told apart by the
@@ -33,8 +35,8 @@ var childModes = map[string]mode{
 // childParent is the parent of children that end while the parent runs. The
 // parent starts each child through the task tool of the harness MCP server,
 // one after the other, waits until each has ended, then reads one more input
-// line. A line in that window shows that harness delivered a report in the
-// middle of the turn.
+// line until the test opens the window gate. A line in that window shows that
+// harness delivered a report in the middle of the turn.
 // A child answers with its prompt, so a report names it. A child that ends
 // with the slow suffix waits for the gate file in its work dir, so a test
 // that writes the file after it queued a prompt gets the prompt queued before
@@ -63,9 +65,14 @@ func childParent(prompts ...string) mode {
 	}
 }
 
+func gateOpen(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
+}
+
 func awaitGate() {
-	for deadline := time.Now().Add(gateWait); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if _, err := os.Stat(gateFile); err == nil {
+	for deadline := time.Now().Add(gateWait); time.Now().Before(deadline); time.Sleep(gatePoll) {
+		if gateOpen(gateFile) {
 			return
 		}
 	}

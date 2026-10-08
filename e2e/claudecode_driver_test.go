@@ -295,6 +295,29 @@ func (a claudeAwaitText) run(t *testing.T, r *run) {
 	claudeDriverOf(t, r).awaitAssistantText(t, r.id(t, a.as), a.text)
 }
 
+// claudeAwaitInputs blocks on the event stream until the session admitted n
+// inputs whose text holds text. A scenario that asserts the CLI gets no
+// message in a window waits for the input to be admitted, then opens the
+// window gate, so no real clock bounds the window.
+type claudeAwaitInputs struct {
+	as, text string
+	n        int
+}
+
+func (a claudeAwaitInputs) run(t *testing.T, r *run) {
+	t.Helper()
+	claudeDriverOf(t, r).awaitAdmitted(t, r.id(t, a.as), a.text, a.n)
+}
+
+// claudeCloseWindow opens the gate that ends a window in which fakeclaude
+// waits for a message.
+type claudeCloseWindow struct{}
+
+func (claudeCloseWindow) run(t *testing.T, r *run) {
+	t.Helper()
+	writeFile{path: "window.gate", body: "open\n"}.run(t, r)
+}
+
 // resolution is the body of a call that resolves an open question: the JSON
 // text of an answer, with an empty text for none, or a dismissal.
 type resolution struct {
@@ -469,6 +492,17 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 		}
 		return false
 	}, 20*time.Millisecond)
+}
+
+func (d *runtimeDriver) awaitAdmitted(t *testing.T, id, text string, n int) {
+	t.Helper()
+	seen := 0
+	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+		if ev.Kind == "input.admitted" && strings.Contains(partsText(decodeEvent[logInput](t, ev).Parts), text) {
+			seen++
+		}
+		return seen >= n
+	})
 }
 
 // recordGrace bounds the wait of awaitAssistantText for the record of a message.

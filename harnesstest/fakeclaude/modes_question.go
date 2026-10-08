@@ -171,8 +171,9 @@ func resumeParkedQuestion(f *fake, state string) {
 }
 
 // continueInTool continues the answered question with a tool call and waits
-// for a queued message while the tool runs. A driver that writes none ends the
-// run with the "no second message" result.
+// for a queued message while the tool runs. A driver that writes none before
+// the test opens the window gate ends the run with the "no second message"
+// result.
 func continueInTool(f *fake, answer string) {
 	f.emit(
 		user(toolResult("toolu_q", answer, false)),
