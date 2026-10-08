@@ -66,6 +66,9 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
+	if err := c.ApplyEnv(os.Getenv); err != nil {
+		t.Fatalf("apply env: %v", err)
+	}
 	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, lastInput: map[string]string{}, lastTyped: map[string]string{}}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })

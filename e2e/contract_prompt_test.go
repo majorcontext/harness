@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"maps"
 	"net/http"
 	"os"
@@ -93,6 +94,11 @@ func inTree(files map[string]string, sub string) func(*testing.T, host, string) 
 
 // inTreeWith is inTree with keys in the user config of the host.
 func inTreeWith(files map[string]string, sub string, config map[string]any) func(*testing.T, host, string) driver {
+	return inTreeEnv(files, sub, config, nil)
+}
+
+// inTreeEnv is inTreeWith with variables in the environment of the host.
+func inTreeEnv(files map[string]string, sub string, config map[string]any, env map[string]string) func(*testing.T, host, string) driver {
 	return func(t *testing.T, h host, modelURL string) driver {
 		t.Helper()
 		base := resolved(t.TempDir())
@@ -107,7 +113,7 @@ func inTreeWith(files map[string]string, sub string, config map[string]any) func
 		}
 		cfg := writeGoalConfigWith(t, modelURL, scenarioConfig(config))
 		workDir := filepath.Join(base, sub)
-		return h.openIn(t, cfg, workDir, nil)
+		return h.openIn(t, cfg, workDir, env)
 	}
 }
 
@@ -159,8 +165,24 @@ const (
 	instructionOf = "Project instructions from AGENTS.md:\n\n"
 )
 
+// manySections is a file whose outline is over its byte budget, and manyOutline
+// is the outline that the prompt holds for it: the headings and the ranges
+// alone, with no teaser.
+var manySections, manyOutline = func() (string, string) {
+	const parts = 300
+	var file, outline strings.Builder
+	file.WriteString("# Top\nintro\n")
+	for i := range parts {
+		fmt.Fprintf(&file, "## Part %03d\nbody of part %03d\n", i, i)
+	}
+	fmt.Fprintf(&outline, "# Top\nintro\n## Part 000\nbody of part 000\n\n[instructions outline] %d of the %d sections of <workdir>/AGENTS.md are not in this prompt. You MUST read a section with the read_file tool before you rely on it:", parts-1, parts+1)
+	for i := 1; i < parts; i++ {
+		fmt.Fprintf(&outline, "\n  Part %03d — read_file(path=<workdir>/AGENTS.md, offset=%d, limit=2)", i, 3+2*i)
+	}
+	return file.String(), outline.String()
+}()
+
 func TestContractPromptInstructions(t *testing.T) {
-	plain := strings.Repeat("plain text line\n", 10)
 	runScenarios(t, []scenario{
 		{
 			name:  "instructions_single_file_at_workdir",
@@ -210,13 +232,6 @@ func TestContractPromptInstructions(t *testing.T) {
 					"[... truncated: <workdir>/AGENTS.md is 84 bytes. The first 50 bytes are above. 34 bytes are not shown. Read the full file with the read_file tool. ...]"}})...),
 		},
 		{
-			name:   "instructions_oversize_without_headings_keep_the_truncation_marker",
-			config: map[string]any{"instructions_max_bytes": 50},
-			model:  textReply("ok"),
-			actions: inDir(map[string]string{"AGENTS.md": plain}, append(slices.Clone(oneTurn), systemTail{parts: []string{
-				instructionOf + "plain text line\nplain text line\nplain text line\npl\n" + oversizeMark}})...),
-		},
-		{
 			name:   "instructions_negative_max_bytes_keeps_the_whole_file",
 			config: map[string]any{"instructions_max_bytes": -1},
 			model:  textReply("ok"),
@@ -236,6 +251,75 @@ func TestContractPromptInstructions(t *testing.T) {
 			model:  textReply("ok"),
 			actions: inDir(map[string]string{"AGENTS.md": sections, "other.md": "OTHER\n"},
 				append(slices.Clone(oneTurn), systemTail{parts: []string{"Project instructions from other.md:\n\nOTHER\n"}})...),
+		},
+	})
+}
+
+func TestContractPromptInstructionsLimits(t *testing.T) {
+	plain := strings.Repeat("plain text line\n", 10)
+	runScenarios(t, []scenario{
+		{
+			name:   "instructions_chain_over_four_times_the_cap_drops_the_middle_files_nearest_the_root",
+			config: map[string]any{"instructions_max_bytes": 16},
+			model:  textReply("ok"),
+			driver: inTreeWith(map[string]string{
+				"repo/.git":              "gitdir: elsewhere",
+				"repo/AGENTS.md":         "root-rule-0123\n",
+				"repo/a/AGENTS.md":       "mid-one-rule-1\n",
+				"repo/a/b/AGENTS.md":     "mid-two-rule-2\n",
+				"repo/a/b/c/AGENTS.md":   "mid-three-rul-3\n",
+				"repo/a/b/c/d/AGENTS.md": "deepest-rule-4\n",
+				"repo/a/b/c/d/.keep":     "",
+			}, "repo/a/b/c/d", map[string]any{"instructions_max_bytes": 16}),
+			actions: append(slices.Clone(oneTurn), systemTail{parts: []string{chainHeader +
+				"From ../../../../AGENTS.md:\n\nroot-rule-0123\n\n\n" +
+				"From ../../AGENTS.md:\n\nmid-two-rule-2\n\n\n" +
+				"From ../AGENTS.md:\n\nmid-three-rul-3\n\n\n" +
+				"From AGENTS.md:\n\ndeepest-rule-4"}}),
+		},
+		{
+			name:   "instructions_first_section_over_the_cap_is_cut_with_the_marker_and_the_rest_is_outlined",
+			config: map[string]any{"instructions_max_bytes": 30},
+			model:  textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": "# Alpha\nalpha body line one is long\nalpha two\n# Beta\nbeta body\n"},
+				append(slices.Clone(oneTurn), systemTail{parts: []string{
+					instructionOf + "# Alpha\nalpha body line one is\n" +
+						"[... truncated: <workdir>/AGENTS.md is 63 bytes. The first 30 bytes are above. 33 bytes are not shown. Read the full file with the read_file tool. ...]\n\n" +
+						"[instructions outline] 1 of the 2 sections of <workdir>/AGENTS.md are not in this prompt. You MUST read a section with the read_file tool before you rely on it:\n" +
+						"  Beta — read_file(path=<workdir>/AGENTS.md, offset=4, limit=2) — beta body"}})...),
+		},
+		{
+			name:   "instructions_outline_drops_the_teasers_over_its_budget",
+			config: map[string]any{"instructions_max_bytes": 50},
+			model:  textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": manySections},
+				append(slices.Clone(oneTurn), systemTail{parts: []string{instructionOf + manyOutline}})...),
+		},
+		{
+			name:   "instructions_mode_full_from_the_environment_keeps_the_truncation_marker",
+			config: map[string]any{"instructions_max_bytes": 50},
+			model:  textReply("ok"),
+			driver: inTreeEnv(map[string]string{"AGENTS.md": sections}, "", map[string]any{"instructions_max_bytes": 50}, map[string]string{"HARNESS_INSTRUCTIONS_MODE": "full"}),
+			actions: append(slices.Clone(oneTurn), systemTail{parts: []string{
+				instructionOf + "# Alpha\nalpha body line one\nalpha body line two\n# \n" +
+					"[... truncated: <workdir>/AGENTS.md is 84 bytes. The first 50 bytes are above. 34 bytes are not shown. Read the full file with the read_file tool. ...]"}}),
+		},
+		{
+			name:   "instructions_mode_other_than_full_keeps_the_outline",
+			config: map[string]any{"instructions_max_bytes": 50, "instructions_mode": "short"},
+			model:  textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": sections}, append(slices.Clone(oneTurn), systemTail{parts: []string{
+				instructionOf + "# Alpha\nalpha body line one\nalpha body line two\n\n" +
+					"[instructions outline] 2 of the 3 sections of <workdir>/AGENTS.md are not in this prompt. You MUST read a section with the read_file tool before you rely on it:\n" +
+					"  Beta — read_file(path=<workdir>/AGENTS.md, offset=4, limit=2) — beta body\n" +
+					"  Gamma — read_file(path=<workdir>/AGENTS.md, offset=6, limit=2) — gamma body"}})...),
+		},
+		{
+			name:   "instructions_oversize_without_headings_keep_the_truncation_marker",
+			config: map[string]any{"instructions_max_bytes": 50},
+			model:  textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": plain}, append(slices.Clone(oneTurn), systemTail{parts: []string{
+				instructionOf + "plain text line\nplain text line\nplain text line\npl\n" + oversizeMark}})...),
 		},
 	})
 }

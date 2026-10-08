@@ -30,6 +30,8 @@ type Config struct {
 	// system prompt. Zero: 64 KiB. Negative: no cap. A cut file gets a marker
 	// and a WARN log line. HARNESS_INSTRUCTIONS_MAX_KB overrides it.
 	InstructionsMaxBytes int `json:"instructions_max_bytes,omitempty"`
+	// InstructionsMode "full" keeps a head and a marker for a file over the cap; else an outline follows the head.
+	InstructionsMode string `json:"instructions_mode,omitempty"`
 	// AppendSystemPrompt lists PLATFORM-owned facts the agent cannot
 	// discover, and the platform policy that depends on them. Two hard
 	// exclusions remain: project instructions belong in AGENTS.md, and tool

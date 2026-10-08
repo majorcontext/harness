@@ -80,17 +80,18 @@ func instructions(cfg config.Config, workDir string) (string, []string) {
 	if limit == 0 {
 		limit = config.Defaults().InstructionsMaxBytes
 	}
+	outline := !strings.EqualFold(strings.TrimSpace(cfg.InstructionsMode), "full")
 	var files []file
 	if cfg.InstructionsPath != "" {
 		p := resolve(workDir, cfg.InstructionsPath)
 		data, err := os.ReadFile(p)
 		if err != nil {
 			slog.Warn("prompt: instructions file skipped", "path", p, "err", err)
-		} else if body, ok := render(p, data, limit); ok {
+		} else if body, ok := render(p, data, limit, outline); ok {
 			files = append(files, file{cfg.InstructionsPath, body})
 		}
 	} else {
-		files = chain(workDir, limit)
+		files = chain(workDir, limit, outline)
 	}
 	names := make([]string, len(files))
 	for i, f := range files {
@@ -112,8 +113,9 @@ func instructions(cfg config.Config, workDir string) (string, []string) {
 
 // chain returns the AGENTS.md, or else AGENT.md, of each directory from the
 // git root down to workDir. Outside a repository only workDir counts, so a
-// scratch directory never picks up a file of $HOME.
-func chain(workDir string, limit int) []file {
+// scratch directory never picks up a file of $HOME. A chain over four times
+// limit loses its middle files, nearest the root first.
+func chain(workDir string, limit int, outline bool) []file {
 	var dirs []string
 	for dir := workDir; ; dir = filepath.Dir(dir) {
 		dirs = append(dirs, dir)
@@ -137,20 +139,51 @@ func chain(workDir string, limit int) []file {
 				slog.Warn("prompt: instructions file skipped", "path", p, "err", err)
 				continue
 			}
-			if body, ok := render(p, data, limit); ok {
+			if body, ok := render(p, data, limit, outline); ok {
 				rel, _ := filepath.Rel(workDir, p)
 				files = append(files, file{rel, body})
 			}
 			break
 		}
 	}
-	return files
+	return capChain(files, limit)
 }
 
-// render cuts data at limit bytes and names path in the marker, so the model
-// knows that the file goes on. A negative limit keeps the whole file. An
-// empty or invalid file has no body.
-func render(path string, data []byte, limit int) (string, bool) {
+const chainCeilingFactor = 4
+
+// capChain drops the files between the root file and the deepest file, nearest
+// the root first, until the bodies fit chainCeilingFactor times limit or none
+// is left to drop. The root and the deepest file stay whole, so the total can
+// stay over the ceiling. A negative limit keeps the whole chain.
+func capChain(files []file, limit int) []file {
+	if limit < 0 || len(files) <= 2 {
+		return files
+	}
+	ceiling := limit * chainCeilingFactor
+	total := 0
+	for _, f := range files {
+		total += len(f.body)
+	}
+	if total <= ceiling {
+		return files
+	}
+	kept := slices.Clone(files)
+	var dropped []string
+	for i := 1; i < len(kept)-1 && total > ceiling; {
+		total -= len(kept[i].body)
+		dropped = append(dropped, kept[i].name)
+		kept = slices.Delete(kept, i, i+1)
+	}
+	slog.Warn("prompt: instructions chain cut to fit the ceiling", "ceiling", ceiling, "dropped", strings.Join(dropped, ", "))
+	return kept
+}
+
+// render returns the body of an instructions file. A file over limit bytes
+// becomes its first sections and an outline of the rest, or with outline false
+// its head and a marker that names path, so the model knows that the file goes
+// on. A negative limit keeps the whole file. An empty or invalid file has no
+// body.
+func render(path string, data []byte, limit int, outline bool) (string, bool) {
 	if !utf8.Valid(data) || strings.TrimSpace(string(data)) == "" {
 		slog.Warn("prompt: instructions file skipped, empty or not UTF-8", "path", path)
 		return "", false
@@ -158,13 +191,25 @@ func render(path string, data []byte, limit int) (string, bool) {
 	if limit < 0 || len(data) <= limit {
 		return string(data), true
 	}
+	if outline {
+		return outlined(path, data, limit), true
+	}
+	return truncated(path, data, limit, len(data)), true
+}
+
+// truncated cuts data at limit bytes on a rune boundary and adds the marker.
+// total is the size of the whole file, which the marker reports.
+func truncated(path string, data []byte, limit, total int) string {
+	if limit < 0 || len(data) <= limit {
+		return string(data)
+	}
 	kept := data[:limit]
 	for len(kept) > 0 && !utf8.Valid(kept) {
 		kept = kept[:len(kept)-1]
 	}
-	slog.Warn("prompt: instructions file truncated", "path", path, "bytes", len(data), "kept", len(kept))
+	slog.Warn("prompt: instructions file truncated", "path", path, "bytes", total, "kept", len(kept))
 	return fmt.Sprintf("%s\n[... truncated: %s is %d bytes. The first %d bytes are above. %d bytes are not shown. Read the full file with the read_file tool. ...]",
-		kept, path, len(data), len(kept), len(data)-len(kept)), true
+		kept, path, total, len(kept), total-len(kept))
 }
 
 // skillList lists each valid skill of the skills dirs once, sorted by name.
