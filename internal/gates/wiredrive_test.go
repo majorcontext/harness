@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -148,7 +149,7 @@ func buildFakeClaude(t *testing.T) string {
 		cmd := exec.Command("go", "build", "-o", fakeClaudePath, "./harnesstest/fakeclaude")
 		cmd.Dir = "../.."
 		if out, err := cmd.CombinedOutput(); err != nil {
-			fakeClaudeErr = &exec.ExitError{Stderr: out}
+			fakeClaudeErr = fmt.Errorf("%w: %s", err, out)
 		}
 	})
 	if fakeClaudeErr != nil {
@@ -166,6 +167,10 @@ func fakeClaudeModes(t *testing.T, bin string) []string {
 	return strings.Fields(string(out))
 }
 
+// fakeClaudeExitsByDesign holds the modes that end with an error or print no
+// frame on purpose, or that need an MCP server this driver does not run.
+var fakeClaudeExitsByDesign = map[string]bool{"crash": true, "crash_before_init": true, "mcp": true}
+
 // fakeClaudeFrames runs the fake in one mode with one user line on stdin and
 // returns the frames it printed before it ended or the deadline passed.
 func fakeClaudeFrames(t *testing.T, bin, mode string) []byte {
@@ -174,11 +179,18 @@ func fakeClaudeFrames(t *testing.T, bin, mode string) []byte {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	state := filepath.Join(t.TempDir(), "state")
-	cmd.Env = append(os.Environ(), "FAKE_CLAUDE_MODE="+mode, "FAKE_CLAUDE_STATE="+state)
+	cmd.Env = append(os.Environ(), "FAKE_CLAUDE_MODE="+mode, "FAKE_CLAUDE_STATE="+state,
+		"CLAUDE_CONFIG_DIR="+t.TempDir(), "FAKE_CLAUDE_MIRROR_FIXTURE=../../harnesstest/fakeclaude/testdata/run1.stdout.jsonl")
 	cmd.Stdin = strings.NewReader(`{"type":"user","message":{"role":"user","content":"hi"}}` + "\n")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	_ = cmd.Run()
+	err := cmd.Run()
+	if err != nil && ctx.Err() == nil && !fakeClaudeExitsByDesign[mode] {
+		t.Errorf("fakeclaude mode %q: %v", mode, err)
+	}
+	if out.Len() == 0 && !fakeClaudeExitsByDesign[mode] {
+		t.Errorf("fakeclaude mode %q printed no frames", mode)
+	}
 	return out.Bytes()
 }
 

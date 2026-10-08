@@ -159,6 +159,9 @@ func CaseReads(fsys fs.FS, dir, file, fn string) (map[string][]StructReads, erro
 			continue
 		}
 		found = true
+		if err := checkDecodes(fd.Body, fn); err != nil {
+			return nil, err
+		}
 		collect(fd.Body, []string{""}, types, out)
 	}
 	if !found {
@@ -210,3 +213,91 @@ func collect(n ast.Node, labels []string, types packageTypes, out map[string][]S
 
 // Labels lists the case labels of a CaseReads result, sorted.
 func Labels(m map[string][]StructReads) []string { return slices.Sorted(maps.Keys(m)) }
+
+func isDecodeCall(call *ast.CallExpr) (target ast.Expr, ok bool) {
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	if !isSel || len(call.Args) == 0 {
+		return nil, false
+	}
+	switch sel.Sel.Name {
+	case "Unmarshal":
+		return call.Args[len(call.Args)-1], len(call.Args) == 2
+	case "Decode":
+		return call.Args[0], len(call.Args) == 1
+	}
+	return nil, false
+}
+
+// checkDecodes fails when a function decodes JSON into anything but a variable
+// declared as an inline struct or a basic type, and when a case clause that
+// decodes JSON declares no inline struct, so that a parser rewritten to a named
+// type cannot shrink the reads the gate sees.
+func checkDecodes(body *ast.BlockStmt, fn string) error {
+	inline := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if vs, ok := n.(*ast.ValueSpec); ok {
+			switch t := vs.Type.(type) {
+			case *ast.StructType:
+				for _, nm := range vs.Names {
+					inline[nm.Name] = true
+				}
+			case *ast.Ident:
+				if _, basic := goJSONTypes[t.Name]; basic {
+					for _, nm := range vs.Names {
+						inline[nm.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	var err error
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || err != nil {
+			return err == nil
+		}
+		target, ok := isDecodeCall(call)
+		if !ok {
+			return true
+		}
+		var name *ast.Ident
+		if addr, ok := target.(*ast.UnaryExpr); ok && addr.Op == token.AND {
+			name, _ = addr.X.(*ast.Ident)
+		}
+		if name == nil || !inline[name.Name] {
+			err = fmt.Errorf("%s decodes JSON into a target that is not an inline struct variable; the parser gate cannot read it", fn)
+		}
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		cc, ok := n.(*ast.CaseClause)
+		if !ok || err != nil || len(caseLabels(cc)) == 0 {
+			return err == nil
+		}
+		decodes, structs := false, false
+		for _, stmt := range cc.Body {
+			ast.Inspect(stmt, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.CallExpr:
+					if _, ok := isDecodeCall(x); ok {
+						decodes = true
+					}
+				case *ast.ValueSpec:
+					if _, ok := x.Type.(*ast.StructType); ok {
+						structs = true
+					}
+				}
+				return true
+			})
+		}
+		if decodes && !structs {
+			err = fmt.Errorf("%s: case %q decodes JSON but declares no inline struct", fn, caseLabels(cc))
+		}
+		return true
+	})
+	return err
+}

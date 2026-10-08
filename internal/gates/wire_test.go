@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/majorcontext/harness/internal/wirescrub"
 )
@@ -86,5 +87,26 @@ func TestWireDoublesMatchTheRealWire(t *testing.T) {
 	}
 	for _, line := range allowed.Unused() {
 		t.Errorf("testdata/wire/allowed.txt: no check needs %q", line)
+	}
+}
+
+func TestCaseReadsRefusesUnreadableDecodes(t *testing.T) {
+	const head = "package p\n\nimport \"encoding/json\"\n\ntype named struct{ A string `json:\"a\"` }\n\n"
+	for name, body := range map[string]string{
+		"named type":     "func f(k string, d []byte) {\n\tswitch k {\n\tcase \"x\":\n\t\tvar ev named\n\t\t_ = json.Unmarshal(d, &ev)\n\t}\n}\n",
+		"pointer target": "func f(k string, d []byte) {\n\tswitch k {\n\tcase \"x\":\n\t\tev := &named{}\n\t\t_ = json.Unmarshal(d, ev)\n\t}\n}\n",
+		"no struct":      "func f(k string, d []byte, ev any) {\n\tswitch k {\n\tcase \"x\":\n\t\t_ = json.Unmarshal(d, &ev)\n\t}\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fsys := fstest.MapFS{"p/p.go": {Data: []byte(head + body)}}
+			if _, err := CaseReads(fsys, "p", "p.go", "f"); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
+	ok := head + "func f(k string, d []byte) {\n\tswitch k {\n\tcase \"x\":\n\t\tvar ev struct{ A string `json:\"a\"` }\n\t\t_ = json.Unmarshal(d, &ev)\n\t}\n}\n"
+	got, err := CaseReads(fstest.MapFS{"p/p.go": {Data: []byte(ok)}}, "p", "p.go", "f")
+	if err != nil || len(got["x"]) != 1 {
+		t.Fatalf("got %v, %v", got, err)
 	}
 }
