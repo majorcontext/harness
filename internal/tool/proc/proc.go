@@ -74,6 +74,17 @@ func NewTool(m *process.Manager, specs map[string]config.ProcessSpec) Tool {
 // Spec returns the definition of the process tool.
 func (t Tool) Spec() protocol.ToolSpec { return t.spec }
 
+// Key makes the calls that name one process run in call order.
+func (Tool) Key(call protocol.ToolCall) string {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(call.Arguments, &in) != nil || in.Name == "" {
+		return ""
+	}
+	return "process:" + in.Name
+}
+
 type processArgs struct {
 	Action        string   `json:"action"`
 	Name          string   `json:"name"`

@@ -16,14 +16,15 @@ var Names = []string{"read_file", "write_file", "edit_file", "glob", "grep", "ls
 // Tools returns the file, search, and shell tools of workDir. Each call
 // returns a new set: the read guard of write_file belongs to one session.
 func Tools(workDir string) []turn.Tool {
-	d := dir{root: workDir, read: &guard{hashes: map[string][32]byte{}}}
-	return []turn.Tool{d.readFile(), d.writeFile(), d.editFile(), d.glob(), d.grep(), d.ls(), d.bash()}
+	d := dir{root: workDir, read: &guard{hashes: map[string][32]byte{}}, mem: &budget{limit: readBudgetBytes}}
+	return []turn.Tool{d.keyed(d.readFile()), d.keyed(d.writeFile()), d.keyed(d.editFile()), d.glob(), d.grep(), d.ls(), d.bash()}
 }
 
 // dir resolves the paths of the tools of one session.
 type dir struct {
 	root string
 	read *guard
+	mem  *budget
 }
 
 // resolve joins a relative path to the work directory.
@@ -45,10 +46,50 @@ func (d dir) base(path string) string {
 type tool struct {
 	spec protocol.ToolSpec
 	run  func(ctx context.Context, args json.RawMessage) (string, error)
+	key  func(args json.RawMessage) string
 }
 
 func newTool(name, description, schema string, run func(context.Context, json.RawMessage) (string, error)) tool {
-	return tool{protocol.ToolSpec{Name: name, Description: description, InputSchema: json.RawMessage(schema)}, run}
+	return tool{spec: protocol.ToolSpec{Name: name, Description: description, InputSchema: json.RawMessage(schema)}, run: run}
+}
+
+// keyed makes the calls of t on one file run in call order.
+func (d dir) keyed(t tool) tool {
+	t.key = d.pathKey
+	return t
+}
+
+// Key names the resource of a call, or "" when the tool has none.
+func (t tool) Key(call protocol.ToolCall) string {
+	if t.key == nil {
+		return ""
+	}
+	return t.key(call.Arguments)
+}
+
+// pathKey names the file that a call of read_file, write_file, or edit_file
+// touches, so that two spellings of one path, also through a symlink, share a
+// key. Calls whose path cannot be read share one key. A hard link is a
+// second name that this key does not join.
+func (d dir) pathKey(args json.RawMessage) string {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(args, &in) != nil || in.Path == "" {
+		return "path:<unparsed>"
+	}
+	path := d.resolve(in.Path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "path:" + filepath.Clean(path)
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return "path:" + real
+	}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		return "path:" + filepath.Join(parent, filepath.Base(abs))
+	}
+	return "path:" + abs
 }
 
 func (t tool) Spec() protocol.ToolSpec { return t.spec }

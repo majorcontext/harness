@@ -50,7 +50,7 @@ const readFileSchema = `{
 
 func (d dir) readFile() tool {
 	return newTool("read_file", "Read a file and return its content with line numbers (N→ prefixes). A recognized image file (PNG, JPEG, GIF, WebP) is returned as one line that names its type, size, and pixel dimensions, not its content. Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
-		readFileSchema, func(_ context.Context, args json.RawMessage) (string, error) {
+		readFileSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				Path   string `json:"path"`
 				Offset int    `json:"offset"`
@@ -67,6 +67,11 @@ func (d dir) readFile() tool {
 			if info.IsDir() {
 				return "", fmt.Errorf("read_file: %s is a directory", path)
 			}
+			release, err := d.mem.reserve(ctx, info.Size())
+			if err != nil {
+				return "", fmt.Errorf("read_file: %w", err)
+			}
+			defer release()
 			c, err := readContent(path)
 			if err != nil {
 				return "", fmt.Errorf("read_file: %s: %w", path, err)
@@ -129,7 +134,7 @@ const writeFileSchema = `{
 
 func (d dir) writeFile() tool {
 	return newTool("write_file", "Write content to a file, creating parent directories as needed. Overwriting an existing file requires having read it first with read_file this session, with no changes on disk since — use edit_file for a targeted change, or read_file then write_file to intentionally replace it. Relative paths resolve against the session working directory.",
-		writeFileSchema, func(_ context.Context, args json.RawMessage) (string, error) {
+		writeFileSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				Path    string  `json:"path"`
 				Content *string `json:"content"`
@@ -138,7 +143,7 @@ func (d dir) writeFile() tool {
 				return "", errors.New("write_file: missing path or content argument")
 			}
 			path := d.resolve(in.Path)
-			if err := d.mayOverwrite(path); err != nil {
+			if err := d.mayOverwrite(ctx, path); err != nil {
 				return "", err
 			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -154,7 +159,7 @@ func (d dir) writeFile() tool {
 
 // mayOverwrite gates only an existing regular file. A stat that fails for
 // another reason refuses: it cannot prove that no file is there.
-func (d dir) mayOverwrite(path string) error {
+func (d dir) mayOverwrite(ctx context.Context, path string) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -169,6 +174,11 @@ func (d dir) mayOverwrite(path string) error {
 	if !ok {
 		return fmt.Errorf("write_file: %s exists and has not been read this session; read it first (or use edit_file)", path)
 	}
+	release, err := d.mem.reserve(ctx, info.Size())
+	if err != nil {
+		return fmt.Errorf("write_file: %w", err)
+	}
+	defer release()
 	data, err := readCapped(path)
 	if err != nil && !errors.Is(err, errTooLarge) {
 		return fmt.Errorf("write_file: %w", err)
@@ -192,7 +202,7 @@ const editFileSchema = `{
 
 func (d dir) editFile() tool {
 	return newTool("edit_file", "Replace an exact string in a file. Prefer this over sed or shell heredocs for editing files. old_string must match the file content exactly and uniquely; include surrounding context to disambiguate, or set replace_all to replace every occurrence. Relative paths resolve against the session working directory.",
-		editFileSchema, func(_ context.Context, args json.RawMessage) (string, error) {
+		editFileSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				Path       string `json:"path"`
 				OldString  string `json:"old_string"`
@@ -206,6 +216,13 @@ func (d dir) editFile() tool {
 				return "", errors.New("edit_file: old_string and new_string are identical")
 			}
 			path := d.resolve(in.Path)
+			if info, err := os.Stat(path); err == nil {
+				release, err := d.mem.reserve(ctx, info.Size())
+				if err != nil {
+					return "", fmt.Errorf("edit_file: %w", err)
+				}
+				defer release()
+			}
 			data, err := readCapped(path)
 			if err != nil {
 				return "", fmt.Errorf("edit_file: %w", err)

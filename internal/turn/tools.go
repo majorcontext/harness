@@ -99,9 +99,39 @@ func (c chain) After(ctx context.Context, call protocol.ToolCall, r protocol.Too
 	return r
 }
 
-// describe sets the tools, prompt, and Call of call and returns Call. all
-// describes every tool, for a backend that owns the loop.
-func describe(ctx context.Context, call *Request, src Source, all bool) func(context.Context, protocol.ToolCall) protocol.ToolResult {
+// runner runs the calls of one model call between the hooks of its Toolset.
+type runner struct {
+	runnable []Tool
+	hooks    Hooks
+}
+
+func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+	return runTool(ctx, t.runnable, t.hooks, c)
+}
+
+func (t runner) find(name string) Tool {
+	if i := slices.IndexFunc(t.runnable, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
+		return t.runnable[i]
+	}
+	return nil
+}
+
+func (t runner) alone(name string) bool {
+	_, ok := t.find(name).(Alone)
+	return ok
+}
+
+func (t runner) key(c protocol.ToolCall) string {
+	if k, ok := t.find(c.Name).(Keyed); ok {
+		return k.Key(c)
+	}
+	return ""
+}
+
+// describe sets the tools, prompt, and Call of call and returns the runner of
+// its calls. all describes every tool, for a backend that owns the
+// loop.
+func describe(ctx context.Context, call *Request, src Source, all bool) runner {
 	var ts Toolset
 	if src != nil {
 		ts = src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
@@ -119,11 +149,9 @@ func describe(ctx context.Context, call *Request, src Source, all bool) func(con
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
 	}
-	runnable := append(slices.Clip(ts.Tools), ts.Deferred...)
-	call.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-		return runTool(ctx, runnable, ts.Hooks, c)
-	}
-	return call.Call
+	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
+	call.Call = t.run
+	return t
 }
 
 // Restrict returns the tools that names lists, or every tool when names is nil.

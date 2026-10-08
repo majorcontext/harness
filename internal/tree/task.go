@@ -75,6 +75,17 @@ func (taskTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "task", Description: taskDescription, InputSchema: json.RawMessage(taskSchema)}
 }
 
+// Key makes the calls that name one session run in call order.
+func (taskTool) Key(c protocol.ToolCall) string {
+	var in struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(c.Arguments, &in) != nil || in.SessionID == "" {
+		return ""
+	}
+	return "task:" + in.SessionID
+}
+
 // Run runs one action of the task tool.
 func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in taskArgs

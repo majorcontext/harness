@@ -102,7 +102,6 @@ const (
 	specRetryable      = "`ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times"
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
-	specToolsSerial    = "Tools run one at a time, so the tool-batching segment is gone."
 	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
 	specRepeatName     = "fails the load, and the error names both files"
 	specMidTurnFails   = "When the new model has another kind of backend, one that owns its loop or one that does not, the turn fails at its next model call"
@@ -194,6 +193,10 @@ var runtimeRows = map[string]runtimeRow{
 	"task_profiles_skip_bad_files":                                         pendingOn(specProfileSkip, specTaskWording),
 	"task_profile_file_with_model_inherit_and_color_is_a_profile":          reGolden(specProfileModel, specProfileColor, specTaskInputs, specChildReport),
 	"task_profile_file_replaces_a_built_in_profile":                        reGolden(specProfileSwap, specTaskInputs, specChildReport),
+	"two_slow_tool_calls_of_one_message_overlap_and_log_in_call_order":     sameAsServe(),
+	"interrupt_cancels_every_running_tool_call_of_a_batch":                 sameAsServe(),
+	"calls_on_one_file_run_in_call_order_within_a_batch":                   sameAsServe(),
+	"plugin_hooks_run_for_each_call_of_a_batch":                            sameAsServe(),
 	"file_tools_size_cap":                                                  reGolden(specFileCap),
 	"bash_output_and_exit_status":                                          sameAsServe(),
 	"read_file_returns_an_image":                                           reGolden(specImageLine),
@@ -421,7 +424,7 @@ var runtimeRows = map[string]runtimeRow{
 	"no_goal_evaluator_means_no_goal":                             reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
 	"plugin_inventory_reports_not_spawned_then_running":           reGolden(specView),
 	"plugin_sees_the_model_of_each_call":                          reGolden(specUpdate),
-	"restart_lets_a_running_tool_finish_and_cuts_the_next_call":   reGolden(specView, specHandoff, specToolsSerial),
+	"restart_lets_a_running_tool_finish_and_cuts_the_next_call":   reGolden(specView, specHandoff),
 	"retries_stop_after_prompt_retries":                           reGolden(specView, specRetryable),
 	"settings_change_to_claude_code_mid_turn_fails_the_turn":      reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
 	"typed_commands_record_their_outcome":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
