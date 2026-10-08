@@ -64,7 +64,7 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 	// A real API call with NO Authorization header must succeed — proof
 	// this is actually running unauthenticated, not merely that /health
 	// (already unauthenticated on every box) answered.
-	resp, err := http.Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
+	resp, err := wireClient(t, http.DefaultClient).Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatalf("POST /sessions: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 		"ANTHROPIC_API_KEY":       "e2e-dummy-key",
 	})
 
-	resp, err := http.Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
+	resp, err := wireClient(t, http.DefaultClient).Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatalf("POST /sessions: %v", err)
 	}
@@ -173,7 +173,7 @@ func freeAddrOnHost(t *testing.T, host string) string {
 func waitHealthyAt(t *testing.T, dialAddr string, stderr *lockedBuffer) {
 	t.Helper()
 	if !testpoll.UntilNoT(10*time.Second, func() bool {
-		resp, err := http.Get("http://" + dialAddr + "/health")
+		resp, err := wireClient(t, http.DefaultClient).Get("http://" + dialAddr + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

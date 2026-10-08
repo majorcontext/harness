@@ -98,7 +98,7 @@ func (p *serveProc) waitOwned() bool {
 			return false
 		}
 		req.Header.Set("Authorization", "Bearer "+p.token)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := wireClient(p.t, http.DefaultClient).Do(req)
 		if err != nil {
 			return false
 		}

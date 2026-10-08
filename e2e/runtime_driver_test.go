@@ -38,6 +38,7 @@ type runtimeDriver struct {
 	env        map[string]string
 	args       []string
 	client     *http.Client
+	wire       *wireReport
 	inputs     int
 	lastInput  map[string]string
 	lastTyped  map[string]string
@@ -90,6 +91,7 @@ func (d *runtimeDriver) startProc(t *testing.T) {
 
 func (d *runtimeDriver) start(t *testing.T) {
 	t.Helper()
+	d.wire = reportOf(t)
 	if d.serve {
 		d.startProc(t)
 		return
@@ -168,9 +170,9 @@ func (d *runtimeDriver) Workdir() string { return d.workDir }
 // endpoint is the base URL and client of the host.
 func (d *runtimeDriver) endpoint() (string, *http.Client) {
 	if d.serve {
-		return "http://" + d.proc.addr, d.client
+		return "http://" + d.proc.addr, wireClientFor(d.wire, d.client)
 	}
-	return d.srv.URL, d.srv.Client()
+	return d.srv.URL, wireClientFor(d.wire, d.srv.Client())
 }
 
 // authorize adds the run token that serve requires.

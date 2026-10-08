@@ -12,3 +12,4 @@ Read the root AGENTS.md.
 - Start a subprocess only when the process boundary is under test.
 - Keep fixtures local and deterministic. Require no live provider credentials.
 - Keep subprocess output on failure. Mask secret values.
+- Every HTTP client of a host comes from `wireClient`, which checks each response and error against `protocol/openapi.json` and the Errors table of the spec.
