@@ -316,6 +316,7 @@ func (r *run) system(env envelope) error {
 			r.out.Status(protocol.StatusFrame{Status: protocol.StatusCompactionFailed})
 		}
 	case "compact_boundary":
+		r.settleCompaction(protocol.StatusRunning)
 		r.sawCompact = true
 		r.compact = "Claude Code compacted its context."
 		if m := env.CompactMetadata; m != nil {
@@ -349,13 +350,7 @@ func (r *run) compacted(env envelope) (isSummary bool, err error) {
 	if env.Type == "user" && json.Unmarshal(decodeMessage(env.Message).Content, &s) == nil && s != "" {
 		summary, isSummary = s, true
 	}
-	err = r.out.Compacted(summary)
-	if err != nil {
-		r.settleCompaction(protocol.StatusCompactionFailed)
-	} else {
-		r.settleCompaction(protocol.StatusRunning)
-	}
-	return isSummary, err
+	return isSummary, r.out.Compacted(summary)
 }
 
 // settleCompaction ends the compaction that the CLI started with one status

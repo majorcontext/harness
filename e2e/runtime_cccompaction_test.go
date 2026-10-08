@@ -28,9 +28,12 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 		frames []map[string]any
 		want   []string
 	}{
-		{"claude_code_compaction_sends_compacting_then_running_when_the_summary_is_appended",
+		{"claude_code_compaction_sends_compacting_then_running_at_the_boundary",
 			[]map[string]any{init, compacting, settled, boundary, summary, reply, result},
-			[]string{"turn.started", "~status compacting", "compaction.applied", "~status running", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}},
+		{"claude_code_compaction_settled_at_the_boundary_is_not_failed_when_the_stream_ends",
+			[]map[string]any{init, compacting, settled, boundary},
+			[]string{"turn.started", "~status compacting", "~status running", "turn.ended"}},
 		{"claude_code_compaction_with_a_failed_result_sends_compaction_failed",
 			[]map[string]any{init, compacting, failed, reply, result},
 			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}},
