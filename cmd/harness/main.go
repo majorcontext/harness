@@ -105,6 +105,7 @@ func applyOverrides(cfg *config.Config, noInstructions bool, skillDirs, agentDef
 	if err := cfg.ApplyEnv(os.Getenv); err != nil {
 		return err
 	}
+	defaultPluginCache(cfg)
 	if noInstructions {
 		off := false
 		cfg.Instructions = &off

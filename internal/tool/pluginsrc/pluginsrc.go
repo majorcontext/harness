@@ -33,9 +33,10 @@ type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error
 
 // Plugins starts the configured plugins once for each runtime.
 type Plugins struct {
-	specs   []config.PluginSpec
-	opts    plugin.Options
-	workDir string
+	specs     []config.PluginSpec
+	opts      plugin.Options
+	workDir   string
+	cachePath string
 
 	// host is set once, by the first successful Start.
 	host   atomic.Pointer[plugin.Host]
@@ -48,41 +49,55 @@ func New(cfg config.Config, workDir string, history History, blob Blob, serveURL
 	if len(cfg.Plugins) == 0 {
 		return nil
 	}
-	return &Plugins{specs: cfg.Plugins, workDir: workDir,
+	return &Plugins{specs: cfg.Plugins, workDir: workDir, cachePath: cfg.PluginCache,
 		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob},
 			ServeURL: serveURL, RunToken: runToken}}
 }
 
-// Start reads the manifest of each plugin with one bounded probe, once. The
-// warm process of a plugin starts on its first hook or tool call. taken
-// reports a tool name that another tool has. After an error, the next call
-// tries again.
-func (p *Plugins) Start(ctx context.Context, taken func(string) bool) error {
+// Start reads the manifest of each plugin once: from the manifest cache when
+// the plugin has not changed since its last probe, else with one bounded probe.
+// With refresh, it always probes. The warm process of a plugin starts on its
+// first hook or tool call. taken reports a tool name that another tool has.
+// After an error, the next call tries again.
+func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.host.Load() != nil {
 		return nil
 	}
+	c := &cache{Entries: map[string]cacheEntry{}}
+	if p.cachePath != "" {
+		var err error
+		if c, err = loadCache(p.cachePath); err != nil {
+			return fmt.Errorf("plugin cache: %w", err)
+		}
+	}
+	probe := func(spec plugin.Spec) (plugin.Manifest, error) {
+		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		defer cancel()
+		return plugin.ProbeSpec(pctx, spec)
+	}
 	specs := make([]plugin.Spec, len(p.specs))
 	names := map[string]bool{}
+	dirty := false
 	for i, ps := range p.specs {
-		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config}
-		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
-		m, err := plugin.ProbeSpec(pctx, specs[i])
-		cancel()
+		m, changed, err := c.manifest(probe, ps, refresh)
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", ps.Name, err)
 		}
-		if m.Name != ps.Name {
-			return fmt.Errorf("plugin %s: manifest name %q does not match the config", ps.Name, m.Name)
-		}
+		dirty = dirty || changed
 		for _, d := range m.Tools {
 			if d.Name == "" || names[d.Name] || taken(d.Name) {
 				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ps.Name, d.Name)
 			}
 			names[d.Name] = true
 		}
-		specs[i].Manifest = m
+		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config, Manifest: m}
+	}
+	if dirty && p.cachePath != "" {
+		if err := c.save(p.cachePath); err != nil {
+			return fmt.Errorf("plugin cache: %w", err)
+		}
 	}
 	host, err := plugin.NewHost(p.opts, specs...)
 	if err != nil {
