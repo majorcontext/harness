@@ -373,10 +373,8 @@ func (p *printer) track(ev protocol.Event) {
 	p.unsettled[c.ChildID] = true
 }
 
-// waiting reports whether a followed child has not settled. Its settlement
-// is the next record of the root session, and it queues the report of the
-// child, so the run neither finishes before the child nor misses the turn of
-// the report.
+// waiting reports whether the root log has not yet recorded child.settled
+// for a task child of the root session.
 func (p *printer) waiting() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
