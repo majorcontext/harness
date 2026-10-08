@@ -133,7 +133,7 @@ func TestWireClientsOfTheContractSuite(t *testing.T) {
 
 func TestWireClientRule(t *testing.T) {
 	files := fstest.MapFS{
-		"e2e/a_test.go": file("package e2e\n\nimport \"net/http\"\n\nfunc F() {\n\twireClient(t, http.DefaultClient).Get(\"x\")\n\twireClientFor(r, &http.Client{})\n}\n"),
+		"e2e/a_test.go": file("package e2e\n\nimport \"net/http\"\n\nfunc F() {\n\twireClient(t, http.DefaultClient).Get(\"x\")\n\twireClientFor(r, &http.Client{})\n\twireClientReadOnly(t, srv.Client())\n}\n"),
 		"e2e/b_test.go": file("package e2e\n\nimport \"net/http\"\n\nfunc G() {\n\thttp.Get(\"x\")\n\thttp.DefaultClient.Do(nil)\n\t_ = &http.Client{}\n\t_ = srv.Client()\n}\n"),
 	}
 	vs, err := CheckWireClients(files)

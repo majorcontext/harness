@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/gates"
+	"github.com/majorcontext/harness/internal/server"
 )
 
 const (
@@ -273,6 +274,31 @@ func mediaType(header string) string {
 
 func successStatus(status int) bool { return status >= 200 && status < 300 }
 
+// unservedByReadOnly reports whether a read-only host serves no route for the
+// request: the document has the route, and it is not a read route.
+func (d *specDoc) unservedByReadOnly(method, path string) bool {
+	op, known := d.operation(method, path)
+	return known && !slices.ContainsFunc(server.Table, func(r server.Route) bool { return r.Name == op.OperationID && r.Read })
+}
+
+// checkUnservedByReadOnly checks the answer of a read-only host to a route it
+// does not serve: 405 in the error envelope for a route that changes
+// something, and 404 for any other path.
+func checkUnservedByReadOnly(d *specDoc, method string, status int, contentType string, body []byte) []string {
+	errs := d.checkJSON(errorBodyName, contentType, body)
+	if len(errs) == 0 {
+		errs = checkErrorStatus(status, false, body)
+	}
+	want := http.StatusNotFound
+	if method != http.MethodGet {
+		want = http.StatusMethodNotAllowed
+	}
+	if status != want {
+		errs = append(errs, fmt.Sprintf("a read-only host answers %s of a route it does not serve with %d, and the spec says %d", method, status, want))
+	}
+	return errs
+}
+
 func (d *specDoc) checkStream(method, path string, status int, contentType string) []string {
 	return d.checkResponse(method, path, status, contentType, nil)
 }
@@ -383,6 +409,9 @@ func reportOf(t *testing.T) *wireReport {
 type wireTransport struct {
 	base http.RoundTripper
 	rep  *wireReport
+	// readOnly marks a host that serves only the read routes, such as
+	// harness.ReadHandler.
+	readOnly bool
 }
 
 func (w wireTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -412,7 +441,11 @@ func (w wireTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	if err == nil {
-		for _, m := range doc.checkResponse(req.Method, req.URL.Path, resp.StatusCode, contentType, body) {
+		msgs := doc.checkResponse(req.Method, req.URL.Path, resp.StatusCode, contentType, body)
+		if w.readOnly && doc.unservedByReadOnly(req.Method, req.URL.Path) {
+			msgs = checkUnservedByReadOnly(doc, req.Method, resp.StatusCode, contentType, body)
+		}
+		for _, m := range msgs {
 			w.rep.add(label + ": " + m)
 		}
 	}
@@ -466,7 +499,17 @@ func wireClient(t *testing.T, c *http.Client) *http.Client {
 	return wireClientFor(reportOf(t), c)
 }
 
+// wireClientReadOnly is wireClient for a host that serves only the read routes.
+func wireClientReadOnly(t *testing.T, c *http.Client) *http.Client {
+	t.Helper()
+	return wrapClient(reportOf(t), c, true)
+}
+
 func wireClientFor(rep *wireReport, c *http.Client) *http.Client {
+	return wrapClient(rep, c, false)
+}
+
+func wrapClient(rep *wireReport, c *http.Client, readOnly bool) *http.Client {
 	base := c.Transport
 	if _, wrapped := base.(wireTransport); wrapped || rep == nil {
 		return c
@@ -475,6 +518,6 @@ func wireClientFor(rep *wireReport, c *http.Client) *http.Client {
 		base = http.DefaultTransport
 	}
 	clone := *c
-	clone.Transport = wireTransport{base: base, rep: rep}
+	clone.Transport = wireTransport{base: base, rep: rep, readOnly: readOnly}
 	return &clone
 }
