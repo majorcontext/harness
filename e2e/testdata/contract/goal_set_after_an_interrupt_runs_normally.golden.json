@@ -35,22 +35,6 @@
       ]
     },
     {
-      "system_has_goal_evaluator": true,
-      "model": "eval-model",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ndone"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
@@ -79,24 +63,26 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
+            },
             {
               "kind": "text",
-              "text": "done"
+              "text": "say done"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
         {
           "role": "user",
           "parts": [
             {
               "kind": "text",
-              "text": "next"
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nUSER:\nsay done\n\nASSISTANT:\ndone"
             }
           ]
         }
@@ -117,26 +103,16 @@
       },
       {
         "id": "msg#2",
-        "role": "assistant",
+        "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "done"
+            "text": "say done"
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "next"
-          }
-        ]
-      },
-      {
-        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {
@@ -148,16 +124,6 @@
     ]
   },
   "calls": {
-    "compact.a": {
-      "status": 409,
-      "body": {
-        "error": {
-          "code": "session_busy",
-          "details": {},
-          "message": "harness: session busy"
-        }
-      }
-    },
     "get_session.a": {
       "status": 200,
       "body": {
@@ -186,8 +152,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 5,
+          "output_tokens": 3
         }
       }
     }

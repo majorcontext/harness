@@ -94,7 +94,7 @@ const (
 	specAnswerReceipt = "an answer replies 202 {seq, status}, a dismissal 204"
 
 	specStopped        = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
-	specInterrupt      = "`interrupt` stops the running turn only. The next queued input then starts"
+	specInterrupt      = "`interrupt` stops the running run (a turn, an evaluation, or a compaction). The next queued input then starts"
 	specSameBody       = "| Same id, same body | `200` with the original receipt |"
 	specOtherBody      = "| Same id, other body | `409 input_conflict` |"
 	specTurnMismatch   = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
@@ -138,23 +138,22 @@ const (
 
 // Lines of docs/architecture.md that the session rows cite.
 const (
-	specWindow          = "of the window of the session model, or of the window of the reading when the model reports none"
-	specFailedSummary   = "A failed summary appends nothing, and the turn starts on the full history."
-	specOpenStarts      = "The next owner thus runs the input that waited for a stopped summary"
-	specInterruptTable  = "| `Interrupt` | Stops the turn | Stops it and appends nothing | Stops nothing |"
-	specCompactBusy     = "| `Compact` | `session_busy` | `session_busy` | `session_busy` |"
-	specOverflowTwice   = "With no new input in the turn, a second overflow fails it"
-	specFailedRuns      = "After any other failed turn, the next queued input runs, as after a completed turn."
-	specExhaustedHolds  = "Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule"
-	specExhaustedQueue  = "queued inputs wait for the next input"
-	specGoalImpossible  = "`met` yields `achieved`, and `impossible` yields `failed`."
-	specGoalBusy        = "`SetGoal` while a turn runs, or with queued input, starts nothing. The next turn that ends is the first one evaluated."
-	specGoalClear       = "`ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends."
-	specGoalWithdraw    = "`SetGoal`, `ClearGoal`, each verdict, and each pause or failure withdraw the queued inputs with `source: goal`."
-	specGoalInterrupted = "An interrupt during an evaluation stops nothing."
-	specGoalRestart     = "An `active` goal on an idle session judges the last turn when the goal has not judged it"
-	specNarrow          = "and the allowed tools of the parent narrowed by the profile"
-	specAskRule         = "Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal."
+	specWindow         = "of the window of the session model, or of the window of the reading when the model reports none"
+	specFailedSummary  = "A failed summary appends nothing, and the turn starts on the full history."
+	specOpenStarts     = "The next owner thus runs the input that waited for a stopped summary"
+	specInterruptTable = "| `Interrupt` | Stops the turn, and ends an active goal | Stops it, and ends an active goal | Stops it, and ends an active goal |"
+	specCompactBusy    = "| `Compact` | `session_busy` | `session_busy` | `session_busy` |"
+	specOverflowTwice  = "With no new input in the turn, a second overflow fails it"
+	specFailedRuns     = "After any other failed turn, the next queued input runs, as after a completed turn."
+	specExhaustedHolds = "Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule"
+	specExhaustedQueue = "queued inputs wait for the next input"
+	specGoalImpossible = "`met` yields `achieved`, and `impossible` yields `failed`."
+	specGoalBusy       = "`SetGoal` while a turn runs, or with queued input, starts nothing. The next turn that ends is the first one evaluated."
+	specGoalClear      = "`ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends."
+	specGoalWithdraw   = "`SetGoal`, `ClearGoal`, each verdict, and each pause or failure withdraw the queued inputs with `source: goal`."
+	specGoalRestart    = "An `active` goal on an idle session judges the last turn when the goal has not judged it"
+	specNarrow         = "and the allowed tools of the parent narrowed by the profile"
+	specAskRule        = "Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal."
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -470,7 +469,10 @@ var runtimeRows = map[string]runtimeRow{
 	"goal_impossible_verdict_fails_the_goal":                                 reGolden(specView, specGoalImpossible, specGoalPrompt),
 	"goal_set_on_a_busy_session_judges_the_running_turn":                     reGolden(specView, specGoalBusy),
 	"goal_clear_and_input_during_a_goal_turn":                                reGolden(specView, specGoalClear, specGoalWithdraw),
-	"interrupt_during_goal_evaluation_keeps_the_goal":                        reGolden(specView, specErrors, specGoalInterrupted, specCompactBusy),
+	"interrupt_during_a_goal_turn_ends_the_goal":                             sameAsServe(),
+	"goal_set_after_an_interrupt_runs_normally":                              sameAsServe(),
+	"interrupt_during_a_goal_evaluation_ends_the_goal":                       sameAsServe(),
+	"interrupt_during_a_compaction_between_goal_turns_ends_the_goal":         sameAsServe(),
 	"goal_judges_the_last_turn_after_a_restart":                              reGolden(specView, specGoalRestart),
 	"claudecode_child_and_goal_sessions_ask_no_question":                     reGolden(specTaskInputs, specChildReport, specChildNoGoal, specAskRule),
 	"codex_ws_restart_warms_the_websocket_again":                             reGolden(specItems, specWarm),

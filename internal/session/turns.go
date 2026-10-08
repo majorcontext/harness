@@ -402,7 +402,7 @@ func (a *Actor) cancel(ctx context.Context, why error) error {
 
 func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error)) {
 	r := a.run
-	if r != nil && r.kind == kindJudge {
+	if r != nil && r.kind == kindJudge && !a.goalStopped(why) {
 		r = nil
 	}
 	switch {
@@ -411,9 +411,28 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	case r == nil || turnID != "" && turnID != r.id:
 		reply(struct{}{}, ErrTurnMismatch)
 	default:
+		if err := a.endGoal(why); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
 		r.cancel(why)
 		r.waiters = append(r.waiters, replyAppend(reply))
 	}
+}
+
+// goalStopped reports whether a stop for why ends an active goal.
+func (a *Actor) goalStopped(why error) bool {
+	g, _ := a.state.Goal()
+	return errors.Is(why, errStopTurn) && g.State == eventlog.GoalActive
+}
+
+// endGoal clears an active goal when a user stop ends the run of the actor,
+// and withdraws the queued goal inputs, so no goal turn starts after the stop.
+func (a *Actor) endGoal(why error) error {
+	if !a.goalStopped(why) {
+		return nil
+	}
+	return a.append(append(a.withdrawGoal(), eventlog.GoalChanged{State: eventlog.GoalCleared, Reason: goalInterrupted})...)
 }
 
 // Release hands the session off: it suspends the running turn at an item
