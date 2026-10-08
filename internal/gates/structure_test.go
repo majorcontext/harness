@@ -69,8 +69,8 @@ var structureCases = []struct {
 	{
 		name: "the_default_window_is_written_outside_the_backend_and_the_table",
 		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", "var w = 128000\nvar v = 128_000\nvar u = 128001"),
-			"internal/modelmeta/t.go":               goFile("", "var t = 128000"),
-			"internal/backend/modelapi/modelapi.go": goFile("", "const d = 128000\nfunc Capabilities() int { return 128000 }")},
+			"internal/modelmeta/context_windows_gen.go": goFile("", "var t = 128000"),
+			"internal/backend/modelapi/modelapi.go":     goFile("", "const d = 128000\nfunc Capabilities() int { return 128000 }")},
 		want: []string{"context_window_default:internal/backend/modelapi/modelapi.go", "context_window_default:x.go", "context_window_default:x.go"},
 	},
 	{
@@ -175,20 +175,26 @@ func TestWireClientRule(t *testing.T) {
 
 func TestProviderBranchRule(t *testing.T) {
 	files := fstest.MapFS{
-		"internal/turn/a.go": goFile("", "const fam = \"claude-code\"\nfunc Literal(p string) bool { return p == \"anthropic\" }\nfunc Const(p string) bool { return p != fam }\nfunc Switch(p string) {\n\tswitch p {\n\tcase \"codex\":\n\t}\n}\nfunc Other(p string) bool { return p == \"mistral\" || p == \"\" }\nfunc Same(a, b string) bool { return a == b }"),
-		"config/c.go":        goFile("", "func V(p string) bool { return p == \"openai\" }"),
-		"x.go":               goFile("", "func Listed(p string) bool { return p == \"codex\" }\nfunc Gone() {}"),
+		"internal/turn/a.go":              goFile("", "const fam = \"claude-code\"\nfunc Literal(p string) bool { return p == \"anthropic\" }\nfunc Const(p string) bool { return p != fam }\nfunc Switch(p string) {\n\tswitch p {\n\tcase \"codex\":\n\t}\n}\nfunc Other(p string) bool { return p == \"mistral\" || p == \"\" }\nfunc Same(a, b string) bool { return a == b }"),
+		"config/c.go":                     goFile("", "func V(p string) bool { return p == \"openai\" }"),
+		"internal/modelmeta/modelmeta.go": goFile("", "func ContextWindow(p string) int {\n\tswitch p {\n\tcase \"amazon-bedrock\":\n\t}\n\treturn 0\n}"),
+		"internal/turn/b.go":              goFile("import (\"slices\"; \"strings\")", "func InList(p string) bool { return slices.Contains([]string{\"codex\"}, p) }\nfunc Prefix(p string) bool { return strings.HasPrefix(p, \"claude-code/\") }\nfunc Bedrock(p string) bool { return p == \"amazon-bedrock\" }\nfunc Fields(a, b X) bool { return a.Family == b.Family }\nfunc Map() { _ = map[string]int{\"codex\": 1} }"),
+		"provider/openai/x.go":            goFile("", "const Family = \"openai\"\nconst CodexFamily = \"codex\""),
+		"provider/anthropic/x.go":         goFile("", "const Family = \"anthropic\""),
+		"internal/modelmeta/names.go":     goFile("", "const claudeCodeProvider = \"claude-code\""),
+		"internal/turn/c.go":              goFile("", "func Own(a, b X) bool { return a.Family == b.Family }"),
+		"x.go":                            goFile("", "func Listed(p string) bool { return p == \"codex\" }\nfunc Gone() {}"),
 	}
 	srcs, err := parseSources(files)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []string
-	for _, v := range checkProviderBranches(srcs, []string{"config/"}, map[string]string{"x.go#Listed": "d", "x.go#Gone": "d"}) {
+	for _, v := range checkProviderBranches(srcs, []string{"config/", "internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/names.go#"}, map[string]string{"x.go#Listed": "d", "x.go#Gone": "d"}) {
 		got = append(got, v.Path)
 	}
 	slices.Sort(got)
-	want := []string{"internal/turn/a.go#Const", "internal/turn/a.go#Literal", "internal/turn/a.go#Switch", "x.go#Gone"}
+	want := []string{"internal/turn/a.go#Const", "internal/turn/a.go#Literal", "internal/turn/a.go#Switch", "internal/turn/b.go#Bedrock", "internal/turn/b.go#InList", "internal/turn/b.go#Prefix", "x.go#Gone"}
 	if !slices.Equal(got, want) {
 		t.Errorf("violations = %v, want %v", got, want)
 	}
@@ -205,6 +211,7 @@ func TestDeletedReferenceRule(t *testing.T) {
 		"g.go":                  file("package p\n\n// the old provider/claudecode adapter\n"),
 		"h.go":                  file("package p\n\nimport _ \"github.com/majorcontext/harness/internal/message\"\n// internal/backend/claudecode and mcpserver-free\n"),
 		"owed.go":               file("package p\n\n// engine/mcp_search.go\n"),
+		"i.go":                  file("package p\n\n// see engine.streamTurn for the loop\n"),
 		"internal/gates/x.go":   file("package p\n\n// engine/goal.go\n"),
 		"testdata/ignored/x.go": file("package p\n\n// engine/goal.go\n"),
 	}
@@ -217,7 +224,7 @@ func TestDeletedReferenceRule(t *testing.T) {
 		got = append(got, v.Path)
 	}
 	slices.Sort(got)
-	want := []string{"a.go", "b.go", "c.go", "e.go", "f_test.go", "g.go", "gone.go"}
+	want := []string{"a.go", "b.go", "c.go", "e.go", "f_test.go", "g.go", "gone.go", "i.go"}
 	if !slices.Equal(got, want) {
 		t.Errorf("violations = %v, want %v", got, want)
 	}

@@ -25,6 +25,36 @@ var publicAllow = map[string]string{
 	"provider/openaicompat": "2026-10-08: see provider",
 }
 
+// providerOwners lists the places where a provider name is data: the functions
+// of config that validate the provider entries and map an entry with no type
+// by its key, the router functions that build a backend for each provider of
+// the registry, the tables of modelmeta, which are keyed by provider, and the
+// provider wires (spec: Four rules, 3; Model API backend; Contract source).
+var providerOwners = []string{
+	"config/load.go#validateAppendSystemPromptArgs",
+	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
+	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders",
+	"internal/backend/router.go#New", "internal/backend/router.go#client",
+	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models",
+	"internal/modelmeta/internal/genctx/main.go#",
+	"provider/",
+}
+
+// providerAllow lists the functions that branch on a provider name against
+// the spec, each with the dated reason. An entry that stops being a violation
+// fails, so the list shrinks to nothing.
+var providerAllow = map[string]string{
+	"modeltool.go#billing":            "2026-10-08: billing of the model tool still names the claude-code and codex families; the Problem table of the spec lists billing as a backend-by-name symptom",
+	"cmd/harness/runline.go#refuseOn": "2026-10-08: harness run still tests for the claude-code provider to refuse a command; the spec lists no such place",
+}
+
+// deletedRefAllow lists the files that still name a deleted path, each with
+// the dated reason. An entry that stops being a violation fails, so the list
+// shrinks to nothing.
+var deletedRefAllow = map[string]string{
+	"config/config.go": "2026-10-08: the cleanup of the config references removes these",
+}
+
 type source struct {
 	path    string
 	file    *ast.File
@@ -66,7 +96,7 @@ var nodeRules = []nodeRule{
 		name:   "context_window_default",
 		detail: "the default context window of 128000 tokens is written only by the model API backend and the modelmeta table (spec: Backend)",
 		match:  intLiteral(128000),
-		allow:  []string{"internal/modelmeta/", "internal/backend/modelapi/modelapi.go#", "internal/gates/structure.go#"},
+		allow:  []string{"internal/modelmeta/context_windows_gen.go#", "internal/backend/modelapi/modelapi.go#", "internal/gates/structure.go#"},
 	},
 	{
 		name:   "single_appender",

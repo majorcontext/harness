@@ -307,8 +307,8 @@ func (tr ToolResult) isEmpty() bool {
 // # A null/absent tool_result content wedges a session with no crash at
 // all
 //
-// This is a distinct root cause from the stop-reason orphan (see
-// engine.unexecutedToolCallStopReasonTextFmt's doc comment): a request can
+// This is a distinct root cause from the stop-reason orphan (the
+// synthetic result that fills a call left open): a request can
 // be internally balanced — every tool_use paired with a tool_result,
 // every pair adjacent — and still 400 with the identical "tool_use ids
 // were found without tool_result blocks immediately after" whenever one of

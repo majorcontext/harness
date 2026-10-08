@@ -14,32 +14,34 @@ import (
 
 // ProtocolCodes returns the value of each error code constant of the protocol
 // source: a constant of a const declaration whose name starts with "Code".
-func ProtocolCodes(src string) ([]string, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), "protocol.go", src, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
+func ProtocolCodes(srcs ...string) ([]string, error) {
 	var out []string
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+	for _, src := range srcs {
+		f, err := parser.ParseFile(token.NewFileSet(), "protocol.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
 		}
-		for _, spec := range gd.Specs {
-			vs := spec.(*ast.ValueSpec)
-			for i, name := range vs.Names {
-				if !strings.HasPrefix(name.Name, "Code") || i >= len(vs.Values) {
-					continue
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, name := range vs.Names {
+					if !strings.HasPrefix(name.Name, "Code") || i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						return nil, fmt.Errorf("%s is not a string literal", name.Name)
+					}
+					v, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, v)
 				}
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return nil, fmt.Errorf("%s is not a string literal", name.Name)
-				}
-				v, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					return nil, err
-				}
-				out = append(out, v)
 			}
 		}
 	}

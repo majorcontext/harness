@@ -10,7 +10,5 @@ Read the root AGENTS.md.
 - Keep provider-family matching explicit. Preserve dated variants and aliases.
 - An unknown model returns no window. Hold no default window here; the model API backend owns it.
 - Guess no capability from a model-name substring.
-- `SupportsToolSearch` uses an explicit first-party Anthropic allowlist.
-- Return false for other families and Bedrock-style Anthropic refs.
 - Keep Bifrost namespace stripping aligned with context-window lookup.
-- Pin refs, variants, near misses, unknown families, and tool-search refusals with an `e2e/` contract row. Add no test here unless `testdata/test-exceptions.txt` lists the file.
+- Pin refs, variants, near misses, and unknown families with an `e2e/` contract row. Add no test here unless `testdata/test-exceptions.txt` lists the file.

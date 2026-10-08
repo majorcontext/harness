@@ -14,18 +14,10 @@ import (
 // module root, a symbol of the engine package, provider/claudecode, the
 // module path of a package that moved under internal/, and harness-migrate.
 var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server)/\w|` +
-	`(?:^|[^\w/.-])engine\.[A-Z]|` +
+	`(?:^|[^\w/.-])engine\.[A-Za-z_]|` +
 	`\bprovider/claudecode\b|` +
 	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|plugin|skill|command|process|imageclamp|migrate)\b|` +
 	`\bharness-migrate\b`)
-
-// deletedRefAllow lists the files that still name a deleted path, each with
-// the dated reason. An entry that stops being a violation fails, so the list
-// shrinks to nothing.
-var deletedRefAllow = map[string]string{
-	"config/config.go":      "2026-10-08: the cleanup of the config references removes these",
-	"config/config_test.go": "2026-10-08: the cleanup of the config references removes these",
-}
 
 // CheckDeletedReferences fails each Go file, in code or in a comment, that
 // names a deleted package path (spec: Phase 6, Internal packages), except the

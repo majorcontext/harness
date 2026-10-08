@@ -220,8 +220,7 @@ type Event struct {
 	// adapter is a subscription lane that found the signal on this
 	// response (provider/openai's codex family reads it from x-codex-*
 	// response headers on the HTTP lane and from a codex.rate_limits frame
-	// on the websocket lane; see engine.streamTurn's EventDone case for
-	// where this rides onto Session.SubscriptionUsage).
+	// on the websocket lane).
 	SubscriptionUsage *message.SubscriptionUsage
 }
 

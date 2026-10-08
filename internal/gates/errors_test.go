@@ -3,6 +3,7 @@ package gates
 import (
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,15 +12,26 @@ import (
 )
 
 func TestErrorCodesAgreeAcrossTheirSources(t *testing.T) {
-	src, err := os.ReadFile("../../protocol/protocol.go")
+	files, err := filepath.Glob("../../protocol/*.go")
 	if err != nil {
 		t.Fatal(err)
+	}
+	var srcs []string
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srcs = append(srcs, string(b))
 	}
 	doc, err := os.ReadFile("../../protocol/openapi.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	constants, err := ProtocolCodes(string(src))
+	constants, err := ProtocolCodes(srcs...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +88,7 @@ func TestErrorCodeRule(t *testing.T) {
 }
 
 func TestProtocolCodesReadsTheCodeConstants(t *testing.T) {
-	got, err := ProtocolCodes("package p\n\nconst (\n\tCodeB = \"b\"\n\tCodeA = \"a\"\n\tOther = \"x\"\n)\n\nconst CodeC = \"c\"\n")
+	got, err := ProtocolCodes("package p\n\nconst (\n\tCodeB = \"b\"\n\tCodeA = \"a\"\n\tOther = \"x\"\n)\n", "package p\n\nconst CodeC = \"c\"\n")
 	if err != nil || strings.Join(got, ",") != "a,b,c" {
 		t.Errorf("ProtocolCodes = %v, %v", got, err)
 	}
