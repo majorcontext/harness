@@ -78,6 +78,9 @@ var config struct {
 	RecallBlobs bool   `json:"recall_blobs"`
 	Model       bool   `json:"model"`
 	ExtraTool   string `json:"extra_tool"`
+	// ShellEnv, as NAME=value, subscribes the plugin to shell.env and sets
+	// that variable for every shell command.
+	ShellEnv string `json:"shell_env"`
 	// Serve adds a system segment with the serve_url and run_token of initialize.
 	Serve bool `json:"serve"`
 }
@@ -152,12 +155,17 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		serveInfo.URL, serveInfo.Token = init.ServeURL, init.RunToken
 		rawConfig = init.Config
 		_ = json.Unmarshal(init.Config, &config)
+		m := maps.Clone(manifest)
 		if config.ExtraTool != "" {
-			m := maps.Clone(manifest)
 			m["tools"] = append(slices.Clone(manifest["tools"].([]toolSpec)), toolSpec{config.ExtraTool, "An extra tool.", json.RawMessage(objectSchema)})
-			return m, nil
 		}
-		return manifest, nil
+		if config.ShellEnv != "" {
+			m["hooks"] = append(slices.Clone(manifest["hooks"].([]string)), "shell.env")
+		}
+		return m, nil
+	case "hook/shell.env":
+		name, value, _ := strings.Cut(config.ShellEnv, "=")
+		return map[string]any{"env": map[string]string{name: value}}, nil
 	case "hook/system.transform":
 		return systemTransform(params), nil
 	case "hook/tool.execute.before":

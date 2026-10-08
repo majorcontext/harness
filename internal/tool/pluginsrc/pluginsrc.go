@@ -162,6 +162,11 @@ func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []s
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
 }
 
+// ShellEnv returns the variables that the shell.env hooks add to a bash command.
+func (s *Session) ShellEnv(ctx context.Context, command string) map[string]string {
+	return s.host.ShellEnv(ctx, &plugin.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.workDir})
+}
+
 // Untransformed returns s as a Source that runs no system.transform, for a
 // backend that reads no system prompt of the harness.
 func (s *Session) Untransformed() turn.Source { return untransformed{s} }

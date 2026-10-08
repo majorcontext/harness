@@ -228,6 +228,12 @@ func TestContractPluginHooks(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
+			name:    "plugin_shell_env_hook_sets_the_environment_of_a_bash_command",
+			config:  pluginConfig(t, map[string]any{"shell_env": "FIXTURE_ENV=from-plugin"}),
+			model:   toolChain(ftBash("echo $FIXTURE_ENV")),
+			actions: oneTurn,
+		},
+		{
 			name:   "plugin_event_and_after_hook_payloads",
 			config: cfg,
 			model: toolChain(

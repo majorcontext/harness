@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"time"
 )
 
@@ -37,18 +39,25 @@ func (d dir) bash() tool {
 			if err := json.Unmarshal(args, &in); err != nil || in.Command == "" {
 				return "", errors.New("bash: missing command argument")
 			}
-			return run(ctx, d.root, in.Command, bashTimeout)
+			var env map[string]string
+			if d.env != nil {
+				env = d.env(ctx, in.Command)
+			}
+			return run(ctx, d.root, in.Command, bashTimeout, env)
 		})
 }
 
 // run runs command in its own process group, so a timeout or an interrupt
 // kills each child that it put in the background.
-func run(ctx context.Context, workDir, command string, timeout time.Duration) (string, error) {
+func run(ctx context.Context, workDir, command string, timeout time.Duration, env map[string]string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "sh", "-c", command)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		cmd.Env = append(cmd.Env, k+"="+env[k])
+	}
 	processGroup(cmd)
 	cmd.WaitDelay = bashWaitDelay
 	w := newCapped(bashOutputCap)
