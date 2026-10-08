@@ -69,6 +69,21 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 	return commands, err
 }
 
+// A symlinked ancestor is allowed; the root itself is not.
+func statRoot(root string) (os.FileInfo, error) {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("command directory %q must not be a symlink", root)
+	}
+	return info, nil
+}
+
 type PromptError struct {
 	Name   string
 	Reason string
@@ -87,7 +102,7 @@ func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, 
 		if err != nil {
 			return nil, nil, err
 		}
-		info, err := os.Stat(root)
+		info, err := statRoot(root)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -96,13 +111,6 @@ func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, 
 		}
 		if !info.IsDir() {
 			return nil, nil, fmt.Errorf("command directory %q is not a directory", root)
-		}
-		canonical, err := filepath.EvalSymlinks(root)
-		if err != nil {
-			return nil, nil, err
-		}
-		if canonical != root {
-			return nil, nil, fmt.Errorf("command directory %q must not contain symlinks", root)
 		}
 		err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -200,15 +208,11 @@ func LookupPrompt(dirs []string, name string) (*PromptCommand, error) {
 		if err != nil {
 			return nil, err
 		}
-		canonical, err := filepath.EvalSymlinks(root)
-		if err != nil {
+		if _, err := statRoot(root); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, err
-		}
-		if canonical != root {
-			return nil, fmt.Errorf("command directory %q must not contain symlinks", root)
 		}
 		path := filepath.Join(root, file)
 		if _, err := validatePromptPath(root, path, name); err != nil {
