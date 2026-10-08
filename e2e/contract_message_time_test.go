@@ -15,16 +15,18 @@ type recordTimes struct {
 	items      map[string]time.Time
 	promoted   map[string]time.Time
 	compaction time.Time
+	resolved   map[string]time.Time
 }
 
 func timesOfRecords(t *testing.T, d *runtimeDriver, id string) recordTimes {
 	t.Helper()
-	out := recordTimes{turnInputs: map[string]time.Time{}, items: map[string]time.Time{}, promoted: map[string]time.Time{}}
+	out := recordTimes{turnInputs: map[string]time.Time{}, items: map[string]time.Time{}, promoted: map[string]time.Time{}, resolved: map[string]time.Time{}}
 	for _, ev := range d.events(t, id) {
 		var data struct {
-			ItemID   string   `json:"item_id"`
-			InputID  string   `json:"input_id"`
-			InputIDs []string `json:"input_ids"`
+			ItemID    string   `json:"item_id"`
+			InputID   string   `json:"input_id"`
+			InputIDs  []string `json:"input_ids"`
+			RequestID string   `json:"request_id"`
 		}
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatalf("decode %s: %v", ev.Kind, err)
@@ -38,6 +40,8 @@ func timesOfRecords(t *testing.T, d *runtimeDriver, id string) recordTimes {
 			out.items[data.ItemID] = ev.Time
 		case "input.promoted":
 			out.promoted[data.InputID] = ev.Time
+		case "request.resolved":
+			out.resolved[data.RequestID] = ev.Time
 		case "compaction.applied":
 			out.compaction = ev.Time
 		}
@@ -119,6 +123,33 @@ func TestContractMessageTime(t *testing.T) {
 			}
 			if got := page.Messages[0].CreatedAt; times.compaction.IsZero() || !got.Equal(times.compaction) {
 				t.Errorf("summary created_at = %v, want the compaction time %v", got, times.compaction)
+			}
+		})
+
+		t.Run("dismissal_message_created_at_is_the_time_of_the_request_resolved_record", func(t *testing.T) {
+			fake := harnesstest.New(t)
+			drv := claudeLane{mode: "question", ask: true}.newDriver(t, h, fake.URL()).(*claudeDriver)
+			d := drv.laneHost.(*runtimeDriver)
+			id := d.Create(t)
+			d.Submit(t, id, "pick a db")
+			d.WaitIdle(t, id)
+			if res := drv.resolveQuestion(t, id, "toolu_q", resolution{dismiss: true}); res.Status != http.StatusNoContent {
+				t.Fatalf("dismiss = %d %v", res.Status, res.Body)
+			}
+			times := timesOfRecords(t, d, id)
+			want := times.resolved["toolu_q"]
+			var found bool
+			for _, m := range provPage(t, d, id) {
+				if m.ID != "msg_resolved_toolu_q" {
+					continue
+				}
+				found = true
+				if want.IsZero() || !m.CreatedAt.Equal(want) {
+					t.Errorf("dismissal created_at = %v, want the request.resolved time %v", m.CreatedAt, want)
+				}
+			}
+			if !found {
+				t.Fatal("the page holds no dismissal message")
 			}
 		})
 	})
