@@ -35,19 +35,19 @@ type Config struct {
 	// exclusions remain: project instructions belong in AGENTS.md, and tool
 	// SHAPE (a schema, a description, when to call one server's tool) belongs
 	// to the tool itself — an MCP server states its own usage through
-	// initialize instructions, which the engine renders as its own system
-	// segment (engine/mcp_instructions.go). What is left for this key is the
-	// text no tool owns: what this environment is, and what the platform
-	// running it guarantees. The engine places entries after System and
-	// before its own generated segments. Claude Code receives one
-	// blank-line-joined --append-system-prompt value.
+	// initialize instructions, which internal/tool/mcpsrc renders as its own
+	// segment. What is left for this key is the text no tool owns: what this
+	// environment is, and what the platform running it guarantees.
+	// internal/prompt.Build places entries after the base prompt and before
+	// the AGENTS.md chain. Claude Code receives one blank-line-joined
+	// --append-system-prompt value.
 	//
 	// Every segment must be BYTE-STABLE for the life of a session. These
 	// entries sit at the front of the prompt-cache prefix, so a value that
 	// varies per turn or per process start (a timestamp, a pod name, a live
 	// status) re-processes the whole conversation uncached on every request,
-	// with no error to notice. Put anything that changes in the ambient
-	// status channel instead (engine/process.go's withPinnedAmbient).
+	// with no error to notice. Put anything that changes where a turn builds
+	// it instead, such as the process status line of internal/tool/proc.
 	//
 	// Merge is additive: base segments come first, then project segments.
 	// This rule differs from every other slice field. In box deployments, the
