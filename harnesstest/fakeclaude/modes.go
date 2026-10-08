@@ -113,7 +113,7 @@ var basicModes = map[string]mode{
 	"fast_no_drain":            frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"error":                    frames(failed(11, 3, "fake failure")),
 	"rate_limit_error":         frames(failed(6, 1, "rate_limit_error: please retry later")),
-	"credential_error":         frames(failed(6, 1, "credential resolution failed: no credential for provider anthropic")),
+	"credential_error":         frames(failed(6, 1, "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.")),
 }
 
 func hangAfterText(f *fake) {
