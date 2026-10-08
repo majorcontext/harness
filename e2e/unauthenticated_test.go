@@ -105,7 +105,7 @@ func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 // once it is healthy. The port can be taken between freeAddrOnHost and the
 // bind, and /health answers without a token, so a health answer does not show
 // that the started process owns the port. Ownership is the process logging
-// that it started. A serve that exits on a taken port starts again on a new
+// that it started; on Linux a taken port fails the bind. A serve that exits on a taken port starts again on a new
 // one.
 func startNonLoopbackServe(t *testing.T, env map[string]string, args ...string) (*lockedBuffer, string) {
 	t.Helper()

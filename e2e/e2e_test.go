@@ -136,7 +136,7 @@ func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc 
 
 // freeAddr returns a localhost address that was free a moment ago. The port
 // can be taken between closing the probe listener and the subprocess binding,
-// so a caller starts serve through startServeProc, which starts again on a new
+// so a caller that starts serve uses startServeProc, which starts again on a new
 // port when the bind fails.
 func freeAddr(t *testing.T) string {
 	t.Helper()
