@@ -56,6 +56,7 @@ func serveSyncConfig(t *testing.T, fake *harnesstest.Server, receiverURL string)
 
 func TestContractServeStopReportsHandoffAndSynced(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	receiver := newSyncReceiver(t, nil)
 	d := newServeDriverIn(t, serveSyncConfig(t, fake, receiver.srv.URL), nil, t.TempDir())
@@ -68,6 +69,7 @@ func TestContractServeStopReportsHandoffAndSynced(t *testing.T) {
 
 func TestContractServeStopWithoutSyncReportsUnsynced(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	runTurn(t, d, "go")
@@ -79,6 +81,7 @@ func TestContractServeStopWithoutSyncReportsUnsynced(t *testing.T) {
 
 func TestContractServeStopReportsCrashedWhenSyncDoesNotAcknowledge(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"), replyText("again"))
 	var down atomic.Bool
 	receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
@@ -104,6 +107,7 @@ func TestContractServeStopReportsCrashedWhenSyncDoesNotAcknowledge(t *testing.T)
 
 func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	rows := []struct {
 		name   string
 		status int
@@ -146,6 +150,7 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 
 func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	store := t.TempDir()
 	stale := filepath.Join(store, stopReportFile)

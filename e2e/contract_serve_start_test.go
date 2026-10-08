@@ -45,6 +45,7 @@ func awaitLog(t *testing.T, d *runtimeDriver, wants ...string) {
 
 func TestContractServeStartOpensOnlySessionsWithWork(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := runTurn(t, d, "go")
@@ -60,6 +61,7 @@ func TestContractServeStartOpensOnlySessionsWithWork(t *testing.T) {
 
 func TestContractServeStartSkipsALogThatDoesNotReplay(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := runTurn(t, d, "go")
@@ -84,6 +86,7 @@ func TestContractServeStartSkipsALogThatDoesNotReplay(t *testing.T) {
 
 func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := runTurn(t, d, "go")
@@ -113,6 +116,7 @@ func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
 
 func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	first := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	a, b := runTurn(t, first, "one"), runTurn(t, first, "two")
@@ -155,6 +159,7 @@ func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 
 func TestContractServeLogsItsStartAndEachCreate(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := d.Create(t)

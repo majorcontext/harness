@@ -80,6 +80,7 @@ func sessionID(t *testing.T, stderr string) string {
 
 func TestContractCLIRunSavesAndContinuesTheSession(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	out, errOut, code := h.run("run", "-p", "hi")
 	if code != 0 || out != "hello\n" {
@@ -115,6 +116,7 @@ func TestContractCLIRunSavesAndContinuesTheSession(t *testing.T) {
 
 func TestContractCLIRunNoSaveWritesNothing(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	out, errOut, code := h.run("run", "-no-save", "-p", "hi")
 	if code != 0 || out != "hello\n" || strings.Contains(errOut, "session:") {
@@ -130,6 +132,7 @@ func TestContractCLIRunNoSaveWritesNothing(t *testing.T) {
 
 func TestContractCLIRunJSONPrintsTheEvents(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	out, _, code := h.run("run", "-json", "-p", "hi")
 	if code != 0 {
@@ -154,6 +157,7 @@ func TestContractCLIRunJSONPrintsTheEvents(t *testing.T) {
 
 func TestContractCLIRunGoalExitCodes(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	met := newCLIHost(t, nil, agentStep("work", "done", true), evaluatorStep("judge", "MET: said done", true))
 	if _, errOut, code := met.run("run", "-goal", "say done"); code != 0 || !strings.Contains(errOut, "goal achieved in 1 turn(s)") {
 		t.Errorf("met goal = %d, want 0 and the verdict\n%s", code, errOut)
@@ -166,6 +170,7 @@ func TestContractCLIRunGoalExitCodes(t *testing.T) {
 
 func TestContractCLIRunTypedCommandPrintsNothingOnSuccess(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	_, errOut, _ := h.run("run", "-p", "hi")
 	id := sessionID(t, errOut)
@@ -180,6 +185,7 @@ func TestContractCLIRunTypedCommandPrintsNothingOnSuccess(t *testing.T) {
 
 func TestContractCLIRunJSONExitsOneWhenACommandFails(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	_, errOut, _ := h.run("run", "-p", "hi")
 	id := sessionID(t, errOut)
@@ -191,6 +197,7 @@ func TestContractCLIRunJSONExitsOneWhenACommandFails(t *testing.T) {
 
 func TestContractCLIRunRefusesALineBeforeItCreatesASession(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	rows := []struct {
 		name  string
 		extra map[string]any
@@ -235,6 +242,7 @@ func dirBytes(t *testing.T, dir string) map[string]string {
 
 func TestContractCLIRunRefusesAnUnknownLineOfAResumedSessionBeforeItOpens(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	_, errOut, _ := h.run("run", "-p", "hi")
 	id := sessionID(t, errOut)
@@ -252,6 +260,7 @@ func TestContractCLIRunRefusesAnUnknownLineOfAResumedSessionBeforeItOpens(t *tes
 
 func TestContractCLIRunFailedTurnExitsOne(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
 	if _, errOut, code := h.run("run", "-p", "hi"); code != 1 || !strings.Contains(errOut, "bad request body") {
 		t.Errorf("failed turn = %d, want 1 and the error\n%s", code, errOut)
@@ -260,6 +269,7 @@ func TestContractCLIRunFailedTurnExitsOne(t *testing.T) {
 
 func TestContractCLIRunJSONExitsOneWhenATurnFails(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
 	out, errOut, code := h.run("run", "-json", "-p", "hi")
 	if code != 1 || !strings.Contains(errOut, "bad request body") || !strings.Contains(out, `"k":"turn.ended"`) {
@@ -269,6 +279,7 @@ func TestContractCLIRunJSONExitsOneWhenATurnFails(t *testing.T) {
 
 func TestContractCLIRunGoalExitsOneWhenATurnFails(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
 	out, errOut, code := h.run("run", "-goal", "say done")
 	if code != 1 || !strings.Contains(errOut, "bad request body") || strings.Contains(errOut, "goal not achieved") {
@@ -278,6 +289,7 @@ func TestContractCLIRunGoalExitsOneWhenATurnFails(t *testing.T) {
 
 func TestContractCLIRunRetryBeforeAnyTextPrintsNoRestartNotice(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil,
 		harnesstest.Step{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
 		replyText("recovered"))
@@ -289,6 +301,7 @@ func TestContractCLIRunRetryBeforeAnyTextPrintsNoRestartNotice(t *testing.T) {
 
 func TestContractCLIRunRetryAfterStreamedTextPrintsTheRestartNotice(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{APIKey: codexAPIKey, Replies: map[string]harnesstest.CodexReply{"dropped": {Drop: true}}},
 		harnesstest.Step{Name: "dropped", Reply: codexText("partial")},
 		harnesstest.Step{Name: "retry", Reply: codexText("recovered")})
@@ -301,6 +314,7 @@ func TestContractCLIRunRetryAfterStreamedTextPrintsTheRestartNotice(t *testing.T
 
 func TestContractCLIRunPrintsTheOutputOfATaskChild(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
 	out, errOut, code := h.run("run", "-p", "delegate")
 	if code != 0 || !strings.Contains(out, "child says hello") || !strings.Contains(out, "waiting") {
@@ -350,6 +364,7 @@ func childScript(sendOn harnesstest.Matcher) []harnesstest.Step {
 
 func TestContractCLIRunPrintsEachOutputOfATaskChildOnceWhenTheParentSendsToItAfterItSettled(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, childScript(matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash")))...)
 	out, errOut, code := h.run("run", "-p", "delegate")
 	if first, second := strings.Count(out, "first child text"), strings.Count(out, "second child text"); code != 0 || first != 1 || second != 1 {
@@ -359,6 +374,7 @@ func TestContractCLIRunPrintsEachOutputOfATaskChildOnceWhenTheParentSendsToItAft
 
 func TestContractCLIRunResumedPrintsOnlyTheNewOutputOfATaskChild(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, childScript(userStarts("again"))...)
 	out, errOut, code := h.run("run", "-p", "delegate")
 	if code != 0 || strings.Count(out, "first child text") != 1 {
@@ -372,6 +388,7 @@ func TestContractCLIRunResumedPrintsOnlyTheNewOutputOfATaskChild(t *testing.T) {
 
 func TestContractCLIRunJSONPrintsTheEventsOfATaskChildWithTheirSession(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
 	out, errOut, code := h.run("run", "-json", "-p", "delegate")
 	if code != 0 {
@@ -398,6 +415,7 @@ func TestContractCLIRunJSONPrintsTheEventsOfATaskChildWithTheirSession(t *testin
 
 func TestContractCLISessionsOfAnEmptyDir(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil)
 	if out, _, code := h.run("sessions", "--json"); code != 0 || strings.TrimSpace(out) != "[]" {
 		t.Errorf("sessions --json of an empty dir = %d %q, want []", code, out)
@@ -406,6 +424,7 @@ func TestContractCLISessionsOfAnEmptyDir(t *testing.T) {
 
 func TestContractCLIPluginProbePrintsHooks(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	none := newCLIHost(t, nil)
 	if out, _, code := none.run("plugin", "probe"); code != 0 || strings.TrimSpace(out) != "no plugins configured" {
 		t.Errorf("plugin probe with none = %d %q", code, out)
@@ -419,6 +438,7 @@ func TestContractCLIPluginProbePrintsHooks(t *testing.T) {
 
 func TestContractCLIRunMaxTokensCapsEachModelResponse(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	out, errOut, code := h.run("run", "-max-tokens", "123", "-p", "hi")
 	if code != 0 || out != "hello\n" {
@@ -431,6 +451,7 @@ func TestContractCLIRunMaxTokensCapsEachModelResponse(t *testing.T) {
 
 func TestContractCLIRunNegativeMaxTokensReadsAsTheDefault(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, replyText("hello"))
 	out, errOut, code := h.run("run", "-max-tokens", "-1", "-p", "hi")
 	if code != 0 || out != "hello\n" {

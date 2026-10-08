@@ -466,6 +466,9 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 func runScenarios(t *testing.T, table []scenario) {
 	t.Helper()
 	skipShort(t)
+	if os.Getenv(runtimeEnv) == "" {
+		t.Parallel()
+	}
 	for _, h := range []host{serveHost, runtimeHost} {
 		onHost(t, h, table, func(sc scenario) (string, bool) { return sc.name, sc.driver != nil },
 			func(t *testing.T, sc scenario) observation { return runScenario(t, sc, h) })
@@ -537,6 +540,7 @@ func lineDiff(a, b string) string {
 
 func TestScenarioRunsTwiceIdentically(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	sc := scenario{
 		name:  "one_turn",
 		model: []harnesstest.Step{{Name: "reply", Reply: harnesstest.Reply{Text: "hello"}}},

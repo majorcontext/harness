@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,11 @@ var harnessBin string
 // flag.Parse here makes testing.Short() meaningful before m.Run.
 func TestMain(m *testing.M) {
 	flag.Parse()
+	if err := os.Setenv("OPENAI_API_KEY", ""); err != nil {
+		fmt.Fprintln(os.Stderr, "e2e:", err)
+		os.Exit(1)
+	}
+	setDefaultParallel(32)
 	if !testing.Short() {
 		finishCover, err := startCover()
 		if err != nil {
@@ -257,4 +263,12 @@ func writeGoalConfigWith(t *testing.T, baseURL string, extra map[string]any) str
 		t.Fatalf("write config: %v", err)
 	}
 	return path
+}
+
+func setDefaultParallel(n int) {
+	set := false
+	flag.Visit(func(f *flag.Flag) { set = set || f.Name == "test.parallel" })
+	if f := flag.Lookup("test.parallel"); f != nil && !set {
+		_ = f.Value.Set(strconv.Itoa(n))
+	}
 }

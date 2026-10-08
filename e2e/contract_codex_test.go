@@ -217,6 +217,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 }
 
 func TestContractCodex(t *testing.T) {
+	t.Parallel()
 	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexPluginRows(t)))
 }
 

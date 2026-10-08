@@ -107,6 +107,7 @@ func TestContractGaugeOfAStoppedSessionMatchesTheLiveGauge(t *testing.T) {
 
 func TestContractUnknownModelWarnsOncePerModel(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	fake := harnesstest.New(t, replyText("hi"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(map[string]any{"context_window_tokens": 0})), nil, t.TempDir())
 	for _, model := range []string{unknownModel, unknownModel, unknownModel + "-either"} {

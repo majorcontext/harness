@@ -39,6 +39,7 @@ func serveRequest(t *testing.T, p *serveProc, method, path, auth, origin string)
 
 func TestContractServeBearer(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	p := startServe(t, t.TempDir(), writeGoalConfig(t, "http://127.0.0.1:1"))
 	rows := []struct {
 		name, path, auth string
@@ -68,6 +69,7 @@ func TestContractServeBearer(t *testing.T) {
 
 func TestContractServeCORS(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	const origin = "https://console.example"
 	start := func(t *testing.T, args ...string) *serveProc {
 		return startServeProc(t, freeAddr, t.TempDir(), map[string]string{

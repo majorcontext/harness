@@ -365,6 +365,7 @@ func TestContractChildrenEnd(t *testing.T) {
 // the end walk made sends no report; any other stop still reports canceled.
 func TestContractRuntimeChildReportsAfterEnd(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	if os.Getenv(runtimeEnv) == "" {
 		return
 	}
