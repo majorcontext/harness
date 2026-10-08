@@ -69,14 +69,16 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 	return commands, err
 }
 
-// statRoot stats a command directory without following it. A symlinked
-// ancestor is allowed; the directory itself must not be a symlink.
+// A symlinked ancestor is allowed; the root itself is not.
 func statRoot(root string) (os.FileInfo, error) {
 	info, err := os.Lstat(root)
 	if err != nil {
 		return nil, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("command directory %q must not be a symlink", root)
 	}
 	return info, nil

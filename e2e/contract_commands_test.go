@@ -25,8 +25,7 @@ func typed(as, line string) []action {
 	return []action{command{as: as, text: line}, awaitCommands{as: as}}
 }
 
-// viaSymlinkedAncestor is the driver of a scenario whose work dir is reached
-// through a symlink to its parent.
+// viaSymlinkedAncestor opens a work dir reached through a symlinked ancestor.
 func viaSymlinkedAncestor(t *testing.T, h host, modelURL string) driver {
 	t.Helper()
 	real := filepath.Join(resolved(t.TempDir()), "real")
@@ -38,7 +37,12 @@ func viaSymlinkedAncestor(t *testing.T, h host, modelURL string) driver {
 		t.Fatal(err)
 	}
 	cfg := writeGoalConfigWith(t, modelURL, scenarioConfig(nil))
-	return h.openIn(t, cfg, filepath.Join(link, "work"), nil)
+	work := filepath.Join(link, "work")
+	var env map[string]string
+	if !h.runtime {
+		env = map[string]string{"PWD": work}
+	}
+	return h.openIn(t, cfg, work, env)
 }
 
 func TestContractCommands(t *testing.T) {
