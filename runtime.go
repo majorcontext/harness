@@ -582,7 +582,8 @@ func (r *Runtime) startPlugins(ctx context.Context, refresh bool) error {
 // ProbePlugins probes each configured plugin, as the first Create or Open
 // does, and stores the manifests in the plugin cache. It returns each plugin
 // with its tools and hooks. It fails as that Create or Open fails. It returns
-// nil with no plugin.
+// nil with no plugin. It refreshes the cache only before the first Create or
+// Open of the runtime; after that it returns the started plugins unchanged.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error) {
 	if err := r.startPlugins(ctx, true); err != nil {
 		return nil, err
