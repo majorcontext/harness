@@ -480,7 +480,8 @@ func (s *MCPServer) hold(ctx context.Context, params json.RawMessage) bool {
 	}
 }
 
-// Calls returns every tools/call and resources/read received, in order.
+// Calls returns every tools/call and resources/read served, in order. A gated
+// call counts when its release lets it run, so release order is the order here.
 func (s *MCPServer) Calls() []MCPCall {
 	s.h.mu.Lock()
 	defer s.h.mu.Unlock()

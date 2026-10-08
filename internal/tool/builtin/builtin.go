@@ -86,10 +86,18 @@ func (d dir) pathKey(args json.RawMessage) string {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		return "path:" + real
 	}
-	if parent, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		return "path:" + filepath.Join(parent, filepath.Base(abs))
+	rest := ""
+	for p := abs; ; {
+		parent := filepath.Dir(p)
+		rest = filepath.Join(filepath.Base(p), rest)
+		if parent == p {
+			return "path:" + abs
+		}
+		if real, err := filepath.EvalSymlinks(parent); err == nil {
+			return "path:" + filepath.Join(real, rest)
+		}
+		p = parent
 	}
-	return "path:" + abs
 }
 
 func (t tool) Spec() protocol.ToolSpec { return t.spec }

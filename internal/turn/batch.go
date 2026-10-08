@@ -2,7 +2,6 @@ package turn
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/majorcontext/harness/protocol"
@@ -143,7 +142,7 @@ func (b *batch) exec(i int) {
 	}
 	defer func() {
 		if p := recover(); p != nil {
-			b.outs[i] = outcome{protocol.ToolResult{Text: fmt.Sprintf("%s: %v", toolPanicked, p), IsError: true}, true}
+			b.outs[i] = outcome{protocol.ToolResult{Text: toolPanicked, IsError: true}, true}
 		}
 	}()
 	b.outs[i] = outcome{b.run(b.ctx, b.calls[i]), true}

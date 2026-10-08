@@ -182,6 +182,10 @@ type Sync interface {
 // ApplySync appends b to st by the receiver rules of a Sync (see Events).
 func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error)
 
+// The calls of one model response run at the same time, so Run allows concurrent
+// calls. A Tool may also have `Alone()` (the call runs with no other call in
+// flight) or `Key(protocol.ToolCall) string` (calls with the same non-empty key
+// run one at a time, in call order).
 type Tool interface {
 	Spec() protocol.ToolSpec
 	// Run receives call.ID, stable across a resumed turn, for idempotent effects.
