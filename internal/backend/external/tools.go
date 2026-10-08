@@ -3,10 +3,12 @@ package external
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/majorcontext/harness/internal/mcp"
@@ -63,7 +65,7 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 					<-t.closed
 					return mcp.CallToolResult{}, context.Cause(ctx)
 				}
-				return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: res.Text}}, IsError: res.IsError}, nil
+				return mcp.CallToolResult{Content: content(res), IsError: res.IsError}, nil
 			})
 	}
 	path := "/" + rand.Text()
@@ -75,6 +77,28 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 		_ = t.srv.Serve(ln)
 	}()
 	return t, nil
+}
+
+// content is the MCP content of a tool result: the text, then each blob as
+// image, audio or embedded resource content.
+func content(res protocol.ToolResult) []mcp.Content {
+	var out []mcp.Content
+	if res.Text != "" || len(res.Blobs) == 0 {
+		out = append(out, mcp.Content{Type: mcp.ContentTypeText, Text: res.Text})
+	}
+	for _, b := range res.Blobs {
+		data := base64.StdEncoding.EncodeToString(b.Data)
+		switch {
+		case strings.HasPrefix(b.MediaType, "image/"):
+			out = append(out, mcp.Content{Type: mcp.ContentTypeImage, Data: data, MimeType: b.MediaType})
+		case strings.HasPrefix(b.MediaType, "audio/"):
+			out = append(out, mcp.Content{Type: mcp.ContentTypeAudio, Data: data, MimeType: b.MediaType})
+		default:
+			out = append(out, mcp.Content{Type: mcp.ContentTypeResource,
+				Resource: &mcp.EmbeddedResource{URI: "blob:" + b.MediaType, MimeType: b.MediaType, Blob: data}})
+		}
+	}
+	return out
 }
 
 // run runs c unless ctx ended first.
