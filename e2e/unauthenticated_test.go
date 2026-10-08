@@ -54,24 +54,11 @@ func TestServeNonLoopbackNoTokenFailsClosed(t *testing.T) {
 // -unauthenticated flag.
 func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) {
 	skipShort(t)
-	addr := freeAddrOnHost(t, "0.0.0.0")
-	cmd := exec.Command(harnessBin, "serve", "-addr", addr, "-unauthenticated")
-	cmd.Dir = t.TempDir()
-	cmd.Env = cleanEnv(map[string]string{
+	stderr, dialAddr := startNonLoopbackServe(t, map[string]string{
 		"HARNESS_SESSION_DIR": t.TempDir(),
 		"HARNESS_CONFIG":      writeGoalConfig(t, "http://127.0.0.1:1"),
 		"ANTHROPIC_API_KEY":   "e2e-dummy-key",
-	})
-	stderr := &lockedBuffer{}
-	cmd.Stderr = stderr
-	startGroup(t, cmd)
-
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatalf("splitting %q: %v", addr, err)
-	}
-	dialAddr := "127.0.0.1:" + port
-	waitHealthyAt(t, dialAddr, stderr)
+	}, "-unauthenticated")
 
 	// A real API call with NO Authorization header must succeed — proof
 	// this is actually running unauthenticated, not merely that /health
@@ -96,25 +83,12 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 // flag) opts in exactly the same way, against the real binary.
 func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 	skipShort(t)
-	addr := freeAddrOnHost(t, "0.0.0.0")
-	cmd := exec.Command(harnessBin, "serve", "-addr", addr)
-	cmd.Dir = t.TempDir()
-	cmd.Env = cleanEnv(map[string]string{
+	_, dialAddr := startNonLoopbackServe(t, map[string]string{
 		"HARNESS_SESSION_DIR":     t.TempDir(),
 		"HARNESS_CONFIG":          writeGoalConfig(t, "http://127.0.0.1:1"),
 		"HARNESS_UNAUTHENTICATED": "1",
 		"ANTHROPIC_API_KEY":       "e2e-dummy-key",
 	})
-	stderr := &lockedBuffer{}
-	cmd.Stderr = stderr
-	startGroup(t, cmd)
-
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatalf("splitting %q: %v", addr, err)
-	}
-	dialAddr := "127.0.0.1:" + port
-	waitHealthyAt(t, dialAddr, stderr)
 
 	resp, err := http.Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
 	if err != nil {
@@ -124,6 +98,50 @@ func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("POST /sessions with no Authorization header = %d, want 201 (unauthenticated)", resp.StatusCode)
 	}
+}
+
+// startNonLoopbackServe starts `harness serve` on a free 0.0.0.0 port with no
+// run token and returns its stderr and the loopback address that reaches it
+// once it is healthy. The port can be taken between freeAddrOnHost and the
+// bind, and /health answers without a token, so a health answer does not show
+// that the started process owns the port. Ownership is the process logging
+// that it started; on Linux a taken port fails the bind. A serve that exits on a taken port starts again on a new
+// one.
+func startNonLoopbackServe(t *testing.T, env map[string]string, args ...string) (*lockedBuffer, string) {
+	t.Helper()
+	var last *lockedBuffer
+	for range serveStartAttempts {
+		addr := freeAddrOnHost(t, "0.0.0.0")
+		cmd := exec.Command(harnessBin, append([]string{"serve", "-addr", addr}, args...)...)
+		cmd.Dir = t.TempDir()
+		cmd.Env = cleanEnv(env)
+		stderr := &lockedBuffer{}
+		cmd.Stderr = stderr
+		g := startGroup(t, cmd)
+		// Real cross-process startup: poll on a short interval bounded by a
+		// deadline (synctest N/A).
+		if !testpoll.UntilNoT(10*time.Second, func() bool {
+			return !g.alive() || strings.Contains(stderr.String(), `"serve start"`)
+		}, 15*time.Millisecond) {
+			t.Fatalf("serve neither started nor exited on %s\nstderr:\n%s", addr, stderr.String())
+		}
+		if !g.alive() {
+			if !strings.Contains(stderr.String(), "address already in use") {
+				t.Fatalf("serve exited before it started on %s\nstderr:\n%s", addr, stderr.String())
+			}
+			last = stderr
+			continue
+		}
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			t.Fatalf("splitting %q: %v", addr, err)
+		}
+		dialAddr := "127.0.0.1:" + port
+		waitHealthyAt(t, dialAddr, stderr)
+		return stderr, dialAddr
+	}
+	t.Fatalf("serve never bound a free port in %d attempts\nstderr:\n%s", serveStartAttempts, last.String())
+	return nil, ""
 }
 
 // freeAddrOnHost returns a host:port address on the given host that was free
