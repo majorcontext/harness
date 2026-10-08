@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
@@ -112,5 +114,45 @@ func TestEventsLiveFrames(t *testing.T) {
 			t.Fatalf("a stalled reader got all %d frames, want deltas dropped", live)
 		}
 		closeRuntime(t, r)
+	})
+}
+
+type windowed struct{ *scripted }
+
+func (windowed) Capabilities(string) turn.Capabilities { return turn.Capabilities{ContextWindow: 1000} }
+
+func compactingRuntime(t *testing.T, summary func(turn.Sink) error) *harness.Session {
+	t.Helper()
+	full := func(out turn.Sink) error {
+		out.Telemetry(turn.Telemetry{Context: eventlog.ContextMeasured{Tokens: 900, Window: 1000, Source: "test"}})
+		return out.Item(say("full"))
+	}
+	reply := func(out turn.Sink) error { return out.Item(say("ok")) }
+	b := windowed{&scripted{steps: []func(turn.Sink) error{reply, full, summary, reply}}}
+	r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Config: config.Config{CompactionKeepTurns: 1}}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := create(t, r)
+	converse(t, s, "one", "two")
+	t.Cleanup(func() { closeRuntime(t, r) })
+	return s
+}
+
+func TestEventsAutoCompactionFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := compactingRuntime(t, func(out turn.Sink) error { return out.Item(say("gist")) })
+		head := s.View().HeadSeq
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "13 compaction.applied", "~13 status idle",
+			"14 turn.started", "15 item.completed i1", "16 turn.ended")
+	})
+}
+
+func TestEventsFailedCompactionFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := compactingRuntime(t, func(turn.Sink) error { return errors.New("summary failed") })
+		head := s.View().HeadSeq
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "~12 status compaction_failed",
+			"13 turn.started", "14 item.completed i1", "15 turn.ended")
 	})
 }
