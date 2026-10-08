@@ -98,8 +98,10 @@ var codexModels = []string{"gpt-6-astra", "gpt-6-luna", "gpt-6-sol"}
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves.
 var claudeCodeModels = []string{"fable", "haiku", "opus", "sonnet"}
 
-// Models returns, sorted, the models that a provider serves and that
-// ContextWindow knows. It returns nil for a provider with no curated list.
+// Models returns, sorted, the models that a provider serves. The codex models
+// are ones that ContextWindow knows. The claude-code aliases are names that the
+// CLI resolves, and the backend owns their window. It returns nil for a
+// provider with no curated list.
 func Models(provider string) []string {
 	switch provider {
 	case codexProvider:

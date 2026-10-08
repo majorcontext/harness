@@ -53,6 +53,21 @@ func TestContractContextWindowOfAModel(t *testing.T) {
 				t.Errorf("context = %+v, want window %d not estimated", v.Context, want)
 			}
 		})
+		t.Run("a model API provider keyed claude-code has no table window and runs on the default, marked estimated", func(t *testing.T) {
+			fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "hi"}, Repeat: true})
+			cfg := scenarioConfig(map[string]any{
+				"context_window_tokens": 0,
+				"providers": map[string]any{
+					"anthropic":   map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": fake.URL()},
+					"claude-code": map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": fake.URL()},
+				},
+			})
+			d := h.openIn(t, writeGoalConfigWith(t, fake.URL(), cfg), t.TempDir(), nil).(*runtimeDriver)
+			v := turnOn(t, d, "claude-code/sonnet", "hello")
+			if v.Context.Window != 128000 || !v.Context.WindowEstimated {
+				t.Errorf("context = %+v, want window 128000 estimated", v.Context)
+			}
+		})
 		t.Run("a configured window beats the table", func(t *testing.T) {
 			d, _ := startOn(t, h, t.TempDir(), map[string]any{"context_window_tokens": 1000}, replyText("hi"))
 			v := turnOn(t, d, "anthropic/claude-opus-5", "hello")

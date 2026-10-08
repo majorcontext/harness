@@ -278,10 +278,13 @@ func TestBedrockTableKeysAreNormalized(t *testing.T) {
 	}
 }
 
-func TestModelsAreKnownToContextWindow(t *testing.T) {
+func TestClaudeCodeModelsAreListed(t *testing.T) {
 	if len(Models("claude-code")) == 0 {
 		t.Error(`Models("claude-code") is empty`)
 	}
+}
+
+func TestCodexModelsAreKnownToContextWindow(t *testing.T) {
 	models := Models("codex")
 	if len(models) == 0 {
 		t.Error(`Models("codex") is empty`)
