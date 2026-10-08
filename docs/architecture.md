@@ -146,7 +146,7 @@ func (r *Runtime) Close(ctx context.Context) error
 func (r *Runtime) CatchUp(ctx context.Context) error
 // SyncStopped reports whether a Sync rejected a batch for good since New. Sync may then lack records of a session that the runtime ran.
 func (r *Runtime) SyncStopped() bool
-// ProbePlugins reads the manifest of each configured plugin, as the first Create or Open does, and returns each plugin with its tools and hooks.
+// ProbePlugins probes each configured plugin, refreshes the manifest cache only before the first Create or Open, and returns each plugin with its tools and hooks.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
