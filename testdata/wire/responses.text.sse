@@ -1,0 +1,231 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_FIXTURE1","object":"response","created_at":1791475477,"status":"in_progress","access_programs":null,"background":false,"completed_at":null,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":600,"max_tool_calls":null,"model":"gpt-5-nano-2025-08-07","moderation":null,"output":[],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"in_memory","reasoning":{"context":"current_turn","effort":"low","mode":"standard","summary":"detailed"},"safety_identifier":null,"service_tier":"auto","store":false,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":1.0,"truncation":"disabled","usage":null,"user":null,"metadata":{}},"sequence_number":0}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_FIXTURE1","object":"response","created_at":1791475477,"status":"in_progress","access_programs":null,"background":false,"completed_at":null,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":600,"max_tool_calls":null,"model":"gpt-5-nano-2025-08-07","moderation":null,"output":[],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"in_memory","reasoning":{"context":"current_turn","effort":"low","mode":"standard","summary":"detailed"},"safety_identifier":null,"service_tier":"auto","store":false,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":1.0,"truncation":"disabled","usage":null,"user":null,"metadata":{}},"sequence_number":1}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"rs_FIXTURE1","type":"reasoning","content":[],"encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_1","summary":[]},"output_index":0,"sequence_number":2}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"rs_FIXTURE1","output_index":0,"part":{"type":"summary_text","text":""},"sequence_number":3,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"**Calculating a multiplication**\n\nI","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_1","output_index":0,"sequence_number":4,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" need","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_2","output_index":0,"sequence_number":5,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" to","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_3","output_index":0,"sequence_number":6,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" provide","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_4","output_index":0,"sequence_number":7,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" a","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_5","output_index":0,"sequence_number":8,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" straight","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_6","output_index":0,"sequence_number":9,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" answer","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_7","output_index":0,"sequence_number":10,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":":","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_8","output_index":0,"sequence_number":11,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 17","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_9","output_index":0,"sequence_number":12,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" times","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_10","output_index":0,"sequence_number":13,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 23","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_11","output_index":0,"sequence_number":14,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" equals","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_12","output_index":0,"sequence_number":15,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 391","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_13","output_index":0,"sequence_number":16,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":".","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_14","output_index":0,"sequence_number":17,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" It","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_15","output_index":0,"sequence_number":18,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"’s","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_16","output_index":0,"sequence_number":19,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" simple","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_17","output_index":0,"sequence_number":20,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":",","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_18","output_index":0,"sequence_number":21,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" just","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_19","output_index":0,"sequence_number":22,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" one","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_20","output_index":0,"sequence_number":23,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" sentence","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_21","output_index":0,"sequence_number":24,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" is","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_22","output_index":0,"sequence_number":25,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" enough","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_23","output_index":0,"sequence_number":26,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" for","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_24","output_index":0,"sequence_number":27,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" this","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_25","output_index":0,"sequence_number":28,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":".","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_26","output_index":0,"sequence_number":29,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" I'll","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_27","output_index":0,"sequence_number":30,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" say","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_28","output_index":0,"sequence_number":31,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":",","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_29","output_index":0,"sequence_number":32,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" \"","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_30","output_index":0,"sequence_number":33,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"17","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_31","output_index":0,"sequence_number":34,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" times","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_32","output_index":0,"sequence_number":35,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 23","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_33","output_index":0,"sequence_number":36,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" is","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_34","output_index":0,"sequence_number":37,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 391","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_35","output_index":0,"sequence_number":38,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":".\"","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_36","output_index":0,"sequence_number":39,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" There's","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_37","output_index":0,"sequence_number":40,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" really","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_38","output_index":0,"sequence_number":41,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" no","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_39","output_index":0,"sequence_number":42,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" need","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_40","output_index":0,"sequence_number":43,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" to","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_41","output_index":0,"sequence_number":44,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" elaborate","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_42","output_index":0,"sequence_number":45,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" further","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_43","output_index":0,"sequence_number":46,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" since","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_44","output_index":0,"sequence_number":47,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" it's","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_45","output_index":0,"sequence_number":48,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" a","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_46","output_index":0,"sequence_number":49,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" straightforward","item_id":"rs_FIXTURE1","obfuscation":"","output_index":0,"sequence_number":50,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" calculation","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_47","output_index":0,"sequence_number":51,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":".","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_48","output_index":0,"sequence_number":52,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" Let's","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_49","output_index":0,"sequence_number":53,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" keep","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_50","output_index":0,"sequence_number":54,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" it","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_51","output_index":0,"sequence_number":55,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" clear","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_52","output_index":0,"sequence_number":56,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" and","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_53","output_index":0,"sequence_number":57,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" concise","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_54","output_index":0,"sequence_number":58,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"!","item_id":"rs_FIXTURE1","obfuscation":"OBFUSCATION_FIXTURE_55","output_index":0,"sequence_number":59,"summary_index":0}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_FIXTURE1","output_index":0,"sequence_number":60,"summary_index":0,"text":"**Calculating a multiplication**\n\nI need to provide a straight answer: 17 times 23 equals 391. It’s simple, just one sentence is enough for this. I'll say, \"17 times 23 is 391.\" There's really no need to elaborate further since it's a straightforward calculation. Let's keep it clear and concise!"}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","item_id":"rs_FIXTURE1","output_index":0,"part":{"type":"summary_text","text":"**Calculating a multiplication**\n\nI need to provide a straight answer: 17 times 23 equals 391. It’s simple, just one sentence is enough for this. I'll say, \"17 times 23 is 391.\" There's really no need to elaborate further since it's a straightforward calculation. Let's keep it clear and concise!"},"sequence_number":61,"summary_index":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"rs_FIXTURE1","type":"reasoning","content":[],"encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_2","summary":[{"type":"summary_text","text":"**Calculating a multiplication**\n\nI need to provide a straight answer: 17 times 23 equals 391. It’s simple, just one sentence is enough for this. I'll say, \"17 times 23 is 391.\" There's really no need to elaborate further since it's a straightforward calculation. Let's keep it clear and concise!"}]},"output_index":0,"sequence_number":62}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"msg_FIXTURE1","type":"message","status":"in_progress","content":[],"role":"assistant"},"output_index":1,"sequence_number":63}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","content_index":0,"item_id":"msg_FIXTURE1","output_index":1,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":""},"sequence_number":64}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":"17","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_56","output_index":1,"sequence_number":65}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":" times","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_57","output_index":1,"sequence_number":66}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":" ","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_58","output_index":1,"sequence_number":67}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":"23","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_59","output_index":1,"sequence_number":68}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":" is","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_60","output_index":1,"sequence_number":69}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":" ","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_61","output_index":1,"sequence_number":70}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":"391","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_62","output_index":1,"sequence_number":71}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":".","item_id":"msg_FIXTURE1","logprobs":[],"obfuscation":"OBFUSCATION_FIXTURE_63","output_index":1,"sequence_number":72}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","content_index":0,"item_id":"msg_FIXTURE1","logprobs":[],"output_index":1,"sequence_number":73,"text":"17 times 23 is 391."}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","content_index":0,"item_id":"msg_FIXTURE1","output_index":1,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"17 times 23 is 391."},"sequence_number":74}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"msg_FIXTURE1","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"17 times 23 is 391."}],"role":"assistant"},"output_index":1,"sequence_number":75}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_FIXTURE1","object":"response","created_at":1791475477,"status":"completed","access_programs":null,"background":false,"completed_at":1791475489,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":600,"max_tool_calls":null,"model":"gpt-5-nano-2025-08-07","moderation":null,"output":[{"id":"rs_FIXTURE1","type":"reasoning","content":[],"encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_3","summary":[{"type":"summary_text","text":"**Calculating a multiplication**\n\nI need to provide a straight answer: 17 times 23 equals 391. It’s simple, just one sentence is enough for this. I'll say, \"17 times 23 is 391.\" There's really no need to elaborate further since it's a straightforward calculation. Let's keep it clear and concise!"}]},{"id":"msg_FIXTURE1","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"17 times 23 is 391."}],"role":"assistant"}],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"in_memory","reasoning":{"context":"current_turn","effort":"low","mode":"standard","summary":"detailed"},"safety_identifier":null,"service_tier":"default","store":false,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":20,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":61,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":81},"user":null,"metadata":{}},"sequence_number":76}
+

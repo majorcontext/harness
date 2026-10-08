@@ -32,7 +32,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -146,7 +149,24 @@ func exitWithParent() {
 	os.Exit(1)
 }
 
+func listModes() {
+	names := map[string]bool{}
+	for name := range modes {
+		names[name] = true
+	}
+	for name := range preInitModes {
+		names[name] = true
+	}
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		fmt.Println(name)
+	}
+}
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--list-modes" {
+		listModes()
+		return
+	}
 	spawn := spawnNumber()
 	mode := modeOfSpawn(spawn)
 	if mode == "fast_no_drain" {

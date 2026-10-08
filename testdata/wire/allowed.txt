@@ -1,0 +1,25 @@
+# Reviewed exceptions to the wire gate. Each line: role wire kind path reason.
+# role is fake (the fake emits what the recording lacks) or parser (the parser
+# reads what the recording lacks). A path ending in + covers every path that
+# starts with the text before it. A path of * covers the whole kind. The gate
+# fails on a line that no check needs.
+parser responses response.failed|error * the Responses failed frame comes mid-stream, and no request provokes one on demand
+parser claudecode * local_command the CLI prints a local command only for a slash command that runs in the terminal; headless runs refuse them
+parser claudecode * compact_metadata+ the CLI compacts only after a long conversation, and headless /compact is refused
+parser claudecode * request+ the CLI asks for a permission only through the stdio permission prompt of a question flow
+parser claudecode * rate_limit_info.overageResetsAt the CLI sends it only while overage is active
+parser anthropic content_block_start content_block.data only a redacted thinking block carries data, and no request provokes one
+parser chat chunk error+ OpenAI-compatible gateways such as OpenRouter send a mid-stream error object; OpenAI itself does not
+parser chat chunk choices[].delta.reasoning+ gateways send reasoning in reasoning, reasoning_content, or reasoning_details; OpenAI chat completions has none
+fake chat chunk choices[].delta.reasoning_content a gateway such as Bifrost sends reasoning_content; OpenAI chat completions has no reasoning field
+fake claudecode assistant:text parent_tool_use_id the CLI sets it inside a subagent; the harness disallows the Agent tool, so no cheap recording holds one
+fake claudecode assistant:tool_use parent_tool_use_id the CLI sets it inside a subagent; the harness disallows the Agent tool, so no cheap recording holds one
+fake claudecode user:tool_result parent_tool_use_id the CLI sets it inside a subagent; the harness disallows the Agent tool, so no cheap recording holds one
+fake claudecode rate_limit_event rate_limit_info.overageResetsAt the CLI sends it only while overage is active
+fake claudecode result/success local_command the CLI prints a local command only for a slash command that runs in the terminal; headless runs refuse them
+fake claudecode system/compact_boundary * compaction follows a long conversation, and the headless CLI refuses /compact
+fake claudecode system/status * compaction follows a long conversation, and the headless CLI refuses /compact
+fake claudecode user:string * the compaction summary is a user frame with text content; headless runs refuse /compact
+fake claudecode system/hook_started * the recording runs without hooks; a configured hook prints this frame
+fake claudecode system/task_notification * a background task prints this frame, and the recording starts none
+fake claudecode result/error_during_execution result the CLI reports the failure of an interrupted or failed turn in errors and sends no result text
