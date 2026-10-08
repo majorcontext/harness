@@ -43,8 +43,7 @@ const (
 	specHandoffResume = "A suspended turn has no open tool call, so the next owner resumes it automatically."
 	specQueue         = "(queue: next turn; steer: next item boundary)"
 	specMCPText       = "By design, an error has no `engine:` prefix, a call to a tool that is not there reads `no such tool available`, binary content becomes text"
-	specMCPNoStatus   = "There is no `status` action, no MCP status segment, and no background retry."
-	specMCPStatus     = "Switch oracle: the `mcp_*` rows except `mcp_status_*`."
+	specMCPNotice     = "The notice is part of the system prompt where the engine pinned it as a message"
 	specGoalDeferred  = "The deferred and parked rows are deleted."
 	specCursor        = "One per-session `seq` serves paging and SSE resume."
 	specEventsRoute   = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
@@ -172,7 +171,7 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
-	"mcp_connect_adds_tools_but_not_instructions":                          reGolden(specMCPNoStatus),
+	"mcp_connect_adds_tools_but_not_instructions":                          reGolden(specMCPNotice),
 	"skills_listed_sorted_and_read_through_read_file":                      reGolden(specNoBatching, specBlankJoin),
 	"skills_dirs_config_replaces_the_default_dir":                          reGolden(specNoBatching, specBlankJoin),
 	"skills_from_several_dirs_are_listed_sorted_by_name":                   reGolden(specNoBatching, specBlankJoin),
@@ -198,9 +197,9 @@ var runtimeRows = map[string]runtimeRow{
 	"bash_output_and_exit_status":                                          sameAsServe(),
 	"read_file_returns_an_image":                                           reGolden(specImageLine),
 	"write_guard_belongs_to_one_session":                                   sameAsServe(),
-	"mcp_tool_action_refusals":                                             reGolden(specMCPNoStatus, specMCPText),
+	"mcp_tool_action_refusals":                                             reGolden(specMCPNotice, specMCPText),
 	"mcp_refused_call_hides_the_response_body":                             reGolden(specMCPNoLeak, specMCPText),
-	"mcp_select_of_a_down_server_is_pending":                               reGolden(specMCPNoStatus),
+	"mcp_select_of_a_down_server_is_pending":                               reGolden(specMCPNotice),
 	"mcp_search_ranks_the_tools":                                           sameAsServe(),
 	"tool_result_retention_keeps_a_preview_and_reads_it_back":              sameAsServe(),
 	"tool_result_over_the_session_budget_keeps_a_preview_with_a_notice":    sameAsServe(),
@@ -342,14 +341,14 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_resources_list_and_read":                                          reGolden(specMCPText),
 	"mcp_resources_paged_list_is_merged":                                   sameAsServe(),
 	"mcp_server_lost_mid_session_hides_the_endpoint":                       reGolden(specMCPText),
-	"mcp_status_reports_connected_and_unavailable_servers":                 deletedBy(specMCPStatus),
+	"mcp_status_reports_connected_and_unavailable_servers":                 reGolden(specMCPNotice),
 	"mcp_stdio_server_call":                                                sameAsServe(),
 	"mcp_stdio_server_starts_in_configured_dir":                            sameAsServe(),
 	"mcp_tool_call_result":                                                 sameAsServe(),
 	"mcp_tool_error_and_rpc_error_reach_model":                             reGolden(specMCPText),
 	"mcp_two_servers_share_a_tool_name":                                    sameAsServe(),
-	"mcp_unavailable_at_start_then_connect":                                reGolden(specMCPNoStatus),
-	"mcp_unavailable_connect_fails_with_classified_reason":                 reGolden(specMCPNoStatus, specMCPText),
+	"mcp_unavailable_at_start_then_connect":                                reGolden(specMCPNotice),
+	"mcp_unavailable_connect_fails_with_classified_reason":                 reGolden(specMCPNotice, specMCPText),
 	"messages_page_after_compaction":                                       reGolden(specMessages, specBootstrapGone, specErrors),
 	"messages_page_windows":                                                reGolden(specMessages, specBootstrapGone, specErrors),
 	"model_tool_false_removes_the_model_tool":                              sameAsServe(),

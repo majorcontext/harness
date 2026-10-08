@@ -13,20 +13,26 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-const connectDescription = "Connect this session's configured MCP servers. " +
-	"connect(server) makes one bounded connect attempt for a server that is not connected. " +
-	"A connected server is a no-op. An unknown server name fails and lists the configured names."
+const connectDescription = "Inspect or reconnect this session's configured MCP servers. Actions: " +
+	"status() reports every configured server's live connection state — connected, still retrying in the background, " +
+	"or parked (background retries exhausted); " +
+	"connect(server) makes ONE bounded, synchronous connect attempt for a server that is not yet connected — " +
+	"the only way to bring a parked server back once its automatic background retries have given up. " +
+	"Already-connected is a friendly no-op; an unknown server name errors listing the configured names."
 
-const deferDescription = "Load the schemas of deferred MCP tools, and connect this session's configured MCP servers. " +
+const deferDescription = "Inspect this session's configured MCP servers, and load the schemas of deferred MCP tools. " +
 	"Some MCP tools are DEFERRED: the system prompt lists their names and one-line descriptions, " +
 	"but their input schemas are not loaded and you cannot call them yet. Actions: " +
 	"search(query) ranks deferred and loaded tools by keyword over their names and descriptions, " +
 	"and reports whether each is already loaded; " +
-	"select(tools) loads the schemas of the named tools. They appear in your tool list on the " +
+	"select(tools) loads the schemas of the named tools — they appear in your tool list on the " +
 	"next request and are then called directly, like any other tool. Select every tool you need " +
-	"in ONE call, and do not select a tool that search reports as loaded. " +
-	"connect(server) makes one bounded connect attempt for a server that is not connected, " +
-	"which also discovers its tools."
+	"in ONE call, and do not select a tool search already reports as loaded. " +
+	"status() reports every configured server's live connection state — connected, still " +
+	"retrying in the background, or parked (background retries exhausted); " +
+	"connect(server) makes ONE bounded, synchronous connect attempt for a server that is not " +
+	"yet connected — the only way to bring a parked server back once its automatic background " +
+	"retries have given up, and the way to discover the tools of a server that has never connected."
 
 const catalogHeader = "Deferred MCP tools. These tools exist but their input schemas are not loaded. " +
 	"To use one you MUST first load it with the mcp tool: " +
@@ -55,10 +61,10 @@ type control struct {
 func (c control) Spec() protocol.ToolSpec {
 	if !c.s.defers {
 		return protocol.ToolSpec{Name: controlName, Description: connectDescription, InputSchema: json.RawMessage(`{"type":"object",` +
-			`"properties":{"action":{"type":"string","enum":["connect"]},"server":{"type":"string","description":"The configured server name"}},"required":["action"]}`)}
+			`"properties":{"action":{"type":"string","enum":["status","connect"],"description":"The operation to perform"},"server":{"type":"string","description":"The configured server name (required for connect)"}},"required":["action"]}`)}
 	}
 	return protocol.ToolSpec{Name: controlName, Description: deferDescription, InputSchema: json.RawMessage(`{"type":"object","properties":{` +
-		`"action":{"type":"string","enum":["connect","search","select"]},` +
+		`"action":{"type":"string","enum":["status","connect","search","select"],"description":"The operation to perform"},` +
 		`"server":{"type":"string","description":"The configured server name (required for connect)"},` +
 		`"query":{"type":"string","description":"Keywords to rank tools by (required for search)"},` +
 		`"limit":{"type":"integer","description":"Maximum search results (default 20, max 50)"},` +
@@ -74,6 +80,10 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 	var out any
 	var err error
 	switch {
+	case in.Action == "status":
+		out = struct {
+			Servers []serverStatus `json:"servers"`
+		}{c.s.status()}
 	case in.Action == "connect":
 		out, err = c.connect(ctx, in.Server)
 	case in.Action == "search" && c.s.defers:
@@ -81,9 +91,9 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 	case in.Action == "select" && c.s.defers:
 		out, err = c.choose(in.Tools)
 	case c.s.defers:
-		err = fmt.Errorf(`mcp: unknown action %q (want "connect", "search" or "select")`, in.Action)
+		err = fmt.Errorf(`mcp: unknown action %q (want "status", "connect", "search" or "select")`, in.Action)
 	default:
-		err = fmt.Errorf(`mcp: unknown action %q (want "connect")`, in.Action)
+		err = fmt.Errorf(`mcp: unknown action %q (want "status" or "connect")`, in.Action)
 	}
 	if err != nil {
 		return protocol.ToolResult{}, err
@@ -201,11 +211,11 @@ func (c control) choose(names []string) (any, error) {
 	loaded := len(out.Selected)+len(out.Already) > 0
 	switch {
 	case loaded && len(out.Pending) > 0:
-		out.Note = "the loaded tools are callable from the next request in this turn; the pending ones load once their server connects"
+		out.Note = "the loaded tools are callable from the next request in this turn; the pending ones load once their server reconnects"
 	case loaded:
 		out.Note = "selected tools are callable from the next request in this turn"
 	case len(out.Pending) > 0:
-		out.Note = "no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server connects; see the mcp tool's connect action"
+		out.Note = "no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions"
 	default:
 		out.Note = "no tool was loaded"
 	}

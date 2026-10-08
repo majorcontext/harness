@@ -4,7 +4,7 @@ commands_test.go a panicking command operation and a typed command during Close 
 runtime_test.go fake-backend helpers of the synctest race tests; New refuses runtime-ignored keys only in the Go API; no harnesstest reply records an item and then fails
 session_test.go live frames are ephemeral and goldens hold none; a full subscriber dropping deltas is a race
 tools_test.go Options.Tools and Restrict are Go API with no serve equivalent; an embedder tool name cannot be written in the serve config, so no contract row reaches the New collision with a built-in name
-mcp_test.go AllowedTools at Create has no serve oracle: the engine create takes no allowed tools
+mcp_test.go AllowedTools at Create has no serve oracle: the engine create takes no allowed tools; the retry wait of a down server needs the fake clock of a synctest bubble, which a serve binary cannot take
 plugin_test.go plugin start failures surface at Create here and at serve start on the engine; Create after Close is Go API
 reads_test.go both hosts open each session with work at start, so no row isolates a read that must not open a session
 goaltool_test.go the goal tool rows wait on the runtime: its evaluator transcript, its refusal wording, and the withdrawal of a set condition by adjust differ from serve
