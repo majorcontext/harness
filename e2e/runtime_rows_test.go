@@ -436,7 +436,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_spawn_fails_on_an_agent_name_repeated_across_dirs":          reGolden(specRepeatName, specErrors, specView),
 	"session_of_a_child_opens_after_an_agent_name_is_repeated":        reGolden(specTaskInputs, specChildReport, specChildNoGoal, specReceipt, specView, specChildAgent),
 	"agent_defs_dirs_replace_the_default_profile_dir":                 reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"task_explore_and_plan_children_get_read_only_tools":              pendingOn(specReadOnlyKinds),
+	"task_explore_and_plan_children_get_read_only_tools":              reGolden(specReadOnlyKinds, specTaskInputs, specChildReport),
 	"task_refusals":                                                      pendingOn(specTaskWording),
 	"task_refusal_past_max_task_depth":                                   pendingOn(specLimitFails, specTaskWording),
 	"task_refusal_past_max_concurrent_tasks":                             pendingOn(specLimitFails, specTaskWording),

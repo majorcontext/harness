@@ -31,8 +31,8 @@ func TestBuildWithNoWorkDirReadsNoFile(t *testing.T) {
 	}
 }
 
-// readOnly are the read-only file tools of the native and Claude Code backends.
-var readOnly = []string{"read_file", "glob", "grep", "ls", "Read", "Glob", "Grep"}
+// readOnly are the read-only tools of the native and Claude Code backends.
+var readOnly = []string{"read_file", "glob", "grep", "ls", "session_info", "Read", "Glob", "Grep"}
 
 func TestProfiles(t *testing.T) {
 	agent := func(fm, body string) string { return "---\n" + fm + "\n---\n\n" + body + "\n" }

@@ -77,6 +77,7 @@ First tagged release.
 
 ### Changed
 
+- **Read-only subagents** (`internal/prompt`) — the built-in `explore` and `plan` profiles allow `session_info` beside the read-only file tools, as the engine's allow-list had it.
 - **Parallel tool calls** (`internal/turn`, `internal/tool/builtin`) — the tool calls of one model response run at the same time, up to 8, as the engine ran them. Results reach the log in call order. `goal`, `model`, and `mcp` run alone; `read_file`, `write_file`, and `edit_file` on one path, `process` on one name, and `task` on one session run in call order. An interrupt cancels every running call. A budget of 64 MiB for each session bounds the file bytes that concurrent file calls hold, beside the 20 MiB cap of one file.
 - **Claude Code failure text** (`harness`) — a Claude Code `result` frame with subtype `error_during_execution` reports its failure in `errors` and carries no `result` text. The backend now reads `errors`, joined with `; `, when `result` is empty. The error of the turn names the failure, and a credential refusal in `errors` fails a goal instead of pausing it, as a refusal in `result` already did.
 - **Command directory under a symlink** (`internal/command`) — a prompt command directory is refused only when the directory itself is a symlink. A symlinked ancestor, such as `/tmp` or `/var` on macOS, no longer hides the commands of a work dir.
