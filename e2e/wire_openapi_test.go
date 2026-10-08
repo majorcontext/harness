@@ -8,13 +8,14 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/gates"
 )
 
 const (
@@ -74,26 +75,12 @@ func (d *specDoc) operation(method, path string) (specOperation, bool) {
 	return specOperation{}, false
 }
 
-var errorRowRE = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]{3}) \\|$")
-
 var specErrorStatuses = sync.OnceValues(func() (map[string]int, error) {
 	data, err := os.ReadFile("../docs/architecture.md")
 	if err != nil {
 		return nil, err
 	}
-	_, section, found := strings.Cut(string(data), "\n### Errors\n")
-	if !found {
-		return nil, fmt.Errorf("docs/architecture.md has no Errors section")
-	}
-	section, _, _ = strings.Cut(section, "\n### ")
-	out := map[string]int{}
-	for _, m := range errorRowRE.FindAllStringSubmatch(section, -1) {
-		out[m[1]], _ = strconv.Atoi(m[2])
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("the Errors table of docs/architecture.md holds no row")
-	}
-	return out, nil
+	return gates.SpecErrorStatuses(string(data))
 })
 
 func checkErrorStatus(status int, routed bool, body []byte) []string {
@@ -175,7 +162,7 @@ func (d *specDoc) validate(schema, v any, at string) []string {
 	return nil
 }
 
-var supportedKeywords = []string{"$ref", "anyOf", "type", "properties", "required", "items", "additionalProperties", "format", "contentEncoding", "description", "title", "$schema", "examples", "default"}
+var supportedKeywords = []string{"$ref", "anyOf", "type", "properties", "required", "items", "additionalProperties", "format", "contentEncoding", "description", "title", "$schema", "examples", "default", "enum"}
 
 func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
 	for k := range s {
@@ -208,6 +195,7 @@ func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
 	switch x := v.(type) {
 	case string:
 		errs = append(errs, validateString(s, x, at)...)
+		errs = append(errs, validateEnum(s, x, at)...)
 	case map[string]any:
 		errs = append(errs, d.validateFields(s, x, at)...)
 	case []any:
@@ -218,6 +206,14 @@ func (d *specDoc) validateObject(s map[string]any, v any, at string) []string {
 		}
 	}
 	return errs
+}
+
+func validateEnum(s map[string]any, x, at string) []string {
+	enum, ok := s["enum"].([]any)
+	if !ok || slices.Contains(enum, any(x)) {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s: %q is not one of %v", at, x, enum)}
 }
 
 func validateString(s map[string]any, x, at string) []string {

@@ -80,7 +80,7 @@ export interface CreateSession {
 }
 
 export interface Error {
-  code: string;
+  code: "blob_not_found" | "draining" | "input_conflict" | "internal" | "invalid_request" | "model_unavailable" | "no_base" | "not_a_git_repo" | "payload_too_large" | "process_not_found" | "request_not_pending" | "session_busy" | "session_exists" | "session_not_found" | "session_not_owned" | "too_many_changes" | "turn_mismatch" | "unauthorized";
   message: string;
   details: Record<string, unknown> | null;
 }

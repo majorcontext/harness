@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -12,6 +13,7 @@ var (
 	tickedTokenRE  = regexp.MustCompile("`([A-Z]+ /[^`]*)`")
 	packageTokenRE = regexp.MustCompile("^\\| `(harness[^`]*)` \\|")
 	actionsRE      = regexp.MustCompile("`(\\w+)`, `(\\w+)`, and `(\\w+)` reply with the status")
+	errorRowRE     = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]{3}) \\|$")
 )
 
 // SpecRoutes returns the "METHOD /path" of each route in the route list of
@@ -117,4 +119,22 @@ func fenced(spec, heading string) (string, error) {
 		return "", fmt.Errorf("the fenced block under %q does not end", heading)
 	}
 	return block, nil
+}
+
+// SpecErrorStatuses returns the HTTP status of each error code in the Errors
+// table of the spec.
+func SpecErrorStatuses(spec string) (map[string]int, error) {
+	_, section, found := strings.Cut(spec, "\n### Errors\n")
+	if !found {
+		return nil, errors.New("the spec has no Errors section")
+	}
+	section, _, _ = strings.Cut(section, "\n### ")
+	out := map[string]int{}
+	for _, m := range errorRowRE.FindAllStringSubmatch(section, -1) {
+		out[m[1]], _ = strconv.Atoi(m[2])
+	}
+	if len(out) == 0 {
+		return nil, errors.New("the Errors table of the spec holds no row")
+	}
+	return out, nil
 }

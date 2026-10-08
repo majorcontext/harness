@@ -111,7 +111,12 @@ var statuses = map[string]int{
 	protocol.CodeTooManyChanges:    http.StatusConflict,
 	protocol.CodeProcessNotFound:   http.StatusNotFound,
 	protocol.CodeBlobNotFound:      http.StatusNotFound,
+	protocol.CodeUnauthorized:      http.StatusUnauthorized,
+	protocol.CodeInternal:          http.StatusInternalServerError,
 }
+
+// CodeStatuses returns the HTTP status of each error code of the API.
+func CodeStatuses() map[string]int { return maps.Clone(statuses) }
 
 // errInvalid reports a request that the handler cannot decode.
 var errInvalid = errors.New("invalid request")
