@@ -141,7 +141,7 @@ func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error
 		appendErr = a.recordUsage(c.Usage)
 	}
 	status := protocol.StatusIdle
-	if runErr != nil {
+	if runErr != nil || appendErr != nil {
 		status = protocol.StatusCompactionFailed
 	}
 	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: status, TurnID: r.id})
