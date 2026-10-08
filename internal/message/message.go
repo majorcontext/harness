@@ -78,7 +78,7 @@ type Message struct {
 // The len(Arguments) == 0 guard safeArguments already carries does not
 // catch it: a provider stream that dies mid tool_use block — a connection
 // drop during input_json_delta
-// accumulation, or, as provider/anthropic/anthropic.go's protocol shows, a
+// accumulation, or, as internal/provider/anthropic/anthropic.go's protocol shows, a
 // max_tokens cutoff mid tool-call, which the API still closes out with a
 // normal content_block_stop/message_delta/message_stop sequence rather than
 // an error — can leave ToolCall.Arguments holding non-empty but
@@ -222,8 +222,8 @@ func (*ToolCall) partType() PartType { return PartToolCall }
 //
 // Empty Arguments normalize to "{}", not "null": every transcoder treats a
 // zero-length Arguments as "no arguments" and coerces it to an empty JSON
-// object on the wire (see provider/anthropic/transcode.go and
-// provider/openai/transcode.go, both of which substitute "{}" for a
+// object on the wire (see internal/provider/anthropic/transcode.go and
+// internal/provider/openai/transcode.go, both of which substitute "{}" for a
 // zero-length Arguments before sending to the provider). Normalizing to
 // "null" here instead would diverge from that convention: a resumed session
 // round-tripped through canonical JSON would carry Arguments: null, which is
@@ -322,7 +322,7 @@ func (tr ToolResult) isEmpty() bool {
 // and an omitted content field. The gateway ACCEPTS an empty array, an
 // empty string, and a single blank text block — only the absent forms
 // fail. That distinction matters here, because omitempty on
-// provider/anthropic/transcode.go's apiBlock.Content turns an empty array
+// internal/provider/anthropic/transcode.go's apiBlock.Content turns an empty array
 // into an omitted field on the wire, which is how a blank tool result
 // reached the failing shape.
 //
@@ -384,7 +384,7 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // # Unbounded replay is a request-size/time bomb
 //
 // A thinking-block signature or a redacted_thinking payload (see
-// provider/anthropic/transcode.go's anthropicReasoningData) is opaque to
+// internal/provider/anthropic/transcode.go's anthropicReasoningData) is opaque to
 // this package and, in the ordinary case, small — a few hundred bytes. It
 // is not, however, bounded by anything: a provider can hand back an entry
 // orders of magnitude larger — a single thinking signature has been

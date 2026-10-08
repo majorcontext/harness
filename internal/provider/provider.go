@@ -1,0 +1,264 @@
+// Package provider defines the interface between the engine and model APIs.
+//
+// Each adapter transcodes canonical history (package message) to its wire
+// format from scratch on every request — transcoding is stateless, which is
+// what makes mid-session model swaps free. Adapters produce the final
+// canonical assistant message themselves, since only they know how to fold
+// provider-specific state (thinking signatures, encrypted reasoning) into
+// ProviderData attachments.
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/majorcontext/harness/internal/message"
+)
+
+// ToolDef describes a tool offered to the model.
+type ToolDef struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage // JSON Schema
+}
+
+// Request is one model call. System and Messages are canonical; the adapter
+// owns all wire-format concerns, including prompt-cache markers (injected at
+// transcode time, never stored).
+type Request struct {
+	Model       message.ModelRef
+	System      []string // system prompt segments, in order
+	Messages    []message.Message
+	Tools       []ToolDef
+	Temperature *float64
+	TopP        *float64
+	MaxTokens   int
+	// Effort is the unified reasoning-effort level (message.Effort). The
+	// zero value (EffortUnset) sends no reasoning control. Each adapter maps
+	// a non-unset level to its own wire shape; a level the target model
+	// rejects surfaces as a provider error, since the adapter cannot know
+	// per-model support from the ref alone.
+	Effort message.Effort
+	// ServiceTier is an opaque, per-session speed-tier hint (e.g. Codex's
+	// "standard"/"fast"/"ultrafast"), forwarded to the provider verbatim as
+	// the wire "service_tier" field. The zero value (empty string) sends no
+	// service_tier control. Like Effort, harness does NOT validate which
+	// tiers a model or plan supports — the caller (the boxes API) owns that
+	// gating table — so an adapter maps a non-empty value straight through,
+	// and a tier the target model or plan rejects surfaces as a provider
+	// error.
+	ServiceTier string
+	// SessionKey is a stable, opaque identifier for the session this
+	// request belongs to. An adapter MAY forward it to the provider as a
+	// routing or cache-affinity hint. It is not a secret and is not
+	// persisted.
+	SessionKey string
+}
+
+// StopReason is why the model stopped generating.
+type StopReason string
+
+const (
+	StopEndTurn   StopReason = "end_turn"
+	StopToolUse   StopReason = "tool_use"
+	StopMaxTokens StopReason = "max_tokens"
+	StopRefusal   StopReason = "refusal"
+	StopOther     StopReason = "other"
+)
+
+// Usage is token accounting for one request.
+// Usage reports token accounting for one provider call.
+//
+// CONTRACT: the three input components are DISJOINT — InputTokens is the
+// uncached portion only, and the true prompt size is InputTokens +
+// CacheReadTokens + CacheWriteTokens. Adapters whose upstream reports a
+// cache-inclusive total (OpenAI Responses: input_tokens includes
+// input_tokens_details.cached_tokens) must subtract before populating.
+// Consumers (auto-compaction thresholds, cost accounting) rely on the sum
+// being the prompt size on every provider.
+type Usage struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+}
+
+// EventType discriminates streaming events.
+type EventType string
+
+const (
+	// EventTextDelta carries a chunk of assistant text in Text.
+	EventTextDelta EventType = "text_delta"
+	// EventReasoningDelta carries a chunk of reasoning summary in Text.
+	EventReasoningDelta EventType = "reasoning_delta"
+	// EventToolCall carries a complete tool call (arguments fully buffered).
+	EventToolCall EventType = "tool_call"
+	// EventDone carries the fully assembled canonical assistant message,
+	// stop reason, and usage. It is always the final event of a stream.
+	EventDone EventType = "done"
+	// EventActivity carries no content at all: it reports that a wire
+	// event arrived and was handled but produced nothing consumer-visible
+	// — a keep-alive ping, a tool call's arguments still streaming
+	// (input_json_delta), a message_start. Adapters surface one per such
+	// wire event instead of looping silently, so a consumer timing the
+	// gaps between Next returns (the engine's idle-stream watchdog)
+	// measures real wire activity rather than content cadence — a large
+	// tool-argument block can stream for minutes with zero content
+	// events. Consumers that only want content simply skip it.
+	EventActivity EventType = "activity"
+)
+
+// RequestMode describes how an adapter projected the complete logical request
+// onto its transport. The zero value means the adapter did not report transport
+// projection metadata.
+type RequestMode string
+
+const (
+	RequestModeFull        RequestMode = "full"
+	RequestModeIncremental RequestMode = "incremental"
+)
+
+// ChainRefusal names why a request that COULD have projected an input suffix
+// sent the complete input instead. A full request re-sends every earlier item
+// uncached, so the reason is the operator's first question and the mode alone
+// does not answer it.
+//
+// A refusal reason is a transport fact, like every other RequestMetadata
+// field: a wire property name or an input index, never item content, and
+// never a response identifier.
+type ChainRefusal string
+
+const (
+	// ChainRefusalNone is the zero value: this call chained, or its adapter
+	// and transport cannot chain at all.
+	ChainRefusalNone ChainRefusal = ""
+	// ChainRefusalNoLineage reports that no usable lineage existed to chain
+	// onto: the session's first call, or a lineage a previous partial,
+	// failed, canceled, or concurrent call invalidated.
+	ChainRefusalNoLineage ChainRefusal = "no_lineage"
+	// ChainRefusalConnectionIdle reports a lineage lost with its pooled
+	// connection after the connection sat idle past the pool's idle timeout.
+	// A think-time or CI-wait gap between two turns produces this.
+	ChainRefusalConnectionIdle ChainRefusal = "connection_idle"
+	// ChainRefusalConnectionAged reports a lineage lost with its pooled
+	// connection at the pool's maximum connection age.
+	ChainRefusalConnectionAged ChainRefusal = "connection_aged"
+	// ChainRefusalPropertyChanged reports a context-bearing request property
+	// that moved since the lineage call. Detail names the wire property.
+	ChainRefusalPropertyChanged ChainRefusal = "property_changed"
+	// ChainRefusalPrefixChanged reports an input prefix that is no longer
+	// byte-identical to the lineage call's own input plus its response.
+	// This reason locates the mismatch two ways. Normally it reports the
+	// index of the first item that differs in ChainRefusalItem. When the
+	// input is too short to extend the prefix at all, no such index
+	// exists, so it reports "input_shorter_than_prefix" in
+	// ChainRefusalDetail instead.
+	ChainRefusalPrefixChanged ChainRefusal = "prefix_changed"
+)
+
+// RequestMetadata contains non-secret transport projection facts for one
+// completed provider call. It never contains a provider response identifier.
+type RequestMetadata struct {
+	Mode                 RequestMode `json:"mode"`
+	CompleteInputItems   int         `json:"complete_input_items"`
+	SentInputItems       int         `json:"sent_input_items"`
+	PreviousResponseUsed bool        `json:"previous_response_used"`
+	// ChainRecovered is true when an incremental request received an immediate
+	// chain miss and completed after one full-request retry.
+	ChainRecovered bool `json:"chain_recovered"`
+	// ChainRefusal reports why this call did not chain. It is empty on a
+	// chained call, and on an adapter or transport that cannot chain.
+	//
+	// ChainRefusalDetail and ChainRefusalItem are the two locator shapes a
+	// reason can carry, and a reason carries at most one. Both are empty
+	// for a reason that needs no locator.
+	//
+	// ChainRefusalDetail is a NAME: a wire property name for
+	// ChainRefusalPropertyChanged, or "input_shorter_than_prefix" for the
+	// prefix refusal that has no index to report. It stays free of "[" and
+	// "]" on purpose, because a log pipeline can read a bracketed value as
+	// a path expression and split it (see inputItemLocator in
+	// internal/provider/openai/transcode.go).
+	//
+	// ChainRefusalItem is an INDEX into the complete input array, set only
+	// by ChainRefusalPrefixChanged, and nil otherwise. A pointer, not a
+	// plain int: item 0 is a real and common answer, so "no item" needs a
+	// value of its own. A number is also directly aggregatable, which a
+	// rendered locator never was.
+	ChainRefusal       ChainRefusal `json:"chain_refusal,omitempty"`
+	ChainRefusalDetail string       `json:"chain_refusal_detail,omitempty"`
+	ChainRefusalItem   *int         `json:"chain_refusal_item,omitempty"`
+}
+
+// Event is one streaming event from a model call.
+type Event struct {
+	Type EventType
+	// ID is the upstream response id, captured on the stream's first frame
+	// (e.g. Anthropic's message_start) and stamped on every delta from then
+	// on. It is the SAME id EventDone's own Message.ID carries. Empty
+	// before the id arrives.
+	ID string
+	// CreatedAt is latched at the same moment as ID, on the stream's first
+	// frame, and stamped on every delta from then on. It is the SAME time
+	// EventDone's own Message.CreatedAt carries — never a fresh Now() at
+	// assemble time, which would disagree with what a delta already sent.
+	// Zero before it arrives, exactly when ID is empty.
+	CreatedAt  time.Time
+	Text       string
+	ToolCall   *message.ToolCall
+	Message    *message.Message
+	StopReason StopReason
+	Usage      Usage
+	// RequestMetadata is set only on EventDone when an adapter reports how
+	// it projected the complete logical request onto its transport.
+	RequestMetadata *RequestMetadata
+	// SubscriptionUsage carries a subscription lane's captured rate-limit/
+	// quota snapshot (see message.SubscriptionUsage's own doc comment),
+	// set only on EventDone by an adapter that captured one on THIS call —
+	// nil for every other event, and nil on EventDone itself unless the
+	// adapter is a subscription lane that found the signal on this
+	// response (internal/provider/openai's codex family reads it from x-codex-*
+	// response headers on the HTTP lane and from a codex.rate_limits frame
+	// on the websocket lane).
+	SubscriptionUsage *message.SubscriptionUsage
+}
+
+// Stream yields events for one model call. Next returns io.EOF after the
+// EventDone event has been consumed.
+//
+// That io.EOF MUST be the literal, unwrapped sentinel value on clean
+// termination — never wrapped or replaced by an adapter-specific error type.
+// The goal evaluator and the compaction summarizer tell a clean end apart
+// from a truncated-stream failure via identity comparison (err == io.EOF),
+// deliberately not errors.Is: a stream cut before its terminal event is
+// wrapped by provider.MarkStreamTruncated (see provider/retryable.go) around
+// the underlying transport error — typically io.EOF itself, when the
+// connection simply closes early — so errors.Is(err, io.EOF) would report
+// true for BOTH a clean end and a truncation once that wrapping is in play,
+// and a consumer relying on it would silently fold an unfinished stream into
+// a "done" result. An adapter returning anything other than the literal
+// io.EOF on clean termination is a contract violation.
+type Stream interface {
+	Next() (Event, error)
+	Close() error
+}
+
+// StartupPrewarmer is an optional provider capability that prepares transport-local
+// state before the first model call. StartupPrewarmEnabled must be side-effect free;
+// the engine calls it before startup discovery, hooks, or tool assembly. Warm must
+// not emit provider events and MUST return promptly when ctx is canceled. The engine
+// bounds prompt waiting and session ownership at that deadline, but Go cannot forcibly
+// stop a callback that ignores cancellation.
+type StartupPrewarmer interface {
+	StartupPrewarmEnabled() bool
+	Warm(context.Context, *Request) error
+}
+
+// Provider is one model API family.
+type Provider interface {
+	// Name is the provider family key: it matches ModelRef.Provider and the
+	// ProviderData tag this adapter reads and writes.
+	Name() string
+	Stream(ctx context.Context, req *Request) (Stream, error)
+}

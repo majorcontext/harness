@@ -17,8 +17,8 @@ import (
 // ToolResult.SafeContent, message.NoToolOutputText,
 // message.SyntheticOrphanResultText — all exported, all read for their
 // documented contract, never for their body) and the three real
-// transcoders' wire mapping (provider/anthropic, provider/openai,
-// provider/openaicompat/transcode.go): specifically, that every transcoder
+// transcoders' wire mapping (internal/provider/anthropic, internal/provider/openai,
+// internal/provider/openaicompat/transcode.go): specifically, that every transcoder
 // maps message.RoleAssistant to a wire "assistant" turn and every other
 // Role to a non-assistant turn, and that Anthropic (the strictest) merges adjacent same-side canonical
 // messages into one wire turn and requires every tool_use in an assistant
@@ -31,8 +31,8 @@ import (
 // and the ordered tool_use / tool_result ids it carries. assistant is read
 // directly off Message.Role — the one fact every transcoder's own role
 // mapping keys on (`role := "user"; if m.Role == message.RoleAssistant {
-// role = "assistant" }`, provider/anthropic/transcode.go and mirrored by
-// provider/openai and provider/openaicompat).
+// role = "assistant" }`, internal/provider/anthropic/transcode.go and mirrored by
+// internal/provider/openai and internal/provider/openaicompat).
 type wireMsg struct {
 	assistant  bool
 	toolUseIDs []string
@@ -103,7 +103,7 @@ func emptyToolResultContent(content Parts) bool {
 
 // wireRun is a maximal run of consecutive wireMsg sharing one side. This
 // models the turn-merging every transcoder performs on adjacent same-role
-// canonical messages (provider/anthropic/transcode.go: "The API requires
+// canonical messages (internal/provider/anthropic/transcode.go: "The API requires
 // strict user/assistant alternation; merge adjacent same-role messages") —
 // without it, the documented legitimate shape "results split across two
 // consecutive RoleTool messages" would look unanswered to a naive

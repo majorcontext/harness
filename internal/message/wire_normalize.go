@@ -168,11 +168,11 @@ type partKey struct{ msgIdx, partIdx int }
 // it answers no tool_use, proposes none either, and needs no
 // tool_call_id-addressed wire slot. Leaving it there anyway (mutating only
 // the Part, never the Message.Role, as an earlier version of this function
-// did) is a real, transcode-time regression: provider/openaicompat's own
+// did) is a real, transcode-time regression: internal/provider/openaicompat's own
 // transcodeToolMessages is role-strict and hard-errors on any non-ToolResult
 // part in a "tool"-role message, so the exact orphan-tool_result wedge this
 // function exists to fix turned into a total request-BUILD failure on that
-// provider (see provider/openaicompat/transcode_test.go's
+// provider (see internal/provider/openaicompat/transcode_test.go's
 // TestTranscodeOrphanToolResultBuildsSuccessfully, which drives the REAL
 // transcoder — a canonical-slice-only check, like this package's own
 // property tests, cannot see a provider's own role-strictness at all).
@@ -188,7 +188,7 @@ type partKey struct{ msgIdx, partIdx int }
 // invariant 2's OWN violation this function exists to repair — a
 // tool_result can never legally sit in an assistant-role wire block, but
 // ordinary text always can. A demoted result's BLOB is different and is
-// NEVER left in place, even here: provider/openaicompat's
+// NEVER left in place, even here: internal/provider/openaicompat's
 // transcodeAssistantMessage rejects any Blob outright, and even where a
 // transcoder's own code has no such check (anthropic's transcodeBlob is
 // role-agnostic), the Anthropic Messages API itself rejects an image block
@@ -208,7 +208,7 @@ type partKey struct{ msgIdx, partIdx int }
 // under this file's model (computeTranscodeSpans groups every consecutive
 // non-assistant message together, regardless of which non-assistant Role
 // each one carries). Splicing a new message after only the FIRST of the
-// two strands the demoted text BETWEEN them — provider/openaicompat's
+// two strands the demoted text BETWEEN them — internal/provider/openaicompat's
 // chat/completions wire requires every "tool" message answering a given
 // assistant's tool_calls to be contiguous and to directly follow it, so an
 // interleaved non-"tool" message breaks that association. The request
@@ -216,7 +216,7 @@ type partKey struct{ msgIdx, partIdx int }
 // caught by a build-only check — it produces a request the PROVIDER then
 // rejects with an asynchronous 400 at request time, which is the exact
 // wedge class this whole line of work exists to remove, just moved later.
-// See provider/openaicompat/transcode_test.go's
+// See internal/provider/openaicompat/transcode_test.go's
 // TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun, which drives
 // the real transcoder over exactly this two-consecutive-RoleTool-messages
 // shape.
@@ -245,14 +245,14 @@ type partKey struct{ msgIdx, partIdx int }
 // answers ITS tool_calls (the "carry" mechanism throughout this file). A
 // RoleUser hoisted message landing there, BEFORE that answer run's own
 // content, is the identical wedge the paragraph above closes, one branch
-// over: on provider/openaicompat a "user"-role wire message interposed
+// over: on internal/provider/openaicompat a "user"-role wire message interposed
 // between an assistant's tool_calls and their "tool"-role answers breaks
 // the required contiguity — a total request failure, not merely
 // asynchronous, since the request that ships is simply wrong-shaped.
 // Anthropic (adjacent same-role merge) and the OpenAI
 // Responses adapter (flat, ungrouped item list) both tolerate it; only
 // openaicompat breaks — see
-// provider/openaicompat/transcode_test.go's
+// internal/provider/openaicompat/transcode_test.go's
 // TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer.
 //
 // The fix mirrors the non-assistant branch's own rule exactly, extended by
@@ -497,17 +497,17 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 // one). Derived from reading each transcoder's own Blob handling, not
 // assumed:
 //
-//   - provider/anthropic/transcode.go's transcodeBlob (~line 277) accepts
+//   - internal/provider/anthropic/transcode.go's transcodeBlob (~line 277) accepts
 //     ANY MediaType — image/* becomes an "image" block, anything else a
 //     "document" block — as long as Data or URL is present; a blob with
 //     neither errors "blob has neither data nor url".
 //
-//   - provider/openai/transcode.go's transcodeBlob (~line 298) accepts
+//   - internal/provider/openai/transcode.go's transcodeBlob (~line 298) accepts
 //     image/* (Data or URL) or application/pdf (Data only — a PDF by URL
 //     errors "is not supported"); anything else errors "unsupported blob
 //     media type".
 //
-//   - provider/openaicompat/transcode.go's blobURL (~line 343) accepts
+//   - internal/provider/openaicompat/transcode.go's blobURL (~line 343) accepts
 //     ONLY image/* (Data or URL); anything else — including
 //     application/pdf, which openai alone tolerates — errors "unsupported
 //     blob media type". This is the narrowest of the three and forces the
@@ -541,15 +541,15 @@ func buildSafeBlob(b *Blob) bool {
 // attachment(s) omitted]" note replaced a tool_result Blob that anthropic
 // transcodes to a genuine wire "image" block. That went too far the other
 // way: a demoted Blob is always hoisted into (or left in) a RoleUser
-// message, and provider/openai and provider/openaicompat both hard-error
+// message, and internal/provider/openai and internal/provider/openaicompat both hard-error
 // building ANY request containing a non-image/*, or data-less/URL-less,
 // Blob there (see buildSafeBlob's own doc comment) — turning the
 // orphan/surplus-tool_result wedge this whole file exists to fix back into
 // a total request-BUILD failure for exactly the blob-bearing shape. A Blob
 // that is NOT
 // buildSafeBlob is therefore folded into the label's own note instead,
-// naming its media type, exactly the trade provider/openai's and
-// provider/openaicompat's own toolResultOutput helpers already make for
+// naming its media type, exactly the trade internal/provider/openai's and
+// internal/provider/openaicompat's own toolResultOutput helpers already make for
 // EVERY tool-result Blob today — this file accepts the same trade for the
 // narrower non-build-safe case rather than shipping a request that cannot
 // build. A buildSafeBlob (the common case: a real screenshot with inline
@@ -791,7 +791,7 @@ func NormalizeForWire(messages []Message) []Message {
 	// "somewhere in the correct run" — because at least one real
 	// transcoder's wire contract needs the answer positioned immediately
 	// next to its call, not just co-resident in the same merged block
-	// (provider/openai/transcode_test.go's TestTranscodeResolvesOrphan
+	// (internal/provider/openai/transcode_test.go's TestTranscodeResolvesOrphan
 	// ToolCalls: the OpenAI Responses API's input is a flat item list with
 	// no message-turn grouping at all, so "same run" is this package's
 	// own abstraction, not a wire-level unit OpenAI's API recognizes —

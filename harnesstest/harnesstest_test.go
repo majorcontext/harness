@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
-	"github.com/majorcontext/harness/provider"
-	"github.com/majorcontext/harness/provider/anthropic"
+	"github.com/majorcontext/harness/internal/provider"
+	"github.com/majorcontext/harness/internal/provider/anthropic"
 )
 
 func ask(t testing.TB, s *Server, text string) (provider.Stream, error) {

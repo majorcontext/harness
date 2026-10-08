@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/provider"
-	responses "github.com/majorcontext/harness/provider/openai"
+	"github.com/majorcontext/harness/internal/provider"
+	responses "github.com/majorcontext/harness/internal/provider/openai"
 )
 
 func TestTelemetryOfACallWithNoPromptTokensHasNoReading(t *testing.T) {

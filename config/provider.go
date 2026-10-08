@@ -6,11 +6,11 @@ import (
 )
 
 // TypeOpenAICompat selects the generic OpenAI-compatible chat-completions adapter
-// (provider/openaicompat) for a Provider config entry — the wire format spoken by OpenRouter,
+// (internal/provider/openaicompat) for a Provider config entry — the wire format spoken by OpenRouter,
 // Ollama, vLLM, and similar deployments.
 const TypeOpenAICompat = "openai-compat"
 
-// TypeOpenAI selects the native OpenAI Responses API adapter (provider/openai) for a Provider
+// TypeOpenAI selects the native OpenAI Responses API adapter (internal/provider/openai) for a Provider
 // config entry under ANY providers map key.
 const TypeOpenAI = "openai"
 
@@ -19,7 +19,7 @@ const TypeClaudeCodeCLI = "claude-code-cli"
 
 // nativeProviderKeys are the only providers map keys allowed an empty Type with no further
 // defaulting: the built-in adapters cmd/harness's registry wires directly by name
-// (provider/anthropic.Family and provider/openai.Family).
+// (internal/provider/anthropic.Family and internal/provider/openai.Family).
 var nativeProviderKeys = map[string]bool{
 	"anthropic": true,
 	"openai":    true,
@@ -166,7 +166,7 @@ func validateClaudeCodeFields(name string, p Provider) error {
 }
 
 // buildsResponsesAdapter reports whether a providers entry builds the native OpenAI Responses
-// adapter (provider/openai) — the one adapter that reads ResponsesPath.
+// adapter (internal/provider/openai) — the one adapter that reads ResponsesPath.
 func buildsResponsesAdapter(name string, p Provider) bool {
 	if p.Type == TypeOpenAI {
 		return true

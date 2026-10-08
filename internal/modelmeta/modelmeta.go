@@ -117,7 +117,7 @@ const claudeCodeProvider = "claude-code"
 // codexProvider is the message.ModelRef.Provider value the boxes platform
 // mints for a ChatGPT Codex backend model (see
 // majorcontext/bailey internal/api/codex_models.go, e.g. "codex/gpt-5.6-sol")
-// — distinct from provider/openai.CodexFamily, which names an "openai"-type
+// — distinct from internal/provider/openai.CodexFamily, which names an "openai"-type
 // provider's Client.Family for the same backend's wire format, not a
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"

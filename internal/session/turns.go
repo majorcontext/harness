@@ -10,8 +10,8 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
+	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/provider"
 )
 
 const (

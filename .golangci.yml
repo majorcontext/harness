@@ -55,11 +55,11 @@ linters:
             - "!**/examples/**"
             - "!$test"
           deny:
-            - pkg: github.com/majorcontext/harness/provider/anthropic
+            - pkg: github.com/majorcontext/harness/internal/provider/anthropic
               desc: only internal/backend builds a provider wire
-            - pkg: github.com/majorcontext/harness/provider/openai
+            - pkg: github.com/majorcontext/harness/internal/provider/openai
               desc: only internal/backend builds a provider wire
-            - pkg: github.com/majorcontext/harness/provider/openaicompat
+            - pkg: github.com/majorcontext/harness/internal/provider/openaicompat
               desc: only internal/backend builds a provider wire
         config-leaf:
           files:

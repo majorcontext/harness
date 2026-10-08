@@ -16,9 +16,9 @@ import (
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/provider"
+	"github.com/majorcontext/harness/internal/provider/anthropic"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/provider"
-	"github.com/majorcontext/harness/provider/anthropic"
 )
 
 // runOn runs session s1 on an Anthropic model served by p. Each compaction keeps one turn.
