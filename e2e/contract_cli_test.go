@@ -324,6 +324,7 @@ func TestContractCLIRunPrintsTheOutputOfATaskChild(t *testing.T) {
 
 func TestContractCLIRunWaitsForATaskChildThatRunsAfterItsParentSettled(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	h := newCLIHost(t, nil, delegation("general-purpose", childDone)...)
 	wait := h.start("run", "-p", "delegate")
 	if !h.fake.AwaitRequests(3, waitBound) {
