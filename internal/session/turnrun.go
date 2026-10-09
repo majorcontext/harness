@@ -140,9 +140,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 		}
 		err := a.append(f.c)
 		h := a.state.ModelHistory()
-		if a.bannered {
-			a.bannerPin = min(a.bannerPin, len(h))
-		}
+		a.pins.Clamp(len(h))
 		reply(h, err)
 	})
 	return h, err == nil, err

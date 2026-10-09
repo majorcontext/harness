@@ -135,7 +135,7 @@ var nodeRules = []nodeRule{
 	},
 	{
 		name:   "engine_context_creator",
-		detail: "only the model API backend creates message.EngineContext, from the runtime's banner and logged parts (AGENTS.md: Invariants)",
+		detail: "only the model API backend creates message.EngineContext, from the runtime's pins and logged parts (AGENTS.md: Invariants)",
 		match:  literalOf(modulePath+"/internal/message", "EngineContext"),
 		allow:  []string{"internal/message/", "internal/backend/modelapi/convert.go#toMessage", "internal/backend/modelapi/modelapi.go#request"},
 	},

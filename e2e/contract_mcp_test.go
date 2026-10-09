@@ -128,10 +128,6 @@ func mcpDocs() harnesstest.MCPSpec {
 	}
 }
 
-func mcpDownNotice(server, posture string) string {
-	return "[mcp: unavailable \u2014 " + server + " (initialize failed; " + posture + "). Tools from these servers are temporarily absent and may return later in this session.]"
-}
-
 type expectSystem struct {
 	req        int // 1-based index of the model request
 	has, lacks []string
@@ -464,10 +460,11 @@ func TestContractMCPAvailability(t *testing.T) {
 				mcpTool("weather", "forecast", "city", "Oslo"),
 			),
 			// Instructions render once, on the first request: a server that
-			// connects later never joins them.
+			// connects later never joins them. The notice and the recovery
+			// line are in the conversation, so the system prompt never moves.
 			actions: append(append([]action{}, oneTurn...),
-				expectSystem{req: 1, has: []string{mcpDownNotice("weather", "retrying")}, lacks: []string{"<mcp_instructions>"}},
-				expectSystem{req: 3, lacks: []string{"[mcp:", "<mcp_instructions>", "Call forecast before alerts."}},
+				expectSystem{req: 1, lacks: []string{"[mcp:", "<mcp_instructions>"}},
+				expectSystem{req: 3, lacks: []string{"[mcp:", "<mcp_instructions>", "Call forecast before alerts."}, sameAs: 1},
 			),
 		},
 		{
@@ -480,9 +477,9 @@ func TestContractMCPAvailability(t *testing.T) {
 				mcpTool("weather", "forecast", "city", "Oslo"),
 			),
 			actions: append(append([]action{}, oneTurn...),
-				expectSystem{req: 1, has: []string{"Read doc://guide before searching.", mcpDownNotice("weather", "retrying")}, lacks: []string{"Call forecast before alerts."}},
-				expectSystem{req: 2, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts.", "[mcp:"}},
-				expectSystem{req: 3, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts.", "[mcp:"}, sameAs: 2},
+				expectSystem{req: 1, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts.", "[mcp:"}},
+				expectSystem{req: 2, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts.", "[mcp:"}, sameAs: 1},
+				expectSystem{req: 3, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts.", "[mcp:"}, sameAs: 1},
 			),
 		},
 		{
@@ -493,7 +490,7 @@ func TestContractMCPAvailability(t *testing.T) {
 				mcpAction("action", "connect", "server", "nope"),
 				mcpTool("weather", "forecast", "city", "Oslo"),
 			),
-			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{mcpDownNotice("weather", "retrying")}}, expectSystem{req: 4, sameAs: 1}),
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}}, expectSystem{req: 4, sameAs: 1}),
 		},
 	})
 }
@@ -529,7 +526,7 @@ func TestContractMCPRuntime(t *testing.T) {
 				mcpServerDef{name: "weather", spec: mcpWeather("")},
 				mcpServerDef{name: "docs", spec: mcpDocs(), down: true}),
 			model: toolChain(mcpAction("action", "status")),
-			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{mcpDownNotice("docs", "retrying")}},
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}},
 				expectSystem{req: 2, sameAs: 1}),
 		},
 	})

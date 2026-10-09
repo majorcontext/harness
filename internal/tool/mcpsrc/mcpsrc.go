@@ -41,9 +41,9 @@ func Reserved(name string) bool {
 
 // Source connects every configured server on first use and gives the tools
 // of the connected servers to each model call. A server that fails retries
-// in the background, and the prompt names it while it is down. After
-// maxRetries failed retries it stays down until the model asks the mcp tool
-// to connect it.
+// in the background, and a notice in the conversation names it while it is
+// down. After maxRetries failed retries it stays down until the model asks
+// the mcp tool to connect it.
 type Source struct {
 	specs map[string]config.MCPServerSpec
 	names []string
@@ -252,7 +252,8 @@ func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowe
 		head = append(head, slices.DeleteFunc([]turn.Tool{lister{s}, reader{s}}, func(t turn.Tool) bool { return !ok(t.Spec().Name) })...)
 	}
 	ts.Tools = append(head, ts.Tools...)
-	ts.Prompt = strings.Join(slices.DeleteFunc([]string{s.instructions(servers, reached, ok), catalog(deferred), down}, func(p string) bool { return p == "" }), "\n\n")
+	ts.Prompt = strings.Join(slices.DeleteFunc([]string{s.instructions(servers, reached, ok), catalog(deferred)}, func(p string) bool { return p == "" }), "\n\n")
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: down, Cleared: recovered}}
 	return ts
 }
 

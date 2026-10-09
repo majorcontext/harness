@@ -36,6 +36,7 @@ func TestAllowedMCPToolsOfAnOwnedLoopBackend(t *testing.T) {
 const (
 	mcpDownNotice   = `[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]`
 	mcpParkedNotice = `[mcp: unavailable — weather (initialize failed; use the mcp tool action "connect" to retry). Tools from these servers are temporarily absent and may return later in this session.]`
+	mcpRecovered    = `[mcp: every configured server is connected again.]`
 	mcpStatusCall   = "status"
 )
 
@@ -75,6 +76,15 @@ func elapse(d time.Duration) {
 	synctest.Wait()
 }
 
+// mcpNotice returns the newest MCP notice that req pins.
+func mcpNotice(req turn.Request) string {
+	pins := slices.DeleteFunc(req.Pins.Pinned(), func(p turn.Pin) bool { return p.Kind != "mcp" })
+	if len(pins) == 0 {
+		return ""
+	}
+	return pins[len(pins)-1].Text
+}
+
 func toolNames(req turn.Request) []string {
 	var out []string
 	for _, t := range req.Tools {
@@ -92,15 +102,16 @@ func TestMCPServerDownAtBootComesUpAfterARetry(t *testing.T) {
 		s := create(t, r)
 		submit(t, s, text("a", "first"))
 		req, _ := f.last("s1", "first")
-		if !strings.Contains(req.Instructions, mcpDownNotice) || slices.Contains(toolNames(req), "mcp__weather__forecast") || !slices.Contains(toolNames(req), "mcp__docs__search") {
-			t.Errorf("first call tools %v, prompt %q; want docs tools only and the notice", toolNames(req), req.Instructions)
+		if got := mcpNotice(req); got != mcpDownNotice || slices.Contains(toolNames(req), "mcp__weather__forecast") || !slices.Contains(toolNames(req), "mcp__docs__search") {
+			t.Errorf("first call tools %v, notice %q; want docs tools only and the notice", toolNames(req), got)
 		}
+		prompt := req.Instructions
 		elapse(time.Second)
 		submit(t, s, text("b", "second"))
 		req, _ = f.last("s1", "second")
 		want := []string{"mcp__docs__search", "mcp__weather__forecast"}
-		if got := slices.DeleteFunc(toolNames(req), func(n string) bool { return !strings.HasPrefix(n, "mcp__") }); !slices.Equal(got, want) || strings.Contains(req.Instructions, "[mcp:") {
-			t.Errorf("second call tools %v, prompt %q; want %v and no notice", got, req.Instructions, want)
+		if got := slices.DeleteFunc(toolNames(req), func(n string) bool { return !strings.HasPrefix(n, "mcp__") }); !slices.Equal(got, want) || mcpNotice(req) != mcpRecovered || req.Instructions != prompt {
+			t.Errorf("second call tools %v, notice %q; want %v, the recovery line, and the prompt of the first call", got, mcpNotice(req), want)
 		}
 		closeRuntime(t, r)
 	})
@@ -127,15 +138,15 @@ func TestMCPServerThatStaysDownParksUntilTheModelConnects(t *testing.T) {
 			t.Errorf("status at boot = %s, want %s", got, want)
 		}
 		elapse(time.Second)
-		if req := ask(mcpStatusCall); !strings.Contains(req.Instructions, mcpDownNotice) {
-			t.Errorf("prompt after one retry = %q, want the retrying notice", req.Instructions)
+		if got := mcpNotice(ask(mcpStatusCall)); got != mcpDownNotice {
+			t.Errorf("notice after one retry = %q, want the retrying notice", got)
 		}
 		if got, want := last(), fmt.Sprintf(statusLine, 2, false); got != want {
 			t.Errorf("status after one retry = %s, want %s", got, want)
 		}
 		elapse(time.Hour)
-		if req := ask(mcpStatusCall); !strings.Contains(req.Instructions, mcpParkedNotice) {
-			t.Errorf("prompt after the last retry = %q, want the parked notice", req.Instructions)
+		if got := mcpNotice(ask(mcpStatusCall)); got != mcpParkedNotice {
+			t.Errorf("notice after the last retry = %q, want the parked notice", got)
 		}
 		if got, want := last(), fmt.Sprintf(statusLine, 4, true); got != want {
 			t.Errorf("status after the last retry = %s, want %s", got, want)
@@ -143,8 +154,8 @@ func TestMCPServerThatStaysDownParksUntilTheModelConnects(t *testing.T) {
 		weather.SetAvailable(true)
 		ask("connect")
 		req := ask("after")
-		if strings.Contains(req.Instructions, "[mcp:") || !slices.Contains(toolNames(req), "mcp__weather__forecast") {
-			t.Errorf("call after connect has tools %v, prompt %q; want the tool and no notice", toolNames(req), req.Instructions)
+		if mcpNotice(req) != mcpRecovered || !slices.Contains(toolNames(req), "mcp__weather__forecast") {
+			t.Errorf("call after connect has tools %v, notice %q; want the tool and the recovery line", toolNames(req), mcpNotice(req))
 		}
 		closeRuntime(t, r)
 	})

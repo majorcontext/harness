@@ -64,7 +64,14 @@ func (s *Source) retry(name string) {
 	}
 }
 
-// unavailable renders the prompt line that names each server that is not
+// noticeKind is the kind of the notice of the servers that are down, and
+// recovered is what the conversation says when the last of them connects.
+const (
+	noticeKind = "mcp"
+	recovered  = "[mcp: every configured server is connected again.]"
+)
+
+// unavailable renders the notice that names each server that is not
 // connected, with the reason, or "" when every server is connected. The
 // caller holds s.mu.
 func (s *Source) unavailable() string {

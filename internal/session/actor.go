@@ -158,14 +158,13 @@ type Actor struct {
 	stopped   bool
 	retryStop context.CancelFunc
 	retryAt   time.Time
-	// bannered is set once bannerPin holds the place of the banner.
-	bannered  bool
-	bannerPin int
+	// pins holds the engine context that the model reads inside the history.
+	pins *turn.Pins
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
 	a := &Actor{cfg: cfg, mail: make(chan func()), quit: make(chan struct{}), done: make(chan struct{}),
-		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s}
+		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s, pins: &turn.Pins{}}
 	a.view.Store(&View{changed: make(chan struct{})})
 	a.publish(false)
 	return a

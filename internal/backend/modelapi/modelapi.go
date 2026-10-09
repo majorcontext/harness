@@ -199,9 +199,9 @@ func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 			return nil, err
 		}
 	}
-	if req.Banner != "" {
-		banner := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: req.Banner}}}
-		msgs = slices.Insert(msgs, min(req.BannerAt, len(msgs)), banner)
+	for i, p := range req.Pins.Pinned() {
+		pin := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: p.Text}}}
+		msgs = slices.Insert(msgs, min(p.At, len(req.History))+i, pin)
 	}
 	tools := make([]provider.ToolDef, len(req.Tools))
 	for i, t := range req.Tools {

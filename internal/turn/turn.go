@@ -88,9 +88,12 @@ type Request struct {
 	Questions bool
 	// Foreign reports History messages that another provider recorded.
 	Foreign bool
-	// Banner is engine context that each model call sends after History[:BannerAt].
-	Banner   string
-	BannerAt int
+	// Banner is the engine status that the first model call of a session
+	// pins. Empty: none.
+	Banner string
+	// Pins holds the engine context that the model reads inside the
+	// conversation. nil: none.
+	Pins *Pins
 	// Blob reads the bytes of a blob part.
 	Blob func(ctx context.Context, key string) ([]byte, error)
 	// Params changes the model, the output cap, and the sampling of each
@@ -243,7 +246,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		res, err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
-				req.History, req.BannerAt = h, min(req.BannerAt, len(h))
+				req.History = h
 				continue
 			}
 		}
