@@ -1053,7 +1053,8 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 
 ## Open questions
 
-No question is open.
+- Does `adjust` inside a goal turn judge that turn on the old condition, as the engine did? Open: the engine ran the evaluator on the condition from the start of the turn, discarded its verdict as stale, spent a turn of `max_turns` on it, and ran the next turn with the new condition and an "adjusted" notice. The runtime judges the turn on the new condition. Matching needs a stale-verdict rule in the goal actor. Port the rule, or record the break?
+- Does `cancel` of a child report its canceled grandchild to the nearest live ancestor, as the engine did? Open: the engine reported a canceled grandchild to the nearest ancestor that is not terminal, which is the parent that called `cancel`, and skipped a finished child. The runtime silences the descendants of a `cancel` and reports only the target. Only `DELETE /sessions/{id}` has the nearest-live-ancestor routing. Port the routing for `cancel`, or record the break?
 
 ## Closed parity questions
 
@@ -1094,6 +1095,8 @@ Each row is a difference between the runtime and the engine that remains after t
 | Place of a pinned segment that a compaction folds into a kept tail | The pin sits at its slot inside the tail, between a tool call and its result | The pin sits at the end of the history, after the next input | Decided by Andy (2026-10-05): the runtime keeps the call and its result paired; see Settle | `child_report_to_a_busy_parent_folded_with_a_long_kept_tail` |
 | Pinned segment after a restart | The segment is gone | The segment is rebuilt from the log | Decided by Andy (2026-10-05): the runtime keeps the report; see Settle | `child_report_to_a_busy_parent_survives_a_restart` |
 | `event_sink` | The engine posts each journal record to the URL | `Load` rejects the key as unknown; a box harness replicates through the config key `sync` (see Events) | Closed: boxes moves to `Sync` at the cutover (see Decided) | None: no row sets `event_sink` |
+| Evaluator condition after `adjust` in a goal turn | The turn is judged on the old condition, the verdict is discarded as stale, and it costs a turn of `max_turns` | The turn is judged on the new condition | Open question | `goal_tool_adjust_keeps_the_turn_limit` waits for the line |
+| Report of a canceled grandchild | The report goes to the nearest ancestor that is not terminal | `cancel` silences the descendants and reports only the target | Open question | `task_cancel_of_a_child_stops_the_grandchild` waits for the line |
 
 ## Decided
 
