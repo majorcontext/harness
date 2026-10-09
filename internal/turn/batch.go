@@ -7,8 +7,8 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// maxParallel bounds the tool calls of one model call that run at once.
-const maxParallel = 8
+// MaxParallel bounds the tool calls of one model call that run at once.
+const MaxParallel = 8
 
 // Alone is a Tool that runs with no other call of its model call in flight:
 // each earlier call ends before it starts, and it ends before a later call
@@ -46,7 +46,7 @@ type batch struct {
 	done      []chan struct{}
 }
 
-// runBatch runs calls, at most maxParallel at once, and gives the result of
+// runBatch runs calls, at most MaxParallel at once, and gives the result of
 // each call that ran to emit in call order as soon as it and every earlier
 // call have ended, after the Join of the hooks. When ctx ends, every running
 // call is canceled and none starts; the result of each call that ran is still
@@ -104,7 +104,7 @@ func (b *batch) collect(ctx context.Context, emit func(i int, r protocol.ToolRes
 // cannot start holds no slot.
 func (b *batch) schedule() {
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, min(maxParallel, len(b.calls)))
+	slots := make(chan struct{}, min(MaxParallel, len(b.calls)))
 	tail := map[string]chan struct{}{}
 	for i, c := range b.calls {
 		if b.alone(c.Name) {

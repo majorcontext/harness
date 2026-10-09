@@ -17,7 +17,8 @@ const (
 	skillHeader = "Available skills. Each skill below is a capability you can use, but only its name and description are shown here. " +
 		"To activate a skill you MUST first read its SKILL.md file with the read_file tool before relying on it; do not assume its contents from the description alone."
 	batchingPrefix = "If you intend to call multiple tools"
-	batchingSuffix = "to determine the dependent values."
+	batchingText   = "If you intend to call multiple tools and there are no dependencies between the calls, make all of the independent calls in the same message: " +
+		"harness runs one message's tool calls concurrently, up to 8 at a time. Otherwise you MUST wait for previous calls to finish first to determine the dependent values."
 )
 
 func skillFile(name, description, body string) string {
@@ -34,13 +35,14 @@ func inDir(files map[string]string, rest ...action) []action {
 }
 
 // systemTail checks the system prompt of the first model request after the
-// base prompt. It records whether the tool-batching segment follows the base
-// prompt and whether a blank line joins the segments. It cuts out the batching
-// segment and its separator, then the rest must equal the segments joined by
-// that separator. A turn that fails before its first model call records sent
-// false.
+// base prompt. The segments after the base prompt must be, joined by one
+// separator: the first layers entries of parts, the tool-batching segment, and
+// the rest of parts. It records whether the segment is in the prompt and
+// whether a blank line joins the segments. A turn that fails before its first
+// model call records sent false.
 type systemTail struct {
-	parts []string // the segments after the base prompt, with the work dir as <workdir>
+	parts  []string // the segments after the base prompt, except the tool-batching segment, with the work dir as <workdir>
+	layers int      // how many of parts come before the tool-batching segment
 }
 
 func (a systemTail) run(t *testing.T, r *run) {
@@ -61,25 +63,11 @@ func (a systemTail) run(t *testing.T, r *run) {
 			sep = "\n\n"
 		}
 		rec["blank_line_join"] = sep == "\n\n"
-		if i := strings.Index(tail, batchingPrefix); i >= 0 {
-			rec["batching_segment"] = true
-			end := strings.Index(tail[i:], batchingSuffix)
-			if end < 0 {
-				t.Fatalf("the tool-batching segment does not end as expected:\n%s", tail[i:])
-			}
-			head, rest := tail[:i], tail[i+end+len(batchingSuffix):]
-			if rest != "" {
-				rest = strings.TrimPrefix(rest, sep)
-			} else {
-				head = strings.TrimSuffix(head, sep)
-			}
-			tail = head + rest
-		}
-		want := ""
-		if len(a.parts) > 0 {
-			want = sep + strings.Join(a.parts, sep)
-		}
-		if tail != want {
+		rec["batching_segment"] = strings.Contains(tail, batchingPrefix)
+		segs := slices.Clone(a.parts[:a.layers])
+		segs = append(segs, batchingText)
+		segs = append(segs, a.parts[a.layers:]...)
+		if want := sep + strings.Join(segs, sep); tail != want {
 			t.Errorf("system segments after the base prompt differ:\n got %q\nwant %q", tail, want)
 		}
 	}
@@ -385,7 +373,7 @@ func TestContractPromptSystemOrder(t *testing.T) {
 			".agents/skills/demo/SKILL.md":     skillFile("demo", "Demo.", "x"),
 			".agents/skills/zeta-two/SKILL.md": skillFile("zeta-two", "Zeta.", "x"),
 		}, "", map[string]any{"append_system_prompt": []string{"USER-LAYER"}}),
-		actions: append(slices.Clone(oneTurn), systemTail{parts: []string{
+		actions: append(slices.Clone(oneTurn), systemTail{layers: 2, parts: []string{
 			"USER-LAYER", "PROJECT-LAYER",
 			instructionOf + "be brief\n",
 			skillHeader + "\ndemo — Demo. (path: <workdir>/.agents/skills/demo/SKILL.md)\nzeta-two — Zeta. (path: <workdir>/.agents/skills/zeta-two/SKILL.md)",
