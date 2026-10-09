@@ -89,7 +89,7 @@
     "system_tail": {
       "status": 200,
       "body": {
-        "batching_segment": false,
+        "batching_segment": true,
         "blank_line_join": true,
         "sent": true
       }

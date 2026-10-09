@@ -71,22 +71,21 @@ const (
 	specGoalFailed   = "An error the user must fix yields `failed`."
 	specNoParkedGoal = "There is no deferred goal and no parked goal."
 
-	specPromptSwitch = "At the switch, the `runtime_prompt` contract rows change in two ways"
-	specBadFileSkip  = "a bad file degrades instead of failing the turn"
-	specNoBatching   = "no batching segment follows the base prompt"
-	specBlankJoin    = "The runtime joins them with a blank line."
-	specMCPNoLeak    = "An error that is not the server's own RPC error names a reason, never the endpoint URL or a response body."
-	specRetainBound  = "`read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`."
-	specNoReader     = "A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call."
-	specRetainIndex  = "Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds."
-	specFileCap      = "A file-size cap of 20 MiB bounds one file:"
-	specToolImages   = "A reader of the history that shows text (`View.Messages`, `get_conversation_history`, the `log` of `task`) shows the text of the result and no blob."
-	specProfileSkip  = "A file with a key that the format does not know is skipped with a WARN log line, as in the engine."
-	specProfileFail  = "Any other file that is not valid, such as one with no `name`, fails the load, and the error names the file, with no `engine:` prefix"
-	specProfileModel = "`model` (a ref or an alias; omitted or `inherit` keeps the model of the parent)"
-	specProfileColor = "`color` is read and ignored"
-	specProfileSwap  = "beside the built-in profiles, which a file of the same name replaces"
-	specFileSkipped  = "A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a skill that is not valid or repeats a name."
+	specStatusFollows = "The base prompt says that the status follows the system prompt."
+	specBadFileSkip   = "a bad file degrades instead of failing the turn"
+	specBlankJoin     = "The runtime joins them with a blank line."
+	specMCPNoLeak     = "An error that is not the server's own RPC error names a reason, never the endpoint URL or a response body."
+	specRetainBound   = "`read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`."
+	specNoReader      = "A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call."
+	specRetainIndex   = "Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds."
+	specFileCap       = "A file-size cap of 20 MiB bounds one file:"
+	specToolImages    = "A reader of the history that shows text (`View.Messages`, `get_conversation_history`, the `log` of `task`) shows the text of the result and no blob."
+	specProfileSkip   = "A file with a key that the format does not know is skipped with a WARN log line, as in the engine."
+	specProfileFail   = "Any other file that is not valid, such as one with no `name`, fails the load, and the error names the file, with no `engine:` prefix"
+	specProfileModel  = "`model` (a ref or an alias; omitted or `inherit` keeps the model of the parent)"
+	specProfileColor  = "`color` is read and ignored"
+	specProfileSwap   = "beside the built-in profiles, which a file of the same name replaces"
+	specFileSkipped   = "A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a skill that is not valid or repeats a name."
 
 	specContinuation  = "in `<harness-engine-context>` tags, so the model reads it as engine text"
 	specListOrder     = "list in creation order"
@@ -174,32 +173,32 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
 	"mcp_connect_adds_tools_but_not_instructions":                                                              reGolden(specMCPNotice),
-	"skills_listed_sorted_and_read_through_read_file":                                                          reGolden(specNoBatching, specBlankJoin),
-	"skills_dirs_config_replaces_the_default_dir":                                                              reGolden(specNoBatching, specBlankJoin),
-	"skills_from_several_dirs_are_listed_sorted_by_name":                                                       reGolden(specNoBatching, specBlankJoin),
-	"skills_dirs_empty_list_disables_discovery":                                                                reGolden(specNoBatching),
-	"instructions_single_file_at_workdir":                                                                      reGolden(specNoBatching, specBlankJoin),
-	"instructions_chain_runs_root_to_workdir_and_stops_at_the_git_root":                                        reGolden(specNoBatching, specBlankJoin),
-	"instructions_outside_a_repository_read_only_the_workdir_file":                                             reGolden(specNoBatching, specBlankJoin),
-	"instructions_oversize_with_headings_become_an_outline_read_by_range":                                      reGolden(specNoBatching, specBlankJoin),
-	"instructions_mode_full_keeps_the_truncation_marker":                                                       reGolden(specNoBatching, specBlankJoin),
-	"instructions_chain_over_four_times_the_cap_drops_the_middle_files_nearest_the_root":                       reGolden(specNoBatching, specBlankJoin),
-	"instructions_first_section_over_the_cap_is_cut_with_the_marker_and_the_rest_is_outlined":                  reGolden(specNoBatching, specBlankJoin),
-	"instructions_outline_drops_the_teasers_over_its_budget":                                                   reGolden(specNoBatching, specBlankJoin),
-	"instructions_mode_full_from_the_environment_keeps_the_truncation_marker":                                  reGolden(specNoBatching, specBlankJoin),
-	"instructions_mode_other_than_full_keeps_the_outline":                                                      reGolden(specNoBatching, specBlankJoin),
-	"instructions_oversize_without_headings_keep_the_truncation_marker":                                        reGolden(specNoBatching, specBlankJoin),
-	"instructions_300_kb_file_with_headings_keeps_the_sections_that_fit_the_default_cap_and_outlines_the_rest": reGolden(specNoBatching, specBlankJoin),
-	"instructions_300_kb_file_without_headings_is_cut_at_the_default_cap_with_the_marker":                      reGolden(specNoBatching, specBlankJoin),
-	"instructions_300_kb_file_with_one_huge_first_section_is_cut_with_the_marker_and_the_rest_is_outlined":     reGolden(specNoBatching, specBlankJoin),
-	"instructions_negative_max_bytes_keeps_the_whole_file":                                                     reGolden(specNoBatching, specBlankJoin),
-	"instructions_false_in_config_injects_nothing":                                                             reGolden(specNoBatching),
-	"instructions_path_in_config_replaces_discovery":                                                           reGolden(specNoBatching, specBlankJoin),
-	"system_segments_order_append_layers_then_instructions_then_skills":                                        reGolden(specNoBatching, specBlankJoin),
-	"instructions_empty_file_fails_the_turn":                                                                   reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specView),
-	"instructions_empty_and_invalid_files_in_a_chain_fail_the_turn":                                            reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specView, specBlankJoin),
-	"skill_with_an_uppercase_name_fails_the_turn":                                                              reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specBlankJoin),
-	"skill_named_unlike_its_directory_fails_the_turn":                                                          reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specView),
+	"skills_listed_sorted_and_read_through_read_file":                                                          reGolden(specBlankJoin),
+	"skills_dirs_config_replaces_the_default_dir":                                                              reGolden(specBlankJoin),
+	"skills_from_several_dirs_are_listed_sorted_by_name":                                                       reGolden(specBlankJoin),
+	"skills_dirs_empty_list_disables_discovery":                                                                reGolden(specBlankJoin),
+	"instructions_single_file_at_workdir":                                                                      reGolden(specBlankJoin),
+	"instructions_chain_runs_root_to_workdir_and_stops_at_the_git_root":                                        reGolden(specBlankJoin),
+	"instructions_outside_a_repository_read_only_the_workdir_file":                                             reGolden(specBlankJoin),
+	"instructions_oversize_with_headings_become_an_outline_read_by_range":                                      reGolden(specBlankJoin),
+	"instructions_mode_full_keeps_the_truncation_marker":                                                       reGolden(specBlankJoin),
+	"instructions_chain_over_four_times_the_cap_drops_the_middle_files_nearest_the_root":                       reGolden(specBlankJoin),
+	"instructions_first_section_over_the_cap_is_cut_with_the_marker_and_the_rest_is_outlined":                  reGolden(specBlankJoin),
+	"instructions_outline_drops_the_teasers_over_its_budget":                                                   reGolden(specBlankJoin),
+	"instructions_mode_full_from_the_environment_keeps_the_truncation_marker":                                  reGolden(specBlankJoin),
+	"instructions_mode_other_than_full_keeps_the_outline":                                                      reGolden(specBlankJoin),
+	"instructions_oversize_without_headings_keep_the_truncation_marker":                                        reGolden(specBlankJoin),
+	"instructions_300_kb_file_with_headings_keeps_the_sections_that_fit_the_default_cap_and_outlines_the_rest": reGolden(specBlankJoin),
+	"instructions_300_kb_file_without_headings_is_cut_at_the_default_cap_with_the_marker":                      reGolden(specBlankJoin),
+	"instructions_300_kb_file_with_one_huge_first_section_is_cut_with_the_marker_and_the_rest_is_outlined":     reGolden(specBlankJoin),
+	"instructions_negative_max_bytes_keeps_the_whole_file":                                                     reGolden(specBlankJoin),
+	"instructions_false_in_config_injects_nothing":                                                             reGolden(specBlankJoin),
+	"instructions_path_in_config_replaces_discovery":                                                           reGolden(specBlankJoin),
+	"system_segments_order_append_layers_then_instructions_then_skills":                                        reGolden(specBlankJoin),
+	"instructions_empty_file_fails_the_turn":                                                                   reGolden(specFileSkipped, specBadFileSkip, specView),
+	"instructions_empty_and_invalid_files_in_a_chain_fail_the_turn":                                            reGolden(specFileSkipped, specBadFileSkip, specView, specBlankJoin),
+	"skill_with_an_uppercase_name_fails_the_turn":                                                              reGolden(specFileSkipped, specBadFileSkip, specBlankJoin),
+	"skill_named_unlike_its_directory_fails_the_turn":                                                          reGolden(specFileSkipped, specBadFileSkip, specView),
 	"task_profiles_skip_bad_files":                                                                             reGolden(specProfileSkip, specProfileFail, specOneResult, specView),
 	"task_profile_file_with_model_inherit_and_color_is_a_profile":                                              reGolden(specProfileModel, specProfileColor, specTaskInputs, specChildReport),
 	"task_profile_file_replaces_a_built_in_profile":                                                            reGolden(specProfileSwap, specTaskInputs, specChildReport),
@@ -399,9 +398,9 @@ var runtimeRows = map[string]runtimeRow{
 	"replay_after_kill_full_transcript":                                    reGolden(specMessages, specBootstrapGone, specErrors),
 	"send_to_child_and_cancel_tree":                                        reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView, specChildAgent),
 	"settings_model_change_reaches_the_next_model_call_of_a_turn":          reGolden(specUpdate),
-	"session_info_reports_the_session":                                     reGolden(specPromptSwitch),
-	"session_info_reports_what_the_session_loaded":                         reGolden(specPromptSwitch),
-	"session_info_reports_the_plugin_and_its_system_segment":               reGolden(specPromptSwitch),
+	"session_info_reports_the_session":                                     reGolden(specStatusFollows),
+	"session_info_reports_what_the_session_loaded":                         reGolden(specStatusFollows),
+	"session_info_reports_the_plugin_and_its_system_segment":               reGolden(specStatusFollows),
 	"session_settings_validation_and_persistence":                          reGolden(specNoProvider, specErrors, specUpdate, specView, specRestartOpens),
 	"sse_resume_after_kill":                                                reGolden(specCursor, specBoxGlobal, specRestartOpens),
 	"sse_resume_cursor":                                                    reGolden(specCursor, specBoxGlobal),

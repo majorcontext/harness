@@ -15,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/skill"
+	"github.com/majorcontext/harness/internal/turn"
 )
 
 // The budget keeps baseBehaviorGuidance a short floor, not a style guide.
@@ -44,8 +45,16 @@ type Info struct {
 	Skills []Skill
 }
 
+// toolBatching asks the model to put independent tool calls in one message.
+var toolBatching = fmt.Sprintf("If you intend to call multiple tools and there are no "+
+	"dependencies between the calls, make all of the independent calls in "+
+	"the same message: harness runs one message's tool calls concurrently, "+
+	"up to %d at a time. Otherwise you MUST wait for previous calls to "+
+	"finish first to determine the dependent values.", turn.MaxParallel)
+
 // Build returns the system prompt segments of a session in workDir: the base
-// prompt, append_system_prompt, the AGENTS.md chain, and the skill list. With
+// prompt, append_system_prompt, the tool-batching segment, the AGENTS.md
+// chain, and the skill list. With
 // no workDir it reads no file and returns only append_system_prompt. A file
 // that cannot be used is skipped.
 func Build(cfg config.Config, workDir string) []string { return Describe(cfg, workDir).Segments }
@@ -60,6 +69,7 @@ func Describe(cfg config.Config, workDir string) Info {
 		workDir = abs
 	}
 	segs := append([]string{Base(workDir)}, cfg.AppendSystemPrompt...)
+	segs = append(segs, toolBatching)
 	instr, names := instructions(cfg, workDir)
 	list, skills := skillList(cfg, workDir)
 	for _, s := range []string{instr, list} {
