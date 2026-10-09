@@ -310,7 +310,7 @@ func cutRunes(s string, n int) string {
 }
 
 // listNames joins names, and stops before the list passes toolNamesMax bytes.
-// Any 200 names pass that bound, so it also bounds their count.
+// Any 200 names need more than that bound, so it also bounds their count.
 func listNames(names []string) string {
 	var b strings.Builder
 	for i, n := range names {
