@@ -9,6 +9,9 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// bannerKind is the kind of the pin of Request.Banner.
+const bannerKind = "engine"
+
 // HistoryTool is the name of the tool that gives a backend that owns its loop
 // the conversation that its own session lacks.
 const HistoryTool = "get_conversation_history"
@@ -21,8 +24,21 @@ type Toolset struct {
 	Deferred []Tool
 	// Prompt follows the system prompt.
 	Prompt string
+	// Notices are statuses that the model reads inside the conversation, and
+	// not in the system prompt, so that the system prompt stays stable.
+	Notices []Notice
 	// Hooks run around each tool call. nil: none.
 	Hooks Hooks
+}
+
+// Notice is a status that the model reads inside the conversation. Each model
+// call pins a notice when its Text differs from the newest notice of its Kind.
+type Notice struct {
+	Kind string
+	// Text is the status now. Empty: nothing to report.
+	Text string
+	// Cleared is pinned once when Text turns empty after a status with text.
+	Cleared string
 }
 
 // Hooks run around each tool call of a model call.
@@ -57,7 +73,7 @@ func (f Fixed) Toolset(_ context.Context, _ []eventlog.Message, allowed []string
 }
 
 // Sources gives the tools of each Source in order, their prompts joined by a
-// blank line, and the hooks of every Source that has any, chained in order.
+// blank line, their notices, and the hooks of every Source that has any, chained in order.
 type Sources []Source
 
 // Toolset implements Source.
@@ -71,6 +87,7 @@ func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowe
 		if ts.Prompt != "" {
 			prompts = append(prompts, ts.Prompt)
 		}
+		out.Notices = append(out.Notices, ts.Notices...)
 		if ts.Hooks != nil {
 			hooks = append(hooks, ts.Hooks)
 		}
@@ -167,10 +184,10 @@ func (t runner) key(c protocol.ToolCall) (key string) {
 	return ""
 }
 
-// describe sets the tools, prompt, and Call of call and returns the runner of
-// its calls. all describes every tool, for a backend that owns the
-// loop.
-func describe(ctx context.Context, call *Request, src Source, all bool) runner {
+// describe sets the tools, prompt, and Call of call, pins its notices and
+// banner through to, and returns the runner of its calls. all describes every
+// tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
+func describe(ctx context.Context, call *Request, src Source, to Turn, all bool) runner {
 	var ts Toolset
 	if src != nil {
 		ts = src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
@@ -187,6 +204,9 @@ func describe(ctx context.Context, call *Request, src Source, all bool) runner {
 		call.Instructions = ts.Prompt
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
+	}
+	if !all && to != nil {
+		call.Pins = to.Pin(append(slices.Clip(ts.Notices), Notice{Kind: bannerKind, Text: call.Banner}), len(call.History))
 	}
 	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
 	call.Call = t.run

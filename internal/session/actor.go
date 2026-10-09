@@ -158,9 +158,8 @@ type Actor struct {
 	stopped   bool
 	retryStop context.CancelFunc
 	retryAt   time.Time
-	// bannered is set once bannerPin holds the place of the banner.
-	bannered  bool
-	bannerPin int
+	// pins holds the engine context that the model reads inside the history.
+	pins turn.Pins
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {

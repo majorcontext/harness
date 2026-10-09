@@ -88,9 +88,11 @@ type Request struct {
 	Questions bool
 	// Foreign reports History messages that another provider recorded.
 	Foreign bool
-	// Banner is engine context that each model call sends after History[:BannerAt].
-	Banner   string
-	BannerAt int
+	// Banner is the engine status that the first model call of a session
+	// pins. Empty: none.
+	Banner string
+	// Pins is a copy of the engine context that the model reads inside the conversation.
+	Pins []Pin
 	// Blob reads the bytes of a blob part.
 	Blob func(ctx context.Context, key string) ([]byte, error)
 	// Params changes the model, the output cap, and the sampling of each
@@ -190,6 +192,8 @@ type Turn interface {
 	Attach(mediaType string, data []byte) (eventlog.Part, error)
 	// Settings returns the model and settings of the session now, or "".
 	Settings() (string, eventlog.Settings)
+	// Pin pins the changed notices after at messages and returns every pin.
+	Pin(ns []Notice, at int) []Pin
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
 }
@@ -238,12 +242,12 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := applyParams(step, b, caps, req, &call); err != nil {
 			return err
 		}
-		t := describe(step, &call, src, caps.OwnsLoop)
+		t := describe(step, &call, src, to, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
-				req.History, req.BannerAt = h, min(req.BannerAt, len(h))
+				req.History = h
 				continue
 			}
 		}

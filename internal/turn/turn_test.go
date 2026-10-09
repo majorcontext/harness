@@ -48,6 +48,7 @@ func (r *recorder) Steer() ([]eventlog.Message, error) {
 	return in, nil
 }
 func (*recorder) Settings() (string, eventlog.Settings)     { return "", eventlog.Settings{} }
+func (*recorder) Pin([]turn.Notice, int) []turn.Pin         { return nil }
 func (*recorder) Ask(string, string, json.RawMessage) error { return nil }
 func (*recorder) Resolution(string) (eventlog.RequestResolved, bool) {
 	return eventlog.RequestResolved{}, false

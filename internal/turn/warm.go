@@ -20,7 +20,7 @@ func Warm(ctx context.Context, b Backend, req Request, src Source) error {
 	if !CanWarm(b, req.Model) {
 		return nil
 	}
-	describe(ctx, &req, src, b.Capabilities(req.Model).OwnsLoop)
+	describe(ctx, &req, src, nil, b.Capabilities(req.Model).OwnsLoop)
 	return b.(Warmer).Warm(ctx, req)
 }
 

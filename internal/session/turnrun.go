@@ -91,6 +91,17 @@ func (t *turnRun) Settings() (string, eventlog.Settings) {
 	return h.model, h.set
 }
 
+// Pin pins ns on the actor, which owns the pins, and returns every pin.
+func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
+	pins, _ := call(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
+		for _, n := range ns {
+			t.a.pins.Set(n.Kind, n.Text, n.Cleared, at)
+		}
+		reply(t.a.pins.Pinned(), nil)
+	})
+	return pins
+}
+
 // Ended ends the turn by the cause of its stop.
 func (t *turnRun) Ended(runErr error) {
 	_, _ = call(context.Background(), t.a, func(reply func(struct{}, error)) {
@@ -140,9 +151,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 		}
 		err := a.append(f.c)
 		h := a.state.ModelHistory()
-		if a.bannered {
-			a.bannerPin = min(a.bannerPin, len(h))
-		}
+		a.pins.Clamp(len(h))
 		reply(h, err)
 	})
 	return h, err == nil, err
