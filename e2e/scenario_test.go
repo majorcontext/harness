@@ -212,6 +212,10 @@ type writeFile struct{ path, body string }
 // dropToolBlobs removes the stored image bytes of every tool result from the store.
 type dropToolBlobs struct{}
 
+// awaitServeLog waits until the stderr of serve holds each of wants. The
+// in-process host has no stderr of its own, so the action does nothing there.
+type awaitServeLog struct{ wants []string }
+
 // models lists the models of the host and records the response.
 type models struct{}
 
@@ -350,7 +354,12 @@ func (a writeFile) run(t *testing.T, r *run) {
 		t.Fatal(err)
 	}
 }
-func (dropToolBlobs) run(t *testing.T, r *run)   { r.drv.DropToolBlobs(t) }
+func (dropToolBlobs) run(t *testing.T, r *run) { r.drv.DropToolBlobs(t) }
+func (a awaitServeLog) run(t *testing.T, r *run) {
+	if d, ok := r.drv.(*runtimeDriver); ok && d.serve {
+		awaitLog(t, d, a.wants...)
+	}
+}
 func (a awaitCommands) run(t *testing.T, r *run) { r.drv.AwaitCommands(t, r.id(t, a.as)) }
 func (a commandRecords) run(t *testing.T, r *run) {
 	r.record(t, "command_records", a.as, r.drv.CommandRecords(t, r.id(t, a.as)))

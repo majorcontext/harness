@@ -196,7 +196,8 @@ func TestContractFileToolsLimits(t *testing.T) {
 			model: append(toolChain(ftRead(ftArgs("path", "a.png"))),
 				harnesstest.Step{Name: "again", Match: assistantTurns(2), Reply: harnesstest.Reply{Text: "seen again"}}),
 			actions: append(append([]action{writeFile{path: "a.png", body: string(png)}}, oneTurn...),
-				dropToolBlobs{}, submit{as: "a", text: "again"}, waitIdle{as: "a"}),
+				dropToolBlobs{}, submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				awaitServeLog{wants: []string{`"level":"WARN"`, `"blob":"toolblob-`}}),
 		},
 		{
 			name: "write_guard_belongs_to_one_session",
