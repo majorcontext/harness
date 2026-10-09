@@ -295,6 +295,15 @@ func (a claudeAwaitText) run(t *testing.T, r *run) {
 	claudeDriverOf(t, r).awaitAssistantText(t, r.id(t, a.as), a.text)
 }
 
+// claudeAwaitToolCall blocks on the event stream until the session journals an
+// assistant message that holds the tool call callID.
+type claudeAwaitToolCall struct{ as, callID string }
+
+func (a claudeAwaitToolCall) run(t *testing.T, r *run) {
+	t.Helper()
+	claudeDriverOf(t, r).awaitToolCall(t, r.id(t, a.as), a.callID)
+}
+
 // claudeAwaitAdmitted blocks on the event stream until the session admitted n
 // inputs whose text holds text. A scenario that asserts the CLI gets no
 // message in a window waits for the input to be admitted, then opens the
@@ -496,6 +505,25 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 		}
 		return false
 	}, 20*time.Millisecond)
+}
+
+func (d *runtimeDriver) awaitToolCall(t *testing.T, id, callID string) {
+	t.Helper()
+	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+		if ev.Kind != "item.completed" {
+			return false
+		}
+		it := decodeEvent[logItem](t, ev)
+		if it.Message.Role != "assistant" {
+			return false
+		}
+		for _, p := range it.Message.Parts {
+			if p.Type == protocol.MessagePartToolCall && p.CallID == callID {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func (d *runtimeDriver) awaitAdmitted(t *testing.T, id, text string, n int) {

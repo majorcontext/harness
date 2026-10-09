@@ -59,12 +59,13 @@ const (
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
-	specClaudeGauge   = "A Claude Code turn reads its context gauge and its cost from the `result` frame, as the engine did"
-	specClaudeOnce    = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
-	specHistoryBridge = "When another provider recorded a message after the newest message that this backend saw"
-	specBackendState  = "Private backend state is a chain of `backend.state` records"
-	specMirrorBlob    = "The entries, the Claude Code transcript mirror, are appended as chunk blobs"
-	specKeepOwned     = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
+	specClaudeGauge     = "A Claude Code turn reads its context gauge and its cost from the `result` frame, as the engine did"
+	specToolCallsAtOnce = "The backend records the assistant item that holds a tool call when the `tool_use` frame arrives"
+	specClaudeOnce      = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
+	specHistoryBridge   = "When another provider recorded a message after the newest message that this backend saw"
+	specBackendState    = "Private backend state is a chain of `backend.state` records"
+	specMirrorBlob      = "The entries, the Claude Code transcript mirror, are appended as chunk blobs"
+	specKeepOwned       = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
 
 	specErrorText    = "the actor masks and bounds each error text that it writes to the log"
 	specGoalFailed   = "An error the user must fix yields `failed`."
@@ -518,6 +519,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_mirror_crash_before_a_transcript_starts_a_new_session":    reGolden(specView, specBackendState, specMirrorBlob, specCrash, specCrashQueue, specClaudeGauge),
 
 	"claudecode_interrupt_keeps_the_usage_of_the_result_after_the_signal":         reGolden(specView, specStopped, specClaudeGauge),
+	"claudecode_running_tool_call_is_in_the_messages_before_its_result":           reGolden(specView, specToolCallsAtOnce, specStopped, specOneResult),
 	"claudecode_interrupt_closes_a_tool_call_that_the_cli_left_open":              reGolden(specView, specStopped, specOneResult, specClaudeGauge),
 	"claudecode_interrupt_closes_a_tool_call_that_the_cli_printed_on_the_signal":  reGolden(specView, specStopped, specOneResult, specClaudeGauge),
 	"claudecode_interrupt_keeps_a_tool_result_that_the_cli_printed_on_the_signal": reGolden(specView, specStopped, specClaudeGauge),
