@@ -104,8 +104,8 @@ func newWireEvent(transport, event string, conn int, b openAIBody) WireEvent {
 }
 
 // OpenAI is a scripted OpenAI Responses server for the ChatGPT Codex wire,
-// over SSE and websocket. Release and AwaitCanceled fire only for a prewarm
-// that HoldPrewarm holds: NewOpenAI rejects Block.
+// over SSE and websocket. HoldPrewarm holds the first websocket prewarm, and
+// AwaitPrewarmHeld and AwaitPrewarmAbandoned observe it: NewOpenAI rejects Block.
 type OpenAI struct {
 	*Server
 	opts OpenAIOptions

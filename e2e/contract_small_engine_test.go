@@ -3,6 +3,7 @@ package e2e
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
@@ -124,7 +125,7 @@ func TestContractStartupPrewarmEndsWhenTheFirstTurnIsInterrupted(t *testing.T) {
 		}
 		d.Submit(t, id, "hello")
 		d.Interrupt(t, id)
-		if !o.AwaitPrewarmAbandoned(waitBound) {
+		if !o.AwaitPrewarmAbandoned(10 * time.Second) {
 			t.Fatalf("the interrupt of the first turn left the warm-up running\n%s", d.Stderr())
 		}
 		if err := d.AwaitTurnEnd(id); err != nil {
