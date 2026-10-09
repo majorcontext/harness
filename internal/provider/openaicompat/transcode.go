@@ -246,9 +246,46 @@ func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOp
 		if err != nil {
 			return nil, fmt.Errorf("openaicompat: message %s: %w", m.ID, err)
 		}
-		out.Messages = append(out.Messages, msgs...)
+		for _, wm := range msgs {
+			out.Messages, err = appendWire(out.Messages, wm)
+			if err != nil {
+				return nil, fmt.Errorf("openaicompat: message %s: %w", m.ID, err)
+			}
+		}
 	}
 	return out, nil
+}
+
+// appendWire adds wm to msgs. An assistant message that follows an assistant
+// message joins it: the wire requires the tool messages of a tool call right
+// after the assistant message that holds it, so the tool calls of a run of
+// assistant items must share one message.
+func appendWire(msgs []apiMessage, wm apiMessage) ([]apiMessage, error) {
+	n := len(msgs)
+	if n == 0 || wm.Role != "assistant" || msgs[n-1].Role != "assistant" {
+		return append(msgs, wm), nil
+	}
+	last := &msgs[n-1]
+	var texts []string
+	for _, raw := range []json.RawMessage{last.Content, wm.Content} {
+		if len(raw) == 0 {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, err
+		}
+		texts = append(texts, text)
+	}
+	if len(texts) > 0 {
+		raw, err := json.Marshal(strings.Join(texts, "\n"))
+		if err != nil {
+			return nil, err
+		}
+		last.Content = raw
+	}
+	last.ToolCalls = append(last.ToolCalls, wm.ToolCalls...)
+	return msgs, nil
 }
 
 // transcodeMessage expands one canonical message into zero or more wire

@@ -240,6 +240,17 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 			claudeHistoryTool{as: "a"},
 		),
 	}, {
+		name:   "claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request",
+		driver: claudeLane{mode: "parallel_calls", chat: true}.newDriver,
+		chat:   true,
+		model: []harnesstest.Step{
+			{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}},
+		},
+		actions: withActions(claudeOneTurn,
+			setModel{as: "a", model: "bifrost/" + bifrostModel},
+			submit{as: "a", text: "native"}, waitIdle{as: "a"},
+		),
+	}, {
 		name:   "claudecode_history_bridge_after_native_turn",
 		driver: claudeLane{mode: "normal", historyTool: true}.newDriver,
 		model:  []harnesstest.Step{native},

@@ -278,6 +278,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors": sameAsServe(),
 	"claudecode_credential_refusal_in_errors_fails_a_goal":                 sameAsServe(),
 	"claudecode_history_bridge_after_native_turn":                          reGolden(specUpdate, specClaudeGauge),
+	"claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request":     reGolden(specToolCallsAtOnce),
 	"claudecode_interrupt_mid_turn":                                        reGolden(specView),
 	"claudecode_question_dismissed_by_compact":                             reGolden(specWaiting, specView, specCompactResult, specClaudeGauge),
 	"claudecode_question_dismissed_by_next_prompt":                         reGolden(specWaiting, specView, specClaudeGauge),
