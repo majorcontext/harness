@@ -75,6 +75,9 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("turn_metrics lines = %d, want 2: a model call that failed before its stream ended logs none\n%s", len(lines), d.Stderr())
 	}
+	if n := len(logLines(d.Stderr(), "startup_prewarm")); n != 0 {
+		t.Errorf("startup_prewarm lines = %d, want 0: a backend that cannot warm logs none\n%s", n, d.Stderr())
+	}
 	common := map[string]any{"session_id": id, "model": "anthropic/claude-fable-5", "cache_read_tokens": 0.0, "cache_write_tokens": 0.0}
 	wantFields(t, "first call", lines[0], map[string]any{"retry": 1.0, "input_tokens": 11.0, "output_tokens": 7.0})
 	wantFields(t, "second call", lines[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0})
@@ -117,6 +120,7 @@ func TestContractTurnMetricsLineOfAClaudeCodeTurn(t *testing.T) {
 	}
 	wantFields(t, "turn", lines[0], map[string]any{"session_id": id, "model": "claude-code/sonnet", "retry": 0.0,
 		"ttft_ms": 50.0, "stream_ms": 350.0, "input_tokens": 101.0, "output_tokens": 42.0, "cache_read_tokens": 7.0, "cache_write_tokens": 5.0})
+	wantFields(t, "turn", lines[0], map[string]any{"system_len": 0.0, "tools_count": 0.0})
 	wantAbsent(t, "turn", lines[0], "service_tier", "effort", "request_mode", "chain_refusal")
 }
 

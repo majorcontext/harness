@@ -240,7 +240,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		t := describe(step, &call, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
-		res, err := callModel(step, b, call, s, lim)
+		res, err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
 				req.History, req.BannerAt = h, min(req.BannerAt, len(h))
@@ -303,13 +303,13 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 
 // callModel runs one model call. It calls b again, at most lim.Retries
 // times, after an ErrRetryable error that came before any item.
-func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits) (Result, error) {
-	s.call = callOf(req, 0)
+func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) (Result, error) {
+	s.call = callOf(req, 0, ownsLoop)
 	res, err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
 		s.item = ""
 		if err = s.wait(ctx, n); err == nil {
-			s.call = callOf(req, n+1)
+			s.call = callOf(req, n+1, ownsLoop)
 			res, err = watch(ctx, b, req, s, lim.Idle)
 		}
 	}

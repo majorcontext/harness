@@ -478,8 +478,8 @@ func (r *run) telemetry(env envelope) {
 	r.out.Telemetry(t)
 }
 
-// callMetrics reads the timing of the result. A CLI that sends a duration
-// without a first-token time, or the reverse, leaves the stream time at zero.
+// callMetrics reads the timing of the result. A first-token time without a
+// duration leaves the stream time at zero.
 func callMetrics(env envelope) *turn.CallMetrics {
 	ttft := time.Duration(env.TTFTMillis) * time.Millisecond
 	return &turn.CallMetrics{TTFT: ttft, Stream: max(0, time.Duration(env.DurationMillis)*time.Millisecond-ttft)}
