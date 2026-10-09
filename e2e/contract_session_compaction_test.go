@@ -87,6 +87,34 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
+			name:   "auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens",
+			config: overThreshold,
+			model: []harnesstest.Step{
+				text("one", 5),
+				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: strings.Repeat("x", 4000), Usage: harnesstest.Usage{Output: 1}}},
+				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "re three"}},
+			},
+			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:   "auto_compaction_runs_again_after_a_model_change_moves_the_window",
+			config: map[string]any{"context_window_tokens": 0, "compaction_keep_turns": 1},
+			model: []harnesstest.Step{
+				text("one", 5), text("two", 900_000),
+				{Name: "summary1", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				text("three", 900_000),
+				{Name: "summary2", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				text("four", 5),
+			},
+			actions: withActions(twoTurns,
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				setModel{as: "a", model: "anthropic/claude-haiku-4-5"},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				getSession{as: "a"},
+			),
+		},
+		{
 			name:   "auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again",
 			config: overThreshold,
 			model: []harnesstest.Step{

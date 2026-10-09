@@ -10,7 +10,7 @@ import (
 // Config.Check validates a new model first.
 func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		set := a.state.Settings()
+		set, prev := a.state.Settings(), a.state.Model()
 		ch.Model = changed(ch.Model, a.state.Model())
 		ch.Effort = changed(ch.Effort, set.Effort)
 		ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
@@ -24,6 +24,9 @@ func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
 				events = a.dismissRequests()
 			}
 			err = a.append(append(events, ch)...)
+			if err == nil && ch.Model != nil && a.cfg.Backend.Capabilities(*ch.Model).ContextWindow != a.cfg.Backend.Capabilities(prev).ContextWindow {
+				a.latched = false
+			}
 		}
 		reply(struct{}{}, err)
 	})

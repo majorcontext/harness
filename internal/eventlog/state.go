@@ -181,30 +181,32 @@ const (
 
 // State is the durable session state. Apply is its only mutator.
 type State struct {
-	created    bool
-	parentID   string
-	agent      string
-	origin     string
-	model      string
-	settings   Settings
-	allowed    []string
-	head       uint64
-	createdAt  time.Time
-	updatedAt  time.Time
-	inputs     map[string]input
-	queue      []InputAdmitted
-	turn       Turn
-	turnIDs    map[string]bool
-	lastEnded  TurnEnded
-	calls      []OpenToolCall
-	requests   []pendingRequest
-	resolved   map[string]RequestResolved
-	goal       Goal
-	usage      Usage
-	context    ContextMeasured
-	subscribed *SubscriptionUsage
-	cost       *float64
-	compaction CompactionApplied
+	created   bool
+	parentID  string
+	agent     string
+	origin    string
+	model     string
+	settings  Settings
+	allowed   []string
+	head      uint64
+	createdAt time.Time
+	updatedAt time.Time
+	inputs    map[string]input
+	queue     []InputAdmitted
+	turn      Turn
+	turnIDs   map[string]bool
+	lastEnded TurnEnded
+	calls     []OpenToolCall
+	requests  []pendingRequest
+	resolved  map[string]RequestResolved
+	goal      Goal
+	usage     Usage
+	context   ContextMeasured
+	// measuredTurn is the turn count when the newest reading was recorded.
+	measuredTurn int
+	subscribed   *SubscriptionUsage
+	cost         *float64
+	compaction   CompactionApplied
 	// compactedAt is the seq of the record of the newest compaction.
 	compactedAt uint64
 	// compactedTime is the time of that record.
@@ -359,6 +361,9 @@ func (s *State) Usage() Usage { return s.usage }
 
 // Context returns the newest context measurement, with no usage.
 func (s *State) Context() ContextMeasured { return s.context }
+
+// Measured reports whether the newest reading was recorded in the newest turn.
+func (s *State) Measured() bool { return s.context != (ContextMeasured{}) && s.measuredTurn == s.turnN }
 
 // SubscriptionUsage returns the newest snapshot with the summed cost, or nil.
 // A cost with no snapshot gets an empty snapshot of the claude lane, with no capture time.

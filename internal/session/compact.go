@@ -69,7 +69,7 @@ func (a *Actor) autoCompact() bool {
 // window of the session model, or of the window of the newest reading when the
 // model reports none, for a backend that does not own its context. The context
 // is the newest reading, or an estimate of the history when a turn has ended and
-// no call reported prompt tokens. After an automatic compaction applied, or paid
+// the newest turn recorded no reading. After an automatic compaction applied, or paid
 // for an empty summary, the context must fall below the threshold once before
 // another one is due: the pressure sits in the kept turns.
 func (a *Actor) compactDue() bool {
@@ -79,7 +79,7 @@ func (a *Actor) compactDue() bool {
 		return false
 	}
 	tokens := c.Tokens
-	if tokens == 0 && a.state.LastEnded().TurnID != "" {
+	if !a.state.Measured() && a.state.LastEnded().TurnID != "" {
 		tokens = estimateTokens(a.state.History())
 	}
 	over := float64(tokens) >= a.cfg.Threshold*float64(window)
