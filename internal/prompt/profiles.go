@@ -105,7 +105,7 @@ func profile(path string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	f, unknown := skill.ParseFrontmatterFields(fm, profileKeys...)
+	f, unknown := skill.ParseFrontmatterFieldsDeferUnknown(fm, profileKeys...)
 	if unknown != nil && !errors.Is(unknown, skill.ErrUnknownKey) {
 		return Profile{}, unknown
 	}

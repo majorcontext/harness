@@ -52,15 +52,26 @@ func SplitFrontmatter(doc string) (frontmatter, body string, err error) {
 }
 
 // ParseFrontmatterFields parses frontmatter scalars with the supplied allowed
-// keys. It uses the same parser as Agent Skills. A key outside allowedKeys
-// does not stop the parse: any other error wins, and when there is none the
-// error wraps ErrUnknownKey and the fields hold the allowed keys.
+// keys. It uses the same parser as Agent Skills and stops at the first
+// problem, an unknown key included.
 func ParseFrontmatterFields(frontmatter string, allowedKeys ...string) (map[string]string, error) {
+	return parseFields(frontmatter, false, allowedKeys)
+}
+
+// ParseFrontmatterFieldsDeferUnknown parses like ParseFrontmatterFields, but a
+// key outside allowedKeys does not stop the parse: any other error wins, and
+// when there is none the error wraps ErrUnknownKey and the fields hold the
+// allowed keys.
+func ParseFrontmatterFieldsDeferUnknown(frontmatter string, allowedKeys ...string) (map[string]string, error) {
+	return parseFields(frontmatter, true, allowedKeys)
+}
+
+func parseFields(frontmatter string, deferUnknown bool, allowedKeys []string) (map[string]string, error) {
 	allowed := make(map[string]bool, len(allowedKeys))
 	for _, key := range allowedKeys {
 		allowed[key] = true
 	}
-	fields, _, err := parseFrontmatterWithKeys(frontmatter, allowed, true)
+	fields, _, err := parseFrontmatterWithKeys(frontmatter, allowed, deferUnknown)
 	return fields, err
 }
 

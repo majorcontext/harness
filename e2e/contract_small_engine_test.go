@@ -152,3 +152,24 @@ func TestContractStartupPrewarmEndsWhenTheFirstTurnIsInterrupted(t *testing.T) {
 		}
 	})
 }
+
+func TestContractPromptCommandWithAnUnknownKeyAndAnotherErrorListsTheUnknownKey(t *testing.T) {
+	skipShort(t)
+	onHosts(t, func(t *testing.T, h host) {
+		t.Parallel()
+		files := map[string]string{
+			".agents/commands/stray.md": "---\ndescription: S.\nhooks: y\nstray\n---\nBody.\n",
+			".agents/commands/ok.md":    "---\ndescription: O.\nhooks: y\n---\nBody.\n",
+		}
+		d, _ := startOn(t, h, runtimeWorkdir(t, files), nil, replyText("ok"))
+		body := bodyOf(t, d.Commands(t))
+		support, _ := body["serve_support"].(map[string]any)
+		for _, name := range []string{"stray", "ok"} {
+			entry, _ := support[name].(map[string]any)
+			reason, _ := entry["reason"].(string)
+			if entry["supported"] != false || !strings.Contains(reason, "unknown frontmatter key") || strings.Contains(reason, "malformed") {
+				t.Errorf("serve_support[%s] = %v, want an unsupported entry whose reason is the unknown key", name, entry)
+			}
+		}
+	})
+}
