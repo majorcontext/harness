@@ -172,6 +172,19 @@ func (d *runtimeDriver) Stderr() string {
 
 func (d *runtimeDriver) Workdir() string { return d.workDir }
 
+func (d *runtimeDriver) DropToolBlobs(t *testing.T) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(d.store, "*", "blobs", "toolblob-*"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("tool blobs in the store: %v, %v", paths, err)
+	}
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // endpoint is the base URL and client of the host.
 func (d *runtimeDriver) endpoint() (string, *http.Client) {
 	if d.serve {

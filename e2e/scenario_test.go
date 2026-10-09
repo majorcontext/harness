@@ -209,6 +209,9 @@ type steerOtherTurn struct{ as, text string }
 // writeFile writes a file into the work dir of the host.
 type writeFile struct{ path, body string }
 
+// dropToolBlobs removes the stored image bytes of every tool result from the store.
+type dropToolBlobs struct{}
+
 // models lists the models of the host and records the response.
 type models struct{}
 
@@ -347,6 +350,7 @@ func (a writeFile) run(t *testing.T, r *run) {
 		t.Fatal(err)
 	}
 }
+func (dropToolBlobs) run(t *testing.T, r *run)   { r.drv.DropToolBlobs(t) }
 func (a awaitCommands) run(t *testing.T, r *run) { r.drv.AwaitCommands(t, r.id(t, a.as)) }
 func (a commandRecords) run(t *testing.T, r *run) {
 	r.record(t, "command_records", a.as, r.drv.CommandRecords(t, r.id(t, a.as)))
