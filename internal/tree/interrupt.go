@@ -32,7 +32,14 @@ func (t *Tree) cancelTurn(ctx context.Context, id string, end bool) error {
 // no parent inside the tree starts a turn on a report. The walk outlives
 // ctx, so a caller that leaves does not stop half of a tree.
 func (t *Tree) Interrupt(ctx context.Context, id string, stop func(context.Context) error) error {
-	return t.walk(ctx, id, stop, false)
+	return t.walk(ctx, id, stop, walkKind{})
+}
+
+// Cancel stops session id and its descendants as Interrupt does, for the
+// cancel action of the task tool. The report of a descendant goes to session
+// route, not to its parent, which settles it with no report input.
+func (t *Tree) Cancel(ctx context.Context, id, route string) error {
+	return t.walk(ctx, id, func(ctx context.Context) error { return t.cancelTurn(ctx, id, false) }, walkKind{route: route})
 }
 
 // End is Interrupt for the end of session id: each descendant turn that it
@@ -40,10 +47,17 @@ func (t *Tree) Interrupt(ctx context.Context, id string, stop func(context.Conte
 // lands while stop refuses the end still reaches id; it marks them, so none
 // opens id again once stop has released it.
 func (t *Tree) End(ctx context.Context, id string, stop func(context.Context) error) error {
-	return t.walk(ctx, id, stop, true)
+	return t.walk(ctx, id, stop, walkKind{end: true})
 }
 
-func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) error, end bool) error {
+// walkKind is how a walk stops a tree: an end walk stops each turn with cause
+// ended, and a walk with a route sends the report of each descendant there.
+type walkKind struct {
+	end   bool
+	route string
+}
+
+func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) error, k walkKind) error {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	defer context.AfterFunc(t.cfg.Base, cancel)()
@@ -53,10 +67,10 @@ func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) e
 			t.hush(kid, m, -1)
 		}
 	}()
-	return t.stopTree(ctx, id, stop, marked, end, true)
+	return t.stopTree(ctx, id, stop, marked, k, true)
 }
 
-func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Context) error, marked map[string]walkMark, end, top bool) error {
+func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Context) error, marked map[string]walkMark, k walkKind, top bool) error {
 	mark := func() ([]string, error) {
 		var kids []string
 		err := t.s.Read(ctx, id, func(st *eventlog.State) { kids = st.Children() })
@@ -68,7 +82,7 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 		}
 		for _, kid := range kids {
 			if _, ok := marked[kid]; !ok {
-				m := walkMark{quiet: !end || !top, ending: end}
+				m := walkMark{quiet: !k.end || !top, ending: k.end, route: k.route}
 				marked[kid] = m
 				t.hush(kid, m, 1)
 			}
@@ -83,7 +97,7 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 	}
 	kids, err := mark()
 	for _, kid := range kids {
-		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, end) }, marked, end, false))
+		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, k.end) }, marked, k, false))
 	}
 	return err
 }
