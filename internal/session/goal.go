@@ -37,12 +37,16 @@ const (
 	goalMaxPauses        = 6
 	goalRetriesExhausted = "retries_exhausted"
 	goalInterrupted      = "interrupted"
-	// partBytes and transcriptBytes bound the transcript of the evaluator,
-	// which keeps the newest messages.
-	partBytes       = 4096
-	transcriptBytes = 128 << 10
-	partCut         = "…[truncated]"
-	transcriptCut   = "[earlier conversation omitted to fit the evaluator's context budget]\n"
+	// partBytes bounds one part of the transcript of the evaluator, which
+	// keeps the newest messages within a share of the window of the evaluator
+	// model: transcriptShare of the window less transcriptReserve tokens, at
+	// bytesPerToken. A model with no known window reads transcriptFloorWindow.
+	partBytes             = 4096
+	transcriptShare       = 0.5
+	transcriptReserve     = 2048
+	transcriptFloorWindow = 16000
+	partCut               = "…[truncated]"
+	transcriptCut         = "[earlier conversation omitted to fit the evaluator's context budget]\n"
 )
 
 var (
@@ -196,7 +200,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 	r := a.newRun(kindJudge, newID("goal"))
 	a.run = r
 	turnID := a.state.LastEnded().TurnID
-	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History())
+	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History(), a.transcriptBudget())
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
 		Settings: eventlog.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
@@ -271,10 +275,24 @@ func parseVerdict(answer string) (eventlog.Verdict, string) {
 	return eventlog.VerdictNotMet, t
 }
 
+// transcriptBudget returns the bytes of transcript that the evaluator model
+// reads: half its window less a reserve for the rest of the request, never
+// less than the reserve. A window that the backend only estimates counts as
+// transcriptFloorWindow.
+func (a *Actor) transcriptBudget() int {
+	caps := a.cfg.Backend.Capabilities(a.cfg.Evaluator)
+	window := caps.ContextWindow
+	if caps.WindowEstimated || window <= 0 {
+		window = transcriptFloorWindow
+	}
+	return max(int(float64(window)*transcriptShare)-transcriptReserve, transcriptReserve) * bytesPerToken
+}
+
 // transcript renders h for the evaluator: each message under its role, each
-// part cut at partBytes, and the newest messages within transcriptBytes. It
-// keeps the newest message even over the budget.
-func transcript(h []eventlog.Message) string {
+// part cut at partBytes, and the newest messages within budget bytes, each
+// message counted with the blank line that follows it. It keeps the newest
+// message even over the budget.
+func transcript(h []eventlog.Message, budget int) string {
 	var blocks []string
 	size := 0
 	for _, m := range slices.Backward(h) {
@@ -299,7 +317,7 @@ func transcript(h []eventlog.Message) string {
 			}
 			b.WriteString(s + "\n")
 		}
-		if size += b.Len(); size > transcriptBytes && len(blocks) > 0 {
+		if size += b.Len() + 1; size > budget && len(blocks) > 0 {
 			blocks = append(blocks, transcriptCut)
 			break
 		}

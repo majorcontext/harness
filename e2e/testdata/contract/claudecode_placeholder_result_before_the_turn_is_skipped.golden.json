@@ -1,0 +1,36 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Real answer."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_usage.a": {
+      "status": 200,
+      "body": {
+        "input_tokens": 7,
+        "output_tokens": 2
+      }
+    }
+  }
+}

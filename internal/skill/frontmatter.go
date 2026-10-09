@@ -61,7 +61,9 @@ func ParseFrontmatterFields(frontmatter string, allowedKeys ...string) (map[stri
 // ParseFrontmatterFieldsDeferUnknown parses like ParseFrontmatterFields, but a
 // key outside allowedKeys does not stop the parse: any other error wins, and
 // when there is none the error wraps ErrUnknownKey and the fields hold the
-// allowed keys.
+// allowed keys. A line under such a key that holds no colon is an error, so a
+// list or a block of text under it fails the parse; a line that holds a colon
+// reads as one more unknown key.
 func ParseFrontmatterFieldsDeferUnknown(frontmatter string, allowedKeys ...string) (map[string]string, error) {
 	return parseFields(frontmatter, true, allowedKeys)
 }
@@ -86,6 +88,7 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown b
 	fields = make(map[string]string)
 	lines := strings.Split(fm, "\n")
 	var unknown error
+	underUnknown := false
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -95,8 +98,12 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown b
 		}
 		// Top-level entries must not be indented.
 		if line != strings.TrimLeft(line, " \t") {
+			if underUnknown && strings.Contains(trimmed, ":") {
+				continue
+			}
 			return nil, nil, fmt.Errorf("unexpected indented line in frontmatter: %q", trimmed)
 		}
+		underUnknown = false
 
 		key, value, ok := splitKeyValue(trimmed)
 		if !ok {
@@ -109,9 +116,7 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown b
 			if unknown == nil {
 				unknown = fmt.Errorf("%w: %q", ErrUnknownKey, key)
 			}
-			if _, block := blockScalarIndicator(value); value == "" || block {
-				i = skipIndented(lines, i+1) - 1
-			}
+			underUnknown = true
 			continue
 		}
 
@@ -151,18 +156,6 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown b
 		fields[key] = unquote(value)
 	}
 	return fields, meta, unknown
-}
-
-// skipIndented returns the index of the first line from start that is neither
-// indented nor blank, which ends the value of the key above it.
-func skipIndented(lines []string, start int) int {
-	i := start
-	for ; i < len(lines); i++ {
-		if line := lines[i]; strings.TrimSpace(line) != "" && line == strings.TrimLeft(line, " \t") {
-			break
-		}
-	}
-	return i
 }
 
 // blockScalarIndicator reports whether a frontmatter value is a YAML block

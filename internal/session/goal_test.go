@@ -214,10 +214,10 @@ func TestParseVerdict(t *testing.T) {
 
 func TestTranscriptKeepsTheNewestMessageOverBudget(t *testing.T) {
 	big := eventlog.Message{Role: eventlog.RoleAssistant}
-	for range transcriptBytes/partBytes + 1 {
+	for range 9 {
 		big.Parts = append(big.Parts, eventlog.Part{Type: eventlog.PartText, Text: strings.Repeat("x", partBytes)})
 	}
-	got := transcript([]eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "old"}}}, big})
+	got := transcript([]eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "old"}}}, big}, 8*partBytes)
 	if !strings.HasPrefix(got, transcriptCut+"\nASSISTANT:\n") || strings.Contains(got, "old") {
 		t.Errorf("transcript starts %q, want the omitted marker, then the newest message", got[:min(len(got), 80)])
 	}

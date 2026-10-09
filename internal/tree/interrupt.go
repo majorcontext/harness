@@ -36,10 +36,13 @@ func (t *Tree) Interrupt(ctx context.Context, id string, stop func(context.Conte
 }
 
 // Cancel stops session id and its descendants as Interrupt does, for the
-// cancel action of the task tool. The report of a descendant goes to session
-// route, not to its parent, which settles it with no report input.
-func (t *Tree) Cancel(ctx context.Context, id, route string) error {
-	return t.walk(ctx, id, func(ctx context.Context) error { return t.cancelTurn(ctx, id, false) }, walkKind{route: route})
+// cancel action of the task tool. up holds the ancestors of id, nearest first.
+// The report of id and of each descendant goes to the first of them whose turn
+// has not ended with an outcome when the report is delivered, else to
+// fallback. A parent that is not that session settles the child with no report
+// input.
+func (t *Tree) Cancel(ctx context.Context, id string, up []string, fallback string) error {
+	return t.walk(ctx, id, func(ctx context.Context) error { return t.cancelTurn(ctx, id, false) }, walkKind{route: &route{up: up, fallback: fallback}})
 }
 
 // End is Interrupt for the end of session id: each descendant turn that it
@@ -51,10 +54,11 @@ func (t *Tree) End(ctx context.Context, id string, stop func(context.Context) er
 }
 
 // walkKind is how a walk stops a tree: an end walk stops each turn with cause
-// ended, and a walk with a route sends the report of each descendant there.
+// ended, and a walk with a route sends the report of the session that it
+// stops, and of each descendant, along it.
 type walkKind struct {
 	end   bool
-	route string
+	route *route
 }
 
 func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) error, k walkKind) error {
@@ -67,6 +71,10 @@ func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) e
 			t.hush(kid, m, -1)
 		}
 	}()
+	if k.route != nil {
+		marked[id] = walkMark{route: k.route}
+		t.hush(id, marked[id], 1)
+	}
 	return t.stopTree(ctx, id, stop, marked, k, true)
 }
 

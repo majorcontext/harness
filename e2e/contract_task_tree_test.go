@@ -62,6 +62,20 @@ func TestContractTaskTree(t *testing.T) {
 			}),
 		},
 		{
+			name:       "task_cancel_of_a_grandchild_reports_to_the_nearest_live_ancestor",
+			concurrent: true,
+			model: grandchildren(
+				taskStep("look", userStarts("cancel grand"), onKid(func(kid string) []map[string]any { return []map[string]any{onSession("status", kid)} })),
+				busyTaskStep("cancel_grand", lastResultHas(`"children":["ses_`), func(r harnesstest.Request) []map[string]any {
+					return []map[string]any{onSession("cancel", resultID(r, childrenIDPattern))}
+				})),
+			actions: slices.Concat(tree, []action{
+				submit{as: "a", text: "cancel grand"},
+				waitIdle{as: "a"},
+				waitIdle{as: "grand"},
+			}),
+		},
+		{
 			name:       "task_tree_interrupt_stops_the_grandchild",
 			concurrent: true,
 			model:      grandchildren(),

@@ -128,6 +128,7 @@ var basicModes = map[string]mode{
 	"placeholder_on_interrupt": hangAfterText,
 	"exit_on_interrupt":        hangAfterText,
 	"crash":                    crashAfter(),
+	"placeholder_before_turn":  frames(success("", 0, 0).set("num_turns", 0), say("Real answer."), success("Real answer.", 7, 2)),
 	"fast_no_drain":            frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"error":                    frames(failed(11, 3, "fake failure")),
 	"rate_limit_error":         frames(failed(6, 1, "rate_limit_error: please retry later")),
