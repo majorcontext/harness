@@ -1111,7 +1111,7 @@ Each row is a difference between the runtime and the engine that remains after t
 | `event_sink` | The engine posts each journal record to the URL | `Load` rejects the key as unknown; a box harness replicates through the config key `sync` (see Events) | Closed: boxes moves to `Sync` at the cutover (see Decided) | None: no row sets `event_sink` |
 | Evaluator condition after `adjust` in a goal turn | The turn is judged on the old condition, the verdict is discarded as stale, and it costs a turn of `max_turns` | The turn is judged on the new condition | Open question | `goal_tool_adjust_keeps_the_turn_limit` waits for the line |
 | Report of a canceled grandchild | The report goes to the nearest ancestor that is not terminal | `cancel` silences the descendants and reports only the target | Open question | `task_cancel_of_a_child_stops_the_grandchild` waits for the line |
-| Parallel tool calls of one Claude Code response | One grouped journal message; the live tool-start event at once | One item per `tool_use` frame in wire order, each recorded when its frame arrives | Decided by Andy (2026-10-09): each call is recorded as it arrives; the chat-completions transcoder joins the run of assistant items into one wire message | `claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request` |
+| Parallel tool calls of one Claude Code response | One grouped journal message; the live tool-start event at once | One item per `tool_use` frame in wire order, each recorded when its frame arrives; the chat-completions transcoder joins the run of assistant items into one wire message | Decided by Andy (2026-10-09): each call is recorded as it arrives | `claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request` |
 
 ## Decided
 

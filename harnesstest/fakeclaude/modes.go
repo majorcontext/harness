@@ -45,8 +45,11 @@ func parallelCalls(f *fake) {
 	bash := func(n, cmd string) obj {
 		return assistant(toolUse("toolu_"+n, "Bash", obj{"command": cmd})).inMessage("id", "msg_parallel")
 	}
+	note := func(s string) obj { return say(s).inMessage("id", "msg_parallel") }
 	f.emit(
+		note("Running a."),
 		bash("a", "echo a"),
+		note("Running b."),
 		bash("b", "echo b"),
 		user(toolResult("toolu_a", "a\n", false)),
 		user(toolResult("toolu_b", "b\n", false)),
