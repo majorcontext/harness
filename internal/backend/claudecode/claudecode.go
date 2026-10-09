@@ -33,11 +33,6 @@ const continuation = "The previous turn was interrupted. " +
 	"Continue the unfinished work from the saved conversation. " +
 	"Check the current state before repeating actions that may already have completed."
 
-// reportTrigger is the text of a turn that only reports of children start,
-// before the segment that holds their task lines.
-const reportTrigger = "A background task you started has finished. " +
-	"See the engine context below for its result, and continue accordingly."
-
 // historyDirective tells a CLI session that lacks part of the conversation to
 // read it through the history tool before it answers.
 const historyDirective = "You are continuing a conversation that happened on another model. " +
@@ -375,7 +370,7 @@ func startParts(inputs []eventlog.Message) []eventlog.Part {
 		}
 	}
 	if len(parts) == 0 && len(tasks) > 0 {
-		parts = append(parts, eventlog.Part{Type: eventlog.PartText, Text: reportTrigger})
+		parts = append(parts, eventlog.Part{Type: eventlog.PartText, Text: eventlog.ReportTrigger})
 	}
 	if len(tasks) > 0 {
 		parts = append(parts, eventlog.Part{Type: eventlog.PartEngineContext, Text: eventlog.TaskSegment(tasks)})

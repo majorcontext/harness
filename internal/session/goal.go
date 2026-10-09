@@ -55,8 +55,8 @@ var (
 // and no input queued, it admits the condition as an input with source
 // goal. Otherwise the next turn that ends is the first one judged.
 func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) error {
-	return a.setGoal(ctx, false, func(eventlog.Goal, bool) (*eventlog.GoalSet, error) {
-		return &eventlog.GoalSet{Condition: condition, MaxTurns: maxTurns}, nil
+	return a.setGoal(ctx, func(eventlog.Goal, bool) (*eventlog.GoalSet, bool, error) {
+		return &eventlog.GoalSet{Condition: condition, MaxTurns: maxTurns}, false, nil
 	})
 }
 
@@ -66,37 +66,42 @@ func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) err
 // the goal tool. It fails with ErrGoalActive while a goal is active or
 // paused.
 func (a *Actor) StartGoal(ctx context.Context, condition string) error {
-	return a.setGoal(ctx, true, func(_ eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
+	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*eventlog.GoalSet, bool, error) {
 		if live {
-			return nil, ErrGoalActive
+			return nil, false, ErrGoalActive
 		}
-		return &eventlog.GoalSet{Condition: condition}, nil
+		return &eventlog.GoalSet{Condition: condition}, true, nil
 	})
 }
 
 // AdjustGoal replaces the condition of the active or paused goal. It keeps
 // max_turns and the turn count, so an adjust never extends the turn limit.
-// The same condition changes nothing. It fails with ErrNoGoal when no goal
-// is active or paused.
+// The same condition changes nothing. A condition that still waits in the
+// queue is replaced by the new one. It fails with ErrNoGoal when no goal is
+// active or paused.
 func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
-	return a.setGoal(ctx, false, func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
+	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*eventlog.GoalSet, bool, error) {
 		switch {
 		case !live:
-			return nil, ErrNoGoal
+			return nil, false, ErrNoGoal
 		case g.Condition == condition:
-			return nil, nil
+			return nil, false, nil
 		}
-		return &eventlog.GoalSet{Condition: condition, MaxTurns: g.MaxTurns, Turns: g.Turns}, nil
+		waiting := slices.ContainsFunc(a.state.Queue(), func(in eventlog.InputAdmitted) bool {
+			return in.Source == sourceGoal && textOf(eventlog.Message{Parts: in.Parts}) == g.Condition
+		})
+		return &eventlog.GoalSet{Condition: condition, MaxTurns: g.MaxTurns, Turns: g.Turns}, waiting, nil
 	})
 }
 
 // setGoal appends the goal that set returns for the current goal, and
-// whether that goal is active or paused. A nil goal appends nothing. With
-// post, the condition is an input even while the session is busy.
-func (a *Actor) setGoal(ctx context.Context, post bool, set func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error)) error {
+// whether that goal is active or paused. A nil goal appends nothing. When
+// set reports post, the condition is an input even while the session is
+// busy.
+func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*eventlog.GoalSet, bool, error)) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		g, _ := a.state.Goal()
-		gs, err := set(g, g.State == eventlog.GoalActive || g.State == eventlog.GoalPaused)
+		gs, post, err := set(g, g.State == eventlog.GoalActive || g.State == eventlog.GoalPaused)
 		if err != nil || gs == nil {
 			reply(struct{}{}, err)
 			return
@@ -275,8 +280,13 @@ func transcript(h []eventlog.Message) string {
 		b.WriteString(strings.ToUpper(m.Role) + ":\n")
 		for _, p := range m.Parts {
 			s := p.Text
-			if p.Type == eventlog.PartToolCall {
-				s = p.Name + " " + string(p.Arguments)
+			switch {
+			case p.Type == eventlog.PartToolCall:
+				s = "[tool call " + p.Name + "] " + string(p.Arguments)
+			case p.Type == eventlog.PartToolResult && p.IsError:
+				s = "[tool result (error)] " + p.Text
+			case p.Type == eventlog.PartToolResult:
+				s = "[tool result] " + p.Text
 			}
 			if len(s) > partBytes {
 				s = strings.ToValidUTF8(s[:partBytes], "") + " [cut]"

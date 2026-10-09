@@ -23,7 +23,7 @@ const goalDescription = "Inspect, set, or adjust this session's completion goal:
 	"adjust(condition) rewrites the condition of an ALREADY-active goal in place; a running goal loop " +
 	"picks up the new condition at its next turn boundary. " +
 	"There is no action to clear a goal here — clearing an active goal is operator-only, via " +
-	"DELETE /sessions/{id}/goal on the HTTP API."
+	"DELETE /goal on the server API."
 
 const goalSchema = `{
 	"type": "object",
@@ -52,7 +52,7 @@ func (goalTool) Spec() protocol.ToolSpec {
 func (goalTool) Alone() {}
 
 // Bind returns the tool of session id, or nil for a child session.
-func (t goalTool) Bind(id string, child bool) turn.Tool {
+func (t goalTool) Bind(id string, child bool, _ int) turn.Tool {
 	if child {
 		return nil
 	}
@@ -75,20 +75,20 @@ func (t goalTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 	case "status":
 	case "set":
 		if cond == "" {
-			return protocol.ToolResult{}, fmt.Errorf("goal: set requires a non-empty condition (if a goal is already active, %s)", adjustInstead)
+			return protocol.ToolResult{}, fmt.Errorf("goal: engine: RegisterGoal requires a non-empty condition (if a goal is already active, %s)", adjustInstead)
 		}
 		if err = s.a.StartGoal(ctx, cond); errors.Is(err, session.ErrGoalActive) {
 			return protocol.ToolResult{}, fmt.Errorf("goal: a goal is already active; %s", adjustInstead)
 		}
 	case "adjust":
 		if cond == "" {
-			return protocol.ToolResult{}, errors.New("goal: adjust requires a non-empty condition")
+			return protocol.ToolResult{}, errors.New("goal: engine: UpdateGoal requires a non-empty condition")
 		}
 		if err = s.a.AdjustGoal(ctx, cond); errors.Is(err, session.ErrNoGoal) {
-			return protocol.ToolResult{}, errors.New("goal: no active goal to update")
+			return protocol.ToolResult{}, errors.New("goal: engine: no active goal to update")
 		}
 	default:
-		return protocol.ToolResult{}, fmt.Errorf("goal: unknown action %q (clearing a goal is operator-only — DELETE /sessions/{id}/goal on the HTTP API)", in.Action)
+		return protocol.ToolResult{}, fmt.Errorf("goal: unknown action %q (clearing a goal is operator-only — DELETE /goal on the server API)", in.Action)
 	}
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("goal: %w", err)

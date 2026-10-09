@@ -50,15 +50,16 @@ var profileKeys = []string{"name", "description", "tools", "model", "color"}
 
 // Profiles returns the built-in profiles and each valid *.md file of dirs in
 // the agent format of Claude Code, by name. A file replaces a built-in
-// profile of its name. A file that is not valid is skipped with a WARN log
-// line. A file that repeats the name of an earlier file, in one directory or
-// across dirs, is left out, and the load returns the profiles of the other
-// files with an error that names both files of the first repeat.
+// profile of its name. A file with a key that the format does not know is
+// skipped with a WARN log line. Any other file that is not valid, and a file
+// that repeats the name of an earlier file, in one directory or across dirs,
+// is left out, and the load returns the profiles of the other files with the
+// error of the first such file; a repeat names both files.
 func Profiles(dirs []string) (map[string]Profile, error) {
 	out := map[string]Profile{GeneralPurpose: generalPurpose, explore.Name: explore, plan.Name: plan}
 	source := map[string]string{}
 	read := map[string]bool{}
-	var repeated error
+	var failed error
 	for _, dir := range dirs {
 		if dir = filepath.Clean(dir); read[dir] {
 			continue
@@ -71,13 +72,19 @@ func Profiles(dirs []string) (map[string]Profile, error) {
 			}
 			path := filepath.Join(dir, e.Name())
 			p, err := profile(path)
-			if err != nil {
+			switch {
+			case errors.Is(err, skill.ErrUnknownKey):
 				slog.Warn("prompt: agent profile skipped", "path", path, "err", err)
+				continue
+			case err != nil:
+				if failed == nil {
+					failed = fmt.Errorf("agent definition %s: %w", path, err)
+				}
 				continue
 			}
 			if first, ok := source[p.Name]; ok {
-				if repeated == nil {
-					repeated = fmt.Errorf("agent definition %s: name %q already defined in %s", path, p.Name, first)
+				if failed == nil {
+					failed = fmt.Errorf("agent definition %s: name %q already defined in %s", path, p.Name, first)
 				}
 				continue
 			}
@@ -85,10 +92,8 @@ func Profiles(dirs []string) (map[string]Profile, error) {
 			out[p.Name] = p
 		}
 	}
-	return out, repeated
+	return out, failed
 }
-
-var errFields = errors.New("name and description are required")
 
 func profile(path string) (Profile, error) {
 	data, err := os.ReadFile(path)
@@ -103,8 +108,10 @@ func profile(path string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	if f["name"] == "" || f["description"] == "" {
-		return Profile{}, errFields
+	for _, key := range []string{"name", "description"} {
+		if f[key] == "" {
+			return Profile{}, fmt.Errorf("frontmatter missing required '%s'", key)
+		}
 	}
 	p := Profile{Name: f["name"], Description: f["description"], Prompt: strings.TrimSpace(body)}
 	if f["model"] != "inherit" {

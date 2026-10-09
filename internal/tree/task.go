@@ -20,8 +20,8 @@ const taskSchema = `{
 	"type": "object",
 	"properties": {
 		"action": {"type": "string", "enum": ["spawn", "cancel", "status", "send", "log"], "description": "The operation to perform; defaults to \"spawn\" if omitted"},
-		"agent": {"type": "string", "description": "spawn only: the agent profile of the child (default general-purpose)"},
-		"prompt": {"type": "string", "description": "The whole task for the child (spawn), or the message to deliver to it (send). The child sees nothing of this conversation."},
+		"agent": {"type": "string", "description": "spawn only: the agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
+		"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 		"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
 		"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high; omitted means the provider default"},
 		"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
@@ -29,22 +29,23 @@ const taskSchema = `{
 	}
 }`
 
-const taskDescription = "Delegate work to a child session, or manage one you already spawned (directly or transitively). " +
-	"action selects the operation and defaults to \"spawn\" if omitted. " +
-	"spawn(agent?, prompt, model?, effort?): starts a child agent that does a task in the background, in a session of its own. " +
-	"The call returns at once with the session id of the child. The final report of the child arrives later as a new message: " +
-	"do not poll or wait for it. agent selects the profile of the child: general-purpose has every tool, " +
-	"explore finds code with read-only tools, plan returns an implementation plan with read-only tools, " +
-	"and each .agents/*.md file of the project adds a profile. A call with an unknown agent lists the profiles. " +
-	"model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. " +
+const taskDescription = "Delegate work to a child session, or manage one you already spawned (directly or transitively). action selects the " +
+	"operation and defaults to \"spawn\" if omitted. " +
+	"spawn(agent, prompt, model?, effort?): starts a child session that runs independently in the background and returns immediately with its " +
+	"session id — it does NOT wait for the child to finish, and you do not need to poll for the result. The child's outcome arrives " +
+	"later as engine context on one of your own future turns. agent selects the child's tool set and persona: built-in types are " +
+	"\"general-purpose\" (full tool set, can itself spawn children), \"explore\" (read-only, for fast code search), and \"plan\" " +
+	"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more, and this project's " +
+	"current full roster (built-ins plus any custom types) is listed in the error if you call this tool with an agent name it does " +
+	"not recognize. model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. " +
 	"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
 	"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
-	"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered " +
-	"at its next turn boundary; if it is not running, it runs a fresh turn with your message, and that report arrives later " +
-	"exactly like a new spawn's would. " +
-	"log(session_id, tail?): returns the last tail transcript entries of a descendant — living or dead — so you can read what it " +
-	"was doing and how it ended. tail defaults to 20 and is capped; entries are filled newest-first under a total size budget, " +
-	"and the reply reports how many of the transcript's messages it returned. " +
+	"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
+	"next turn boundary (you do not need to wait for it to go idle first); if it is NOT actively running (finished, or idle and never " +
+	"started), it is relaunched with your message as a fresh turn, and that outcome arrives later exactly like a new spawn's would. " +
+	"log(session_id, tail?): returns the last tail transcript entries of a descendant — living or dead — so you can read what it was doing and how it " +
+	"ended, instead of guessing from its fail_reason. tail defaults to 20 and is capped; entries are filled newest-first under a total size " +
+	"budget, and the reply reports how many of the transcript's messages it returned. " +
 	"cancel/status/send/log only work on a session YOU spawned, directly or through a chain of your own children — anything else is refused."
 
 var taskActions = []string{"spawn", "cancel", "status", "send", "log"}
@@ -60,15 +61,22 @@ type taskTool struct {
 // tool to one session, as the runtime asks of a session tool.
 func (t *Tree) Tool() turn.Tool { return taskTool{tree: t} }
 
-type taskArgs struct {
+type taskToolArgs struct {
 	Action, Agent, Prompt string
 	Model, Effort         string
 	SessionID             string `json:"session_id"`
 	Tail                  int
 }
 
-// Bind returns the tool of session id.
-func (t taskTool) Bind(id string, _ bool) turn.Tool { t.parent = id; return t }
+// Bind returns the tool of session id at depth, or nil for a session at
+// max_task_depth.
+func (t taskTool) Bind(id string, _ bool, depth int) turn.Tool {
+	if !t.tree.allowsTask(depth) {
+		return nil
+	}
+	t.parent = id
+	return t
+}
 
 // Spec returns the definition of the task tool.
 func (taskTool) Spec() protocol.ToolSpec {
@@ -88,7 +96,7 @@ func (taskTool) Key(c protocol.ToolCall) string {
 
 // Run runs one action of the task tool.
 func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	var in taskArgs
+	var in taskToolArgs
 	if err := json.Unmarshal(c.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("task: invalid arguments: %w", err)
 	}
@@ -115,7 +123,7 @@ func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 	return protocol.ToolResult{Text: string(b)}, err
 }
 
-func (t taskTool) act(ctx context.Context, in taskArgs, up []string) (any, error) {
+func (t taskTool) act(ctx context.Context, in taskToolArgs, up []string) (any, error) {
 	switch in.Action {
 	case "spawn":
 		return t.spawn(ctx, in)
@@ -144,7 +152,7 @@ func (t taskTool) descendant(ctx context.Context, id string) ([]string, error) {
 	return up, nil
 }
 
-func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
+func (t taskTool) spawn(ctx context.Context, in taskToolArgs) (any, error) {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, errors.New("prompt is required")
 	}
@@ -154,7 +162,7 @@ func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
 		SessionID string `json:"session_id"`
 		Agent     string `json:"agent"`
 		Note      string `json:"note"`
-	}{id, in.Agent, "running in the background; its report arrives later as a message. Do not poll or wait for it."}, err
+	}{id, in.Agent, "spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it"}, err
 }
 
 // cancel stops session id and each of its descendants, and withdraws
@@ -191,7 +199,7 @@ func (t taskTool) status(ctx context.Context, id string, up []string) (any, erro
 		protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens}}, nil
 }
 
-func (t taskTool) send(ctx context.Context, in taskArgs, up []string) (any, error) {
+func (t taskTool) send(ctx context.Context, in taskToolArgs, up []string) (any, error) {
 	text := strings.TrimSpace(in.Prompt)
 	if text == "" {
 		return nil, errors.New(`prompt is required for action "send"`)
@@ -211,7 +219,7 @@ func (t taskTool) send(ctx context.Context, in taskArgs, up []string) (any, erro
 	}{in.SessionID, queued, note}, err
 }
 
-func (t taskTool) log(ctx context.Context, in taskArgs) (any, error) {
+func (t taskTool) log(ctx context.Context, in taskToolArgs) (any, error) {
 	if in.Tail < 0 {
 		return nil, errors.New(`tail must not be negative for action "log"`)
 	}

@@ -390,7 +390,6 @@ func TestContractRuntimeChildReportsAfterEnd(t *testing.T) {
 		name    string
 		model   []harnesstest.Step
 		actions []action
-		session string
 		reports bool
 	}{
 		{
@@ -398,7 +397,6 @@ func TestContractRuntimeChildReportsAfterEnd(t *testing.T) {
 			model: []harnesstest.Step{delegate, blocked("child", "child work"), ack, blocked("more", "more"), rest},
 			actions: append(slices.Clone(endA),
 				submit{as: "kid", text: "more"}, awaitRequests{n: 4}, interrupt{as: "kid"}, awaitRequests{n: 5}),
-			session: "a",
 			reports: true,
 		},
 		{
@@ -419,19 +417,20 @@ func TestContractRuntimeChildReportsAfterEnd(t *testing.T) {
 				cancelTree{as: "a"},
 				submit{as: "kid", text: "hello"},
 			},
-			session: "kid",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := runScenario(t, scenario{concurrent: true, model: tc.model, actions: tc.actions}, runtimeHost)
 			var reported bool
-			for _, m := range obs.Sessions[tc.session] {
-				for _, p := range m.Parts {
-					reported = reported || m.Role == "user" && strings.Contains(p.Text, "outcome: canceled")
+			for _, r := range obs.Requests {
+				for _, m := range r.Messages {
+					for _, p := range m.Parts {
+						reported = reported || m.Role == "user" && strings.Contains(p.Text, "failed: canceled")
+					}
 				}
 			}
 			if reported != tc.reports {
-				t.Errorf("%s holds a canceled report = %v, want %v: %+v", tc.session, reported, tc.reports, obs.Sessions[tc.session])
+				t.Errorf("a model request holds a canceled report = %v, want %v: %+v", reported, tc.reports, obs.Requests)
 			}
 		})
 	}

@@ -7,7 +7,7 @@ tools_test.go Options.Tools and Restrict are Go API with no serve equivalent; an
 mcp_test.go AllowedTools at Create has no serve oracle: the engine create takes no allowed tools; the retry wait of a down server needs the fake clock of a synctest bubble, which a serve binary cannot take
 plugin_test.go plugin start failures surface at Create here and at serve start on the engine; Create after Close is Go API
 reads_test.go both hosts open each session with work at start, so no row isolates a read that must not open a session
-goaltool_test.go the goal tool rows wait on the runtime: its evaluator transcript, its refusal wording, and the withdrawal of a set condition by adjust differ from serve
+goaltool_test.go the adjust-keeps-the-turn-limit row waits on the condition that the evaluator reads after an adjust inside a goal turn
 internal/prompt/guidance_test.go goldens reduce the system prompt to a flag, so the base prompt text reaches no row
 internal/prompt/prompt_test.go an empty Options.WorkDir is Go API: no file is read
 internal/tool/builtin/builtin_test.go an empty Options.WorkDir is Go API: no built-in tool exists

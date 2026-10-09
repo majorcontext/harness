@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -71,10 +71,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "goal",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "set",
+                "condition": "b"
               },
               "tool_use_id": "toolu#1"
             }
@@ -85,8 +85,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "{\"active\":true,\"condition\":\"b\"}",
+              "tool_name": "goal",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -100,6 +100,7 @@
         "bash",
         "edit_file",
         "glob",
+        "goal",
         "grep",
         "ls",
         "model",
@@ -116,11 +117,61 @@
           "parts": [
             {
               "kind": "text",
-              "text": "child work"
+              "text": "go"
             },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "set",
+                "condition": "b"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"active\":true,\"condition\":\"b\"}",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "adjust",
+                "condition": "c"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"active\":true,\"condition\":\"c\"}",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#2"
             }
           ]
         }
@@ -133,6 +184,7 @@
         "bash",
         "edit_file",
         "glob",
+        "goal",
         "grep",
         "ls",
         "model",
@@ -149,15 +201,95 @@
           "parts": [
             {
               "kind": "text",
-              "text": "child work"
+              "text": "go"
             },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            },
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "set",
+                "condition": "b"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"active\":true,\"condition\":\"b\"}",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "adjust",
+                "condition": "c"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"active\":true,\"condition\":\"c\"}",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
             {
               "kind": "text",
-              "text": "again"
+              "text": "went"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "c"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nc\n\nCONVERSATION TRANSCRIPT:\nUSER:\ngo\n\nASSISTANT:\n[tool call goal] {\"action\":\"set\",\"condition\":\"b\"}\n\nTOOL:\n[tool result] {\"active\":true,\"condition\":\"b\"}\n\nASSISTANT:\n[tool call goal] {\"action\":\"adjust\",\"condition\":\"c\"}\n\nTOOL:\n[tool result] {\"active\":true,\"condition\":\"c\"}\n\nASSISTANT:\nwent\n\nUSER:\nc\n\nASSISTANT:\nok"
             }
           ]
         }
@@ -172,7 +304,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "delegate"
+            "text": "go"
           }
         ]
       },
@@ -183,10 +315,10 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "task",
+            "name": "goal",
             "arguments": {
-              "agent": "general-purpose",
-              "prompt": "child work"
+              "action": "set",
+              "condition": "b"
             }
           }
         ]
@@ -198,7 +330,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
+            "content": "{\"active\":true,\"condition\":\"b\"}"
           }
         ]
       },
@@ -207,49 +339,60 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "waiting"
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "goal",
+            "arguments": {
+              "action": "adjust",
+              "condition": "c"
+            }
           }
         ]
-      }
-    ],
-    "kid": [
+      },
       {
         "id": "msg#5",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "child work"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "{\"active\":true,\"condition\":\"c\"}"
           }
         ]
       },
       {
         "id": "msg#6",
-        "role": "user",
+        "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "again"
+            "text": "went"
           }
         ]
       },
       {
         "id": "msg#7",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "c"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "rest"
+            "text": "ok"
           }
         ]
       }
     ]
   },
   "calls": {
-    "cancel_tree.a": {
-      "status": 204
-    },
     "get_session.a": {
       "status": 200,
       "body": {
@@ -258,11 +401,17 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
+        "goal": {
+          "condition": "c",
+          "reason": "ok",
+          "state": "achieved",
+          "turns": 1
+        },
+        "head_seq": 24,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
-          "turn_id": "turn#2"
+          "turn_id": "turn#1"
         },
         "model": "anthropic/claude-fable-5",
         "origin": "",
@@ -271,80 +420,9 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 20,
+          "output_tokens": 12
         }
-      }
-    },
-    "get_session.kid": {
-      "status": 200,
-      "body": {
-        "agent": "general-purpose",
-        "context": {
-          "tokens": 0,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
-        "id": "ses:kid",
-        "last_turn": {
-          "cause": "stopped",
-          "stop_reason": "interrupted",
-          "turn_id": "turn#1"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "task",
-        "parent_id": "ses:a",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        }
-      }
-    },
-    "get_session.kid#2": {
-      "status": 200,
-      "body": {
-        "agent": "general-purpose",
-        "context": {
-          "tokens": 5,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
-        "id": "ses:kid",
-        "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#3"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "task",
-        "parent_id": "ses:a",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 5,
-          "output_tokens": 3
-        }
-      }
-    },
-    "send.kid": {
-      "status": 201,
-      "body": {
-        "input_id": "in2",
-        "seq": 5
-      }
-    },
-    "send.kid#2": {
-      "status": 201,
-      "body": {
-        "input_id": "in3",
-        "seq": 8
       }
     }
   }

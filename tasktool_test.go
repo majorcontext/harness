@@ -27,7 +27,7 @@ var taskActionRows = []struct {
 	want  string
 }{
 	{name: "a spawn past max_tree_tokens is refused", child: done, cfg: config.Config{MaxTreeTokens: 10},
-		args: map[string]any{"prompt": "child work"}, want: "task: max_tree_tokens 10: this session tree has used N tokens"},
+		args: map[string]any{"prompt": "child work"}, want: "task: engine: task tree token budget exceeded"},
 }
 
 func TestTaskActions(t *testing.T) {
@@ -51,8 +51,7 @@ func TestTaskActions(t *testing.T) {
 				submit(t, s, text("b", "act"))
 				synctest.Wait()
 				res := f.results("s1")
-				// A report that joins a running turn costs the parent one model call less, so the token count races.
-				if got := strings.NewReplacer(kid, "KID", "used 24 tokens", "used N tokens", "used 30 tokens", "used N tokens").Replace(res[len(res)-1]); got != tc.want {
+				if got := strings.ReplaceAll(res[len(res)-1], kid, "KID"); got != tc.want {
 					t.Errorf("result\n%s\nwant\n%s", got, tc.want)
 				}
 				closeRuntime(t, r)

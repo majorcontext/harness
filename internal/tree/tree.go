@@ -90,6 +90,17 @@ func New(s Sessions, cfg Config) *Tree {
 	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}}
 }
 
+// The refusals of a spawn, with the text of the engine.
+var (
+	errDepth   = errors.New("engine: task depth limit reached")
+	errRunning = errors.New("engine: tree concurrency limit reached")
+	errBudget  = errors.New("engine: task tree token budget exceeded")
+)
+
+// allowsTask reports whether a session at depth may have the task tool: a
+// session at max_task_depth has none.
+func (t *Tree) allowsTask(depth int) bool { return depth < t.cfg.MaxDepth }
+
 // Choice is what a spawn takes from its caller beside the agent and the task:
 // the model of the child, or "" for the model of its profile and then of its
 // parent, and the effort of the child, or "" for the default of its provider.
@@ -104,7 +115,7 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	}
 	p, ok := profiles[agent]
 	if !ok {
-		return "", fmt.Errorf("unknown agent %q; the agents are %s", agent, strings.Join(slices.Sorted(maps.Keys(profiles)), ", "))
+		return "", fmt.Errorf("unknown agent %q (available: %s)", agent, strings.Join(slices.Sorted(maps.Keys(profiles)), ", "))
 	}
 	effort, err := message.ParseEffort(ch.Effort)
 	if err != nil {
@@ -148,13 +159,13 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 // append one step. A child that ps already counts needs no new slot, so a
 // second spawn of it, as two senders to one settled child make, passes.
 func (t *Tree) SpawnChild(ctx context.Context, ps Node, child, agent string) (eventlog.SessionCreated, error) {
-	if depth := ps.Depth + 1; depth > t.cfg.MaxDepth {
-		return eventlog.SessionCreated{}, fmt.Errorf("max_task_depth %d allows no child at depth %d", t.cfg.MaxDepth, depth)
+	if !t.allowsTask(ps.Depth) {
+		return eventlog.SessionCreated{}, errDepth
 	}
 	defer t.lock(ps.Root)()
 	if !slices.Contains(ps.Actor.View().Unsettled, child) {
 		if n := t.unsettled(ps.Root); n >= t.cfg.MaxRunning {
-			return eventlog.SessionCreated{}, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", t.cfg.MaxRunning, n)
+			return eventlog.SessionCreated{}, errRunning
 		}
 		if err := t.withinBudget(ctx, ps.Root); err != nil {
 			return eventlog.SessionCreated{}, err
@@ -253,7 +264,7 @@ func (t *Tree) withinBudget(ctx context.Context, root string) error {
 	}
 	n, err := t.tokens(ctx, root)
 	if err == nil && n >= int64(t.cfg.MaxTokens) {
-		err = fmt.Errorf("max_tree_tokens %d: this session tree has used %d tokens", t.cfg.MaxTokens, n)
+		err = errBudget
 	}
 	return err
 }

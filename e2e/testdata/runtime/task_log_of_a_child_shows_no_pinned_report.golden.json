@@ -85,7 +85,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -144,7 +144,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -164,7 +164,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nok"
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: ok (usage: 15 in / 9 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -221,7 +225,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -241,7 +245,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nok"
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: ok (usage: 15 in / 9 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -316,7 +324,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -336,7 +344,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nok"
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: ok (usage: 15 in / 9 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -377,7 +389,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"status\":\"done\",\"agent_type\":\"general-purpose\",\"total_messages\":6,\"returned\":6,\"entries\":[{\"role\":\"user\",\"text\":\"child work\"},{\"role\":\"assistant\",\"text\":\"spawning\\n[tool_call] task({\\\"agent\\\":\\\"general-purpose\\\",\\\"prompt\\\":\\\"grand work\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] {\\\"session_id\\\":\\\"\u003csession\u003e\\\",\\\"agent\\\":\\\"general-purpose\\\",\\\"note\\\":\\\"running in the background; its report arrives later as a message. Do not poll or wait for it.\\\"}\"},{\"role\":\"assistant\",\"text\":\"[tool_call] bash({\\\"command\\\":\\\"echo busy; sleep 0.3\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] busy\\n\"},{\"role\":\"assistant\",\"text\":\"ok\"}]}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"status\":\"done\",\"agent_type\":\"general-purpose\",\"total_messages\":6,\"returned\":6,\"entries\":[{\"role\":\"user\",\"text\":\"child work\"},{\"role\":\"assistant\",\"text\":\"spawning\\n[tool_call] task({\\\"agent\\\":\\\"general-purpose\\\",\\\"prompt\\\":\\\"grand work\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] {\\\"session_id\\\":\\\"\u003csession\u003e\\\",\\\"agent\\\":\\\"general-purpose\\\",\\\"note\\\":\\\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\\\"}\"},{\"role\":\"assistant\",\"text\":\"[tool_call] bash({\\\"command\\\":\\\"echo busy; sleep 0.3\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] busy\\n\"},{\"role\":\"assistant\",\"text\":\"ok\"}]}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -472,7 +484,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#2"
             }
@@ -534,7 +546,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#2"
             }
@@ -638,7 +650,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },
@@ -658,7 +670,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nok"
+            "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
           }
         ]
       },
@@ -704,7 +716,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"status\":\"done\",\"agent_type\":\"general-purpose\",\"total_messages\":6,\"returned\":6,\"entries\":[{\"role\":\"user\",\"text\":\"child work\"},{\"role\":\"assistant\",\"text\":\"spawning\\n[tool_call] task({\\\"agent\\\":\\\"general-purpose\\\",\\\"prompt\\\":\\\"grand work\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] {\\\"session_id\\\":\\\"\u003csession\u003e\\\",\\\"agent\\\":\\\"general-purpose\\\",\\\"note\\\":\\\"running in the background; its report arrives later as a message. Do not poll or wait for it.\\\"}\"},{\"role\":\"assistant\",\"text\":\"[tool_call] bash({\\\"command\\\":\\\"echo busy; sleep 0.3\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] busy\\n\"},{\"role\":\"assistant\",\"text\":\"ok\"}]}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"status\":\"done\",\"agent_type\":\"general-purpose\",\"total_messages\":6,\"returned\":6,\"entries\":[{\"role\":\"user\",\"text\":\"child work\"},{\"role\":\"assistant\",\"text\":\"spawning\\n[tool_call] task({\\\"agent\\\":\\\"general-purpose\\\",\\\"prompt\\\":\\\"grand work\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] {\\\"session_id\\\":\\\"\u003csession\u003e\\\",\\\"agent\\\":\\\"general-purpose\\\",\\\"note\\\":\\\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\\\"}\"},{\"role\":\"assistant\",\"text\":\"[tool_call] bash({\\\"command\\\":\\\"echo busy; sleep 0.3\\\"})\"},{\"role\":\"tool\",\"text\":\"[tool_result] busy\\n\"},{\"role\":\"assistant\",\"text\":\"ok\"}]}"
           }
         ]
       },
@@ -778,7 +790,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },

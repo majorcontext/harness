@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -71,10 +71,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "goal",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "adjust",
+                "condition": "x"
               },
               "tool_use_id": "toolu#1"
             }
@@ -85,9 +85,10 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
+              "text": "goal: engine: no active goal to update",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#1",
+              "is_error": true
             }
           ]
         }
@@ -117,7 +118,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -130,10 +131,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "goal",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "adjust",
+                "condition": "x"
               },
               "tool_use_id": "toolu#1"
             }
@@ -144,61 +145,10 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "waiting"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "actions"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "delegate"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "text": "goal: engine: no active goal to update",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#1",
+              "is_error": true
             }
           ]
         },
@@ -207,71 +157,121 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "goal",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
-              },
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "waiting"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "actions"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "action": "send",
-                "prompt": "more work",
-                "session_id": "ses:kid"
-              },
-              "tool_use_id": "toolu#1"
-            },
-            {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "action": "cancel",
-                "session_id": "ses:kid"
+                "action": "set",
+                "condition": " "
               },
               "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "goal: engine: RegisterGoal requires a non-empty condition (if a goal is already active, use action \"adjust\" to change its condition instead)",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
             },
             {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
               "kind": "tool_use",
-              "tool_name": "bash",
+              "tool_name": "goal",
               "tool_input": {
-                "command": "sleep 0.5"
+                "action": "adjust",
+                "condition": "x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "goal: engine: no active goal to update",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "set",
+                "condition": " "
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "goal: engine: RegisterGoal requires a non-empty condition (if a goal is already active, use action \"adjust\" to change its condition instead)",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "clear"
               },
               "tool_use_id": "toolu#3"
             }
@@ -282,58 +282,10 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"queued\":true,\"note\":\"queued for delivery at the descendant's next turn boundary — no need to poll or wait for it, unless the descendant's turn is interrupted first by a cancel or an abort (an interrupted descendant leaves anything still queued undelivered, like the rest of its own state)\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
-            },
-            {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"status\":\"canceled\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#2"
-            },
-            {
-              "kind": "tool_result",
-              "text": "(no output)",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#3"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: canceled (usage: 0 in / 0 out)\n]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "text": "goal: unknown action \"clear\" (clearing a goal is operator-only — DELETE /goal on the server API)",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#3",
+              "is_error": true
             }
           ]
         }
@@ -348,7 +300,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "delegate"
+            "text": "go"
           }
         ]
       },
@@ -359,10 +311,10 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "task",
+            "name": "goal",
             "arguments": {
-              "agent": "general-purpose",
-              "prompt": "child work"
+              "action": "adjust",
+              "condition": "x"
             }
           }
         ]
@@ -374,7 +326,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
+            "is_error": true,
+            "content": "goal: engine: no active goal to update"
           }
         ]
       },
@@ -383,18 +336,25 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "waiting"
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "goal",
+            "arguments": {
+              "action": "set",
+              "condition": " "
+            }
           }
         ]
       },
       {
         "id": "msg#5",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "actions"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "goal: engine: RegisterGoal requires a non-empty condition (if a goal is already active, use action \"adjust\" to change its condition instead)"
           }
         ]
       },
@@ -404,29 +364,10 @@
         "parts": [
           {
             "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "task",
-            "arguments": {
-              "action": "send",
-              "prompt": "more work",
-              "session_id": "ses:kid"
-            }
-          },
-          {
-            "type": "tool_call",
-            "call_id": "toolu#2",
-            "name": "task",
-            "arguments": {
-              "action": "cancel",
-              "session_id": "ses:kid"
-            }
-          },
-          {
-            "type": "tool_call",
             "call_id": "toolu#3",
-            "name": "bash",
+            "name": "goal",
             "arguments": {
-              "command": "sleep 0.5"
+              "action": "clear"
             }
           }
         ]
@@ -437,55 +378,50 @@
         "parts": [
           {
             "type": "tool_result",
-            "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"queued\":true,\"note\":\"queued for delivery at the descendant's next turn boundary — no need to poll or wait for it, unless the descendant's turn is interrupted first by a cancel or an abort (an interrupted descendant leaves anything still queued undelivered, like the rest of its own state)\"}"
+            "call_id": "toolu#3",
+            "is_error": true,
+            "content": "goal: unknown action \"clear\" (clearing a goal is operator-only — DELETE /goal on the server API)"
           }
         ]
       },
       {
         "id": "msg#8",
-        "role": "tool",
-        "parts": [
-          {
-            "type": "tool_result",
-            "call_id": "toolu#2",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"status\":\"canceled\"}"
-          }
-        ]
-      },
-      {
-        "id": "msg#9",
-        "role": "tool",
-        "parts": [
-          {
-            "type": "tool_result",
-            "call_id": "toolu#3",
-            "content": "(no output)"
-          }
-        ]
-      },
-      {
-        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "ok"
-          }
-        ]
-      }
-    ],
-    "kid": [
-      {
-        "id": "msg#11",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "child work"
+            "text": "went"
           }
         ]
       }
     ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 16,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 12
+        }
+      }
+    }
   }
 }

@@ -161,21 +161,21 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		{name: "a profile is read once, when the spawn reads it", agent: "reader", child: done, kids: 1, store: rewriteReader, check: profileApplied},
 		{name: "an unknown agent spawns no child and names the agents", agent: "nope",
 			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if _, got := f.last("s1", `task: unknown agent "nope"; the agents are explore, general-purpose, plan, reader`); got == "" {
+				if _, got := f.last("s1", `task: unknown agent "nope" (available: explore, general-purpose, plan, reader)`); got == "" {
 					t.Error("the task error does not name the agents")
 				}
 			}},
 		{name: "a spawn past max_task_depth is refused", agent: "general-purpose", cfg: config.Config{MaxTaskDepth: 1}, kids: 1,
 			child: func() []eventlog.Message { return []eventlog.Message{task("general-purpose", 1)} },
 			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if _, got := f.last(children[0].ID, "task: max_task_depth 1"); got == "" {
-					t.Error("the task call of the child does not fail on max_task_depth")
+				if _, got := f.last(children[0].ID, "no such tool available: task"); got == "" {
+					t.Error("the task call of the child at max_task_depth reaches a tool that is there")
 				}
 			}},
 		{name: "a spawn past max_concurrent_tasks is refused", agent: "general-purpose", spawns: 2, cfg: config.Config{MaxConcurrentTasks: 1}, kids: 1,
 			child: func() []eventlog.Message { return nil },
 			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if !f.resulted("s1", "task: max_concurrent_tasks 1") {
+				if !f.resulted("s1", "task: engine: tree concurrency limit reached") {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
 				}
 			}},
@@ -267,7 +267,7 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 		outcome eventlog.Outcome
 		report  string
 	}{
-		{name: "a child that ended before its parent settled it settles done", outcome: eventlog.OutcomeDone, report: "outcome: done\n\nchild done",
+		{name: "a child that ended before its parent settled it settles done", outcome: eventlog.OutcomeDone, report: "done: child done",
 			stop: func(st *refusing, free func()) { st.armed.Store(true); free() }},
 		{name: "a spawned child with no log settles failed with no report", arm: true, outcome: eventlog.OutcomeFailed,
 			stop: func(*refusing, func()) {}},
@@ -403,7 +403,7 @@ func TestAnOpenedParentCountsItsUnsettledChildrenBeforeItRecoversThem(t *testing
 		}
 		synctest.Wait()
 		submit(t, s, text("b", "delegate"))
-		if _, got := f2.last("s1", "task: max_concurrent_tasks 1"); got == "" {
+		if _, got := f2.last("s1", "task: engine: tree concurrency limit reached"); got == "" {
 			t.Error("a spawn beside an unsettled child fails on max_concurrent_tasks only after the recovery reads that child")
 		}
 		close(g.open)
@@ -438,7 +438,7 @@ func TestTwoSpawnsInOneTreeCountEachOthersChildren(t *testing.T) {
 		synctest.Wait()
 		close(open)
 		synctest.Wait()
-		if _, got := f.last(first, "task: max_concurrent_tasks 2"); got == "" {
+		if _, got := f.last(first, "task: engine: tree concurrency limit reached"); got == "" {
 			t.Error("a child spawns beside a spawn of the root that has not settled its append, and the tree passes max_concurrent_tasks")
 		}
 		closeRuntime(t, r)
@@ -461,7 +461,7 @@ func TestAgentDefsDirsReplaceTheDefaultProfileDir(t *testing.T) {
 		kids  int
 		want  string
 	}{
-		{"reader", 0, `task: unknown agent "reader"; the agents are explore, general-purpose, lead, plan`},
+		{"reader", 0, `task: unknown agent "reader" (available: explore, general-purpose, lead, plan)`},
 	} {
 		t.Run(tc.agent, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {

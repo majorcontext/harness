@@ -166,7 +166,7 @@ func TestContractInputProvenanceChildReport(t *testing.T) {
 				}}}},
 				harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child finished", Block: true}},
 				harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
-				harnesstest.Step{Name: "parent", Match: harnesstest.LastUserText("child finished"), Reply: harnesstest.Reply{Text: "parent done"}},
+				harnesstest.Step{Name: "parent", Match: harnesstest.LastUserText("A background task"), Reply: harnesstest.Reply{Text: "parent done"}},
 			)
 			id := d.Create(t)
 			d.Submit(t, id, "delegate")
@@ -179,7 +179,7 @@ func TestContractInputProvenanceChildReport(t *testing.T) {
 				t.Fatal("the report started no parent turn")
 			}
 			d.WaitIdle(t, id)
-			m := userMessageWithText(t, provPage(t, d, id), "child finished")
+			m := userMessageWithText(t, provPage(t, d, id), "A background task you started has finished")
 			if m.Source != "child" {
 				t.Errorf("the report message has source %q, want child: %+v", m.Source, m)
 			}
