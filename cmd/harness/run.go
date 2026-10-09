@@ -93,6 +93,7 @@ func runCmd(args []string) error {
 		return fmt.Errorf("cannot resume a session with -no-save")
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	slog.SetDefault(logger)
 	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err

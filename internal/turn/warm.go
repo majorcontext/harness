@@ -17,13 +17,18 @@ type WarmGate interface {
 // Warm warms b with req described as the first model call, with the tools
 // of src. A model that cannot warm costs no tool discovery and no hook.
 func Warm(ctx context.Context, b Backend, req Request, src Source) error {
-	w, ok := b.(Warmer)
-	if !ok {
-		return nil
-	}
-	if g, ok := b.(WarmGate); ok && !g.CanWarm(req.Model) {
+	if !CanWarm(b, req.Model) {
 		return nil
 	}
 	describe(ctx, &req, src, b.Capabilities(req.Model).OwnsLoop)
-	return w.Warm(ctx, req)
+	return b.(Warmer).Warm(ctx, req)
+}
+
+// CanWarm reports whether b has a warm-up to run for model.
+func CanWarm(b Backend, model string) bool {
+	if _, ok := b.(Warmer); !ok {
+		return false
+	}
+	g, gated := b.(WarmGate)
+	return !gated || g.CanWarm(model)
 }
