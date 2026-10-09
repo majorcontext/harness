@@ -83,12 +83,13 @@ type Tree struct {
 	quiet  map[string]int
 	ending map[string]int
 	muted  map[string]int
+	held   map[string]int
 	routed map[string][]*route
 }
 
 // New returns the Tree of runtime s.
 func New(s Sessions, cfg Config) *Tree {
-	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, routed: map[string][]*route{}}
+	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, held: map[string]int{}, routed: map[string][]*route{}}
 }
 
 // The refusals of a spawn, with the text of the engine.
@@ -303,7 +304,8 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // a cancel walk marked reports to the nearest ancestor of the target that has
 // not ended its work when the report is delivered, as the engine routed it. It
 // settles in its own parent with no report input when that ancestor is not
-// the parent.
+// the parent. It holds that child until it has settled, so Recover never
+// settles the child with the report that the ancestor gets.
 func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Report) {
 	quiet, ending, rt := t.hushed(s.ChildID)
 	relay := report
@@ -311,17 +313,19 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 		report = nil
 		t.mute(s.ChildID, 1)
 	}
+	if rt != nil {
+		t.hold(s.ChildID, 1)
+	}
 	t.cfg.Go(func() {
 		if quiet {
 			defer t.mute(s.ChildID, -1)
 		}
+		if rt != nil {
+			defer t.hold(s.ChildID, -1)
+		}
 		if rt != nil && relay != nil {
 			if to, err := t.live(t.cfg.Base, rt.up, rt.fallback); err == nil && to != parent {
-				if !quiet {
-					report = nil
-					t.mute(s.ChildID, 1)
-					defer t.mute(s.ChildID, -1)
-				}
+				report = nil
 				if r, err := t.s.Open(t.cfg.Base, to); err == nil {
 					_ = r.Actor.Relay(t.cfg.Base, relay)
 				}
@@ -344,7 +348,8 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 // crash can come between the end of a child turn and its child.settled
 // record. A child whose last turn the end of a session stopped (cause ended),
 // and a child whose silenced report Report is delivering, settle with no
-// report input; every other child reports its outcome, a canceled one included.
+// report input; a child whose routed report Report is delivering is left to
+// Report; every other child reports its outcome, a canceled one included.
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
@@ -358,6 +363,9 @@ func (t *Tree) Recover(a *session.Actor) {
 			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
+			if t.holding(id) {
+				continue
+			}
 			if t.muting(id) {
 				report = nil
 			}
@@ -457,6 +465,20 @@ func (t *Tree) mute(child string, n int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	count(t.muted, child, n)
+}
+
+// hold adds n to the routed reports of child that Report has not settled yet,
+// under the rule of mute. Recover leaves a held child to Report.
+func (t *Tree) hold(child string, n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count(t.held, child, n)
+}
+
+func (t *Tree) holding(child string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.held[child] > 0
 }
 
 func (t *Tree) muting(child string) bool {
