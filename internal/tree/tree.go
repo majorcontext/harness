@@ -83,12 +83,12 @@ type Tree struct {
 	quiet  map[string]int
 	ending map[string]int
 	muted  map[string]int
-	routed map[string][]string
+	routed map[string][]*route
 }
 
 // New returns the Tree of runtime s.
 func New(s Sessions, cfg Config) *Tree {
-	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, routed: map[string][]string{}}
+	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, routed: map[string][]*route{}}
 }
 
 // The refusals of a spawn, with the text of the engine.
@@ -300,10 +300,12 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // with no report input. A child that an end walk marked reaches only a parent
 // that the runtime runs, and never opens one: the end never opens a session,
 // and a parent that has stopped settles the child when it opens. A child that
-// a cancel walk marked settles with no report input too, and its report goes
-// to the session that the walk names.
+// a cancel walk marked reports to the nearest ancestor of the target that has
+// not ended its work when the report is delivered, as the engine routed it. It
+// settles in its own parent with no report input when that ancestor is not
+// the parent.
 func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Report) {
-	quiet, ending, route := t.hushed(s.ChildID)
+	quiet, ending, rt := t.hushed(s.ChildID)
 	relay := report
 	if quiet {
 		report = nil
@@ -313,9 +315,16 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 		if quiet {
 			defer t.mute(s.ChildID, -1)
 		}
-		if route != "" && relay != nil {
-			if r, err := t.s.Open(t.cfg.Base, route); err == nil {
-				_ = r.Actor.Relay(t.cfg.Base, relay)
+		if rt != nil && relay != nil {
+			if to, err := t.live(t.cfg.Base, rt.up, rt.fallback); err == nil && to != parent {
+				if !quiet {
+					report = nil
+					t.mute(s.ChildID, 1)
+					defer t.mute(s.ChildID, -1)
+				}
+				if r, err := t.s.Open(t.cfg.Base, to); err == nil {
+					_ = r.Actor.Relay(t.cfg.Base, relay)
+				}
 			}
 		}
 		if ending {
@@ -387,12 +396,21 @@ func (t *Tree) lock(root string) (unlock func()) {
 	}
 }
 
+// route is where a cancel sends the report of a child: the first of the
+// sessions in up, the ancestors of the canceled target nearest first, whose
+// turn has not ended with an outcome when the report is delivered, else
+// fallback.
+type route struct {
+	up       []string
+	fallback string
+}
+
 // walkMark names the walks that stop a child: a quiet child settles with no
 // report input; an ending child never opens its parent; a routed child
-// reports to the session route instead of its parent.
+// reports along the route instead of to its parent when they differ.
 type walkMark struct {
 	quiet, ending bool
-	route         string
+	route         *route
 }
 
 // hush adds n to the walks that stop child.
@@ -405,28 +423,28 @@ func (t *Tree) hush(child string, h walkMark, n int) {
 	if h.ending {
 		count(t.ending, child, n)
 	}
-	if h.route != "" {
+	if h.route != nil {
 		if t.routed[child] = withRoute(t.routed[child], h.route, n); len(t.routed[child]) == 0 {
 			delete(t.routed, child)
 		}
 	}
 }
 
-func (t *Tree) hushed(child string) (quiet, ending bool, route string) {
+func (t *Tree) hushed(child string) (quiet, ending bool, rt *route) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if r := t.routed[child]; len(r) > 0 {
-		route = r[len(r)-1]
+		rt = r[len(r)-1]
 	}
-	return t.quiet[child] > 0, t.ending[child] > 0, route
+	return t.quiet[child] > 0, t.ending[child] > 0, rt
 }
 
 // withRoute adds one walk to the routes of a child, or takes one away.
-func withRoute(routes []string, to string, n int) []string {
+func withRoute(routes []*route, rt *route, n int) []*route {
 	if n > 0 {
-		return append(routes, to)
+		return append(routes, rt)
 	}
-	if i := slices.Index(routes, to); i >= 0 {
+	if i := slices.Index(routes, rt); i >= 0 {
 		routes = slices.Delete(routes, i, i+1)
 	}
 	return routes

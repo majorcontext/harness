@@ -93,6 +93,14 @@ func TestContractClaudeCodeToolCallVisible(t *testing.T) {
 	}})
 }
 
+func TestContractClaudeCodePlaceholder(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:    "claudecode_placeholder_result_before_the_turn_is_skipped",
+		driver:  claudeLane{mode: "placeholder_before_turn"}.newDriver,
+		actions: []action{create{as: "a"}, submit{as: "a", text: "hi"}, waitIdle{as: "a"}, claudeUsage{as: "a"}},
+	}})
+}
+
 func TestContractClaudeCodeInterrupt(t *testing.T) {
 	row := func(name, mode string, facts ...action) scenario {
 		return scenario{

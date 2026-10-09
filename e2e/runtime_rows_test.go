@@ -469,6 +469,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_action_refusals":                                               reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_tree_reaches_a_grandchild":                                     reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"task_cancel_of_a_child_stops_the_grandchild":                        reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
+	"task_cancel_of_a_grandchild_reports_to_the_nearest_live_ancestor":   reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_tree_interrupt_stops_the_grandchild":                           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"task_profile_keeps_the_plugin_tools_of_its_list":                    reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
 	"task_child_on_claude_code_gets_no_runtime_builtin":                  sameAsServe(),
@@ -531,6 +532,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_interrupt_keeps_a_tool_result_that_the_cli_printed_on_the_signal": reGolden(specView, specStopped, specClaudeGauge),
 	"claudecode_interrupt_ends_completed_when_the_cli_finishes_on_the_signal":     reGolden(specView, specClaudeGauge),
 	"claudecode_interrupt_ignores_a_placeholder_result":                           sameAsServe(),
+	"claudecode_placeholder_result_before_the_turn_is_skipped":                    sameAsServe(),
 	"claudecode_interrupt_of_a_cli_that_exits_with_no_frame":                      reGolden(specView, specStopped, specClaudeGauge),
 
 	"claudecode_runs_in_the_work_dir":                               sameAsServe(),
