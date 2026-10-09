@@ -51,7 +51,8 @@ var profileKeys = []string{"name", "description", "tools", "model", "color"}
 // Profiles returns the built-in profiles and each valid *.md file of dirs in
 // the agent format of Claude Code, by name. A file replaces a built-in
 // profile of its name. A file with a key that the format does not know is
-// skipped with a WARN log line. Any other file that is not valid, and a file
+// skipped with a WARN log line, unless it has another error too, which fails
+// the load. Any other file that is not valid, and a file
 // that repeats the name of an earlier file, in one directory or across dirs,
 // is left out, and the load returns the profiles of the other files with the
 // error of the first such file; a repeat names both files.
@@ -104,14 +105,17 @@ func profile(path string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	f, err := skill.ParseFrontmatterFields(fm, profileKeys...)
-	if err != nil {
-		return Profile{}, err
+	f, unknown := skill.ParseFrontmatterFieldsDeferUnknown(fm, profileKeys...)
+	if unknown != nil && !errors.Is(unknown, skill.ErrUnknownKey) {
+		return Profile{}, unknown
 	}
 	for _, key := range []string{"name", "description"} {
 		if f[key] == "" {
 			return Profile{}, fmt.Errorf("frontmatter missing required '%s'", key)
 		}
+	}
+	if unknown != nil {
+		return Profile{}, unknown
 	}
 	p := Profile{Name: f["name"], Description: f["description"], Prompt: strings.TrimSpace(body)}
 	if f["model"] != "inherit" {

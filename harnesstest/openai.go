@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -29,6 +30,9 @@ type OpenAIOptions struct {
 	UncodedChainMiss bool
 	// Replies adds Codex-only behavior to the Step of the same Name.
 	Replies map[string]CodexReply
+	// HoldPrewarm makes the server hold the first websocket prewarm without an
+	// answer until the client closes its connection.
+	HoldPrewarm bool
 }
 
 // CodexReply is what a Step reply can ask for beyond Reply.
@@ -100,8 +104,8 @@ func newWireEvent(transport, event string, conn int, b openAIBody) WireEvent {
 }
 
 // OpenAI is a scripted OpenAI Responses server for the ChatGPT Codex wire,
-// over SSE and websocket. Release and AwaitCanceled never fire: NewOpenAI
-// rejects Block.
+// over SSE and websocket. HoldPrewarm holds the first websocket prewarm, and
+// AwaitPrewarmHeld and AwaitPrewarmAbandoned observe it: NewOpenAI rejects Block.
 type OpenAI struct {
 	*Server
 	opts OpenAIOptions
@@ -114,7 +118,10 @@ type OpenAI struct {
 	callNames map[string]string // call id -> tool name, for chained requests that omit the call
 	known     map[string]bool   // "conn/response id" of every completed response
 	faults    []string
+	held      bool // a prewarm took the hold of HoldPrewarm
 }
+
+const heldPrewarm = "prewarm"
 
 // NewOpenAI starts an OpenAI Responses server that matches Steps as New does.
 // A websocket prewarm consumes no Step, and a chain to an unknown response
@@ -170,6 +177,39 @@ func (o *OpenAI) WireEvents() []WireEvent {
 	o.wmu.Lock()
 	defer o.wmu.Unlock()
 	return append([]WireEvent(nil), o.wire...)
+}
+
+// AwaitPrewarmHeld reports whether the server holds a prewarm within bound.
+func (o *OpenAI) AwaitPrewarmHeld(bound time.Duration) bool {
+	return o.awaitClosed(o.blockedCh(heldPrewarm), bound)
+}
+
+// AwaitPrewarmAbandoned reports whether the client closed the connection of
+// the held prewarm within bound. It stays false when server close ended it.
+func (o *OpenAI) AwaitPrewarmAbandoned(bound time.Duration) bool {
+	return o.awaitClosed(o.canceledCh(heldPrewarm), bound)
+}
+
+// holdPrewarm holds the prewarm on conn until its client gives up, and
+// reports whether it took the hold.
+func (o *OpenAI) holdPrewarm(ctx context.Context, conn *websocket.Conn) bool {
+	o.wmu.Lock()
+	take := o.opts.HoldPrewarm && !o.held
+	o.held = o.held || take
+	o.wmu.Unlock()
+	if !take {
+		return false
+	}
+	o.mu.Lock()
+	closeOnce(o.chanFor(o.blocked, heldPrewarm))
+	o.mu.Unlock()
+	_, _, err := conn.Read(ctx)
+	if err != nil && ctx.Err() == nil {
+		o.mu.Lock()
+		closeOnce(o.chanFor(o.canceled, heldPrewarm))
+		o.mu.Unlock()
+	}
+	return true
 }
 
 // PrewarmInstructions returns the instructions of each websocket prewarm, in
@@ -336,6 +376,9 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 		o.wmu.Lock()
 		o.prewarms = append(o.prewarms, b.Instructions)
 		o.wmu.Unlock()
+		if o.holdPrewarm(ctx, conn) {
+			return false
+		}
 		id, frames := o.prewarmFrames()
 		ok := writeFrames(ctx, conn, frames...)
 		o.markKnown(n, id)
