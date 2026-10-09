@@ -40,6 +40,13 @@ const catalogHeader = "Deferred MCP tools. These tools exist but their input sch
 	"A selected tool appears in your tool list on the next request and is then called directly. " +
 	`Select every tool you need in ONE call. Use mcp(action="search", query="...") to find a tool by keyword.`
 
+const (
+	instructionsMax = 4000
+	toolNamesMax    = 2048
+	catalogMax      = 200
+	cutMarker       = "… [truncated]"
+)
+
 const resourcesLine = "This session can also list and read MCP resources with the " + listName + " and " + readName + " tools."
 
 type args struct {
@@ -225,18 +232,23 @@ func (c control) choose(names []string) (any, error) {
 	return out, nil
 }
 
-// catalog lists the deferred tools with the first line of each description.
+// catalog lists the first catalogMax deferred tools with the first line of
+// each description, and counts the rest.
 func catalog(deferred []remote) string {
 	if len(deferred) == 0 {
 		return ""
 	}
+	shown := deferred[:min(len(deferred), catalogMax)]
 	var b strings.Builder
 	b.WriteString(catalogHeader + "\n")
-	for _, r := range deferred {
+	for _, r := range shown {
 		b.WriteString("\n" + r.spec.Name)
 		if d := line(r.spec.Description); d != "" {
 			b.WriteString(" — " + d)
 		}
+	}
+	if rest := len(deferred) - len(shown); rest > 0 {
+		fmt.Fprintf(&b, "\n... and %d more tools; use mcp(action=\"search\", query=\"...\") to find them", rest)
 	}
 	return b.String()
 }
@@ -264,7 +276,7 @@ func (s *Source) instructions(servers map[string]*server, reached []string, ok f
 	var b strings.Builder
 	for _, name := range reached {
 		sv := servers[name]
-		text := strings.TrimSpace(sv.client.Instructions())
+		text := cutRunes(strings.TrimSpace(sv.client.Instructions()), instructionsMax)
 		if text == "" {
 			continue
 		}
@@ -274,7 +286,7 @@ func (s *Source) instructions(servers map[string]*server, reached []string, ok f
 				tools = append(tools, attr(n))
 			}
 		}
-		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), strings.Join(tools, ", "), tag.Replace(text))
+		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), listNames(tools), tag.Replace(text))
 	}
 	if slices.ContainsFunc(reached, func(n string) bool { return servers[n].resources() }) {
 		return "<mcp_instructions>\n" + resourcesLine + b.String() + "\n</mcp_instructions>"
@@ -283,4 +295,36 @@ func (s *Source) instructions(servers map[string]*server, reached []string, ok f
 		return ""
 	}
 	return "<mcp_instructions>" + b.String() + "\n</mcp_instructions>"
+}
+
+// cutRunes cuts s to at most n runes and marks a cut.
+func cutRunes(s string, n int) string {
+	count := 0
+	for i := range s {
+		if count == n {
+			return s[:i] + cutMarker
+		}
+		count++
+	}
+	return s
+}
+
+// listNames joins names, and stops before the list passes toolNamesMax bytes.
+// Any 200 names need more than that bound, so it also bounds their count.
+func listNames(names []string) string {
+	var b strings.Builder
+	for i, n := range names {
+		need := len(n)
+		if i > 0 {
+			need += 2
+		}
+		if b.Len()+need > toolNamesMax {
+			return b.String() + " names truncated at byte budget"
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(n)
+	}
+	return b.String()
 }

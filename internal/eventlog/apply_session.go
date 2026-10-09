@@ -59,6 +59,7 @@ func (s *State) applyMeasured(e ContextMeasured) {
 			window, estimated = s.context.Window, s.context.WindowEstimated
 		}
 		s.context = ContextMeasured{Tokens: e.Tokens, Window: window, WindowEstimated: estimated, Source: e.Source}
+		s.measuredTurn = s.turnN
 	}
 	if e.SubscriptionUsage != nil {
 		s.subscribed = e.SubscriptionUsage

@@ -153,6 +153,7 @@ type Actor struct {
 	// chunks counts the state chunks that this ownership wrote for each backend.
 	chunks    map[string]int
 	run       *running
+	latched   bool
 	releasing []func(struct{}, error)
 	stopped   bool
 	retryStop context.CancelFunc
