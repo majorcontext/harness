@@ -59,13 +59,21 @@ func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, rep *Report
 }
 
 // Relay admits rep as an input with source child, with the delivery of
-// Settle, for a descendant that is no child of this session. It appends no
-// child.settled.
+// Settle, for a child that settles in another session. It appends no
+// child.settled. The input ID names the child and its turn, so a report that
+// this session already holds changes nothing.
 func (a *Actor) Relay(ctx context.Context, rep *Report) error {
 	big := a.stage(ctx, rep.child, rep)
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+		id := "relay_" + rep.child + "_" + rep.turn
+		if _, _, ok := a.state.Input(id); ok {
+			reply(struct{}{}, nil)
+			return
+		}
 		text, retained := a.shown(rep, big)
-		_, err := a.admit(a.reportInput(rep, text), "", append(a.resumed(), retained...)...)
+		in := a.reportInput(rep, text)
+		in.InputID = id
+		_, err := a.admit(in, "", append(a.resumed(), retained...)...)
 		reply(struct{}{}, err)
 	})
 	return err

@@ -10,15 +10,18 @@ import (
 
 // cancelTurn withdraws the queued inputs of session id and stops its turn,
 // when this runtime runs it. For the end of an ancestor the turn ends with
-// cause ended.
-func (t *Tree) cancelTurn(ctx context.Context, id string, end bool) error {
+// cause ended, and for a task cancel with the task_cancel mark.
+func (t *Tree) cancelTurn(ctx context.Context, id string, k walkKind) error {
 	s, ok := t.s.Loaded(ctx, id)
 	if !ok {
 		return nil
 	}
 	cancel := (*session.Actor).Cancel
-	if end {
+	switch {
+	case k.end:
 		cancel = (*session.Actor).CancelForEnd
+	case k.route != nil:
+		cancel = (*session.Actor).CancelForTask
 	}
 	if err := cancel(s.Actor, ctx); !errors.Is(err, session.ErrNotOwned) {
 		return err
@@ -42,7 +45,8 @@ func (t *Tree) Interrupt(ctx context.Context, id string, stop func(context.Conte
 // fallback. A parent that is not that session settles the child with no report
 // input.
 func (t *Tree) Cancel(ctx context.Context, id string, up []string, fallback string) error {
-	return t.walk(ctx, id, func(ctx context.Context) error { return t.cancelTurn(ctx, id, false) }, walkKind{route: &route{up: up, fallback: fallback}})
+	k := walkKind{route: &route{up: up, fallback: fallback}}
+	return t.walk(ctx, id, func(ctx context.Context) error { return t.cancelTurn(ctx, id, k) }, k)
 }
 
 // End is Interrupt for the end of session id: each descendant turn that it
@@ -105,7 +109,7 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 	}
 	kids, err := mark()
 	for _, kid := range kids {
-		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, k.end) }, marked, k, false))
+		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, k) }, marked, k, false))
 	}
 	return err
 }
