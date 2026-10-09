@@ -207,12 +207,14 @@ type State struct {
 	compaction CompactionApplied
 	// compactedAt is the seq of the record of the newest compaction.
 	compactedAt uint64
-	compacted   int
-	children    map[string]Outcome
-	backends    map[string]BackendChain
-	retained    []ToolResultRetained
-	commands    map[string]command
-	history     []entry
+	// compactedTime is the time of that record.
+	compactedTime time.Time
+	compacted     int
+	children      map[string]Outcome
+	backends      map[string]BackendChain
+	retained      []ToolResultRetained
+	commands      map[string]command
+	history       []entry
 	// stranded holds the pinned segments that a compaction outside a turn
 	// folded. The model reads them at the end of the history, and the next
 	// turn start settles them there, after its inputs.
@@ -478,7 +480,7 @@ func (s *State) step(env Envelope) error {
 	case RequestOpened:
 		return s.applyRequestOpened(e)
 	case RequestResolved:
-		return s.applyRequestResolved(e, env.Seq)
+		return s.applyRequestResolved(e, env.Seq, env.Time)
 	case GoalSet:
 		return s.applyGoalSet(e)
 	case GoalEvaluated:
@@ -486,7 +488,7 @@ func (s *State) step(env Envelope) error {
 	case GoalChanged:
 		return s.applyGoalChanged(e)
 	case CompactionApplied:
-		return s.applyCompaction(e, env.Seq)
+		return s.applyCompaction(e, env.Seq, env.Time)
 	case ChildSpawned:
 		return s.applyChildSpawned(e)
 	case ChildSettled:

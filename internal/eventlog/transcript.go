@@ -31,14 +31,14 @@ func summaryID(seq uint64) string { return "cmpsum_" + strconv.FormatUint(seq, 1
 func (s *State) Transcript() []protocol.Message {
 	out := make([]protocol.Message, 0, len(s.history)+1)
 	if c, ok := s.Compaction(); ok {
-		out = append(out, protocol.Message{ID: summaryID(s.compactedAt), Role: RoleUser,
+		out = append(out, protocol.Message{ID: summaryID(s.compactedAt), Role: RoleUser, CreatedAt: s.compactedTime,
 			Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: c.Summary}}})
 	}
 	for _, e := range s.history {
 		if e.pinned {
 			continue
 		}
-		out = append(out, protocol.Message{ID: e.id, Role: e.msg.Role, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts),
+		out = append(out, protocol.Message{ID: e.id, Role: e.msg.Role, CreatedAt: e.at, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts),
 			Source: e.from.source, SourceID: e.from.id, SourceLabel: e.from.label, OperatorBatch: operatorBatch(e.promoted)})
 	}
 	return out

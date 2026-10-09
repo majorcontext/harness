@@ -546,6 +546,10 @@
             },
             "type": "array"
           },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
           "parent_call_id": {
             "type": "string"
           },

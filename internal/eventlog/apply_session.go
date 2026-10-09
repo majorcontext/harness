@@ -41,11 +41,11 @@ func (s *State) applySettings(e SettingsChanged) error {
 	return nil
 }
 
-func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
+func (s *State) applyCompaction(e CompactionApplied, seq uint64, at time.Time) error {
 	if e.FromSeq == 0 || e.FromSeq > e.ToSeq || e.ToSeq >= seq {
 		return illegal("compaction from_seq %d to_seq %d at seq %d", e.FromSeq, e.ToSeq, seq)
 	}
-	s.compaction, s.compactedAt = e, seq
+	s.compaction, s.compactedAt, s.compactedTime = e, seq, at
 	s.compacted++
 	s.usage = s.usage.Add(e.Usage)
 	return nil
