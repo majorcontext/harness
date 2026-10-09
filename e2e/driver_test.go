@@ -50,6 +50,8 @@ type driver interface {
 	AwaitGoalExhausted(t *testing.T)
 	Stderr() string
 	Workdir() string
+	// DropToolBlobs deletes every tool-result blob from the store.
+	DropToolBlobs(t *testing.T)
 
 	Compact(t *testing.T, id string) callResult
 	SetModel(t *testing.T, id, model string) callResult

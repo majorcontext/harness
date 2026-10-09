@@ -205,6 +205,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bash_output_and_exit_status":                                          sameAsServe(),
 	"read_file_returns_an_image":                                           reGolden(specToolImages),
 	"a_tool_result_image_reaches_the_model_after_a_restart":                sameAsServe(),
+	"a_missing_tool_result_image_leaves_the_text_for_the_model":            sameAsServe(),
 	"write_guard_belongs_to_one_session":                                   sameAsServe(),
 	"mcp_tool_action_refusals":                                             reGolden(specMCPNotice, specMCPText),
 	"mcp_refused_call_hides_the_response_body":                             reGolden(specMCPNoLeak, specMCPText),
