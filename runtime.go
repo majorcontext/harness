@@ -339,7 +339,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Source:          r.source(id, c.ParentID != "", plug, sp),
+		Source:          r.source(id, c.ParentID != "", depth, plug, sp),
 		Retain:          r.workDir != "",
 		Prompt:          sp.system,
 		Appended:        r.appended(id, plug),

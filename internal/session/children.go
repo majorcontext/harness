@@ -102,21 +102,13 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, b
 	return settled, r, true
 }
 
-// Parts returns the report as the parts of an input: the text for a parent
-// that starts a turn with it, which holds result as the Task tool of Claude
-// Code returns the last assistant text, and the task line for a parent that
-// takes it in a running turn. result is the text of the child as the parent
+// Parts returns the report as the parts of an input: the trigger sentence of
+// the engine, which is the text of a turn that only reports start, and the
+// task line, which holds the result as the Task tool of Claude Code returns
+// the last assistant text. result is the text of the child as the parent
 // reads it.
 func (r *Report) Parts(result string) []eventlog.Part {
-	var b strings.Builder
-	fmt.Fprintf(&b, "A background task you started has finished.\n\ntask: %s (agent %s)\noutcome: %s", r.child, r.agent, r.outcome)
-	if r.reason != "" {
-		b.WriteString(": " + r.reason + r.guidance)
-	}
-	if result != "" {
-		b.WriteString("\n\n" + result)
-	}
-	return []eventlog.Part{{Type: eventlog.PartText, Text: b.String()}, {Type: eventlog.PartTaskReport, Text: r.line(result)}}
+	return []eventlog.Part{{Type: eventlog.PartText, Text: eventlog.ReportTrigger}, {Type: eventlog.PartTaskReport, Text: r.line(result)}}
 }
 
 // The reasons that a report gives for a failed turn, by the class of its error.

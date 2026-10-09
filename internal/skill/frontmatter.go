@@ -9,6 +9,9 @@ import (
 // delimiter is the frontmatter fence line.
 const delimiter = "---"
 
+// ErrUnknownKey reports a frontmatter key that the parser does not allow.
+var ErrUnknownKey = errors.New("unknown frontmatter key")
+
 // knownKeys are the only top-level frontmatter keys the specification defines.
 // Any other key is rejected (spec-first strictness).
 var knownKeys = map[string]bool{
@@ -86,7 +89,7 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool) (fields map[st
 			return nil, nil, fmt.Errorf("malformed frontmatter line (expected 'key: value'): %q", trimmed)
 		}
 		if !allowed[key] {
-			return nil, nil, fmt.Errorf("unknown frontmatter key: %q", key)
+			return nil, nil, fmt.Errorf("%w: %q", ErrUnknownKey, key)
 		}
 
 		if key == "metadata" {

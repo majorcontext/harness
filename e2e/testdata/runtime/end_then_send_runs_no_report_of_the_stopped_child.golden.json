@@ -85,7 +85,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -173,7 +173,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -238,7 +238,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },

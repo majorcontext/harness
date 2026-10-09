@@ -73,7 +73,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "explore",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -85,7 +85,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"explore\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -132,7 +132,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "explore",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -144,7 +144,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"explore\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -164,7 +164,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent explore)\noutcome: done\n\nchild done"
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 5 in / 3 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -209,7 +213,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "explore",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -221,7 +225,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"explore\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -241,7 +245,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent explore)\noutcome: done\n\nchild done"
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 5 in / 3 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -259,7 +267,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "plan it"
+              "text": "again"
             }
           ]
         }
@@ -304,7 +312,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "explore",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -316,7 +324,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"explore\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -336,7 +344,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent explore)\noutcome: done\n\nchild done"
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 5 in / 3 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -354,7 +366,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "plan it"
+              "text": "again"
             }
           ]
         },
@@ -365,8 +377,8 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "plan",
-                "prompt": "plan work"
+                "agent": "general-purpose",
+                "prompt": "second work"
               },
               "tool_use_id": "toolu#1"
             }
@@ -377,9 +389,10 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"plan\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "task: engine: task tree token budget exceeded",
               "tool_name": "task",
-              "tool_use_id": "toolu#1"
+              "tool_use_id": "toolu#1",
+              "is_error": true
             }
           ]
         }
@@ -392,7 +405,6 @@
         "bash",
         "edit_file",
         "glob",
-        "goal",
         "grep",
         "ls",
         "model",
@@ -402,136 +414,6 @@
         "session_info",
         "task",
         "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "delegate"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "agent": "explore",
-                "prompt": "child work"
-              },
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"explore\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "waiting"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent explore)\noutcome: done\n\nchild done"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "plan it"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "agent": "plan",
-                "prompt": "plan work"
-              },
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"plan\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "waiting"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent plan)\noutcome: done\n\nplan done"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "glob",
-        "grep",
-        "ls",
-        "read_file",
-        "session_info"
       ],
       "messages": [
         {
@@ -540,32 +422,6 @@
             {
               "kind": "text",
               "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "glob",
-        "grep",
-        "ls",
-        "read_file",
-        "session_info"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "plan work"
             },
             {
               "kind": "text",
@@ -597,7 +453,7 @@
             "call_id": "toolu#1",
             "name": "task",
             "arguments": {
-              "agent": "explore",
+              "agent": "general-purpose",
               "prompt": "child work"
             }
           }
@@ -610,7 +466,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"explore\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },
@@ -630,7 +486,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent explore)\noutcome: done\n\nchild done"
+            "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
           }
         ]
       },
@@ -650,7 +506,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "plan it"
+            "text": "again"
           }
         ]
       },
@@ -663,8 +519,8 @@
             "call_id": "toolu#1",
             "name": "task",
             "arguments": {
-              "agent": "plan",
-              "prompt": "plan work"
+              "agent": "general-purpose",
+              "prompt": "second work"
             }
           }
         ]
@@ -676,32 +532,13 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"plan\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "is_error": true,
+            "content": "task: engine: task tree token budget exceeded"
           }
         ]
       },
       {
         "id": "msg#10",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "waiting"
-          }
-        ]
-      },
-      {
-        "id": "msg#11",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent plan)\noutcome: done\n\nplan done"
-          }
-        ]
-      },
-      {
-        "id": "msg#12",
         "role": "assistant",
         "parts": [
           {
@@ -713,7 +550,7 @@
     ],
     "kid": [
       {
-        "id": "msg#13",
+        "id": "msg#11",
         "role": "user",
         "parts": [
           {
@@ -723,34 +560,12 @@
         ]
       },
       {
-        "id": "msg#14",
+        "id": "msg#12",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
             "text": "child done"
-          }
-        ]
-      }
-    ],
-    "planner": [
-      {
-        "id": "msg#15",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "plan work"
-          }
-        ]
-      },
-      {
-        "id": "msg#16",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "plan done"
           }
         ]
       }

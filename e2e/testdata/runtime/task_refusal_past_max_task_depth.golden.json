@@ -1,22 +1,6 @@
 {
   "requests": [
     {
-      "system_has_goal_evaluator": true,
-      "model": "eval-model",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\nDone before you finished writing."
-            }
-          ]
-        }
-      ]
-    },
-    {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
@@ -89,7 +73,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "reader",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -101,7 +85,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -148,7 +132,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "reader",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -160,7 +144,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -180,7 +164,105 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent reader)\noutcome: done\n\nDone before you finished writing."
+              "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "looking"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "grand work"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "no such tool available: task",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
             }
           ]
         }
@@ -188,53 +270,9 @@
     }
   ],
   "sessions": {
-    "goal": [
+    "a": [
       {
         "id": "msg#1",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "say done"
-          }
-        ]
-      },
-      {
-        "id": "msg#2",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "Done before you finished writing."
-          }
-        ]
-      }
-    ],
-    "kid": [
-      {
-        "id": "msg#3",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "child work"
-          }
-        ]
-      },
-      {
-        "id": "msg#4",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "Done before you finished writing."
-          }
-        ]
-      }
-    ],
-    "parent": [
-      {
-        "id": "msg#5",
         "role": "user",
         "parts": [
           {
@@ -244,7 +282,7 @@
         ]
       },
       {
-        "id": "msg#6",
+        "id": "msg#2",
         "role": "assistant",
         "parts": [
           {
@@ -252,25 +290,25 @@
             "call_id": "toolu#1",
             "name": "task",
             "arguments": {
-              "agent": "reader",
+              "agent": "general-purpose",
               "prompt": "child work"
             }
           }
         ]
       },
       {
-        "id": "msg#7",
+        "id": "msg#3",
         "role": "tool",
         "parts": [
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {
@@ -280,17 +318,17 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#5",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent reader)\noutcome: done\n\nDone before you finished writing."
+            "text": "A background task you started has finished. See the engine context below for its result, and continue accordingly."
           }
         ]
       },
       {
-        "id": "msg#10",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
@@ -300,68 +338,58 @@
         ]
       }
     ],
-    "root": [
+    "kid": [
       {
-        "id": "msg#11",
+        "id": "msg#7",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "run it"
+            "text": "child work"
           }
         ]
       },
       {
-        "id": "msg#12",
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "Done before you finished writing."
+            "text": "looking"
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "prompt": "grand work"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "no such tool available: task"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child done"
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "claude_invocations.root": {
-      "status": 200,
-      "body": [
-        {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": true,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        },
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        },
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        }
-      ]
-    }
   }
 }

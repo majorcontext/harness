@@ -13,10 +13,10 @@ import (
 )
 
 // sessionTool is a runtime tool that belongs to one session. Bind returns
-// the tool for session id, or nil when that session does not get it.
+// the tool for session id at depth, or nil when that session does not get it.
 type sessionTool interface {
 	turn.Tool
-	Bind(id string, child bool) turn.Tool
+	Bind(id string, child bool, depth int) turn.Tool
 }
 
 // known reports whether a session at model can have a tool named name: a
@@ -45,12 +45,12 @@ func (r *Runtime) builtin(name string) bool {
 // them. A session tool binds to the session or drops out. Each session has
 // its own file tools, because the write_file guard belongs to one session,
 // and its own session_info tool, which reads what sp recorded of the session.
-func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
+func (r *Runtime) source(id string, child bool, depth int, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
 	var static, loopOnly []turn.Tool
 	var model *modelTool
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
-			if t = b.Bind(id, child); t == nil {
+			if t = b.Bind(id, child, depth); t == nil {
 				continue
 			}
 		}

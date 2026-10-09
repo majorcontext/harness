@@ -81,7 +81,8 @@ const (
 	specRetainIndex  = "Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds."
 	specFileCap      = "A file-size cap of 20 MiB bounds one file:"
 	specToolImages   = "A reader of the history that shows text (`View.Messages`, `get_conversation_history`, the `log` of `task`) shows the text of the result and no blob."
-	specProfileSkip  = "A file that is not valid is skipped with a WARN log line."
+	specProfileSkip  = "A file with a key that the format does not know is skipped with a WARN log line, as in the engine."
+	specProfileFail  = "Any other file that is not valid, such as one with no `name`, fails the load, and the error names the file, with no `engine:` prefix"
 	specProfileModel = "`model` (a ref or an alias; omitted or `inherit` keeps the model of the parent)"
 	specProfileColor = "`color` is read and ignored"
 	specProfileSwap  = "beside the built-in profiles, which a file of the same name replaces"
@@ -101,7 +102,7 @@ const (
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
 	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
-	specRepeatName     = "fails the load, and the error names both files"
+	specRepeatName     = "fails the load the same way, and the error names both files."
 	specMidTurnFails   = "When the new model has another kind of backend, one that owns its loop or one that does not, the turn fails at its next model call"
 	specTypedReceipt   = "A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command"
 	specCmdRepeat      = "A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`."
@@ -114,10 +115,14 @@ const (
 	specCmdMenuRoutes  = "A control command names its operation and `available_during_task`; the handler adds the route of the same operation, where one exists."
 	specGoalOwnTurn    = "So the turn that calls `set` is not judged; the condition runs as a turn of its own after it"
 	specGoalPrompt     = "Its prompt copies the engine prompt, with a third form for `impossible`."
-	specGoalWording    = "The tool copies the engine description and error wording."
+	specGoalWording    = "The tool copies the engine description and error wording, with the `engine:` prefix and the route names of the engine."
 	specGoalNoEval     = "`SetGoal` without it is an invalid request."
 	specOverflowFolds  = "A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history."
-	specLimitFails     = "A spawn past any limit fails the tool call."
+	specLimitFails     = "A spawn past `max_concurrent_tasks` or `max_tree_tokens` fails the tool call with the text of the engine"
+	specTaskWithheld   = "A session at `max_task_depth` has no `task` tool, as in the engine, so a call to it reads as a call to a tool that is not there."
+	specGoalTranscript = "The transcript that it reads shows a tool call as `[tool call <name>] <arguments>`"
+	specGoalAdjust     = "`adjust` calls `AdjustGoal`: it replaces the condition of the active or paused goal, keeps `max_turns` and the turn count, and does nothing for the same condition."
+	specGoalAdjustPost = "A condition that `set` posted and that still waits is replaced by the adjusted one, so the turn of its own runs the adjusted condition."
 	specTaskWording    = "The `task` tool keeps the engine actions and wording."
 	specReadOnlyKinds  = "The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan."
 	specCancelReport   = "The report of the target reaches its parent."
@@ -192,7 +197,7 @@ var runtimeRows = map[string]runtimeRow{
 	"instructions_empty_and_invalid_files_in_a_chain_fail_the_turn":                           reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specView, specBlankJoin),
 	"skill_with_an_uppercase_name_fails_the_turn":                                             reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specBlankJoin),
 	"skill_named_unlike_its_directory_fails_the_turn":                                         reGolden(specFileSkipped, specBadFileSkip, specNoBatching, specView),
-	"task_profiles_skip_bad_files":                                                            pendingOn(specProfileSkip, specTaskWording),
+	"task_profiles_skip_bad_files":                                                            reGolden(specProfileSkip, specProfileFail, specOneResult, specView),
 	"task_profile_file_with_model_inherit_and_color_is_a_profile":                             reGolden(specProfileModel, specProfileColor, specTaskInputs, specChildReport),
 	"task_profile_file_replaces_a_built_in_profile":                                           reGolden(specProfileSwap, specTaskInputs, specChildReport),
 	"two_slow_tool_calls_of_one_message_overlap_and_log_in_call_order":                        sameAsServe(),
@@ -252,12 +257,12 @@ var runtimeRows = map[string]runtimeRow{
 	"child_result_within_the_byte_limit_reaches_a_busy_parent":             reGolden(specChildReport, specChildLong, specChildWording),
 	"child_usage_limit_with_a_long_hint_reaches_a_busy_parent":             reGolden(specChildReport, specChildReason, specChildHint, specChildWording),
 	"child_long_result_handle_reads_back":                                  reGolden(specChildReport, specChildLong, specChildHandle, specChildWording),
-	"claudecode_long_child_result_has_no_readable_handle":                  reGolden(specTaskInputs, specChildReport, specChildNoRead, specChildClaude),
+	"claudecode_long_child_result_has_no_readable_handle":                  sameAsServe(),
 	"child_long_error_reaches_a_busy_parent":                               reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
 	"child_long_result_reaches_a_busy_parent":                              reGolden(specChildReport, specChildLong, specChildWording),
 	"claudecode_compact_delegated":                                         reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specRestartOpens),
-	"claudecode_child_report_waits_for_the_next_turn":                      reGolden(specTaskInputs, specChildReport, specChildClaude),
-	"claudecode_child_reports_share_the_next_turn":                         reGolden(specTaskInputs, specChildReport, specChildClaude),
+	"claudecode_child_report_waits_for_the_next_turn":                      sameAsServe(),
+	"claudecode_child_reports_share_the_next_turn":                         sameAsServe(),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":               reGolden(specQueue, specChildReport, specChildClaude),
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                   sameAsServe(),
 	"claudecode_bridge_model_tool_offers_list_only":                        sameAsServe(),
@@ -419,11 +424,11 @@ var runtimeRows = map[string]runtimeRow{
 	"create_checks_the_provider":                                      reGolden(specNoProvider, specUnknownWindow, specErrors, specView),
 	"create_without_a_model_takes_the_default_model":                  reGolden(specView),
 	"create_takes_an_unknown_model_with_a_configured_window":          reGolden(specView),
-	"goal_tool_actions_report_and_refuse":                             pendingOn(specGoalPrompt),
-	"goal_tool_adjust_after_set_runs_the_adjusted_condition":          pendingOn(specGoalOwnTurn, specGoalPrompt),
-	"goal_tool_adjust_keeps_the_turn_limit":                           pendingOn(specGoalPrompt),
-	"goal_tool_refusals_copy_the_engine_wording":                      pendingOn(specGoalWording),
-	"goal_tool_set_runs_the_condition_as_its_own_turn":                pendingOn(specGoalPrompt),
+	"goal_tool_actions_report_and_refuse":                             reGolden(specView, specGoalTranscript),
+	"goal_tool_adjust_after_set_runs_the_adjusted_condition":          reGolden(specView, specGoalOwnTurn, specGoalAdjustPost),
+	"goal_tool_adjust_keeps_the_turn_limit":                           pendingOn(specGoalAdjust),
+	"goal_tool_refusals_copy_the_engine_wording":                      reGolden(specView, specGoalWording),
+	"goal_tool_set_runs_the_condition_as_its_own_turn":                reGolden(specView, specGoalOwnTurn, specGoalTranscript),
 	"input_receipts_and_conflicts":                                    reGolden(specReceipt, specSameBody, specOtherBody, specTurnMismatch, specErrors),
 	"instructions_are_read_when_the_session_starts":                   reGolden(specPromptOnce),
 	"interrupt_cuts_a_running_tool_then_queue_continues":              reGolden(specStopped, specInterrupt),
@@ -438,19 +443,19 @@ var runtimeRows = map[string]runtimeRow{
 	"typed_commands_record_their_outcome":                             reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
 	"typed_compact_keeps_keep_turns_and_returns_the_range":            reGolden(specTypedReceipt, specCmdResult, specReceipt),
 	"unknown_tool_call_gets_an_error_result":                          reGolden(specMCPText),
-	"task_profile_sets_the_tools_model_and_prompt_of_the_child":       reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_profile_sets_the_tools_model_and_prompt_of_the_child":       sameAsServe(),
 	"task_spawn_fails_on_an_agent_name_repeated_in_one_dir":           reGolden(specRepeatName, specErrors, specView),
 	"task_spawn_fails_on_an_agent_name_repeated_across_dirs":          reGolden(specRepeatName, specErrors, specView),
 	"session_of_a_child_opens_after_an_agent_name_is_repeated":        reGolden(specTaskInputs, specChildReport, specChildNoGoal, specReceipt, specView, specChildAgent),
 	"agent_defs_dirs_replace_the_default_profile_dir":                 reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"task_explore_and_plan_children_get_read_only_tools":              reGolden(specReadOnlyKinds, specTaskInputs, specChildReport),
-	"task_refusals":                                                      pendingOn(specTaskWording),
-	"task_refusal_past_max_task_depth":                                   pendingOn(specLimitFails, specTaskWording),
-	"task_refusal_past_max_concurrent_tasks":                             pendingOn(specLimitFails, specTaskWording),
+	"task_explore_and_plan_children_get_read_only_tools":              sameAsServe(),
+	"task_refusals":                                                      reGolden(specTaskWording, specOneResult),
+	"task_refusal_past_max_task_depth":                                   reGolden(specTaskWithheld, specMCPText, specChildNoGoal),
+	"task_refusal_past_max_concurrent_tasks":                             reGolden(specLimitFails, specChildNoGoal),
 	"task_status_and_log_of_a_failed_child":                              reGolden(specChildReport, specChildReason, specChildBound, specChildStatus, specItems, specOneResult),
 	"task_status_and_log_of_a_settled_child":                             reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_cancel_and_send_to_a_running_child":                            reGolden(specTaskInputs, specChildWording, specChildNoGoal, specItems, specOneResult),
-	"task_spawn_past_max_tree_tokens_is_refused":                         pendingOn(specLimitFails, specTaskWording),
+	"task_spawn_past_max_tree_tokens_is_refused":                         reGolden(specLimitFails, specChildNoGoal),
 	"task_send_runs_a_settled_child_again":                               reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"task_two_sends_to_a_settled_child_need_one_slot":                    reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_action_refusals":                                               reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
@@ -458,7 +463,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_cancel_of_a_child_stops_the_grandchild":                        pendingOn(specCancelReport),
 	"task_tree_interrupt_stops_the_grandchild":                           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"task_profile_keeps_the_plugin_tools_of_its_list":                    reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
-	"task_child_on_claude_code_gets_no_runtime_builtin":                  reGolden(specTaskInputs, specChildReport),
+	"task_child_on_claude_code_gets_no_runtime_builtin":                  sameAsServe(),
 	"claudecode_turn_gets_no_plugin_system_segment":                      sameAsServe(),
 	"claudecode_question_dismissed_by_resolve":                           reGolden(specDismissed, specNoStart, specWaiting, specView, specClaudeGauge),
 	"claudecode_question_dismissed_by_a_model_of_another_provider":       reGolden(specProviderSwap, specDismissed, specView, specErrors, specClaudeGauge),
@@ -467,6 +472,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView, specClaudeGauge),
 	"usage_survives_a_kill_mid_turn":                                     reGolden(specView, specCrash, specCrashMarker),
 
+<<<<<<< HEAD
 	"auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens":            sameAsServe(),
 	"auto_compaction_waits_for_the_reading_to_fall_after_an_empty_summary":                sameAsServe(),
 	"auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens": sameAsServe(),
@@ -501,6 +507,34 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_ws_prewarm_carries_the_plugin_system_segment":                                  reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":                      reGolden(specTaskInputs, specChildReport, specChildNoGoal, specNarrow),
 	"a_failed_summary_keeps_its_usage_in_the_session":                                     reGolden(specView, specOverflowFails),
+=======
+	"a_negative_compaction_threshold_is_the_default_threshold":               reGolden(specView, specThreshold),
+	"auto_compaction_with_a_failed_summary_keeps_the_history":                reGolden(specView, specFailedSummary),
+	"restart_during_auto_compaction_runs_the_queued_input_on_the_next_owner": reGolden(specView, specOpenStarts),
+	"interrupt_stops_an_auto_compaction":                                     reGolden(specView, specErrors, specInterruptTable, specCompactBusy),
+	"auto_compaction_uses_the_window_of_the_session_model":                   reGolden(specView, specWindow),
+	"context_overflow_compacts_and_runs_the_turn_again":                      reGolden(specView, specOverflowFolds),
+	"context_overflow_after_the_compaction_fails_the_turn":                   reGolden(specView, specOverflowFolds, specOverflowTwice),
+	"a_stalled_summary_fails_the_overflowed_turn":                            reGolden(specView, specOverflowFails),
+	"compact_during_a_turn_is_session_busy":                                  reGolden(specView, specErrors, specCompactBusy),
+	"provider_usage_limit_fails_the_turn_and_holds_the_queue":                reGolden(specView, specExhaustedHolds, specExhaustedQueue, specRestartOpens),
+	"a_failed_turn_runs_the_next_queued_input":                               reGolden(specView, specFailedRuns),
+	"session_usage_counts_every_model_call_but_the_evaluation":               reGolden(specView, specCompactResult),
+	"goal_impossible_verdict_fails_the_goal":                                 reGolden(specView, specGoalImpossible, specGoalPrompt),
+	"goal_set_on_a_busy_session_judges_the_running_turn":                     reGolden(specView, specGoalBusy),
+	"goal_clear_and_input_during_a_goal_turn":                                reGolden(specView, specGoalClear, specGoalWithdraw),
+	"interrupt_during_a_goal_turn_ends_the_goal":                             sameAsServe(),
+	"goal_set_after_an_interrupt_runs_normally":                              sameAsServe(),
+	"interrupt_during_a_goal_evaluation_ends_the_goal":                       sameAsServe(),
+	"interrupt_during_a_compaction_between_goal_turns_ends_the_goal":         sameAsServe(),
+	"goal_judges_the_last_turn_after_a_restart":                              reGolden(specView, specGoalRestart),
+	"claudecode_child_and_goal_sessions_ask_no_question":                     sameAsServe(),
+	"codex_ws_restart_warms_the_websocket_again":                             reGolden(specItems, specWarm),
+	"codex_ws_restart_prewarms_with_a_tool_the_log_selected":                 reGolden(specItems, specWarm),
+	"codex_ws_prewarm_carries_the_plugin_system_segment":                     reGolden(specItems, specWarm),
+	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":         sameAsServe(),
+	"a_failed_summary_keeps_its_usage_in_the_session":                        reGolden(specView, specOverflowFails),
+>>>>>>> c38cb4f1 (fix: port the engine text of child reports, goals, and agent profiles)
 
 	"claudecode_history_bridge_after_a_mid_turn_model_change":             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
 	"claudecode_history_bridge_after_a_turn_whose_cli_never_started":      reGolden(specUpdate, specView, specClaudeGauge),
@@ -516,7 +550,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_interrupt_closes_a_tool_call_that_the_cli_printed_on_the_signal":  reGolden(specView, specStopped, specOneResult, specClaudeGauge),
 	"claudecode_interrupt_keeps_a_tool_result_that_the_cli_printed_on_the_signal": reGolden(specView, specStopped, specClaudeGauge),
 	"claudecode_interrupt_ends_completed_when_the_cli_finishes_on_the_signal":     reGolden(specView, specClaudeGauge),
-	"claudecode_interrupt_ignores_a_placeholder_result":                           pendingOn(specClaudeGauge),
+	"claudecode_interrupt_ignores_a_placeholder_result":                           sameAsServe(),
 	"claudecode_interrupt_of_a_cli_that_exits_with_no_frame":                      reGolden(specView, specStopped, specClaudeGauge),
 
 	"claudecode_runs_in_the_work_dir":                               sameAsServe(),

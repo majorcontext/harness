@@ -33,6 +33,11 @@ type entry struct {
 	pinned bool
 }
 
+// ReportTrigger is the text of a turn that only reports of children start,
+// before the segment that holds their task lines.
+const ReportTrigger = "A background task you started has finished. " +
+	"See the engine context below for its result, and continue accordingly."
+
 // IsReport reports whether parts hold the report of a child. A caller cannot
 // write a task report part, so this tells a report from a prompt that names
 // source child.
@@ -158,10 +163,27 @@ func (s *State) messages(pinned bool) []Message {
 func (s *State) remember(env Envelope) {
 	switch e := env.Event.(type) {
 	case TurnStarted:
+		var reports [][]Part
+		var others int
+		for _, id := range e.InputIDs {
+			if in := s.inputs[id].event; IsReport(in.Parts) {
+				reports = append(reports, in.Parts)
+			} else {
+				others++
+			}
+		}
+		sayReport := others == 0
 		for _, id := range e.InputIDs {
 			in := s.inputs[id].event
+			if IsReport(in.Parts) && !sayReport {
+				continue
+			}
 			s.say(env.Seq, env.Time, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(in.Parts)})
 			s.history[len(s.history)-1].from = provenance{in.Source, in.SourceID, in.SourceLabel}
+			sayReport = false
+		}
+		if len(reports) > 0 {
+			s.history = append(s.history, entry{seq: env.Seq, at: env.Time, id: "pin_" + e.TurnID, msg: pinMessage(reports), by: s.turnBy, turn: s.turnN, pinned: true})
 		}
 		s.settle(env.Seq)
 	case InputPromoted:

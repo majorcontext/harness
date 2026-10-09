@@ -60,15 +60,22 @@ type taskTool struct {
 // tool to one session, as the runtime asks of a session tool.
 func (t *Tree) Tool() turn.Tool { return taskTool{tree: t} }
 
-type taskArgs struct {
+type taskToolArgs struct {
 	Action, Agent, Prompt string
 	Model, Effort         string
 	SessionID             string `json:"session_id"`
 	Tail                  int
 }
 
-// Bind returns the tool of session id.
-func (t taskTool) Bind(id string, _ bool) turn.Tool { t.parent = id; return t }
+// Bind returns the tool of session id at depth, or nil for a session at
+// max_task_depth.
+func (t taskTool) Bind(id string, _ bool, depth int) turn.Tool {
+	if !t.tree.allowsTask(depth) {
+		return nil
+	}
+	t.parent = id
+	return t
+}
 
 // Spec returns the definition of the task tool.
 func (taskTool) Spec() protocol.ToolSpec {
@@ -88,7 +95,7 @@ func (taskTool) Key(c protocol.ToolCall) string {
 
 // Run runs one action of the task tool.
 func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	var in taskArgs
+	var in taskToolArgs
 	if err := json.Unmarshal(c.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("task: invalid arguments: %w", err)
 	}
@@ -115,7 +122,7 @@ func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 	return protocol.ToolResult{Text: string(b)}, err
 }
 
-func (t taskTool) act(ctx context.Context, in taskArgs, up []string) (any, error) {
+func (t taskTool) act(ctx context.Context, in taskToolArgs, up []string) (any, error) {
 	switch in.Action {
 	case "spawn":
 		return t.spawn(ctx, in)
@@ -144,7 +151,7 @@ func (t taskTool) descendant(ctx context.Context, id string) ([]string, error) {
 	return up, nil
 }
 
-func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
+func (t taskTool) spawn(ctx context.Context, in taskToolArgs) (any, error) {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, errors.New("prompt is required")
 	}
@@ -154,7 +161,7 @@ func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
 		SessionID string `json:"session_id"`
 		Agent     string `json:"agent"`
 		Note      string `json:"note"`
-	}{id, in.Agent, "running in the background; its report arrives later as a message. Do not poll or wait for it."}, err
+	}{id, in.Agent, "spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it"}, err
 }
 
 // cancel stops session id and each of its descendants, and withdraws
@@ -191,7 +198,7 @@ func (t taskTool) status(ctx context.Context, id string, up []string) (any, erro
 		protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens}}, nil
 }
 
-func (t taskTool) send(ctx context.Context, in taskArgs, up []string) (any, error) {
+func (t taskTool) send(ctx context.Context, in taskToolArgs, up []string) (any, error) {
 	text := strings.TrimSpace(in.Prompt)
 	if text == "" {
 		return nil, errors.New(`prompt is required for action "send"`)
@@ -211,7 +218,7 @@ func (t taskTool) send(ctx context.Context, in taskArgs, up []string) (any, erro
 	}{in.SessionID, queued, note}, err
 }
 
-func (t taskTool) log(ctx context.Context, in taskArgs) (any, error) {
+func (t taskTool) log(ctx context.Context, in taskToolArgs) (any, error) {
 	if in.Tail < 0 {
 		return nil, errors.New(`tail must not be negative for action "log"`)
 	}

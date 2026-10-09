@@ -6,11 +6,6 @@
       "tools": [
         "bash",
         "edit_file",
-        "fixture_config",
-        "fixture_crash",
-        "fixture_echo",
-        "fixture_fail",
-        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -29,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "refuse it"
             },
             {
               "kind": "text",
@@ -45,11 +40,6 @@
       "tools": [
         "bash",
         "edit_file",
-        "fixture_config",
-        "fixture_crash",
-        "fixture_echo",
-        "fixture_fail",
-        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -68,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "refuse it"
             },
             {
               "kind": "text",
@@ -83,16 +73,16 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "mixed",
-                "prompt": "child work"
+                "agent": "nope",
+                "prompt": "x"
               },
               "tool_use_id": "toolu#1"
             },
             {
               "kind": "tool_use",
-              "tool_name": "bash",
+              "tool_name": "task",
               "tool_input": {
-                "command": "sleep 0.5"
+                "prompt": 5
               },
               "tool_use_id": "toolu#2"
             }
@@ -103,38 +93,17 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"mixed\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
+              "text": "task: unknown agent \"nope\" (available: explore, general-purpose, plan)",
               "tool_name": "task",
-              "tool_use_id": "toolu#1"
+              "tool_use_id": "toolu#1",
+              "is_error": true
             },
             {
               "kind": "tool_result",
-              "text": "after-hook saw: ",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#2"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "fixture_echo",
-        "ls"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "text": "task: invalid arguments: json: cannot unmarshal number into Go struct field taskToolArgs.prompt of type string",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
             }
           ]
         }
@@ -149,7 +118,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "delegate"
+            "text": "refuse it"
           }
         ]
       },
@@ -162,16 +131,16 @@
             "call_id": "toolu#1",
             "name": "task",
             "arguments": {
-              "agent": "mixed",
-              "prompt": "child work"
+              "agent": "nope",
+              "prompt": "x"
             }
           },
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "bash",
+            "name": "task",
             "arguments": {
-              "command": "sleep 0.5"
+              "prompt": 5
             }
           }
         ]
@@ -183,7 +152,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"mixed\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
+            "is_error": true,
+            "content": "task: unknown agent \"nope\" (available: explore, general-purpose, plan)"
           }
         ]
       },
@@ -194,7 +164,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "after-hook saw: "
+            "is_error": true,
+            "content": "task: invalid arguments: json: cannot unmarshal number into Go struct field taskToolArgs.prompt of type string"
           }
         ]
       },
@@ -204,7 +175,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "waiting"
+            "text": "ok"
           }
         ]
       }

@@ -73,7 +73,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "reader",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -85,7 +85,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -132,7 +132,7 @@
               "kind": "tool_use",
               "tool_name": "task",
               "tool_input": {
-                "agent": "reader",
+                "agent": "general-purpose",
                 "prompt": "child work"
               },
               "tool_use_id": "toolu#1"
@@ -144,7 +144,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -164,7 +164,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent reader)\noutcome: done\n\nchild done"
+              "text": "again"
             }
           ]
         }
@@ -172,9 +172,123 @@
     },
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-haiku-4-5",
+      "model": "claude-fable-5",
       "tools": [
-        "ls"
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "waiting"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "second work"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: engine: tree concurrency limit reached",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
       ],
       "messages": [
         {
@@ -214,7 +328,7 @@
             "call_id": "toolu#1",
             "name": "task",
             "arguments": {
-              "agent": "reader",
+              "agent": "general-purpose",
               "prompt": "child work"
             }
           }
@@ -227,7 +341,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },
@@ -247,12 +361,39 @@
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent reader)\noutcome: done\n\nchild done"
+            "text": "again"
           }
         ]
       },
       {
         "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "prompt": "second work"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "task: engine: tree concurrency limit reached"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -264,7 +405,7 @@
     ],
     "kid": [
       {
-        "id": "msg#7",
+        "id": "msg#9",
         "role": "user",
         "parts": [
           {
@@ -272,25 +413,7 @@
             "text": "child work"
           }
         ]
-      },
-      {
-        "id": "msg#8",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "child done"
-          }
-        ]
       }
     ]
-  },
-  "calls": {
-    "system_line.child work": {
-      "status": 200,
-      "body": [
-        "Only read files."
-      ]
-    }
   }
 }

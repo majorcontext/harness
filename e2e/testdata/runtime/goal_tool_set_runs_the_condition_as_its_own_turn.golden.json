@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -71,10 +71,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "goal",
               "tool_input": {
-                "agent": "reader",
-                "prompt": "child work"
+                "action": "set",
+                "condition": "say done"
               },
               "tool_use_id": "toolu#1"
             }
@@ -85,8 +85,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
-              "tool_name": "task",
+              "text": "{\"active\":true,\"condition\":\"say done\"}",
+              "tool_name": "goal",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -117,7 +117,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -130,10 +130,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "goal",
               "tool_input": {
-                "agent": "reader",
-                "prompt": "child work"
+                "action": "set",
+                "condition": "say done"
               },
               "tool_use_id": "toolu#1"
             }
@@ -144,8 +144,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
-              "tool_name": "task",
+              "text": "{\"active\":true,\"condition\":\"say done\"}",
+              "tool_name": "goal",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -155,7 +155,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "waiting"
+              "text": "went"
             }
           ]
         },
@@ -164,7 +164,23 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent reader)\noutcome: canceled: stopped\n\nWorking on it."
+              "text": "say done"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\ngo\n\nASSISTANT:\n[tool call goal] {\"action\":\"set\",\"condition\":\"say done\"}\n\nTOOL:\n[tool result] {\"active\":true,\"condition\":\"say done\"}\n\nASSISTANT:\nwent\n\nUSER:\nsay done\n\nASSISTANT:\nok"
             }
           ]
         }
@@ -179,7 +195,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "delegate"
+            "text": "go"
           }
         ]
       },
@@ -190,10 +206,10 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "task",
+            "name": "goal",
             "arguments": {
-              "agent": "reader",
-              "prompt": "child work"
+              "action": "set",
+              "condition": "say done"
             }
           }
         ]
@@ -205,7 +221,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"reader\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"active\":true,\"condition\":\"say done\"}"
           }
         ]
       },
@@ -215,7 +231,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "waiting"
+            "text": "went"
           }
         ]
       },
@@ -225,7 +241,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent reader)\noutcome: canceled: stopped\n\nWorking on it."
+            "text": "say done"
           }
         ]
       },
@@ -239,52 +255,40 @@
           }
         ]
       }
-    ],
-    "kid": [
-      {
-        "id": "msg#7",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "child work"
-          }
-        ]
-      },
-      {
-        "id": "msg#8",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "Working on it."
-          }
-        ]
-      }
     ]
   },
   "calls": {
-    "claude_invocations.kid": {
+    "get_session.a": {
       "status": 200,
-      "body": [
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "goal": {
+          "condition": "say done",
+          "reason": "ok",
+          "state": "achieved",
+          "turns": 1
+        },
+        "head_seq": 18,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 15,
+          "output_tokens": 9
         }
-      ]
-    },
-    "offered_tools.kid": {
-      "status": 200,
-      "body": [
-        "get_conversation_history"
-      ]
+      }
     }
   }
 }

@@ -55,6 +55,8 @@ type run struct {
 	pending   *eventlog.Message
 	pendingID string
 	deferred  []eventlog.Message
+	// spoke reports that the run recorded an assistant item.
+	spoke bool
 	// steer reports a steer input that waits for Sink.Steer. A resolution
 	// run takes none and leaves the notification for the run after it: the
 	// CLI would queue the input behind its own continuation and answer it in a
@@ -422,7 +424,7 @@ func (r *run) flush() error {
 		return nil
 	}
 	items := append([]eventlog.Message{*r.pending}, r.deferred...)
-	r.pending, r.pendingID, r.deferred = nil, "", nil
+	r.pending, r.pendingID, r.deferred, r.spoke = nil, "", nil, true
 	for _, m := range items {
 		if err := r.out.Item(m); err != nil {
 			return err
@@ -452,10 +454,11 @@ func (r *run) steered() error {
 
 // placeholder reports whether env is the empty zero-turn result that the
 // CLI sends for a queued task notification. The real turn follows it. A
-// compaction ends with the same shape and is final.
+// compaction ends with the same shape and is final, and so is a result after
+// the run recorded an assistant item.
 func (r *run) placeholder(env envelope) bool {
 	return !env.IsError && env.NumTurns != nil && *env.NumTurns == 0 && env.Result == "" &&
-		r.pending == nil && env.LocalCommand == "" && !r.sawCompact
+		r.pending == nil && !r.spoke && env.LocalCommand == "" && !r.sawCompact
 }
 
 // settle records the items and the telemetry of the result.

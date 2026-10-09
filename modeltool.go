@@ -101,7 +101,7 @@ func (t modelTool) Spec() protocol.ToolSpec {
 }
 
 // Bind returns the tool of session id.
-func (t modelTool) Bind(id string, _ bool) turn.Tool {
+func (t modelTool) Bind(id string, _ bool, _ int) turn.Tool {
 	t.session = id
 	return t
 }

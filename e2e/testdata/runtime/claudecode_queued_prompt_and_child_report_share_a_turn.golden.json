@@ -44,16 +44,6 @@
       },
       {
         "id": "msg#5",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild done slow"
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
