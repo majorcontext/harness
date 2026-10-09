@@ -450,7 +450,47 @@ func TestContractMCPLazyLoading(t *testing.T) {
 	})
 }
 
+func answeredTool(tool string) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		for i := len(r.Messages) - 1; i >= 0 && r.Messages[i].Role != "assistant"; i-- {
+			if harnesstest.LastToolResult(tool)(harnesstest.Request{Messages: r.Messages[i : i+1]}) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func unansweredPrompt(text string) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		return harnesstest.LastUserText(text)(r) && !answeredTool("mcp")(r) && !answeredTool("mcp__weather__forecast")(r)
+	}
+}
+
+func callWithID(id string, c harnesstest.ToolCall) []harnesstest.ToolCall {
+	c.ID = id
+	return []harnesstest.ToolCall{c}
+}
+
 func TestContractMCPAvailability(t *testing.T) {
+	forecast := mcpTool("weather", "forecast", "city", "Oslo")
+	pinModel := []harnesstest.Step{
+		{Name: "connect", Match: unansweredPrompt("go"), Reply: harnesstest.Reply{ToolCalls: callWithID("toolu_connect", mcpAction("action", "connect", "server", "weather"))}},
+		{Name: "connected", Match: answeredTool("mcp"), Reply: harnesstest.Reply{Text: "connected"}},
+		{Name: "first forecast", Match: unansweredPrompt("bravo"), Reply: harnesstest.Reply{ToolCalls: callWithID("toolu_first", forecast)}},
+		{Name: "first answer", Match: answeredTool("mcp__weather__forecast"), Reply: harnesstest.Reply{Text: "snow"}},
+		{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+		{Name: "second forecast", Match: unansweredPrompt("charlie"), Reply: harnesstest.Reply{ToolCalls: callWithID("toolu_second", forecast)}},
+		{Name: "second answer", Match: answeredTool("mcp__weather__forecast"), Reply: harnesstest.Reply{Text: "still snow"}},
+	}
+	pinActions := []action{
+		create{as: "a"},
+		submit{as: "a", text: "go"}, waitIdle{as: "a"},
+		submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
+		compact{as: "a"},
+		submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
+	}
+	pinSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), failInit: 1})
 	runScenarios(t, []scenario{
 		{
 			name:  "mcp_unavailable_at_start_then_connect",
@@ -492,6 +532,8 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}}, expectSystem{req: 4, sameAs: 1}),
 		},
+		{name: "mcp_notice_then_compaction_keeps_a_call_paired", setup: pinSetup, model: pinModel, actions: pinActions},
+		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
 	})
 }
 

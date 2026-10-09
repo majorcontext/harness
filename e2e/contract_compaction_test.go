@@ -14,6 +14,15 @@ func TestContractBanner(t *testing.T) {
 	summarized := func(r harnesstest.Request) bool {
 		return strings.Contains(r.Messages[0].Parts[0].Text, "gist") && harnesstest.LastUserText("charlie")(r) && !harnesstest.LastToolResult("bash")(r)
 	}
+	bash := func(id, cmd string) harnesstest.ToolCall {
+		return harnesstest.ToolCall{ID: id, Name: "bash", Input: map[string]any{"command": cmd}}
+	}
+	text := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
+	}
+	done := func(name, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: reply}}
+	}
 	runScenarios(t, []scenario{{
 		name: "banner_holds_its_place_when_a_turn_compacts_in_the_middle",
 		model: []harnesstest.Step{
@@ -31,6 +40,27 @@ func TestContractBanner(t *testing.T) {
 			submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
 			restart{},
 			submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
+		},
+	}, {
+		name:   "banner_stays_after_the_results_when_a_compaction_follows_two_calls",
+		config: map[string]any{"compaction_keep_turns": 1},
+		model: []harnesstest.Step{
+			text("alpha", "alpha", "re alpha"),
+			{Name: "bravo", Match: harnesstest.LastUserText("bravo"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{bash("toolu_zero", "echo zero")}}},
+			done("bravo done", "re bravo"),
+			{Name: "charlie", Match: harnesstest.LastUserText("charlie"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{bash("toolu_one", "echo one"), bash("toolu_two", "echo two")}}},
+			done("charlie done", "re charlie"),
+			{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+			text("delta", "delta", "re delta"),
+		},
+		actions: []action{
+			create{as: "a"},
+			submit{as: "a", text: "alpha"}, waitIdle{as: "a"},
+			restart{},
+			submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
+			submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
+			compact{as: "a"},
+			submit{as: "a", text: "delta"}, waitIdle{as: "a"},
 		},
 	}})
 }

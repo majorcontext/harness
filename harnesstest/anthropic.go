@@ -63,6 +63,7 @@ func decodeRequest(body []byte) (Request, error) {
 	for _, m := range w.Messages {
 		msg := Message{Role: m.Role}
 		answered, leading := 0, true
+		awaiting := slices.Clone(pending)
 		for _, b := range blocks(m.Content) {
 			if b.Type != "tool_result" {
 				leading = false
@@ -74,9 +75,11 @@ func decodeRequest(body []byte) (Request, error) {
 				toolNames[b.ID] = b.Name
 				msg.Parts = append(msg.Parts, Part{Kind: "tool_use", ToolName: b.Name, ToolInput: b.Input, ToolUseID: b.ID})
 			case "tool_result":
-				if !leading || m.Role != "user" || !slices.Contains(pending, b.ToolUseID) {
-					return Request{}, fmt.Errorf("tool_result %q is not at the start of the user message that follows its tool_use", b.ToolUseID)
+				at := slices.Index(awaiting, b.ToolUseID)
+				if !leading || m.Role != "user" || at < 0 {
+					return Request{}, fmt.Errorf("tool_result %q is not at the start of the user message that follows its tool_use, or answers it twice", b.ToolUseID)
 				}
+				awaiting = slices.Delete(awaiting, at, at+1)
 				answered++
 				msg.Parts = append(msg.Parts, Part{
 					Kind: "tool_result", Text: joinText(b.Content), ToolName: toolNames[b.ToolUseID],
