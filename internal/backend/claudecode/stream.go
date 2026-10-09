@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,10 +53,9 @@ type run struct {
 	tailErr error
 	result  *envelope
 	// pending is the assistant item that later frames of the same API
-	// response join; deferred holds the tool results that follow it.
+	// response join, until it holds a tool call.
 	pending   *eventlog.Message
 	pendingID string
-	deferred  []eventlog.Message
 	// spoke reports that the run recorded an assistant item.
 	spoke bool
 	// steer reports a steer input that waits for Sink.Steer. A resolution
@@ -395,7 +395,7 @@ func (r *run) assistant(env envelope) error {
 		}
 	}
 	r.pending.Parts = append(r.pending.Parts, parts...)
-	if m.ID == "" {
+	if m.ID == "" || slices.ContainsFunc(parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }) {
 		return r.flush()
 	}
 	return nil
@@ -407,31 +407,20 @@ func (r *run) toolResults(env envelope) error {
 		return nil
 	}
 	msg := eventlog.Message{Role: eventlog.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID}
-	if r.pending != nil && r.pending.ParentCallID != env.ParentToolUseID {
-		if err := r.flush(); err != nil {
-			return err
-		}
-	}
-	if r.pending != nil {
-		r.deferred = append(r.deferred, msg)
-		return nil
+	if err := r.flush(); err != nil {
+		return err
 	}
 	return r.out.Item(msg)
 }
 
-// flush records the pending assistant item, then its tool results.
+// flush records the pending assistant item.
 func (r *run) flush() error {
 	if r.pending == nil {
 		return nil
 	}
-	items := append([]eventlog.Message{*r.pending}, r.deferred...)
-	r.pending, r.pendingID, r.deferred, r.spoke = nil, "", nil, true
-	for _, m := range items {
-		if err := r.out.Item(m); err != nil {
-			return err
-		}
-	}
-	return nil
+	m := *r.pending
+	r.pending, r.pendingID, r.spoke = nil, "", true
+	return r.out.Item(m)
 }
 
 // steered writes the queued steer inputs to stdin.
