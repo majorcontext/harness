@@ -128,7 +128,7 @@ func (t taskTool) act(ctx context.Context, in taskToolArgs, up []string) (any, e
 	case "spawn":
 		return t.spawn(ctx, in)
 	case "cancel":
-		return t.cancel(ctx, in.SessionID)
+		return t.cancel(ctx, in.SessionID, up)
 	case "status":
 		return t.status(ctx, in.SessionID, up)
 	case "send":
@@ -166,9 +166,16 @@ func (t taskTool) spawn(ctx context.Context, in taskToolArgs) (any, error) {
 }
 
 // cancel stops session id and each of its descendants, and withdraws
-// their queued inputs. The report of session id reaches its parent.
-func (t taskTool) cancel(ctx context.Context, id string) (any, error) {
-	if err := t.tree.Interrupt(ctx, id, func(ctx context.Context) error { return t.tree.cancelTurn(ctx, id, false) }); err != nil {
+// their queued inputs. The report of session id reaches its parent. The
+// report of a descendant reaches the nearest ancestor of session id that has
+// not ended its work, as the engine routed it: the parent of session id, or
+// the session of the tool when the parents between are done.
+func (t taskTool) cancel(ctx context.Context, id string, up []string) (any, error) {
+	route, err := t.tree.live(ctx, up, t.parent)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.tree.Cancel(ctx, id, route); err != nil {
 		return nil, err
 	}
 	k, err := t.tree.child(ctx, id, 0)
@@ -278,6 +285,21 @@ func (t *Tree) child(ctx context.Context, id string, tail int) (childView, error
 		}
 	})
 	return k, err
+}
+
+// live returns the first of the sessions in up whose turn has not ended with
+// an outcome, or fallback when each has.
+func (t *Tree) live(ctx context.Context, up []string, fallback string) (string, error) {
+	for _, id := range up {
+		var ended bool
+		if err := t.s.Read(ctx, id, func(st *eventlog.State) { _, _, ended = session.Settlement(id, st) }); err != nil {
+			return "", err
+		}
+		if !ended {
+			return id, nil
+		}
+	}
+	return fallback, nil
 }
 
 // send admits text to child as an input with source parent. When the

@@ -120,11 +120,10 @@ const (
 	specLimitFails     = "A spawn past `max_concurrent_tasks` or `max_tree_tokens` fails the tool call with the text of the engine"
 	specTaskWithheld   = "A session at `max_task_depth` has no `task` tool, as in the engine, so a call to it reads as a call to a tool that is not there."
 	specGoalTranscript = "The transcript that it reads shows a tool call as `[tool call <name>] <arguments>`"
-	specGoalAdjust     = "Does `adjust` inside a goal turn judge that turn on the old condition, as the engine did?"
+	specGoalAdjust     = "Decided by Andy (2026-10-09): an adjust takes effect on the current turn"
 	specGoalAdjustPost = "A condition that `set` posted and that still waits is replaced by the adjusted one, so the turn of its own runs the adjusted condition."
 	specTaskWording    = "The `task` tool keeps the engine actions and wording."
 	specReadOnlyKinds  = "The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan."
-	specCancelReport   = "Does `cancel` of a child report its canceled grandchild to the nearest live ancestor, as the engine did?"
 	specProfileKnown   = "a spawn keeps only the names of a profile that `known` accepts for the model of the child"
 	specCrashMarker    = "Does the switch keep the crash marker? Yes, built"
 	specDismissed      = "A dismissal closes the call with an error result that says the user dismissed the question."
@@ -429,7 +428,7 @@ var runtimeRows = map[string]runtimeRow{
 	"create_takes_an_unknown_model_with_a_configured_window":          reGolden(specView),
 	"goal_tool_actions_report_and_refuse":                             reGolden(specView, specGoalTranscript),
 	"goal_tool_adjust_after_set_runs_the_adjusted_condition":          reGolden(specView, specGoalOwnTurn, specGoalAdjustPost),
-	"goal_tool_adjust_keeps_the_turn_limit":                           pendingOn(specGoalAdjust),
+	"goal_tool_adjust_keeps_the_turn_limit":                           reGolden(specView, specGoalAdjust),
 	"goal_tool_refusals_copy_the_engine_wording":                      reGolden(specView, specGoalWording),
 	"goal_tool_set_runs_the_condition_as_its_own_turn":                reGolden(specView, specGoalOwnTurn, specGoalTranscript),
 	"input_receipts_and_conflicts":                                    reGolden(specReceipt, specSameBody, specOtherBody, specTurnMismatch, specErrors),
@@ -463,7 +462,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_two_sends_to_a_settled_child_need_one_slot":                    reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_action_refusals":                                               reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_tree_reaches_a_grandchild":                                     reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"task_cancel_of_a_child_stops_the_grandchild":                        pendingOn(specCancelReport),
+	"task_cancel_of_a_child_stops_the_grandchild":                        reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_tree_interrupt_stops_the_grandchild":                           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"task_profile_keeps_the_plugin_tools_of_its_list":                    reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
 	"task_child_on_claude_code_gets_no_runtime_builtin":                  sameAsServe(),
