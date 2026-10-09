@@ -1,0 +1,109 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Working on it."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Checking."
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Bash",
+            "arguments": {
+              "command": "sleep 60"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "interrupted before a result was recorded; check whether it took effect before running it again"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "messages_page.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "Working on it."
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "Checking."
+            },
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "Bash",
+              "arguments": {
+                "command": "sleep 60"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -80,6 +80,19 @@ func TestContractClaudeCodeMirror(t *testing.T) {
 	})
 }
 
+func TestContractClaudeCodeToolCallVisible(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:   "claudecode_running_tool_call_is_in_the_messages_before_its_result",
+		driver: claudeLane{mode: "hang_in_tool", signals: true}.newDriver,
+		actions: []action{
+			create{as: "a"}, submit{as: "a", text: "hi"},
+			claudeAwaitToolCall{as: "a", callID: "toolu_h"},
+			messagesPage{as: "a"},
+			interrupt{as: "a"}, waitIdle{as: "a"},
+		},
+	}})
+}
+
 func TestContractClaudeCodeInterrupt(t *testing.T) {
 	row := func(name, mode string, facts ...action) scenario {
 		return scenario{
