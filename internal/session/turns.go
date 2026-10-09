@@ -144,6 +144,9 @@ func (a *Actor) item(r *running, itemID string, m eventlog.Message) error {
 // telemetry records what a model call of r measured. A call that measured
 // nothing records nothing.
 func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
+	if t.Call != nil {
+		a.resolveWarm(t.Call)
+	}
 	if a.run != r {
 		return nil
 	}

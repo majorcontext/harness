@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -468,11 +469,18 @@ func (r *run) settle(env envelope) error {
 }
 
 func (r *run) telemetry(env envelope) {
-	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &env.TotalCostUSD}
+	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &env.TotalCostUSD, Call: callMetrics(env)}
 	last := r.lastCall
 	if last == nil {
 		last = env.Usage
 	}
 	t.Context = eventlog.ContextMeasured{Tokens: last.prompt(), Window: env.ModelUsage[r.mainModel].ContextWindow, Source: stateKey}
 	r.out.Telemetry(t)
+}
+
+// callMetrics reads the timing of the result. A first-token time without a
+// duration leaves the stream time at zero.
+func callMetrics(env envelope) *turn.CallMetrics {
+	ttft := time.Duration(env.TTFTMillis) * time.Millisecond
+	return &turn.CallMetrics{TTFT: ttft, Stream: max(0, time.Duration(env.DurationMillis)*time.Millisecond-ttft)}
 }

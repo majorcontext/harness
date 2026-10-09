@@ -144,8 +144,8 @@ type Actor struct {
 	pending  []func()
 	// runs counts the turn, compaction, and judge goroutines.
 	runs sync.WaitGroup
-	// warming closes when the warm-up that Run started ends. nil: none.
-	warming chan struct{}
+	// warming is the warm-up that Run started. nil: none.
+	warming *warmup
 
 	state *eventlog.State
 	// fenced is the seq of the owner.acquired record of this actor.

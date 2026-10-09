@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
@@ -69,12 +70,14 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	if err != nil {
 		return turn.Result{}, err
 	}
+	sentAt := time.Now()
 	st, err := b.client.Stream(ctx, preq)
 	if err != nil {
 		return turn.Result{}, classify(err)
 	}
 	defer func() { _ = st.Close() }()
 	var res turn.Result
+	var firstAt time.Time
 	for {
 		// A truncated stream wraps io.EOF, so only the bare sentinel is a clean end.
 		ev, err := st.Next()
@@ -84,13 +87,18 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 		if err != nil {
 			return turn.Result{}, classify(err)
 		}
+		if firstAt.IsZero() && ev.Type != provider.EventActivity {
+			firstAt = time.Now()
+		}
 		switch ev.Type {
 		case provider.EventTextDelta:
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartText, Text: ev.Text})
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
-			out.Telemetry(b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage))
+			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
+			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
+			out.Telemetry(tel)
 			res.MaxTokens = ev.StopReason == provider.StopMaxTokens
 			m := fromMessage(ev.Message)
 			if !hasOutput(m) {
@@ -123,6 +131,20 @@ func (b *Backend) Warm(ctx context.Context, req turn.Request) error {
 		return err
 	}
 	return b.client.(provider.StartupPrewarmer).Warm(ctx, preq)
+}
+
+// callMetrics measures a call that was sent at sentAt, streamed its first
+// content at firstAt, and ended at doneAt. A call whose first event was its
+// end has no stream time.
+func callMetrics(sentAt, firstAt, doneAt time.Time, md *provider.RequestMetadata) *turn.CallMetrics {
+	m := &turn.CallMetrics{TTFT: firstAt.Sub(sentAt), Stream: doneAt.Sub(firstAt)}
+	if md != nil {
+		m.RequestMode = string(md.Mode)
+		m.CompleteInputItems, m.SentInputItems = md.CompleteInputItems, md.SentInputItems
+		m.PreviousResponseUsed, m.ChainRecovered = md.PreviousResponseUsed, md.ChainRecovered
+		m.ChainRefusal, m.ChainRefusalDetail, m.ChainRefusalItem = string(md.ChainRefusal), md.ChainRefusalDetail, md.ChainRefusalItem
+	}
+	return m
 }
 
 // telemetry reports u, and the prompt of the call as the context reading.
