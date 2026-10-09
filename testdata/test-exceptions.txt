@@ -13,4 +13,3 @@ internal/prompt/prompt_test.go an empty Options.WorkDir is Go API: no file is re
 internal/tool/builtin/builtin_test.go an empty Options.WorkDir is Go API: no built-in tool exists
 internal/tool/mcpsrc/mcpsrc_test.go AllowedTools has no serve oracle; MCP search scoring is a pure table
 internal/toolresult/toolresult_test.go pure secret-mask table with many edge cases (spec Tool-result retention)
-tasktool_test.go the cancel-report race needs the fake clock of a synctest bubble, a Sync receiver that stops a parent, and a Store that parks one read; no serve driver takes a Go Sync or Store

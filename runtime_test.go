@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -342,6 +343,130 @@ func TestCreateWaitsForAnOpenOfTheSameIDThatFindsNoSession(t *testing.T) {
 		}
 		if err := <-created; err != nil {
 			t.Errorf("Create = %v, want success", err)
+		}
+		closeRuntime(t, r)
+	})
+}
+
+// stoppingSync holds every batch of a session other than s1 until release
+// closes, then rejects the first batch of stop for good and acknowledges the rest.
+type stoppingSync struct {
+	release chan struct{}
+	mu      sync.Mutex
+	stop    string
+	spent   bool
+}
+
+func (y *stoppingSync) Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error) {
+	if b.Session != "s1" {
+		select {
+		case <-y.release:
+		case <-ctx.Done():
+			return protocol.SyncAck{}, ctx.Err()
+		}
+	}
+	y.mu.Lock()
+	defer y.mu.Unlock()
+	if b.Session == y.stop && !y.spent {
+		y.spent = true
+		return protocol.SyncAck{}, harness.ErrSyncRejected
+	}
+	return protocol.SyncAck{Head: b.FromSeq + uint64(len(b.Records)) - 1}, nil
+}
+
+// parkingStore parks the first read of session park once the turn of session
+// ender ends, until resume closes.
+type parkingStore struct {
+	harness.Store
+	mu          sync.Mutex
+	ender, park string
+	armed       chan struct{}
+	entered     chan struct{}
+	resume      chan struct{}
+	parked      atomic.Bool
+}
+
+func (s *parkingStore) targets() (ender, park string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ender, s.park
+}
+
+func (s *parkingStore) Append(ctx context.Context, id string, expectedSeq uint64, records ...[]byte) error {
+	if ender, _ := s.targets(); id == ender {
+		for _, r := range records {
+			if env, err := eventlog.Decode(r); err == nil {
+				if _, ok := env.Event.(eventlog.TurnEnded); ok {
+					close(s.armed)
+				}
+			}
+		}
+	}
+	return s.Store.Append(ctx, id, expectedSeq, records...)
+}
+
+func (s *parkingStore) Head(ctx context.Context, id string) (uint64, error) {
+	if _, park := s.targets(); id == park {
+		select {
+		case <-s.armed:
+			if s.parked.CompareAndSwap(false, true) {
+				close(s.entered)
+				select {
+				case <-s.resume:
+				case <-ctx.Done():
+				}
+			}
+		default:
+		}
+	}
+	return s.Store.Head(ctx, id)
+}
+
+func TestCancelOfAGrandchildWhoseParentStoppedReportsOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var grand string
+		f := &family{answer: generations(block, func() eventlog.Message {
+			return calls("task", onChild("cancel", "session_id", grand))
+		})}
+		y := &stoppingSync{release: make(chan struct{})}
+		ps := &parkingStore{Store: harness.NewMemStore(), armed: make(chan struct{}), entered: make(chan struct{}), resume: make(chan struct{})}
+		r, err := harness.NewWithBackend(harness.Options{Store: ps, Sync: y, WorkDir: t.TempDir()}, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := create(t, r)
+		submit(t, s, text("a", "delegate"))
+		kid := children(t, r)[0].ID
+		grand = descendants(t, r, kid)[0].ID
+		y.mu.Lock()
+		y.stop = kid
+		y.mu.Unlock()
+		ps.mu.Lock()
+		ps.ender, ps.park = grand, kid
+		ps.mu.Unlock()
+		reportInputs := func() (n int) {
+			for _, id := range []string{"s1", kid, grand} {
+				for _, e := range events(t, ps, id) {
+					if in, ok := e.(eventlog.InputAdmitted); ok && in.Source == "child" {
+						n++
+					}
+				}
+			}
+			return n
+		}
+		before := reportInputs()
+		close(y.release)
+		synctest.Wait()
+		submit(t, s, text("b", "act"))
+		<-ps.entered
+		if _, err := r.Open(bg, kid); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		close(ps.resume)
+		synctest.Wait()
+		if got := reportInputs() - before; got != 1 {
+			t.Errorf("report inputs the cancel added to the tree = %d, want 1", got)
 		}
 		closeRuntime(t, r)
 	})
