@@ -156,9 +156,9 @@ func (a expectSystem) run(t *testing.T, r *run) {
 	}
 }
 
-type expectPrefixAfterCompaction struct{}
+type expectPrefixAfterCompaction struct{ anthropic bool }
 
-func (expectPrefixAfterCompaction) run(t *testing.T, r *run) {
+func (e expectPrefixAfterCompaction) run(t *testing.T, r *run) {
 	t.Helper()
 	reqs := r.fake.Requests()
 	from := -1
@@ -172,12 +172,13 @@ func (expectPrefixAfterCompaction) run(t *testing.T, r *run) {
 	}
 	for i := from; i < len(reqs); i++ {
 		req := reqs[i]
-		if len(req.CacheBreakpoints) > 0 {
+		var want []harnesstest.CacheBreakpoint
+		if e.anthropic {
 			last := len(req.Messages) - 1
-			want := []harnesstest.CacheBreakpoint{{Message: -1}, {Message: last, Block: len(req.Messages[last].Parts) - 1}}
-			if !reflect.DeepEqual(req.CacheBreakpoints, want) {
-				t.Errorf("request %d cache breakpoints = %+v, want %+v", i+1, req.CacheBreakpoints, want)
-			}
+			want = []harnesstest.CacheBreakpoint{{Message: -1}, {Message: last, Block: len(req.Messages[last].Parts) - 1}}
+		}
+		if !reflect.DeepEqual(req.CacheBreakpoints, want) {
+			t.Errorf("request %d cache breakpoints = %+v, want %+v", i+1, req.CacheBreakpoints, want)
 		}
 		if i == from {
 			continue
@@ -537,20 +538,22 @@ func pinPrefixRows() []scenario {
 			harnesstest.Step{Name: in + " call", Match: unanswered(in), Reply: harnesstest.Reply{ToolCalls: bashCall(in)}},
 			harnesstest.Step{Name: in + " done", Match: answeredTool("bash"), Reply: harnesstest.Reply{Text: "re " + in}})
 	}
-	cacheActions := []action{
-		create{as: "a"},
-		submit{as: "a", text: "alpha"}, waitIdle{as: "a"},
-		submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
-		compact{as: "a"},
-		submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
-		submit{as: "a", text: "delta"}, waitIdle{as: "a"},
-		submit{as: "a", text: "echo"}, waitIdle{as: "a"},
-		expectPrefixAfterCompaction{},
+	cacheActions := func(anthropic bool) []action {
+		return []action{
+			create{as: "a"},
+			submit{as: "a", text: "alpha"}, waitIdle{as: "a"},
+			submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
+			compact{as: "a"},
+			submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
+			submit{as: "a", text: "delta"}, waitIdle{as: "a"},
+			submit{as: "a", text: "echo"}, waitIdle{as: "a"},
+			expectPrefixAfterCompaction{anthropic: anthropic},
+		}
 	}
 	cacheSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true})
 	return []scenario{
-		{name: "pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", setup: cacheSetup, model: cacheModel, actions: cacheActions},
-		{name: "bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", chat: true, setup: cacheSetup, model: cacheModel, actions: cacheActions},
+		{name: "pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", setup: cacheSetup, model: cacheModel, actions: cacheActions(true)},
+		{name: "bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", chat: true, setup: cacheSetup, model: cacheModel, actions: cacheActions(false)},
 	}
 }
 
