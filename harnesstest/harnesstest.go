@@ -71,7 +71,9 @@ type Request struct {
 	// Temperature and TopP are nil when the request sends none. Only the Anthropic wire fills them.
 	Temperature, TopP *float64
 	Messages          []Message
-	Tools             []string // sorted names
+	// CacheBreakpoints holds the cache_control markers in wire order. Only the Anthropic wire fills it.
+	CacheBreakpoints []CacheBreakpoint
+	Tools            []string // sorted names
 	// Header holds the HTTP request headers. Only NewChat fills it.
 	Header http.Header
 	// Chat-completions requests only.
@@ -79,6 +81,9 @@ type Request struct {
 	User            string // top-level user
 	PromptCacheKey  string // top-level prompt_cache_key
 }
+
+// CacheBreakpoint is the place of one cache_control marker: Message indexes Request.Messages, or is -1 for the system prompt, and Block indexes the content blocks.
+type CacheBreakpoint struct{ Message, Block int }
 
 // Message is one conversation turn in a Request.
 type Message struct {
