@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "alpha"
             },
             {
               "kind": "text",
@@ -58,7 +58,77 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
             },
             {
               "kind": "text",
@@ -71,10 +141,9 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "bash",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "command": "echo zero"
               },
               "tool_use_id": "toolu#1"
             }
@@ -85,8 +154,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "zero\n",
+              "tool_name": "bash",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -117,7 +186,25 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
             },
             {
               "kind": "text",
@@ -130,10 +217,9 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "bash",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "command": "echo zero"
               },
               "tool_use_id": "toolu#1"
             }
@@ -144,8 +230,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "zero\n",
+              "tool_name": "bash",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -154,12 +240,8 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "tool_use",
-              "tool_name": "bash",
-              "tool_input": {
-                "command": "sleep 0.3"
-              },
-              "tool_use_id": "toolu#2"
+              "kind": "text",
+              "text": "re bravo"
             }
           ]
         },
@@ -167,14 +249,8 @@
           "role": "user",
           "parts": [
             {
-              "kind": "tool_result",
-              "text": "(no output)",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#2"
-            },
-            {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "charlie"
             }
           ]
         }
@@ -204,11 +280,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "text": "alpha"
             }
           ]
         },
@@ -216,13 +288,8 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
-              },
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "re alpha"
             }
           ]
         },
@@ -230,10 +297,12 @@
           "role": "user",
           "parts": [
             {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "bravo"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -244,9 +313,9 @@
               "kind": "tool_use",
               "tool_name": "bash",
               "tool_input": {
-                "command": "sleep 0.3"
+                "command": "echo zero"
               },
-              "tool_use_id": "toolu#2"
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -255,112 +324,46 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "(no output)",
+              "text": "zero\n",
               "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re bravo"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "charlie"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo one"
+              },
               "tool_use_id": "toolu#2"
             },
             {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "parent done"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "next"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "looking"
-            },
-            {
               "kind": "tool_use",
-              "tool_name": "ls",
+              "tool_name": "bash",
               "tool_input": {
-                "path": "."
+                "command": "echo two"
               },
               "tool_use_id": "toolu#3"
             }
@@ -371,8 +374,14 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "(empty directory)",
-              "tool_name": "ls",
+              "text": "one\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_result",
+              "text": "two\n",
+              "tool_name": "bash",
               "tool_use_id": "toolu#3"
             }
           ]
@@ -389,56 +398,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
-              },
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "bash",
-              "tool_input": {
-                "command": "sleep 0.3"
-              },
-              "tool_use_id": "toolu#2"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "(no output)",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#2"
+              "text": "alpha"
             }
           ]
         },
@@ -447,7 +407,49 @@
           "parts": [
             {
               "kind": "text",
-              "text": "parent done"
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo zero"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "zero\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re bravo"
             }
           ]
         },
@@ -490,7 +492,45 @@
             },
             {
               "kind": "text",
-              "text": "next"
+              "text": "charlie"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo one"
+              },
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo two"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "one\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_result",
+              "text": "two\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3"
             }
           ]
         },
@@ -499,7 +539,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "parent done"
+              "text": "re charlie"
             }
           ]
         },
@@ -508,15 +548,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "third"
-            },
-            {
-              "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "delta"
             }
           ]
         }
@@ -541,7 +577,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "next"
+            "text": "charlie"
           }
         ]
       },
@@ -550,28 +586,72 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "parent done"
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "bash",
+            "arguments": {
+              "command": "echo one"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "bash",
+            "arguments": {
+              "command": "echo two"
+            }
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "third"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "one\n"
           }
         ]
       },
       {
         "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "two\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "parent done"
+            "text": "re charlie"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "delta"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "re delta"
           }
         ]
       }
@@ -583,7 +663,7 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 18
+        "to_seq": 17
       }
     }
   }

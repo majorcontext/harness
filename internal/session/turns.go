@@ -109,7 +109,6 @@ func (a *Actor) start(id string, inputIDs []string) {
 		req.Steered = r.steered
 	}
 	req.Questions = a.questions()
-	a.pins.Clamp(len(req.History))
 	req.Banner, req.Pins = a.cfg.Banner, a.pins.Pinned()
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
