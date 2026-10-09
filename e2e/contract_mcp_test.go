@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -158,7 +159,8 @@ func (a expectSystem) run(t *testing.T, r *run) {
 
 // expectCachePrefix checks the model requests from the 1-based request from
 // to the last: each one keeps the previous one as a prefix of its messages
-// with the same system prompt, and its cache breakpoints sit on the last
+// with the same system prompt, both compared as the canonical wire JSON of
+// each block with cache_control removed, and its cache breakpoints sit on the last
 // block of the system prompt and the last block of its last message, the
 // places the Anthropic transcoder gives them. A chat request sends none and
 // keeps its prompt cache key.
@@ -169,7 +171,7 @@ type expectCachePrefix struct {
 
 func (a expectCachePrefix) run(t *testing.T, r *run) {
 	t.Helper()
-	reqs := r.fake.Requests()
+	reqs, wires := r.fake.Requests(), r.fake.Wires()
 	if a.from < 1 || a.from >= len(reqs) {
 		t.Fatalf("expectCachePrefix: from %d of %d requests", a.from, len(reqs))
 	}
@@ -187,6 +189,12 @@ func (a expectCachePrefix) run(t *testing.T, r *run) {
 			continue
 		}
 		prev := reqs[i-1]
+		if !slices.Equal(wires[i].System, wires[i-1].System) {
+			t.Errorf("request %d system wire differs from request %d:\n%q\n---\n%q", i+1, i, wires[i].System, wires[i-1].System)
+		}
+		if len(wires[i].Messages) <= len(wires[i-1].Messages) || !slices.Equal(wires[i].Messages[:len(wires[i-1].Messages)], wires[i-1].Messages) {
+			t.Errorf("request %d does not keep request %d as a byte-stable prefix of its wire messages:\n%q\n---\n%q", i+1, i, wires[i].Messages, wires[i-1].Messages)
+		}
 		if req.System != prev.System {
 			t.Errorf("request %d system prompt differs from request %d:\n%s\n---\n%s", i+1, i, req.System, prev.System)
 		}

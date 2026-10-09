@@ -82,6 +82,12 @@ type Request struct {
 	PromptCacheKey  string // top-level prompt_cache_key
 }
 
+// Wire is the canonical JSON of one request: each system block (Anthropic) or
+// system message (chat) and each other message, with every cache_control
+// member removed. A prefix check on it sees every byte of content, images and
+// thinking blocks included, and ignores only the breakpoints.
+type Wire struct{ System, Messages []string }
+
 // CacheBreakpoint is the place of one cache_control marker. Message is the
 // index of the message in Messages, or -1 for the system prompt. Block is the
 // index of the content block in the wire message or system array.
@@ -132,6 +138,7 @@ func (r Request) LastUserText() string {
 // codec is the wire format of a Server.
 type codec struct {
 	decode     func(body []byte, h http.Header) (Request, error)
+	wire       func(body []byte) (Wire, error)
 	stream     func(s *Server, w http.ResponseWriter, r *http.Request, n int, name string, rep Reply)
 	writeError func(w http.ResponseWriter, status int, msg string)
 	replyError func(w http.ResponseWriter, rep Reply)
@@ -140,7 +147,7 @@ type codec struct {
 }
 
 var anthropicCodec = codec{
-	decode: func(body []byte, _ http.Header) (Request, error) { return decodeRequest(body) },
+	decode: func(body []byte, _ http.Header) (Request, error) { return decodeRequest(body) }, wire: anthropicWire,
 	stream: (*Server).stream, writeError: writeError, replyError: writeReplyError,
 }
 
@@ -162,6 +169,7 @@ type Server struct {
 	steps     []Step
 	consumed  []bool
 	requests  []Request
+	wires     []Wire
 	unmatched []Request
 	undecoded []string
 	releases  map[string]chan struct{}
@@ -240,6 +248,13 @@ func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
+}
+
+// Wires returns the canonical wire form of every request received so far, in the order of Requests.
+func (s *Server) Wires() []Wire {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Wire(nil), s.wires...)
 }
 
 // Release lets the named Block step finish. A Release before the request arrives still counts.
@@ -388,8 +403,14 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wire, err := s.wire().wire(body)
+	if err != nil {
+		s.wire().writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s.mu.Lock()
 	s.requests = append(s.requests, req)
+	s.wires = append(s.wires, wire)
 	n := len(s.requests)
 	close(s.arrived)
 	s.arrived = make(chan struct{})

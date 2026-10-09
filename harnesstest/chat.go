@@ -23,7 +23,7 @@ func NewChat(t testing.TB, steps ...Step) *Server {
 }
 
 var chatCodec = codec{
-	decode: decodeChatRequest, stream: (*Server).chatStream, writeError: writeChatError, replyError: writeChatReplyError,
+	decode: decodeChatRequest, wire: chatWire, stream: (*Server).chatStream, writeError: writeChatError, replyError: writeChatReplyError,
 	pathSuffix: "/chat/completions",
 }
 
@@ -95,6 +95,31 @@ func chatText(raw json.RawMessage) string {
 		}
 	}
 	return strings.Join(texts, "\n")
+}
+
+// chatWire is the canonical wire form of the system and other messages of body.
+func chatWire(body []byte) (Wire, error) {
+	var w struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &w); err != nil {
+		return Wire{}, err
+	}
+	var wire Wire
+	for _, m := range w.Messages {
+		var role struct {
+			Role string `json:"role"`
+		}
+		if err := json.Unmarshal(m, &role); err != nil {
+			return Wire{}, err
+		}
+		if role.Role == "system" {
+			wire.System = append(wire.System, canonicalWire(m))
+		} else {
+			wire.Messages = append(wire.Messages, canonicalWire(m))
+		}
+	}
+	return wire, nil
 }
 
 // decodeChatRequest maps the chat wire onto Request. A run of "tool"

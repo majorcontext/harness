@@ -1,6 +1,7 @@
 package harnesstest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -112,6 +113,70 @@ func decodeRequest(body []byte) (Request, error) {
 		return Request{}, fmt.Errorf("%d tool_use blocks have no tool_result message", len(pending))
 	}
 	return req, nil
+}
+
+// anthropicWire is the canonical wire form of the system blocks and messages of body.
+func anthropicWire(body []byte) (Wire, error) {
+	var raw struct {
+		System   json.RawMessage   `json:"system"`
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return Wire{}, err
+	}
+	wire := Wire{System: wireBlocks(raw.System)}
+	for _, m := range raw.Messages {
+		wire.Messages = append(wire.Messages, canonicalWire(m))
+	}
+	return wire, nil
+}
+
+// wireBlocks is the canonical wire form of each block of a system value.
+func wireBlocks(raw json.RawMessage) []string {
+	var arr []json.RawMessage
+	if json.Unmarshal(raw, &arr) != nil {
+		if len(raw) == 0 {
+			return nil
+		}
+		return []string{canonicalWire(raw)}
+	}
+	out := make([]string, len(arr))
+	for i, b := range arr {
+		out[i] = canonicalWire(b)
+	}
+	return out
+}
+
+// canonicalWire re-marshals raw with every cache_control member removed, so
+// two wire values that differ only in their breakpoints compare equal and
+// every other byte of the content, image and thinking blocks included, counts.
+func canonicalWire(raw json.RawMessage) string {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return string(raw)
+	}
+	out, err := json.Marshal(stripCacheControl(v))
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
+}
+
+func stripCacheControl(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		delete(x, "cache_control")
+		for k, e := range x {
+			x[k] = stripCacheControl(e)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = stripCacheControl(e)
+		}
+	}
+	return v
 }
 
 func blocks(raw json.RawMessage) []wireBlock {
