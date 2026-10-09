@@ -156,6 +156,49 @@ func (a expectSystem) run(t *testing.T, r *run) {
 	}
 }
 
+// expectCachePrefix checks the model requests from the 1-based request from
+// to the last: each one keeps the previous one as a prefix of its messages
+// with the same system prompt, and its cache breakpoints sit on the last
+// block of the system prompt and the last block of its last message, the
+// places the Anthropic transcoder gives them. A chat request sends none and
+// keeps its prompt cache key.
+type expectCachePrefix struct {
+	from int
+	chat bool
+}
+
+func (a expectCachePrefix) run(t *testing.T, r *run) {
+	t.Helper()
+	reqs := r.fake.Requests()
+	if a.from < 1 || a.from >= len(reqs) {
+		t.Fatalf("expectCachePrefix: from %d of %d requests", a.from, len(reqs))
+	}
+	for i := a.from - 1; i < len(reqs); i++ {
+		req := reqs[i]
+		var want []harnesstest.CacheBreakpoint
+		if !a.chat {
+			last := len(req.Messages) - 1
+			want = []harnesstest.CacheBreakpoint{{Message: -1}, {Message: last, Block: len(req.Messages[last].Parts) - 1}}
+		}
+		if !reflect.DeepEqual(req.CacheBreakpoints, want) {
+			t.Errorf("request %d cache breakpoints = %+v, want %+v", i+1, req.CacheBreakpoints, want)
+		}
+		if i == a.from-1 {
+			continue
+		}
+		prev := reqs[i-1]
+		if req.System != prev.System {
+			t.Errorf("request %d system prompt differs from request %d:\n%s\n---\n%s", i+1, i, req.System, prev.System)
+		}
+		if len(req.Messages) <= len(prev.Messages) || !reflect.DeepEqual(req.Messages[:len(prev.Messages)], prev.Messages) {
+			t.Errorf("request %d does not keep request %d as a prefix of its messages:\n%+v\n---\n%+v", i+1, i, req.Messages, prev.Messages)
+		}
+		if req.PromptCacheKey != prev.PromptCacheKey {
+			t.Errorf("request %d prompt cache key %q differs from request %d (%q)", i+1, req.PromptCacheKey, i, prev.PromptCacheKey)
+		}
+	}
+}
+
 type expectMCPCalls struct {
 	server string
 	want   []harnesstest.MCPCall
@@ -472,6 +515,45 @@ func callWithID(id string, c harnesstest.ToolCall) []harnesstest.ToolCall {
 	return []harnesstest.ToolCall{c}
 }
 
+// pinCacheRows are the rows of a session with the engine banner and an MCP
+// notice, a compaction, then three turns that each call a tool.
+func pinCacheRows() []scenario {
+	bash := func(id string) []harnesstest.ToolCall {
+		return callWithID("toolu_"+id, harnesstest.ToolCall{Name: "bash", Input: map[string]any{"command": "echo " + id}})
+	}
+	unanswered := func(text string) harnesstest.Matcher {
+		return func(r harnesstest.Request) bool { return harnesstest.LastUserText(text)(r) && !answeredTool("bash")(r) }
+	}
+	cacheModel := []harnesstest.Step{
+		{Name: "alpha call", Match: unanswered("alpha"), Reply: harnesstest.Reply{ToolCalls: bash("alpha")}},
+		{Name: "alpha done", Match: answeredTool("bash"), Reply: harnesstest.Reply{Text: "re alpha"}},
+		{Name: "bravo", Match: harnesstest.LastUserText("bravo"), Reply: harnesstest.Reply{Text: "re bravo"}},
+		{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+	}
+	for _, in := range []string{"charlie", "delta", "echo"} {
+		cacheModel = append(cacheModel,
+			harnesstest.Step{Name: in + " call", Match: unanswered(in), Reply: harnesstest.Reply{ToolCalls: bash(in)}},
+			harnesstest.Step{Name: in + " done", Match: answeredTool("bash"), Reply: harnesstest.Reply{Text: "re " + in}})
+	}
+	cacheActions := func(chat bool) []action {
+		return []action{
+			create{as: "a"},
+			submit{as: "a", text: "alpha"}, waitIdle{as: "a"},
+			submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
+			compact{as: "a"},
+			submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
+			submit{as: "a", text: "delta"}, waitIdle{as: "a"},
+			submit{as: "a", text: "echo"}, waitIdle{as: "a"},
+			expectCachePrefix{from: 5, chat: chat},
+		}
+	}
+	cacheSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true})
+	return []scenario{
+		{name: "pins_after_compaction_keep_a_prefix", setup: cacheSetup, model: cacheModel, actions: cacheActions(false)},
+		{name: "bifrost_pins_after_compaction_keep_a_prefix", chat: true, setup: cacheSetup, model: cacheModel, actions: cacheActions(true)},
+	}
+}
+
 func TestContractMCPAvailability(t *testing.T) {
 	forecast := mcpTool("weather", "forecast", "city", "Oslo")
 	pinModel := []harnesstest.Step{
@@ -491,7 +573,7 @@ func TestContractMCPAvailability(t *testing.T) {
 		submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
 	}
 	pinSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), failInit: 1})
-	runScenarios(t, []scenario{
+	runScenarios(t, append(pinCacheRows(), []scenario{
 		{
 			name:  "mcp_unavailable_at_start_then_connect",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts."), failInit: 1}),
@@ -534,7 +616,7 @@ func TestContractMCPAvailability(t *testing.T) {
 		},
 		{name: "mcp_notice_then_compaction_keeps_a_call_paired", setup: pinSetup, model: pinModel, actions: pinActions},
 		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
-	})
+	}...))
 }
 
 func TestContractMCPRuntime(t *testing.T) {

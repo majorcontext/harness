@@ -367,6 +367,8 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_two_servers_share_a_tool_name":                                    sameAsServe(),
 	"mcp_notice_then_compaction_keeps_a_call_paired":                       sameAsServe(),
 	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":               sameAsServe(),
+	"pins_after_compaction_keep_a_prefix":                                  sameAsServe(),
+	"bifrost_pins_after_compaction_keep_a_prefix":                          sameAsServe(),
 	"mcp_unavailable_at_start_then_connect":                                sameAsServe(),
 	"mcp_unavailable_connect_fails_with_classified_reason":                 reGolden(specMCPText),
 	"messages_page_after_compaction":                                       reGolden(specMessages, specBootstrapGone, specErrors),
