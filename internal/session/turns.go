@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ const (
 var (
 	errStopTurn = errors.New("harness: turn stopped")
 	errEndTurn  = errors.New("harness: turn stopped by the end of a session")
+	errTaskTurn = fmt.Errorf("harness: turn stopped by a task cancel: %w", errStopTurn)
 )
 
 // Submit admits in and returns the seq of its input.admitted record. A
@@ -214,6 +216,9 @@ func (a *Actor) ended(r *running, runErr error) {
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff, false), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
+	case errors.Is(cause, errTaskTurn):
+		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseStopped, TaskCancel: true}, interrupted)
+		next = true
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseStopped}, interrupted)
 		next = true
@@ -383,6 +388,11 @@ func (a *Actor) Cancel(ctx context.Context) error { return a.cancel(ctx, errStop
 // ends the turn with cause ended, which tells Recover that the stop sends no
 // report to the parent.
 func (a *Actor) CancelForEnd(ctx context.Context) error { return a.cancel(ctx, errEndTurn) }
+
+// CancelForTask is Cancel for a session that a task cancel stops. It ends
+// the turn with cause stopped and the task_cancel mark, which tells Recover
+// to route the report of the child again.
+func (a *Actor) CancelForTask(ctx context.Context) error { return a.cancel(ctx, errTaskTurn) }
 
 func (a *Actor) cancel(ctx context.Context, why error) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {

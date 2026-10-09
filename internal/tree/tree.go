@@ -349,14 +349,17 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 // record. A child whose last turn the end of a session stopped (cause ended),
 // and a child whose silenced report Report is delivering, settle with no
 // report input; a child whose routed report Report is delivering is left to
-// Report; every other child reports its outcome, a canceled one included.
+// Report; a child whose last turn a task cancel stopped reports to the
+// nearest ancestor that has not ended its work (see reroute); every other
+// child reports its outcome, a canceled one included.
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
 		var report *session.Report
-		var ended bool
+		var ended, canceled bool
 		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) {
 			s, report, ended = session.Settlement(id, st)
+			canceled = st.LastEnded().TaskCancel
 		})
 		switch {
 		case errors.Is(err, session.ErrNotFound):
@@ -369,11 +372,38 @@ func (t *Tree) Recover(a *session.Actor) {
 			if t.muting(id) {
 				report = nil
 			}
+			if canceled && report != nil {
+				var ok bool
+				if report, ok = t.reroute(a.View().Session.ID, id, report); !ok {
+					continue
+				}
+			}
 			_ = a.Settle(t.cfg.Base, s, report)
 		default:
 			_, _ = t.s.Open(t.cfg.Base, id)
 		}
 	}
+}
+
+// reroute relays the report of child, which a task cancel stopped, to the
+// nearest ancestor that has not ended its work, and returns nil for parent to
+// settle the child with no report. It returns report when that ancestor is
+// parent, or when no ancestor can be read. ok is false when the relay failed:
+// parent leaves the child for the next Recover, which relays no report twice.
+func (t *Tree) reroute(parent, child string, report *session.Report) (_ *session.Report, ok bool) {
+	up, err := t.ancestors(t.cfg.Base, child)
+	if err != nil {
+		return report, true
+	}
+	to, err := t.live(t.cfg.Base, up, parent)
+	if err != nil || to == parent {
+		return report, true
+	}
+	r, err := t.s.Open(t.cfg.Base, to)
+	if err != nil || r.Actor.Relay(t.cfg.Base, report) != nil {
+		return nil, false
+	}
+	return nil, true
 }
 
 // treeLock is a channel, not a sync.Mutex, so that a spawner that waits for

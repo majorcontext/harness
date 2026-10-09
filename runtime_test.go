@@ -471,3 +471,90 @@ func TestCancelOfAGrandchildWhoseParentStoppedReportsOnce(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+// dyingStore refuses every append once die returns true for a record that it
+// has appended, as a process that dies after that write.
+type dyingStore struct {
+	harness.Store
+	die  func(id string, e eventlog.Event) bool
+	dead atomic.Bool
+}
+
+func (s *dyingStore) Append(ctx context.Context, id string, expectedSeq uint64, records ...[]byte) error {
+	if s.dead.Load() {
+		return errors.New("process died")
+	}
+	if err := s.Store.Append(ctx, id, expectedSeq, records...); err != nil {
+		return err
+	}
+	for _, r := range records {
+		if env, err := eventlog.Decode(r); err == nil && s.die(id, env.Event) {
+			s.dead.Store(true)
+		}
+	}
+	return nil
+}
+
+// reportsOf counts the child reports in the log of session id that name child.
+func reportsOf(t *testing.T, st harness.Store, id, child string) (n int) {
+	t.Helper()
+	for _, e := range events(t, st, id) {
+		if in, ok := e.(eventlog.InputAdmitted); ok && in.Source == "child" && strings.Contains(fmt.Sprint(in.Parts), child) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestACanceledGrandchildReportsOnceAcrossARestart(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		die  func(armed *atomic.Bool, id string, e eventlog.Event, grand string) bool
+	}{
+		{"the process dies after the turn of the target ends and before the relay", func(_ *atomic.Bool, id string, e eventlog.Event, grand string) bool {
+			_, ok := e.(eventlog.TurnEnded)
+			return ok && id == grand
+		}},
+		{"the process dies after the relay and before the settle", func(armed *atomic.Bool, id string, e eventlog.Event, grand string) bool {
+			if _, ok := e.(eventlog.TurnEnded); ok && id == grand {
+				armed.Store(true)
+			}
+			in, ok := e.(eventlog.InputAdmitted)
+			return ok && id == "s1" && in.Source == "child" && armed.Load()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eachStore(t, func(t *testing.T, open func() harness.Store) {
+				var grand string
+				var armed atomic.Bool
+				f := &family{answer: generations(block, func() eventlog.Message {
+					return calls("task", onChild("cancel", "session_id", grand))
+				})}
+				ds := &dyingStore{Store: open(), die: func(id string, e eventlog.Event) bool { return tc.die(&armed, id, e, grand) }}
+				r1 := familyRuntime(t, ds, f, nil, config.Config{}, t.TempDir())
+				s := create(t, r1)
+				submit(t, s, text("a", "delegate"))
+				kid := children(t, r1)[0].ID
+				grand = descendants(t, r1, kid)[0].ID
+				submit(t, s, text("b", "act"))
+				_ = r1.Close(bg)
+				r2 := familyRuntime(t, open(), &family{answer: f.answer}, nil, config.Config{}, t.TempDir())
+				if _, err := r2.Open(bg, kid); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				st := open()
+				if got := settled(t, st, kid); got != eventlog.OutcomeCanceled {
+					t.Errorf("child.settled of the grandchild %q, want canceled", got)
+				}
+				if got := reportsOf(t, st, kid, grand); got != 0 {
+					t.Errorf("reports of the grandchild in its done parent = %d, want 0", got)
+				}
+				if got := reportsOf(t, st, "s1", grand); got != 1 {
+					t.Errorf("reports of the grandchild in the canceller = %d, want 1", got)
+				}
+				closeRuntime(t, r2)
+			})
+		})
+	}
+}
