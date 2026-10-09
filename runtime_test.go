@@ -523,38 +523,46 @@ func TestACanceledGrandchildReportsOnceAcrossARestart(t *testing.T) {
 			return ok && id == "s1" && in.Source == "child" && armed.Load()
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			eachStore(t, func(t *testing.T, open func() harness.Store) {
-				var grand string
-				var armed atomic.Bool
-				f := &family{answer: generations(block, func() eventlog.Message {
-					return calls("task", onChild("cancel", "session_id", grand))
-				})}
-				ds := &dyingStore{Store: open(), die: func(id string, e eventlog.Event) bool { return tc.die(&armed, id, e, grand) }}
-				r1 := familyRuntime(t, ds, f, nil, config.Config{}, t.TempDir())
-				s := create(t, r1)
-				submit(t, s, text("a", "delegate"))
-				kid := children(t, r1)[0].ID
-				grand = descendants(t, r1, kid)[0].ID
-				submit(t, s, text("b", "act"))
-				_ = r1.Close(bg)
-				r2 := familyRuntime(t, open(), &family{answer: f.answer}, nil, config.Config{}, t.TempDir())
-				if _, err := r2.Open(bg, kid); err != nil {
-					t.Fatal(err)
-				}
-				synctest.Wait()
-				st := open()
-				if got := settled(t, st, kid); got != eventlog.OutcomeCanceled {
-					t.Errorf("child.settled of the grandchild %q, want canceled", got)
-				}
-				if got := reportsOf(t, st, kid, grand); got != 0 {
-					t.Errorf("reports of the grandchild in its done parent = %d, want 0", got)
-				}
-				if got := reportsOf(t, st, "s1", grand); got != 1 {
-					t.Errorf("reports of the grandchild in the canceller = %d, want 1", got)
-				}
-				closeRuntime(t, r2)
+		for _, rootFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, root opens first %t", tc.name, rootFirst), func(t *testing.T) {
+				eachStore(t, func(t *testing.T, open func() harness.Store) {
+					var grand string
+					var armed atomic.Bool
+					f := &family{answer: generations(block, func() eventlog.Message {
+						return calls("task", onChild("cancel", "session_id", grand))
+					})}
+					ds := &dyingStore{Store: open(), die: func(id string, e eventlog.Event) bool { return tc.die(&armed, id, e, grand) }}
+					r1 := familyRuntime(t, ds, f, nil, config.Config{}, t.TempDir())
+					s := create(t, r1)
+					submit(t, s, text("a", "delegate"))
+					kid := children(t, r1)[0].ID
+					grand = descendants(t, r1, kid)[0].ID
+					submit(t, s, text("b", "act"))
+					_ = r1.Close(bg)
+					r2 := familyRuntime(t, open(), &family{answer: f.answer}, nil, config.Config{}, t.TempDir())
+					if rootFirst {
+						if _, err := r2.Open(bg, "s1"); err != nil {
+							t.Fatal(err)
+						}
+						synctest.Wait()
+					}
+					if _, err := r2.Open(bg, kid); err != nil {
+						t.Fatal(err)
+					}
+					synctest.Wait()
+					st := open()
+					if got := settled(t, st, kid); got != eventlog.OutcomeCanceled {
+						t.Errorf("child.settled of the grandchild %q, want canceled", got)
+					}
+					if got := reportsOf(t, st, kid, grand); got != 0 {
+						t.Errorf("reports of the grandchild in its done parent = %d, want 0", got)
+					}
+					if got := reportsOf(t, st, "s1", grand); got != 1 {
+						t.Errorf("reports of the grandchild in the canceller = %d, want 1", got)
+					}
+					closeRuntime(t, r2)
+				})
 			})
-		})
+		}
 	}
 }

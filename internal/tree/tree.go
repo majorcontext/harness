@@ -386,16 +386,17 @@ func (t *Tree) Recover(a *session.Actor) {
 }
 
 // reroute relays the report of child, which a task cancel stopped, to the
-// nearest ancestor that has not ended its work, and returns nil for parent to
-// settle the child with no report. It returns report when that ancestor is
-// parent, or when no ancestor can be read. ok is false when the relay failed:
-// parent leaves the child for the next Recover, which relays no report twice.
+// nearest ancestor that has not ended its work, else the root, and returns nil
+// for parent to settle the child with no report. It returns report when that
+// ancestor is parent, or when no ancestor can be read. ok is false when the
+// relay failed: parent leaves the child for the next Recover, which relays no
+// report twice.
 func (t *Tree) reroute(parent, child string, report *session.Report) (_ *session.Report, ok bool) {
 	up, err := t.ancestors(t.cfg.Base, child)
-	if err != nil {
+	if err != nil || len(up) == 0 {
 		return report, true
 	}
-	to, err := t.live(t.cfg.Base, up, parent)
+	to, err := t.live(t.cfg.Base, up, up[len(up)-1])
 	if err != nil || to == parent {
 		return report, true
 	}
