@@ -199,7 +199,7 @@ func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 			return nil, err
 		}
 	}
-	for i, p := range req.Pins.Pinned() {
+	for i, p := range req.Pins {
 		pin := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: p.Text}}}
 		msgs = slices.Insert(msgs, min(p.At, len(req.History))+i, pin)
 	}

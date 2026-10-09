@@ -159,12 +159,12 @@ type Actor struct {
 	retryStop context.CancelFunc
 	retryAt   time.Time
 	// pins holds the engine context that the model reads inside the history.
-	pins *turn.Pins
+	pins turn.Pins
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
 	a := &Actor{cfg: cfg, mail: make(chan func()), quit: make(chan struct{}), done: make(chan struct{}),
-		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s, pins: &turn.Pins{}}
+		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s}
 	a.view.Store(&View{changed: make(chan struct{})})
 	a.publish(false)
 	return a

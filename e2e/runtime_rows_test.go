@@ -213,7 +213,7 @@ var runtimeRows = map[string]runtimeRow{
 	"a_tool_result_image_reaches_the_model_after_a_restart":                sameAsServe(),
 	"a_missing_tool_result_image_leaves_the_text_for_the_model":            sameAsServe(),
 	"write_guard_belongs_to_one_session":                                   sameAsServe(),
-	"mcp_tool_action_refusals":                                             reGolden(specMCPText),
+	"mcp_tool_action_refusals":                                             sameAsServe(),
 	"mcp_refused_call_hides_the_response_body":                             reGolden(specMCPNoLeak, specMCPText),
 	"mcp_select_of_a_down_server_is_pending":                               sameAsServe(),
 	"mcp_search_ranks_the_tools":                                           sameAsServe(),

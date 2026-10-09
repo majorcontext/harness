@@ -185,9 +185,9 @@ func (t runner) key(c protocol.ToolCall) (key string) {
 }
 
 // describe sets the tools, prompt, and Call of call, pins its notices and
-// banner, and returns the runner of its calls. all describes every tool and
-// pins nothing, for a backend that owns the loop.
-func describe(ctx context.Context, call *Request, src Source, all bool) runner {
+// banner through to, and returns the runner of its calls. all describes every
+// tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
+func describe(ctx context.Context, call *Request, src Source, to Turn, all bool) runner {
 	var ts Toolset
 	if src != nil {
 		ts = src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
@@ -205,11 +205,8 @@ func describe(ctx context.Context, call *Request, src Source, all bool) runner {
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
 	}
-	if !all {
-		for _, n := range ts.Notices {
-			call.Pins.Set(n.Kind, n.Text, n.Cleared, len(call.History))
-		}
-		call.Pins.Set(bannerKind, call.Banner, "", len(call.History))
+	if !all && to != nil {
+		call.Pins = to.Pin(append(slices.Clip(ts.Notices), Notice{Kind: bannerKind, Text: call.Banner}), len(call.History))
 	}
 	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
 	call.Call = t.run

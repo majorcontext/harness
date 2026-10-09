@@ -78,7 +78,7 @@ func elapse(d time.Duration) {
 
 // mcpNotice returns the newest MCP notice that req pins.
 func mcpNotice(req turn.Request) string {
-	pins := slices.DeleteFunc(req.Pins.Pinned(), func(p turn.Pin) bool { return p.Kind != "mcp" })
+	pins := slices.DeleteFunc(req.Pins, func(p turn.Pin) bool { return p.Kind != "mcp" })
 	if len(pins) == 0 {
 		return ""
 	}

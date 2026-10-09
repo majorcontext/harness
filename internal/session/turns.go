@@ -110,7 +110,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 	}
 	req.Questions = a.questions()
 	a.pins.Clamp(len(req.History))
-	req.Banner, req.Pins = a.cfg.Banner, a.pins
+	req.Banner, req.Pins = a.cfg.Banner, a.pins.Pinned()
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
