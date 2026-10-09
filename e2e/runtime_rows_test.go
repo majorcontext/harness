@@ -134,7 +134,8 @@ const (
 	specProcessUnknown = "An unknown name, or any name without a `WorkDir`, is `process_not_found`."
 	specNoRoute        = "A path or method that no route serves answers 404 or 405 with `invalid_request`."
 	specGitOracle      = "Switch oracle: the `git_changes_*` rows, with the route renamed and the error body in the new shape."
-	specBannerPrefix   = "Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier."
+	specBannerPrefix   = "Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction moves the place to the end of the history that it leaves."
+	specPinsMove       = "A compaction moves every pin, the banner and each notice, to the end of the history that it leaves, so a pin never falls between a tool call and its result."
 )
 
 // Lines of docs/architecture.md that the session rows cite.
@@ -364,6 +365,8 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_tool_call_result":                                                 sameAsServe(),
 	"mcp_tool_error_and_rpc_error_reach_model":                             reGolden(specMCPText),
 	"mcp_two_servers_share_a_tool_name":                                    sameAsServe(),
+	"mcp_notice_then_compaction_keeps_a_call_paired":                       sameAsServe(),
+	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":               sameAsServe(),
 	"mcp_unavailable_at_start_then_connect":                                sameAsServe(),
 	"mcp_unavailable_connect_fails_with_classified_reason":                 reGolden(specMCPText),
 	"messages_page_after_compaction":                                       reGolden(specMessages, specBootstrapGone, specErrors),
@@ -474,11 +477,11 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView, specClaudeGauge),
 	"usage_survives_a_kill_mid_turn":                                     reGolden(specView, specCrash, specCrashMarker),
 
-	"auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens":            sameAsServe(),
+	"auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens":            reGolden(specPinsMove, specView),
 	"auto_compaction_waits_for_the_reading_to_fall_after_an_empty_summary":                sameAsServe(),
-	"auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens": sameAsServe(),
-	"auto_compaction_runs_again_after_a_model_change_moves_the_window":                    sameAsServe(),
-	"auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again":                  sameAsServe(),
+	"auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens": reGolden(specPinsMove, specView),
+	"auto_compaction_runs_again_after_a_model_change_moves_the_window":                    reGolden(specPinsMove, specView),
+	"auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again":                  reGolden(specPinsMove, specView),
 	"mcp_instructions_are_cut_at_4000_runes":                                              sameAsServe(),
 	"mcp_instruction_tool_names_stop_at_2048_bytes":                                       sameAsServe(),
 	"mcp_catalog_lists_200_deferred_tools_then_counts_the_rest":                           sameAsServe(),

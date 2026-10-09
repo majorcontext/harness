@@ -151,7 +151,6 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 		}
 		err := a.append(f.c)
 		h := a.state.ModelHistory()
-		a.pins.Clamp(len(h))
 		reply(h, err)
 	})
 	return h, err == nil, err

@@ -10,9 +10,10 @@ type Pin struct {
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
-// never changes once made, so each request is a prefix of the next. The pins
-// live in memory: a restart makes them again from the live state. Pins has
-// no lock: the session actor owns it and a turn reaches it through Turn.Pin.
+// changes only when a compaction moves it, so each request is a prefix of the
+// next until a compaction applies. The pins live in memory: a restart makes
+// them again from the live state. Pins has no lock: the session actor owns it
+// and a turn reaches it through Turn.Pin.
 type Pins struct {
 	pins []Pin
 }
@@ -43,10 +44,10 @@ func (p *Pins) Set(kind, text, cleared string, at int) {
 	p.pins = append(p.pins, Pin{Kind: kind, Text: text, At: at})
 }
 
-// Clamp moves each pin that is past a history of n messages to its end.
-func (p *Pins) Clamp(n int) {
+// Move puts every pin after the first n messages of the history.
+func (p *Pins) Move(n int) {
 	for i := range p.pins {
-		p.pins[i].At = min(p.pins[i].At, n)
+		p.pins[i].At = n
 	}
 }
 

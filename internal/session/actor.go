@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -499,6 +500,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 			a.stopped = true
 			return err
 		}
+	}
+	if slices.ContainsFunc(events, func(e eventlog.Event) bool { _, ok := e.(eventlog.CompactionApplied); return ok }) {
+		a.pins.Move(len(a.state.ModelHistory()))
 	}
 	if g, _ := a.state.Goal(); g.State != eventlog.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
 		a.stopRetry()

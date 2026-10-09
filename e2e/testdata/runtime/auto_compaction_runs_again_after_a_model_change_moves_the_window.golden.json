@@ -71,7 +71,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "1"
+              "text": "re one"
             }
           ]
         },
@@ -105,7 +105,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "1"
+              "text": "re one"
             }
           ]
         },
@@ -157,7 +157,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "2"
+              "text": "re two"
             }
           ]
         },
@@ -178,7 +178,45 @@
     },
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
+      "model": "claude-haiku-4-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[compacted summary of earlier conversation]\n\ngist"
+            },
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re two"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-haiku-4-5",
       "tools": [
         "bash",
         "edit_file",
@@ -204,7 +242,7 @@
             },
             {
               "kind": "text",
-              "text": "two"
+              "text": "three"
             }
           ]
         },
@@ -213,7 +251,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "2"
+              "text": "re three"
             }
           ]
         },
@@ -224,24 +262,6 @@
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             },
-            {
-              "kind": "text",
-              "text": "three"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "3"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
             {
               "kind": "text",
               "text": "four"
@@ -269,7 +289,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "two"
+            "text": "three"
           }
         ]
       },
@@ -279,7 +299,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "2"
+            "text": "re three"
           }
         ]
       },
@@ -289,7 +309,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "three"
+            "text": "four"
           }
         ]
       },
@@ -299,27 +319,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "3"
-          }
-        ]
-      },
-      {
-        "id": "msg#5",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "four"
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "4"
+            "text": "re four"
           }
         ]
       }
@@ -329,80 +329,54 @@
     "get_session.a": {
       "status": 200,
       "body": {
-        "context": {
-          "tokens": 900,
-          "window": 1000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#1"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 905,
-          "output_tokens": 4
-        }
-      }
-    },
-    "get_session.a#2": {
-      "status": 200,
-      "body": {
-        "compaction_count": 1,
+        "compaction_count": 2,
         "context": {
           "tokens": 5,
-          "window": 1000
+          "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 18,
+        "head_seq": 25,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
           "turn_id": "turn#2"
         },
-        "model": "anthropic/claude-fable-5",
+        "model": "anthropic/claude-haiku-4-5",
         "origin": "",
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 915,
+          "input_tokens": 1800020,
           "output_tokens": 10
         }
       }
     },
-    "get_session.a#3": {
+    "set_model.a": {
       "status": 200,
       "body": {
         "compaction_count": 1,
         "context": {
-          "tokens": 5,
-          "window": 1000
+          "tokens": 900000,
+          "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 23,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
-          "turn_id": "turn#3"
+          "turn_id": "turn#1"
         },
-        "model": "anthropic/claude-fable-5",
+        "model": "anthropic/claude-haiku-4-5",
         "origin": "",
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 920,
-          "output_tokens": 13
+          "input_tokens": 1800010,
+          "output_tokens": 6
         }
       }
     }

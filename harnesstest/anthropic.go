@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -58,9 +59,14 @@ func decodeRequest(body []byte) (Request, error) {
 	sort.Strings(req.Tools)
 
 	toolNames := map[string]string{}
+	var pending []string
 	for _, m := range w.Messages {
 		msg := Message{Role: m.Role}
+		answered, leading := 0, true
 		for _, b := range blocks(m.Content) {
+			if b.Type != "tool_result" {
+				leading = false
+			}
 			switch b.Type {
 			case "text":
 				msg.Parts = append(msg.Parts, Part{Kind: "text", Text: b.Text})
@@ -68,13 +74,29 @@ func decodeRequest(body []byte) (Request, error) {
 				toolNames[b.ID] = b.Name
 				msg.Parts = append(msg.Parts, Part{Kind: "tool_use", ToolName: b.Name, ToolInput: b.Input, ToolUseID: b.ID})
 			case "tool_result":
+				if !leading || m.Role != "user" || !slices.Contains(pending, b.ToolUseID) {
+					return Request{}, fmt.Errorf("tool_result %q is not at the start of the user message that follows its tool_use", b.ToolUseID)
+				}
+				answered++
 				msg.Parts = append(msg.Parts, Part{
 					Kind: "tool_result", Text: joinText(b.Content), ToolName: toolNames[b.ToolUseID],
 					ToolUseID: b.ToolUseID, IsError: b.IsError, Images: imageURIs(b.Content),
 				})
 			}
 		}
+		if answered != len(pending) {
+			return Request{}, fmt.Errorf("%d tool_use blocks have no tool_result at the start of the next user message", len(pending)-answered)
+		}
+		pending = pending[:0]
+		for _, p := range msg.Parts {
+			if m.Role == "assistant" && p.Kind == "tool_use" {
+				pending = append(pending, p.ToolUseID)
+			}
+		}
 		req.Messages = append(req.Messages, msg)
+	}
+	if len(pending) > 0 {
+		return Request{}, fmt.Errorf("%d tool_use blocks have no tool_result message", len(pending))
 	}
 	return req, nil
 }
