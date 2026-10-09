@@ -182,6 +182,25 @@ var manySections, manyOutline = func() (string, string) {
 	return file.String(), outline.String()
 }()
 
+// bigSections is a 300,000 byte file of twenty sections of 15,000 bytes each,
+// four lines apiece, and bigOutline is what the prompt holds for it under the
+// default 64 KiB cap: the first four sections whole, then the other sixteen
+// as an outline.
+var bigSections, bigOutline = func() (string, string) {
+	const parts, size = 20, 15000
+	var file, outline strings.Builder
+	for i := range parts {
+		head := fmt.Sprintf("## Part %02d\nbody of part %02d\n\n", i, i)
+		file.WriteString(head + strings.Repeat("p", size-len(head)-1) + "\n")
+	}
+	outline.WriteString(strings.TrimRight(file.String()[:4*size], "\n"))
+	fmt.Fprintf(&outline, "\n\n[instructions outline] %d of the %d sections of <workdir>/AGENTS.md are not in this prompt. You MUST read a section with the read_file tool before you rely on it:", parts-4, parts)
+	for i := 4; i < parts; i++ {
+		fmt.Fprintf(&outline, "\n  Part %02d — read_file(path=<workdir>/AGENTS.md, offset=%d, limit=4) — body of part %02d", i, 1+4*i, i)
+	}
+	return file.String(), outline.String()
+}()
+
 func TestContractPromptInstructions(t *testing.T) {
 	runScenarios(t, []scenario{
 		{
@@ -320,6 +339,38 @@ func TestContractPromptInstructionsLimits(t *testing.T) {
 			model:  textReply("ok"),
 			actions: inDir(map[string]string{"AGENTS.md": plain}, append(slices.Clone(oneTurn), systemTail{parts: []string{
 				instructionOf + "plain text line\nplain text line\nplain text line\npl\n" + oversizeMark}})...),
+		},
+	})
+}
+
+// TestContractPromptInstructionsDefaultCap pins a 300,000 byte AGENTS.md under
+// the default 64 KiB cap, with no instructions_max_bytes in the config.
+func TestContractPromptInstructionsDefaultCap(t *testing.T) {
+	const tail = "# Tail\ntail of the file\n\nlast line\n"
+	bigPlain := strings.Repeat("p", 299999) + "\n"
+	bigFirst := "# Big\n" + strings.Repeat("p", 300000-len("# Big\n")-len(tail)-1) + "\n" + tail
+	runScenarios(t, []scenario{
+		{
+			name:  "instructions_300_kb_file_with_headings_keeps_the_sections_that_fit_the_default_cap_and_outlines_the_rest",
+			model: textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": bigSections},
+				append(slices.Clone(oneTurn), systemTail{parts: []string{instructionOf + bigOutline}})...),
+		},
+		{
+			name:  "instructions_300_kb_file_without_headings_is_cut_at_the_default_cap_with_the_marker",
+			model: textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": bigPlain},
+				append(slices.Clone(oneTurn), systemTail{parts: []string{instructionOf + bigPlain[:65536] + "\n" +
+					"[... truncated: <workdir>/AGENTS.md is 300000 bytes. The first 65536 bytes are above. 234464 bytes are not shown. Read the full file with the read_file tool. ...]"}})...),
+		},
+		{
+			name:  "instructions_300_kb_file_with_one_huge_first_section_is_cut_with_the_marker_and_the_rest_is_outlined",
+			model: textReply("ok"),
+			actions: inDir(map[string]string{"AGENTS.md": bigFirst},
+				append(slices.Clone(oneTurn), systemTail{parts: []string{instructionOf + bigFirst[:65536] + "\n" +
+					"[... truncated: <workdir>/AGENTS.md is 300000 bytes. The first 65536 bytes are above. 234464 bytes are not shown. Read the full file with the read_file tool. ...]\n\n" +
+					"[instructions outline] 1 of the 2 sections of <workdir>/AGENTS.md are not in this prompt. You MUST read a section with the read_file tool before you rely on it:\n" +
+					"  Tail — read_file(path=<workdir>/AGENTS.md, offset=3, limit=4) — tail of the file"}})...),
 		},
 	})
 }
