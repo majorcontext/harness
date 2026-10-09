@@ -41,6 +41,20 @@ func normalTurn(f *fake) {
 	)
 }
 
+func parallelCalls(f *fake) {
+	bash := func(n, cmd string) obj {
+		return assistant(toolUse("toolu_"+n, "Bash", obj{"command": cmd})).inMessage("id", "msg_parallel")
+	}
+	f.emit(
+		bash("a", "echo a"),
+		bash("b", "echo b"),
+		user(toolResult("toolu_a", "a\n", false)),
+		user(toolResult("toolu_b", "b\n", false)),
+		say("Both done."),
+		success("Both done.", 0, 0),
+	)
+}
+
 func perCallUsage(f *fake) {
 	call := func(id string, block obj, cacheWrite, cacheRead, output int) obj {
 		return assistant(block).inMessage("id", id).inMessage("usage", obj{
@@ -97,6 +111,7 @@ func hang(f *fake) {
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
+	"parallel_calls":           parallelCalls,
 	"per_call_usage":           perCallUsage,
 	"compact_after_window":     perCallUsage,
 	"compact_boundary":         compactBoundary,

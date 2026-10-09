@@ -29,6 +29,8 @@ func fakeClaudePath() string { return filepath.Join(filepath.Dir(harnessBin), "f
 // claude-code backend, run against fakeclaude in the given mode.
 type claudeLane struct {
 	mode string
+	// chat adds the chat-completions gateway at the model URL as provider "bifrost".
+	chat bool
 	ask  bool           // pass --ask-user-question to serve
 	mcp  map[string]any // config mcp_servers
 	// extra adds top-level keys to the config, for example plugins.
@@ -110,6 +112,9 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 			"anthropic":   map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL},
 			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": l.mirror},
 		},
+	}
+	if l.chat {
+		cfg["providers"].(map[string]any)["bifrost"] = map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL + "/v1"}
 	}
 	if l.mcp != nil {
 		cfg["mcp_servers"] = l.mcp
