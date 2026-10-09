@@ -92,6 +92,7 @@ func TestContractAgentProfileWithAnUnknownKeyAndAnotherError(t *testing.T) {
 		for _, tc := range []struct{ name, file, want string }{
 			{"a missing name", "---\nhooks: y\ndescription: W.\n---\n\nBody.\n", "frontmatter missing required 'name'"},
 			{"a missing description", "---\nname: w\nhooks: y\n---\n\nBody.\n", "frontmatter missing required 'description'"},
+			{"a stray indented line after an inline unknown value", "---\nname: w\ndescription: W.\nhooks: y\n  stray\n---\n\nBody.\n", "unexpected indented line"},
 			{"a malformed line after the key", "---\nname: w\ndescription: W.\nhooks: y\nstray\n---\n\nBody.\n", "malformed frontmatter line"},
 			{"a repeated key after the key", "---\nname: w\nhooks: y\ndescription: W.\nname: v\n---\n\nBody.\n", "duplicate frontmatter key"},
 		} {

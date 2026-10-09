@@ -98,7 +98,9 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown b
 			if unknown == nil {
 				unknown = fmt.Errorf("%w: %q", ErrUnknownKey, key)
 			}
-			i = skipIndented(lines, i+1) - 1
+			if _, block := blockScalarIndicator(value); value == "" || block {
+				i = skipIndented(lines, i+1) - 1
+			}
 			continue
 		}
 
