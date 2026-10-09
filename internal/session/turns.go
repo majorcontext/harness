@@ -61,7 +61,7 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...
 	events := append(append(before, a.dismissRequests()...), in)
 	seq := a.state.Head() + uint64(len(events))
 	r := a.run
-	if r == nil && !a.overThreshold() {
+	if r == nil && !a.compactDue() {
 		ids := a.startInputs(append(a.state.Queue(), in))
 		id := newID("turn")
 		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {

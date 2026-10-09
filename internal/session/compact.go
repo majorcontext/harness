@@ -58,17 +58,35 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 	return r.c, r.ran, err
 }
 
-// autoCompact starts a compaction when overThreshold, and reports whether one started.
-func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(a.cfg.KeepTurns, nil) }
+// autoCompact starts a compaction when compactDue, and reports whether one started.
+func (a *Actor) autoCompact() bool {
+	return a.compactDue() && a.compact(a.cfg.KeepTurns, func(runErr, appendErr error) {
+		a.latched = appendErr == nil && (runErr == nil || errors.Is(runErr, turn.ErrEmptySummary))
+	})
+}
 
-// overThreshold reports whether the newest context reading passes
-// Config.Threshold of the window of the session model, or of the window of
-// the reading when the model reports none, for a backend that does not own
-// its context.
-func (a *Actor) overThreshold() bool {
+// compactDue reports whether the context passes Config.Threshold of the
+// window of the session model, or of the window of the newest reading when the
+// model reports none, for a backend that does not own its context. The context
+// is the newest reading, or an estimate of the history when a turn has ended and
+// no call reported prompt tokens. After an automatic compaction applied, or paid
+// for an empty summary, the context must fall below the threshold once before
+// another one is due: the pressure sits in the kept turns.
+func (a *Actor) compactDue() bool {
 	c, caps := a.state.Context(), a.cfg.Backend.Capabilities(a.state.Model())
 	window := contextWindow(caps.ContextWindow, c)
-	return window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(window) && !caps.OwnsContext
+	if window <= 0 || caps.OwnsContext {
+		return false
+	}
+	tokens := c.Tokens
+	if tokens == 0 && a.state.LastEnded().TurnID != "" {
+		tokens = estimateTokens(a.state.History())
+	}
+	over := float64(tokens) >= a.cfg.Threshold*float64(window)
+	if !over {
+		a.latched = false
+	}
+	return over && !a.latched
 }
 
 // compact runs a summary of the turns before the newest keep as the run of

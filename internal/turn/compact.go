@@ -33,7 +33,8 @@ const summaryInstruction = "Summarize the conversation above, following the syst
 // not another turn.
 const summaryMaxTokens = 1024
 
-var errEmptySummary = errors.New("turn: the compaction summary is empty")
+// ErrEmptySummary reports a summary call that returned no text.
+var ErrEmptySummary = errors.New("turn: the compaction summary is empty")
 
 // Summarize makes one model call, with no tools, that summarizes
 // req.History, and returns the summary after SummaryBanner and the usage of
@@ -48,7 +49,7 @@ func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) 
 		return "", usage, err
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", usage, errEmptySummary
+		return "", usage, ErrEmptySummary
 	}
 	return SummaryBanner + text, usage, nil
 }

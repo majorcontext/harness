@@ -324,6 +324,28 @@ func TestContractMCPInstructionsAndResources(t *testing.T) {
 			}),
 		},
 		{
+			name:  "mcp_instructions_are_cut_at_4000_runes",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("  " + strings.Repeat("\u00e9", 4000) + "TAIL  ")}),
+			model: textReply("hi"),
+			actions: withTurn(expectSystem{req: 1,
+				has:   []string{strings.Repeat("\u00e9", 4000) + "\u2026 [truncated]\n</server>"},
+				lacks: []string{"TAIL"},
+			}),
+		},
+		{
+			name: "mcp_instruction_tool_names_stop_at_2048_bytes",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: func() harnesstest.MCPSpec {
+				spec := mcpEchoTools(150)
+				spec.Instructions = "Use the numbered tools."
+				return spec
+			}()}),
+			model: textReply("hi"),
+			actions: withTurn(expectSystem{req: 1,
+				has:   []string{`mcp__weather__t54 names truncated at byte budget">`},
+				lacks: []string{"mcp__weather__t55"},
+			}),
+		},
+		{
 			name:  "mcp_resources_list_and_read",
 			setup: mcpSetup(nil, mcpServerDef{name: "docs", spec: mcpDocs()}),
 			model: toolChain(
@@ -392,6 +414,18 @@ func TestContractMCPLazyLoading(t *testing.T) {
 				mcpServerDef{name: "docs", spec: mcpDocs()}),
 			model:   textReply("hi"),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{"mcp__weather__alerts"}, lacks: []string{"mcp__docs__search \u2014"}}),
+		},
+		{
+			name:  "mcp_catalog_lists_200_deferred_tools_then_counts_the_rest",
+			setup: mcpSetup(lazy, mcpServerDef{name: "weather", spec: mcpEchoTools(205)}),
+			model: textReply("hi"),
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1,
+				has: []string{
+					"mcp__weather__t94 \u2014 numbered tool",
+					"\n... and 5 more tools; use mcp(action=\"search\", query=\"...\") to find them",
+				},
+				lacks: []string{"mcp__weather__t95 ", "mcp__weather__t99 "},
+			}),
 		},
 		{
 			name:    "mcp_auto_default_threshold_stays_eager_at_20_tools",

@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -67,6 +68,55 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 				submit{as: "a", text: "three"}, waitIdle{as: "a"},
 				getSession{as: "a"},
 			},
+		},
+	})
+}
+
+func TestContractSessionAutoCompactionGuards(t *testing.T) {
+	text := usedText
+	runScenarios(t, []scenario{
+		{
+			name:   "auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens",
+			config: overThreshold,
+			model: []harnesstest.Step{
+				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: strings.Repeat("x", 4000), Usage: harnesstest.Usage{Output: 1}}},
+				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "re two", Usage: harnesstest.Usage{Output: 1}}},
+				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "re three"}},
+			},
+			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:   "auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again",
+			config: overThreshold,
+			model: []harnesstest.Step{
+				text("one", 5), text("two", 900),
+				{Name: "summary1", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				text("three", 900), text("four", 5), text("five", 900),
+				{Name: "summary2", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				text("six", 5),
+			},
+			actions: withActions(twoTurns,
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				submit{as: "a", text: "five"}, waitIdle{as: "a"},
+				submit{as: "a", text: "six"}, waitIdle{as: "a"},
+				getSession{as: "a"},
+			),
+		},
+		{
+			name:   "auto_compaction_waits_for_the_reading_to_fall_after_an_empty_summary",
+			config: overThreshold,
+			model: []harnesstest.Step{
+				text("one", 5), text("two", 900),
+				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: " "}},
+				text("three", 900), text("four", 5),
+			},
+			actions: withActions(twoTurns,
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				getSession{as: "a"},
+			),
 		},
 	})
 }
