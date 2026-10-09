@@ -16,6 +16,7 @@ const warmTimeout = 15 * time.Second
 // readyAt, and ready are final from then on. resolved belongs to the actor.
 type warmup struct {
 	done      chan struct{}
+	cancel    context.CancelFunc
 	startedAt time.Time
 	readyAt   time.Time
 	ready     bool
@@ -33,12 +34,12 @@ func (a *Actor) warm() {
 	}
 	req := a.modelRequest()
 	src := a.source(&running{})
-	w := &warmup{done: make(chan struct{}), startedAt: time.Now()}
+	ctx, cancel := context.WithTimeout(a.cfg.Base, warmTimeout)
+	w := &warmup{done: make(chan struct{}), cancel: cancel, startedAt: time.Now()}
 	a.warming = w
 	a.logWarm("started", 0, 0)
 	a.cfg.Go(func() {
 		defer close(w.done)
-		ctx, cancel := context.WithTimeout(a.cfg.Base, warmTimeout)
 		defer cancel()
 		go func() {
 			select {
@@ -66,7 +67,8 @@ func (a *Actor) warm() {
 
 // awaitWarm waits for the warm-up in flight, so a turn never dials the
 // transport while the warm-up is about to hold it. A warm-up ends within
-// warmTimeout or with the actor.
+// warmTimeout or with the actor. A turn that ends while it waits cancels the
+// warm-up.
 func (a *Actor) awaitWarm(ctx context.Context) {
 	if a.warming == nil {
 		return
@@ -74,6 +76,7 @@ func (a *Actor) awaitWarm(ctx context.Context) {
 	select {
 	case <-a.warming.done:
 	case <-ctx.Done():
+		a.warming.cancel()
 	}
 }
 

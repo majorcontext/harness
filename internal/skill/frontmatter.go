@@ -52,13 +52,15 @@ func SplitFrontmatter(doc string) (frontmatter, body string, err error) {
 }
 
 // ParseFrontmatterFields parses frontmatter scalars with the supplied allowed
-// keys. It uses the same parser as Agent Skills.
+// keys. It uses the same parser as Agent Skills. A key outside allowedKeys
+// does not stop the parse: any other error wins, and when there is none the
+// error wraps ErrUnknownKey and the fields hold the allowed keys.
 func ParseFrontmatterFields(frontmatter string, allowedKeys ...string) (map[string]string, error) {
 	allowed := make(map[string]bool, len(allowedKeys))
 	for _, key := range allowedKeys {
 		allowed[key] = true
 	}
-	fields, _, err := parseFrontmatterWithKeys(frontmatter, allowed)
+	fields, _, err := parseFrontmatterWithKeys(frontmatter, allowed, true)
 	return fields, err
 }
 
@@ -66,12 +68,13 @@ func ParseFrontmatterFields(frontmatter string, allowedKeys ...string) (map[stri
 // and an optional one-level-deep metadata map. See the package doc for the
 // supported subset of YAML.
 func parseFrontmatter(fm string) (fields map[string]string, meta map[string]string, err error) {
-	return parseFrontmatterWithKeys(fm, knownKeys)
+	return parseFrontmatterWithKeys(fm, knownKeys, false)
 }
 
-func parseFrontmatterWithKeys(fm string, allowed map[string]bool) (fields map[string]string, meta map[string]string, err error) {
+func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown bool) (fields map[string]string, meta map[string]string, err error) {
 	fields = make(map[string]string)
 	lines := strings.Split(fm, "\n")
+	var unknown error
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -89,7 +92,14 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool) (fields map[st
 			return nil, nil, fmt.Errorf("malformed frontmatter line (expected 'key: value'): %q", trimmed)
 		}
 		if !allowed[key] {
-			return nil, nil, fmt.Errorf("%w: %q", ErrUnknownKey, key)
+			if !deferUnknown {
+				return nil, nil, fmt.Errorf("%w: %q", ErrUnknownKey, key)
+			}
+			if unknown == nil {
+				unknown = fmt.Errorf("%w: %q", ErrUnknownKey, key)
+			}
+			i = skipIndented(lines, i+1) - 1
+			continue
 		}
 
 		if key == "metadata" {
@@ -127,7 +137,19 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool) (fields map[st
 		}
 		fields[key] = unquote(value)
 	}
-	return fields, meta, nil
+	return fields, meta, unknown
+}
+
+// skipIndented returns the index of the first line from start that is neither
+// indented nor blank, which ends the value of the key above it.
+func skipIndented(lines []string, start int) int {
+	i := start
+	for ; i < len(lines); i++ {
+		if line := lines[i]; strings.TrimSpace(line) != "" && line == strings.TrimLeft(line, " \t") {
+			break
+		}
+	}
+	return i
 }
 
 // blockScalarIndicator reports whether a frontmatter value is a YAML block

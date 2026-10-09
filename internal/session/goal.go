@@ -41,6 +41,8 @@ const (
 	// which keeps the newest messages.
 	partBytes       = 4096
 	transcriptBytes = 128 << 10
+	partCut         = "…[truncated]"
+	transcriptCut   = "[earlier conversation omitted to fit the evaluator's context budget]\n"
 )
 
 var (
@@ -287,16 +289,18 @@ func transcript(h []eventlog.Message) string {
 				s = "[tool result (error)] " + p.Text
 			case p.Type == eventlog.PartToolResult:
 				s = "[tool result] " + p.Text
+			case p.Type == eventlog.PartReasoning:
+				s = "[reasoning] " + p.Text
+			case p.Type == eventlog.PartBlob:
+				s = "[blob " + p.MediaType + "]"
 			}
 			if len(s) > partBytes {
-				s = strings.ToValidUTF8(s[:partBytes], "") + " [cut]"
+				s = strings.ToValidUTF8(s[:partBytes], "") + partCut
 			}
-			if p.Type != eventlog.PartReasoning {
-				b.WriteString(s + "\n")
-			}
+			b.WriteString(s + "\n")
 		}
 		if size += b.Len(); size > transcriptBytes && len(blocks) > 0 {
-			blocks = append(blocks, "[earlier conversation omitted]\n")
+			blocks = append(blocks, transcriptCut)
 			break
 		}
 		blocks = append(blocks, b.String())
