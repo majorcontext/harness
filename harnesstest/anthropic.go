@@ -30,15 +30,16 @@ type wireRequest struct {
 }
 
 type wireBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Input     map[string]any  `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
-	IsError   bool            `json:"is_error"`
-	Source    struct {
+	Type         string          `json:"type"`
+	CacheControl json.RawMessage `json:"cache_control"`
+	Text         string          `json:"text"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Input        map[string]any  `json:"input"`
+	ToolUseID    string          `json:"tool_use_id"`
+	Content      json.RawMessage `json:"content"`
+	IsError      bool            `json:"is_error"`
+	Source       struct {
 		MediaType string `json:"media_type"`
 		Data      string `json:"data"`
 	} `json:"source"`
@@ -58,13 +59,22 @@ func decodeRequest(body []byte) (Request, error) {
 	}
 	sort.Strings(req.Tools)
 
+	for i, b := range blocks(w.System) {
+		if len(b.CacheControl) > 0 {
+			req.CacheBreakpoints = append(req.CacheBreakpoints, CacheBreakpoint{Message: -1, Block: i})
+		}
+	}
+
 	toolNames := map[string]string{}
 	var pending []string
-	for _, m := range w.Messages {
+	for mi, m := range w.Messages {
 		msg := Message{Role: m.Role}
 		answered, leading := 0, true
 		awaiting := slices.Clone(pending)
-		for _, b := range blocks(m.Content) {
+		for bi, b := range blocks(m.Content) {
+			if len(b.CacheControl) > 0 {
+				req.CacheBreakpoints = append(req.CacheBreakpoints, CacheBreakpoint{Message: mi, Block: bi})
+			}
 			if b.Type != "tool_result" {
 				leading = false
 			}
