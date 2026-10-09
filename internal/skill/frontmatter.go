@@ -101,6 +101,9 @@ func parseFrontmatterWithKeys(fm string, allowed map[string]bool, deferUnknown b
 			if underUnknown && strings.Contains(trimmed, ":") {
 				continue
 			}
+			if underUnknown {
+				return nil, nil, fmt.Errorf("malformed frontmatter line (expected 'key: value'): %q", trimmed)
+			}
 			return nil, nil, fmt.Errorf("unexpected indented line in frontmatter: %q", trimmed)
 		}
 		underUnknown = false

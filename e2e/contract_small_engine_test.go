@@ -72,7 +72,7 @@ func TestContractGoalEvaluatorTranscript(t *testing.T) {
 	})
 }
 
-// evaluatorBudget runs turns turns of a part over the 4096-byte cap, sets a
+// evaluatorBudget runs a number of turns of a part over the 4096-byte cap, sets a
 // goal, and returns the transcript that the evaluator read.
 func evaluatorBudget(t *testing.T, h host, extra map[string]any, turns int) string {
 	t.Helper()
@@ -138,11 +138,11 @@ func TestContractAgentProfileWithAnUnknownKeyAndAnotherError(t *testing.T) {
 		for _, tc := range []struct{ name, file, want string }{
 			{"a missing name beside an unknown key", "---\nhooks: y\ndescription: W.\n---\n\nBody.\n", "frontmatter missing required 'name'"},
 			{"a missing description beside an unknown key", "---\nname: w\nhooks: y\n---\n\nBody.\n", "frontmatter missing required 'description'"},
-			{"a stray indented line after an inline unknown value beside an unknown key", "---\nname: w\ndescription: W.\nhooks: y\n  stray\n---\n\nBody.\n", "unexpected indented line"},
+			{"a stray indented line after an inline unknown value beside an unknown key", "---\nname: w\ndescription: W.\nhooks: y\n  stray\n---\n\nBody.\n", "malformed frontmatter line"},
 			{"a malformed line after the key beside an unknown key", "---\nname: w\ndescription: W.\nhooks: y\nstray\n---\n\nBody.\n", "malformed frontmatter line"},
 			{"a repeated key after the key beside an unknown key", "---\nname: w\nhooks: y\ndescription: W.\nname: v\n---\n\nBody.\n", "duplicate frontmatter key"},
-			{"a list under an unknown key", "---\nname: w\ndescription: W.\nhooks:\n  - a\n  - b\n---\n\nBody.\n", "unexpected indented line"},
-			{"block text with no colon under an unknown key", "---\nname: w\ndescription: W.\nhooks: |\n  text without a colon\n---\n\nBody.\n", "unexpected indented line"},
+			{"a list under an unknown key", "---\nname: w\ndescription: W.\nhooks:\n  - a\n  - b\n---\n\nBody.\n", "malformed frontmatter line"},
+			{"block text with no colon under an unknown key", "---\nname: w\ndescription: W.\nhooks: |\n  text without a colon\n---\n\nBody.\n", "malformed frontmatter line"},
 		} {
 			t.Run("the load fails on "+tc.name, func(t *testing.T) {
 				t.Parallel()
