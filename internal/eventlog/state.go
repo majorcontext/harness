@@ -7,6 +7,8 @@ import (
 	"maps"
 	"slices"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 // ErrIllegal reports an event that breaks a state machine or a log invariant.
@@ -217,6 +219,10 @@ type State struct {
 	retained      []ToolResultRetained
 	commands      map[string]command
 	history       []entry
+	// folded holds the messages that readers see before the summary of the
+	// newest compaction: what each compaction folded, and the summary of each
+	// earlier compaction in its place. The model never reads it.
+	folded []protocol.Message
 	// stranded holds the pinned segments that a compaction outside a turn
 	// folded. The model reads them at the end of the history, and the next
 	// turn start settles them there, after its inputs.
@@ -245,6 +251,7 @@ func (s *State) clone() *State {
 	// A full cap makes an append to c copy, so c never writes into s.history.
 	c.history = s.history[:len(s.history):len(s.history)]
 	c.stranded = slices.Clip(s.stranded)
+	c.folded = slices.Clip(s.folded)
 	c.retained = slices.Clip(s.retained)
 	c.unran = slices.Clip(s.unran)
 	return &c

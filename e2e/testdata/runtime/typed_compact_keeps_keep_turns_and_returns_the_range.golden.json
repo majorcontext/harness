@@ -212,6 +212,46 @@
   "sessions": {
     "a": [
       {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "t1"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "t2"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      },
+      {
         "id": "cmpsum#1",
         "role": "user",
         "parts": [
@@ -222,7 +262,7 @@
         ]
       },
       {
-        "id": "msg#1",
+        "id": "msg#5",
         "role": "user",
         "parts": [
           {
@@ -232,7 +272,7 @@
         ]
       },
       {
-        "id": "msg#2",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {

@@ -4,7 +4,7 @@ package e2e
 const (
 	specView          = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
 	specUpdate        = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
-	specMessages      = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that the model reads, oldest first, as the engine answered its message page"
+	specMessages      = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that a reader sees, oldest first"
 	specBootstrapGone = "The engine bootstrap form (`stream_from`, `live_from`, `seqs`) has no counterpart: one page route and one event cursor replace it."
 	specRestartOpens  = "A restart opens no session by itself: the embedder opens each session that has work to resume"
 	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
@@ -365,10 +365,10 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_tool_call_result":                                                   sameAsServe(),
 	"mcp_tool_error_and_rpc_error_reach_model":                               reGolden(specMCPText),
 	"mcp_two_servers_share_a_tool_name":                                      sameAsServe(),
-	"pins_after_a_compaction_keep_each_request_a_prefix_of_the_next":         sameAsServe(),
-	"bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next": sameAsServe(),
-	"mcp_notice_then_compaction_keeps_a_call_paired":                         sameAsServe(),
-	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":                 sameAsServe(),
+	"pins_after_a_compaction_keep_each_request_a_prefix_of_the_next":         reGolden(specMessages),
+	"bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next": reGolden(specMessages),
+	"mcp_notice_then_compaction_keeps_a_call_paired":                         reGolden(specMessages),
+	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":                 reGolden(specMessages),
 	"mcp_unavailable_at_start_then_connect":                                  sameAsServe(),
 	"mcp_unavailable_connect_fails_with_classified_reason":                   reGolden(specMCPText),
 	"messages_page_after_compaction":                                         reGolden(specMessages, specBootstrapGone, specErrors),
@@ -423,7 +423,7 @@ var runtimeRows = map[string]runtimeRow{
 
 	"end_is_refused_while_a_typed_command_runs":                          reGolden(specTypedReceipt, specErrors, specReceipt),
 	"a_kill_interrupts_an_unfinished_command":                            reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
-	"banner_stays_after_the_results_when_a_compaction_follows_two_calls": sameAsServe(),
+	"banner_stays_after_the_results_when_a_compaction_follows_two_calls": reGolden(specMessages),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":          reGolden(specOverflowFolds, specBannerPrefix, specView),
 	"codex_http_truncated_and_empty_responses_are_retried":               reGolden(specView, specItems, specRetryable),
 	"codex_service_tier_reaches_the_request":                             reGolden(specView, specItems, specUpdate),

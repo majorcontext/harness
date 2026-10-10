@@ -208,6 +208,11 @@ func (s *State) remember(env Envelope) {
 		if i < 0 {
 			i = len(s.history)
 		}
+		for _, h := range s.history[:i] {
+			if !h.pinned {
+				s.folded = append(s.folded, readerMessage(h))
+			}
+		}
 		folded := slices.DeleteFunc(slices.Clone(s.history[:i]), func(h entry) bool { return !h.pinned })
 		s.history, s.turnAt = movePins(s.history[i:], max(0, s.turnAt-i), env.Seq)
 		s.stranded = slices.Concat(s.stranded, folded)

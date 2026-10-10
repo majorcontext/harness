@@ -180,6 +180,26 @@
   "sessions": {
     "a": [
       {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      },
+      {
         "id": "cmpsum#1",
         "role": "user",
         "parts": [
@@ -190,7 +210,7 @@
         ]
       },
       {
-        "id": "msg#1",
+        "id": "msg#3",
         "role": "user",
         "parts": [
           {
@@ -200,7 +220,7 @@
         ]
       },
       {
-        "id": "msg#2",
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {
@@ -210,7 +230,7 @@
         ]
       },
       {
-        "id": "msg#3",
+        "id": "msg#5",
         "role": "user",
         "parts": [
           {
@@ -220,7 +240,7 @@
         ]
       },
       {
-        "id": "msg#4",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
@@ -273,10 +293,30 @@
         "commands": [],
         "first_seq": 1,
         "has_more": false,
-        "last_seq": 5,
-        "total": 5
+        "last_seq": 7,
+        "total": 7
       },
       "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "1"
+            }
+          ]
+        },
         {
           "id": "cmpsum#1",
           "role": "user",
@@ -288,7 +328,7 @@
           ]
         },
         {
-          "id": "msg#1",
+          "id": "msg#3",
           "role": "user",
           "parts": [
             {
@@ -298,7 +338,7 @@
           ]
         },
         {
-          "id": "msg#2",
+          "id": "msg#4",
           "role": "assistant",
           "parts": [
             {
@@ -308,7 +348,7 @@
           ]
         },
         {
-          "id": "msg#3",
+          "id": "msg#5",
           "role": "user",
           "parts": [
             {
@@ -318,7 +358,7 @@
           ]
         },
         {
-          "id": "msg#4",
+          "id": "msg#6",
           "role": "assistant",
           "parts": [
             {

@@ -3,6 +3,16 @@
   "sessions": {
     "a": [
       {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
         "id": "cmpsum#1",
         "role": "user",
         "parts": [

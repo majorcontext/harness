@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,10 +119,7 @@ func TestContractMessageTime(t *testing.T) {
 			times := timesOfRecords(t, d, id)
 			var page protocol.MessagePage
 			d.expect(t, http.StatusOK, http.MethodGet, "/sessions/"+id+"/messages?limit=1000", nil, &page)
-			if len(page.Messages) == 0 {
-				t.Fatal("the page holds no message")
-			}
-			if got := page.Messages[0].CreatedAt; times.compaction.IsZero() || !got.Equal(times.compaction) {
+			if got := summaryOf(t, page).CreatedAt; times.compaction.IsZero() || !got.Equal(times.compaction) {
 				t.Errorf("summary created_at = %v, want the compaction time %v", got, times.compaction)
 			}
 		})
@@ -156,4 +154,15 @@ func dismissalTime(t *testing.T, h host) {
 	if !found {
 		t.Fatal("the page holds no dismissal message")
 	}
+}
+
+func summaryOf(t *testing.T, page protocol.MessagePage) protocol.Message {
+	t.Helper()
+	for _, m := range page.Messages {
+		if strings.HasPrefix(m.ID, "cmpsum_") {
+			return m
+		}
+	}
+	t.Fatal("the page holds no summary")
+	return protocol.Message{}
 }

@@ -27,21 +27,32 @@ func (s *State) lastMessageID() string {
 func summaryID(seq uint64) string { return "cmpsum_" + strconv.FormatUint(seq, 10) }
 
 // Transcript returns the conversation as a reader sees it, oldest first: the
-// summary of the newest compaction, then each later message with its ID.
+// messages that each compaction folded, the summary of each compaction as a
+// divider between the messages it folded and the messages kept, then the
+// messages after the newest summary. The model reads less: see ModelHistory.
 func (s *State) Transcript() []protocol.Message {
-	out := make([]protocol.Message, 0, len(s.history)+1)
-	if c, ok := s.Compaction(); ok {
-		out = append(out, protocol.Message{ID: summaryID(s.compactedAt), Role: RoleUser, CreatedAt: s.compactedTime,
-			Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: c.Summary}}})
+	out := make([]protocol.Message, 0, len(s.folded)+len(s.history)+1)
+	out = append(out, s.folded...)
+	if _, ok := s.Compaction(); ok {
+		out = append(out, s.summaryMessage())
 	}
 	for _, e := range s.history {
-		if e.pinned {
-			continue
+		if !e.pinned {
+			out = append(out, readerMessage(e))
 		}
-		out = append(out, protocol.Message{ID: e.id, Role: e.msg.Role, CreatedAt: e.at, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts),
-			Source: e.from.source, SourceID: e.from.id, SourceLabel: e.from.label, OperatorBatch: operatorBatch(e.promoted)})
 	}
 	return out
+}
+
+// summaryMessage is the divider message of the newest compaction.
+func (s *State) summaryMessage() protocol.Message {
+	return protocol.Message{ID: summaryID(s.compactedAt), Role: RoleUser, CreatedAt: s.compactedTime,
+		Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: s.compaction.Summary}}}
+}
+
+func readerMessage(e entry) protocol.Message {
+	return protocol.Message{ID: e.id, Role: e.msg.Role, CreatedAt: e.at, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts),
+		Source: e.from.source, SourceID: e.from.id, SourceLabel: e.from.label, OperatorBatch: operatorBatch(e.promoted)}
 }
 
 // operatorBatch returns one entry for each input that a steer message joined.
