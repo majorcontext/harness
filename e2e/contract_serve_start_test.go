@@ -1,8 +1,11 @@
 package e2e
 
 import (
+	"encoding/json"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -164,4 +167,53 @@ func TestContractServeLogsItsStartAndEachCreate(t *testing.T) {
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := d.Create(t)
 	awaitLog(t, d, `"msg":"serve start"`, `"msg":"config: `, `"msg":"session created"`, `"session":"`+id+`"`)
+}
+
+// startServePortZero starts serve on `-addr 127.0.0.1:0` and returns it with
+// the address that its "serve start" line reports.
+func startServePortZero(t *testing.T, env map[string]string) *serveProc {
+	t.Helper()
+	token := newRunToken(t)
+	cmd := exec.Command(harnessBin, "serve", "-addr", "127.0.0.1:0")
+	cmd.Dir = t.TempDir()
+	cmd.Env = cleanEnv(withToken(env, token))
+	stderr := &lockedBuffer{}
+	cmd.Stderr = stderr
+	p := &serveProc{procGroup: startGroup(t, cmd), t: t, token: token, stderr: stderr}
+	reported := func() bool {
+		for _, line := range strings.Split(stderr.String(), "\n") {
+			var rec struct{ Msg, Addr string }
+			if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == "serve start" {
+				p.addr = rec.Addr
+				return true
+			}
+		}
+		return false
+	}
+	if !testpoll.UntilNoT(waitBound, reported) {
+		t.Fatalf("serve did not log its start\n%s", stderr.String())
+	}
+	return p
+}
+
+func TestContractServeAddrPortZeroReportsTheBoundPort(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	fake := harnesstest.New(t, replyText("ok"))
+	cfg := writeGoalConfigWith(t, fake.URL(), scenarioConfig(pluginConfig(t, map[string]any{"serve": true})))
+	p := startServePortZero(t, map[string]string{"HARNESS_SESSION_DIR": t.TempDir(), "HARNESS_CONFIG": cfg, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
+	host, port, err := net.SplitHostPort(p.addr)
+	if err != nil || host != "127.0.0.1" || port == "0" {
+		t.Fatalf("serve start reports addr %q for -addr 127.0.0.1:0, want 127.0.0.1 and the bound port\n%s", p.addr, p.stderr.String())
+	}
+	d := &runtimeDriver{store: t.TempDir(), serve: true, proc: p, wire: reportOf(t), client: wireClient(t, http.DefaultClient),
+		lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	if status, _ := d.do(t, http.MethodGet, "/health", nil); status != http.StatusOK {
+		t.Errorf("/health = %d on the reported address %s, want 200", status, p.addr)
+	}
+	runTurn(t, d, "go")
+	want := "SERVE: http://" + p.addr + " TOKEN: " + p.token
+	if reqs := fake.Requests(); len(reqs) == 0 || !strings.Contains(reqs[0].System, want) {
+		t.Errorf("the plugin system segment lacks %q: the plugin serve_url is not the bound address", want)
+	}
 }
