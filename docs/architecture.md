@@ -946,6 +946,7 @@ The package imports only the standard library. The `config-leaf` depguard rule e
 | Box-global `events.jsonl` | Delete |
 | Worktrees, `workdir_isolation`, worktree sweep | Delete |
 | Modal guide and `scripts/modal-e2e.py` | Delete |
+| Engine-era design docs: `docs/design/event-sink.md`, `docs/design/fast-transcript-bootstrap.md`, `docs/design/goal-retry-directive-reuse.md`, `docs/design/journal-snapshotting.md`, `docs/design/live-event-tip-cursor.md`, `docs/design/session-send-unification.md`, `docs/design/transcript-tail-seqs.md` | Delete; Andy 2026-10-10 |
 | `/debug/pprof`, `/debug/goroutines` | Delete |
 | `cancel_tree` | Merged into `interrupt {tree}` |
 | `HARNESS_SEQUENTIAL_TOOLS` and tuning knobs | Delete; the limit of 8 calls and the read budget are fixed |
