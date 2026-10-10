@@ -24,8 +24,7 @@ everything else this document describes — a managed process does not
 survive its box's death, and nothing in that design tries to make it.
 
 Written generically: no deployment-provider specifics beyond neutral
-examples (a volume, a container platform, a sandbox). See
-`docs/deploy-modal.md` for one concrete instantiation of this model.
+examples (a volume, a container platform, a sandbox).
 
 ## 1. Identity: the operator-chosen box NAME
 
@@ -342,6 +341,4 @@ Deferred to the orchestrator side (§8), not testable here:
 - An orchestrator setting `HARNESS_HUB_BOX_NAME` and deployment tooling
   deriving `HARNESS_SESSION_DIR` from it end-to-end.
 - ADOPT exercised against a real deployment platform's volume semantics
-  (the in-repo counterpart today is `scripts/modal-e2e.py`'s abrupt-kill
-  durability test, documented in `docs/deploy-modal.md`, which proves the
-  volume-survival half of §4 for one concrete platform).
+  (no in-repo test covers the volume-survival half of §4).

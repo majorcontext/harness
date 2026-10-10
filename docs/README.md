@@ -9,7 +9,6 @@ are authoritative.
 |---|---|
 | [plugins-and-protocols.md](plugins-and-protocols.md) | Plugin lifecycle and external protocol boundaries |
 | [fleet-and-serve.md](fleet-and-serve.md) | Fleet state, lineage, exhaustion, and diagnostics |
-| [deploy-modal.md](deploy-modal.md) | Deployment modal behavior |
 
 The plugin wire contract is in [internal/plugin/PROTOCOL.md](../internal/plugin/PROTOCOL.md).
 

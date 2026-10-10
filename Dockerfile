@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 go build \
 # git, curl, process tools, search. This is the image to run agents in
 # (`docker build --target sandbox`); layer language toolchains on top of it.
 # In-sandbox tools do not weaken the security model when egress is
-# default-deny through a credential-injecting proxy (see docs/deploy-modal.md).
+# default-deny through a credential-injecting proxy.
 FROM debian:stable-slim AS sandbox
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
