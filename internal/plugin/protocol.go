@@ -1,7 +1,7 @@
-// Package plugin implements the harness plugin protocol and the SDK for
-// writing plugins.
+// Package plugin implements the harness plugin protocol and a Go fixture
+// plugin that its tests use.
 //
-// Plugins are separate processes (any language; this package is the Go SDK)
+// Plugins are separate processes (any language; this package holds the Go fixture plugin)
 // speaking JSON-RPC 2.0 over stdio, one message per line (NDJSON). The
 // channel is bidirectional: the harness sends hook dispatches and tool
 // executions to the plugin, and the plugin sends client API calls

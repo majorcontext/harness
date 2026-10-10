@@ -99,7 +99,7 @@ func (cl *Client) MCPCall(ctx context.Context, server, tool string, args any) (*
 	return &resp, nil
 }
 
-// serve is the transport-agnostic core of Serve, factored out for tests.
+// serve is the transport-agnostic core of the Go fixture plugin.
 func serve(rwc io.ReadWriteCloser, m Manifest, hooks *Hooks) error {
 	m.ProtocolVersion = ProtocolVersion
 	m.Hooks = hooks.hookList()

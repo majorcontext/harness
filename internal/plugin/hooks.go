@@ -59,15 +59,14 @@ type InitializeParams struct {
 	HarnessVersion  string `json:"harness_version"`
 	WorkspaceDir    string `json:"workspace_dir"`
 	// HTTPHeaders are headers the harness wants stamped on all plugin
-	// outbound HTTP traffic (e.g. workspace attribution). Client.HTTPClient
-	// applies them automatically.
+	// outbound HTTP traffic (e.g. workspace attribution). A plugin applies them itself.
 	HTTPHeaders map[string]string `json:"http_headers,omitempty"`
 	// Config is this plugin's block from the harness config file, verbatim.
 	Config json.RawMessage `json:"config,omitempty"`
 	// ServeURL is the base URL of this process's `harness serve` HTTP API
 	// (e.g. "http://localhost:4096"), present only when the harness is
 	// running in serve mode. It lets an out-of-process plugin — in any
-	// language, not just the Go SDK — hit the HTTP API directly (e.g. GET
+	// language, not just the Go fixture — hit the HTTP API directly (e.g. GET
 	// /session/{id}/message) instead of only the stdio client API. Empty in
 	// `harness run` mode, where there is no HTTP API to reach.
 	ServeURL string `json:"serve_url,omitempty"`

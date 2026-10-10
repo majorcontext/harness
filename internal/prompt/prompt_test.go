@@ -26,8 +26,8 @@ func TestBuildWithNoWorkDirReadsNoFile(t *testing.T) {
 		}
 	}
 	t.Chdir(root)
-	if got, want := prompt.Describe(config.Config{AppendSystemPrompt: []string{"EMBEDDER"}}, "").Segments, []string{"EMBEDDER"}; !slices.Equal(got, want) {
-		t.Errorf("Describe = %q, want %q", got, want)
+	if got, want := prompt.Build(config.Config{AppendSystemPrompt: []string{"EMBEDDER"}}, ""), []string{"EMBEDDER"}; !slices.Equal(got, want) {
+		t.Errorf("Build = %q, want %q", got, want)
 	}
 }
 

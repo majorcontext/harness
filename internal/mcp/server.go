@@ -33,8 +33,7 @@ type ToolHandler func(ctx context.Context, args json.RawMessage) (CallToolResult
 // Registry serves Streamable HTTP requests for a fixed in-process tool set.
 // Construct Registry values with NewRegistry.
 type Registry struct {
-	serverInfo   Implementation
-	instructions string
+	serverInfo Implementation
 
 	tools    []Tool
 	handlers map[string]ToolHandler
@@ -140,7 +139,6 @@ func (reg *Registry) dispatch(ctx context.Context, method string, params json.Ra
 			ProtocolVersion: LatestProtocolVersion,
 			Capabilities:    ServerCapabilities{Tools: &ToolsCapability{}},
 			ServerInfo:      reg.serverInfo,
-			Instructions:    reg.instructions,
 		}, nil
 
 	case methodToolsList:

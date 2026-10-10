@@ -1,8 +1,8 @@
 # harness-plugin (TypeScript / JavaScript SDK)
 
 A zero-dependency Node.js ESM SDK for writing [harness](../../README.md)
-plugins. It is the JavaScript counterpart of the Go SDK
-(`github.com/majorcontext/harness/internal/plugin`); both speak exactly the same wire
+plugins. It is the JavaScript counterpart of the Go fixture plugin
+(`github.com/majorcontext/harness/internal/plugin`, used by the harness tests); both speak exactly the same wire
 protocol, documented in [`internal/plugin/PROTOCOL.md`](../../internal/plugin/PROTOCOL.md).
 
 - **Zero npm dependencies.** `harness-plugin.mjs` uses only Node.js
@@ -151,24 +151,24 @@ tools: [
 ```
 
 Throwing inside `execute` becomes an `is_error` tool result sent back to the
-model — never a protocol-level failure, matching the Go SDK.
+model — never a protocol-level failure, matching the Go fixture.
 
 ### `ctx` (the `PluginContext`)
 
-Passed to every hook and tool call; mirrors the Go SDK's `*Client`:
+Passed to every hook and tool call; mirrors the wire protocol's client API (`InitializeParams` and the `client/*` methods):
 
 | Member | Equivalent |
 |---|---|
-| `ctx.workspaceDir` | `Client.WorkspaceDir()` |
-| `ctx.config` | `Client.Config()` — this plugin's config block, already JSON-parsed |
+| `ctx.workspaceDir` | `InitializeParams.WorkspaceDir` |
+| `ctx.config` | `InitializeParams.Config` — this plugin's config block, already JSON-parsed |
 | `ctx.httpHeaders` | `InitializeParams.HTTPHeaders` |
-| `ctx.fetch(url, init)` | `Client.HTTPClient()` — stamps `httpHeaders` on every request |
-| `await ctx.sessionMessages(sessionId)` | `Client.SessionMessages` |
-| `await ctx.mcpCall(server, tool, args)` | `Client.MCPCall` |
-| `await ctx.generate(req)` | `Client.Generate` |
+| `ctx.fetch(url, init)` | fetch that stamps `httpHeaders` on every request (SDK helper) |
+| `await ctx.sessionMessages(sessionId)` | `client/session.messages` |
+| `await ctx.mcpCall(server, tool, args)` | `client/mcp.call` (`Client.MCPCall`) |
+| `await ctx.generate(req)` | `client/generate` |
 
 These calls flow back to the harness over the same connection — including
-while your hook is still in flight, exactly like the Go SDK.
+while your hook is still in flight, exactly like the Go fixture.
 
 ### Message content (`Part[]`)
 
@@ -185,7 +185,7 @@ types (`text`, `blob`, `tool_call`, `tool_result`, `reasoning`).
 ## Protocol version
 
 `PROTOCOL_VERSION` is exported and currently `1`, matching
-`plugin.ProtocolVersion` in the Go SDK. A mismatch is rejected as an
+`plugin.ProtocolVersion` in the Go fixture. A mismatch is rejected as an
 `initialize` error, same as the Go side.
 
 ## Testing

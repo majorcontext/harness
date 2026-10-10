@@ -5,7 +5,7 @@ protocol boundaries.
 
 ## Plugin System
 
-Plugins are separate processes (any language; the TypeScript SDK is the published SDK, the Go SDK is internal) speaking a versioned JSON-RPC protocol over stdio.
+Plugins are separate processes (any language; the TypeScript SDK is the published SDK, `internal/plugin` is a Go fixture for tests) speaking a versioned JSON-RPC protocol over stdio.
 
 - **Manifest cache**: `harness plugin probe` runs a bounded manifest probe and caches the manifest (name, protocol version, hooks subscribed, tool definitions) with executable identity and plugin-spec identity. Run and serve startup trust a matching entry; a missing or stale entry performs one bounded probe before host construction. The long-lived plugin process does not start at boot.
 - **Lazy spawn**: a plugin process starts on first hook dispatch or tool call, then stays warm for later calls during the host lifetime (module-level caches in plugins are expected and fine).
@@ -28,7 +28,7 @@ Plugins may also register **custom tools** (defs in manifest, execution via RPC)
 
 ### Plugin client API
 
-Plugins are API clients over the same channel: `Session.Messages`, `MCP.Call`, `Generate` (LLM calls through the harness provider layer — plugins never carry their own API keys), and `plugin.HTTPClient()` (outbound HTTP with harness-configured headers, e.g. workspace attribution).
+Plugins are API clients over the same channel: `Session.Messages`, `MCP.Call`, and `Generate` (LLM calls through the harness provider layer — plugins never carry their own API keys). The harness passes `http_headers` (e.g. workspace attribution) in `initialize` for the plugin to stamp on outbound HTTP.
 
 Events v1: `session.status`, `question.asked`, `file.edited`,
 `tool.execute.start`, `tool.execute.end`, `session.error`. Message-delta
