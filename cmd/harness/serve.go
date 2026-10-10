@@ -72,9 +72,6 @@ func serveCmd(args []string) error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
-	if unauthenticated {
-		warnUnauthenticated(logger, o.addr)
-	}
 	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err
@@ -93,15 +90,20 @@ func serveCmd(args []string) error {
 	if err := removeStopReport(dir); err != nil {
 		return err
 	}
-	store := newObservedStore(harness.NewDiskStore(dir), logger)
-	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask,
-		ServeURL: serveURLForAddr(o.addr), RunToken: token})
+	ln, err := net.Listen("tcp", o.addr)
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", o.addr)
+	defer ln.Close()
+	bound := ln.Addr().String()
+	if unauthenticated {
+		warnUnauthenticated(logger, bound)
+	}
+	store := newObservedStore(harness.NewDiskStore(dir), logger)
+	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask,
+		ServeURL: serveURLForAddr(bound), RunToken: token})
 	if err != nil {
-		return errors.Join(err, closeRuntime(rt))
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -119,7 +121,7 @@ func serveCmd(args []string) error {
 		startWork(ctx, rt, store, logger, &caughtUp)
 	}()
 	replicated := func() bool { return cfg.Sync != nil && caughtUp.Load() && !rt.SyncStopped() }
-	logger.Info("serve start", "addr", o.addr, "version", version)
+	logger.Info("serve start", "addr", bound, "version", version)
 	select {
 	case err := <-errc:
 		stop()
