@@ -7,7 +7,7 @@
 		"dockerfile": "Dockerfile",
 		// Context is .devcontainer itself, NOT the repo root: this
 		// Dockerfile COPYs nothing, and the repo root is the build
-		// context of the deploy Dockerfile (docs/deploy-modal.md) whose
+		// context of the deploy Dockerfile whose
 		// COPYs must not be starved by a root .dockerignore.
 		"context": "."
 	},
