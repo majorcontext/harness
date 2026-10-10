@@ -134,15 +134,7 @@ func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 // CanWarm reports whether the backend of model has a warm-up to run.
 func (m *Router) CanWarm(model string) bool {
 	be, err := m.lookup(model)
-	if err != nil {
-		return false
-	}
-	w, ok := be.(turn.Warmer)
-	if !ok {
-		return false
-	}
-	g, gated := w.(turn.WarmGate)
-	return !gated || g.CanWarm(model)
+	return err == nil && turn.CanWarm(be, model)
 }
 
 // Warm warms the backend of req.Model, when that backend can warm.

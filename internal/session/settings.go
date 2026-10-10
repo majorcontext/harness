@@ -11,16 +11,16 @@ import (
 func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		set, prev := a.state.Settings(), a.state.Model()
-		ch.Model = changed(ch.Model, a.state.Model())
+		ch.Model = changed(ch.Model, prev)
 		ch.Effort = changed(ch.Effort, set.Effort)
 		ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
 		var err error
 		if ch.Model != nil && a.cfg.Check != nil {
-			err = a.cfg.Check(a.state.Model(), *ch.Model, a.state.AllowedTools())
+			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
 		if err == nil && ch != (eventlog.SettingsChanged{}) {
 			var events []eventlog.Event
-			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(a.state.Model()) {
+			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
 				events = a.dismissRequests()
 			}
 			err = a.append(append(events, ch)...)
