@@ -49,11 +49,6 @@ func NewRegistry(name, version string) *Registry {
 	}
 }
 
-// SetInstructions sets optional guidance returned during initialization.
-func (reg *Registry) SetInstructions(s string) {
-	reg.instructions = s
-}
-
 // RegisterTool adds a tool and its handler. The last registration for a name wins.
 func (reg *Registry) RegisterTool(tool Tool, handler ToolHandler) {
 	for i, existing := range reg.tools {

@@ -223,12 +223,6 @@ func validateSanitizeToolSchemas(name string, p Provider) error {
 	return nil
 }
 
-// ValidateProviderCacheTTL reports whether ttl is a value this package accepts for
-// Provider.CacheTTL.
-func ValidateProviderCacheTTL(ttl string) error {
-	return validateCacheTTL("anthropic", Provider{CacheTTL: ttl})
-}
-
 // validateCacheTTL rejects an unknown cache_ttl, and any value outside the native anthropic entry.
 func validateCacheTTL(name string, p Provider) error {
 	if p.CacheTTL == "" {

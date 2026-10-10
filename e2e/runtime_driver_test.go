@@ -530,20 +530,6 @@ func (d *runtimeDriver) SetServiceTier(t *testing.T, id, tier string) callResult
 	return d.patch(t, id, "service_tier", tier)
 }
 
-// notInEngine is the result of a call whose route or field only the runtime
-// has. Serve never receives it.
-func notInEngine(what string) callResult {
-	return callResult{Body: map[string]any{"not_in_engine": what}}
-}
-
-// notServed fails a row that reaches a route that Runtime.Handler does not
-// serve yet, so no row runs a guess at a route that its phase has not built.
-func notServed(t *testing.T, route, phase string) callResult {
-	t.Helper()
-	t.Fatalf("Runtime.Handler does not serve %s until %s", route, phase)
-	return callResult{}
-}
-
 func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
 	t.Helper()
 	return d.call(t, http.MethodDelete, "/sessions/"+id, nil)

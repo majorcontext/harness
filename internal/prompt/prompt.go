@@ -52,14 +52,9 @@ var toolBatching = fmt.Sprintf("If you intend to call multiple tools and there a
 	"up to %d at a time. Otherwise you MUST wait for previous calls to "+
 	"finish first to determine the dependent values.", turn.MaxParallel)
 
-// Build returns the system prompt segments of a session in workDir: the base
+// Describe returns the system prompt segments of a session in workDir: the base
 // prompt, append_system_prompt, the tool-batching segment, the AGENTS.md
-// chain, and the skill list. With
-// no workDir it reads no file and returns only append_system_prompt. A file
-// that cannot be used is skipped.
-func Build(cfg config.Config, workDir string) []string { return Describe(cfg, workDir).Segments }
-
-// Describe returns what Build returns, with the instructions files and the
+// chain, and the skill list, with the instructions files and the
 // skills that it read.
 func Describe(cfg config.Config, workDir string) Info {
 	if workDir == "" {

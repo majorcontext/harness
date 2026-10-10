@@ -5,15 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"os"
 	"sync/atomic"
 
 	"github.com/majorcontext/harness/internal/message"
 )
 
 // Hooks holds a plugin's hook implementations. Nil fields are not subscribed
-// and never dispatched; Serve derives the manifest hook list from the non-nil
+// and never dispatched; serve derives the manifest hook list from the non-nil
 // fields automatically.
 //
 // Plugin processes stay warm for the session, so module-level caches (token
@@ -79,12 +77,6 @@ type Client struct {
 	init InitializeParams
 }
 
-// WorkspaceDir is the harness workspace (project) directory.
-func (cl *Client) WorkspaceDir() string { return cl.init.WorkspaceDir }
-
-// Config is this plugin's raw config block from the harness config file.
-func (cl *Client) Config() json.RawMessage { return cl.init.Config }
-
 // ServeURL is the base URL of this process's `harness serve` HTTP API, or
 // "" in `harness run` mode (no HTTP API to reach). See InitializeParams and
 // PROTOCOL.md's trust model section.
@@ -93,13 +85,6 @@ func (cl *Client) ServeURL() string { return cl.init.ServeURL }
 // RunToken authenticates requests to ServeURL — the same bearer token the
 // orchestrator holds for this run. Empty whenever ServeURL is empty.
 func (cl *Client) RunToken() string { return cl.init.RunToken }
-
-// SessionMessages returns the canonical message history for a session.
-func (cl *Client) SessionMessages(ctx context.Context, sessionID string) ([]message.Message, error) {
-	var resp SessionMessagesResponse
-	err := cl.c.call(ctx, methodSessionMessages, &SessionMessagesRequest{SessionID: sessionID}, &resp)
-	return resp.Messages, err
-}
 
 // MCPCall invokes a tool on one of the harness's configured MCP servers.
 func (cl *Client) MCPCall(ctx context.Context, server, tool string, args any) (*MCPCallResult, error) {
@@ -113,61 +98,6 @@ func (cl *Client) MCPCall(ctx context.Context, server, tool string, args any) (*
 	}
 	return &resp, nil
 }
-
-// Generate makes an LLM call through the harness provider layer.
-func (cl *Client) Generate(ctx context.Context, req *GenerateRequest) (*message.Message, error) {
-	var resp GenerateResponse
-	if err := cl.c.call(ctx, methodGenerate, req, &resp); err != nil {
-		return nil, err
-	}
-	return &resp.Message, nil
-}
-
-// HTTPClient returns an http.Client that stamps the harness-configured
-// headers (InitializeParams.HTTPHeaders) on every request. Plugins should
-// use it for all outbound HTTP so attribution headers are never missed.
-func (cl *Client) HTTPClient() *http.Client {
-	return &http.Client{Transport: &headerTransport{headers: cl.init.HTTPHeaders}}
-}
-
-type headerTransport struct {
-	headers map[string]string
-}
-
-func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if len(t.headers) > 0 {
-		req = req.Clone(req.Context())
-		for k, v := range t.headers {
-			if req.Header.Get(k) == "" {
-				req.Header.Set(k, v)
-			}
-		}
-	}
-	return http.DefaultTransport.RoundTrip(req)
-}
-
-// Serve runs the plugin: it speaks the protocol on stdin/stdout and blocks
-// until the harness shuts the plugin down or the stream closes. Manifest
-// hooks, tools, and protocol version are filled in from hooks; only Name
-// (and optionally Version) need to be set by the caller.
-//
-// Log to stderr — stdout belongs to the protocol.
-func Serve(m Manifest, hooks *Hooks) error {
-	if m.Name == "" {
-		return fmt.Errorf("plugin: manifest name is required")
-	}
-	if hooks == nil {
-		hooks = &Hooks{}
-	}
-	return serve(stdio{}, m, hooks)
-}
-
-// stdio adapts the process's stdin/stdout to an io.ReadWriteCloser.
-type stdio struct{}
-
-func (stdio) Read(p []byte) (int, error)  { return os.Stdin.Read(p) }
-func (stdio) Write(p []byte) (int, error) { return os.Stdout.Write(p) }
-func (stdio) Close() error                { return os.Stdout.Close() }
 
 // serve is the transport-agnostic core of Serve, factored out for tests.
 func serve(rwc io.ReadWriteCloser, m Manifest, hooks *Hooks) error {

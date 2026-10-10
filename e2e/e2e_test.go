@@ -189,15 +189,6 @@ func cleanEnv(overrides map[string]string) []string {
 
 // --- HTTP client helpers -----------------------------------------------
 
-func (p *serveProc) do(method, path string, body any) (*http.Response, []byte) {
-	p.t.Helper()
-	resp, data, err := p.send(method, path, body)
-	if err != nil {
-		p.t.Fatalf("%s %s: %v\nserve stderr:\n%s", method, path, err, p.stderr.String())
-	}
-	return resp, data
-}
-
 // send fails at waitBound plus waitMargin, so a serve process that stops
 // answering fails the call, not the whole test binary.
 func (p *serveProc) send(method, path string, body any) (*http.Response, []byte, error) {
