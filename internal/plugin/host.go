@@ -20,7 +20,7 @@ import (
 // Host.Emit and PROTOCOL.md for drop semantics.
 const defaultEventQueueSize = 256
 
-// ClientAPI is implemented by the engine to serve plugin → harness calls.
+// ClientAPI is implemented by the runtime to serve plugin → harness calls.
 type ClientAPI interface {
 	SessionMessages(ctx context.Context, req *SessionMessagesRequest) (*SessionMessagesResponse, error)
 	MCPCall(ctx context.Context, req *MCPCallRequest) (*MCPCallResult, error)
@@ -244,7 +244,7 @@ func (h *Host) Close() {
 // happens-before ordering between two events for the same plugin (e.g.
 // tool.execute.start before tool.execute.end for one call id) must call
 // Emit for them, in order, from the same goroutine — which is how the
-// engine already emits events.
+// runtime emits events.
 //
 // Plugins subscribed to events are started (lazily) by their sender
 // goroutine on its first dequeued event.

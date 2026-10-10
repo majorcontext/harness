@@ -1367,7 +1367,7 @@ func TestLoadMCPServers(t *testing.T) {
 	// masking what the config author actually wrote) — reject it
 	// loudly, naming the server, the same "cannot possibly be wired"
 	// philosophy as validateMCPServers' other checks. 0/absent still means
-	// "use the engine default".
+	// "use the runtime default".
 	t.Run("negative connect_timeout_s fails loudly", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp", "connect_timeout_s": -1}}}`)

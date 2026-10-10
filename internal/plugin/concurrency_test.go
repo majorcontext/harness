@@ -21,7 +21,7 @@ import (
 // This file is the specification for ONE property: a harness may keep
 // several requests in flight on one plugin connection at the same time.
 //
-// The property is load-bearing for parallel tool execution in the engine,
+// The property is load-bearing for parallel tool execution in the runtime,
 // which is not implemented yet: Session.runToolCalls still runs one call at
 // a time. A batch of tool calls that runs concurrently will dispatch the
 // tool.execute.before / tool.execute.after hooks concurrently too, all over

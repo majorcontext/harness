@@ -3,7 +3,7 @@ package message
 import "fmt"
 
 // Effort is a unified reasoning-effort level for one model request. It is the
-// canonical, provider-agnostic control the engine carries. Each provider
+// canonical, provider-agnostic control the runtime carries. Each provider
 // adapter maps it to that provider's own wire shape: Anthropic extended
 // thinking (a token budget), OpenAI Responses reasoning.effort, and
 // openai-compat top-level reasoning_effort.
@@ -14,7 +14,7 @@ import "fmt"
 // reasoning treat EffortOff the same as EffortUnset (send no control).
 //
 // Effort does NOT police which model accepts which level. That is a
-// provider-and-model fact the engine cannot know from the model ref alone —
+// provider-and-model fact the runtime cannot know from the model ref alone —
 // the adapter sends the requested level and the provider is the final judge.
 // A caller that must gate levels per model (a dashboard picker) holds its own
 // mapping; see the boxes bifrost catalog.

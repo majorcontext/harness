@@ -78,7 +78,7 @@ func (h host) newDriver(t *testing.T, modelURL string, extra map[string]any) dri
 type rowKind int
 
 const (
-	// rowSame: the observation equals the engine golden under testdata/contract.
+	// rowSame: the observation equals the serve golden under testdata/contract.
 	rowSame rowKind = iota
 	// rowRegolden: the runtime observation has its own golden under
 	// testdata/runtime, and the cites account for each difference.
@@ -160,7 +160,7 @@ var pendingSlots = make(chan struct{}, 4)
 
 // expectPendingFailure runs a pending row in a child test process, so its
 // failure does not fail this run, and fails when the row passes: a fix or a
-// phase has made it match the engine golden, and it must become a same row.
+// phase has made it match the serve golden, and it must become a same row.
 func expectPendingFailure(t *testing.T, row runtimeRow) {
 	t.Helper()
 	t.Parallel()
@@ -196,7 +196,7 @@ func tail(b []byte, n int) []byte {
 	return b
 }
 
-// compareSame compares obs with the engine golden of row name.
+// compareSame compares obs with the serve golden of row name.
 func compareSame(t *testing.T, name string, obs observation) {
 	t.Helper()
 	path := filepath.Join("testdata", "contract", name+".golden.json")

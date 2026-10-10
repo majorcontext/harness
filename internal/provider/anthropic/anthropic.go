@@ -220,7 +220,7 @@ func classifyErrorType(errType string) (provider.RetryableClass, bool) {
 // no distinct error type or code for this — it is a plain invalid_request_
 // error like any other bad request — so this is the one place message
 // matching is tolerated (see provider.Error's doc comment): scoped to this
-// adapter, never the engine, and gated on the structural signal available
+// adapter, never the runtime, and gated on the structural signal available
 // (HTTP 400 + invalid_request_error) before ever inspecting the message.
 var contextOverflowPattern = regexp.MustCompile(`prompt is too long: (\d+) tokens > (\d+) maximum`)
 
@@ -413,7 +413,7 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 			// ": heartbeat" every second on idle streams —
 			// maximhq/bifrost#5010). It carries no event, but it IS wire
 			// activity: hand it up between events so Next surfaces
-			// EventActivity and the engine's idle watchdog sees the
+			// EventActivity and the runtime's idle watchdog sees the
 			// stream is alive. A comment INSIDE a partially-read event
 			// (name or data already buffered) stays skipped — the event's
 			// own arrival is the activity signal there.

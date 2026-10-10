@@ -1149,4 +1149,4 @@ Each row is a difference between the runtime and the engine that remains after t
 - The wire contract of `POST /v1/boxes/{id}/sync` (2026-10-05): `409 sync_conflict` is `ErrConflict`, and `400 invalid_request`, `413 too_large`, `401`, and `403` are final; `5xx` and transport errors resend. A batch stays under 32 MiB (see Events).
 - On start, a box harness replicates every stored session through `Sync`, not only the open ones.
 - `claim_epoch` is a plain counter that boxes increments when it admits a Spawn, and the ownership comparison uses it in the same release. Boxes writes one `BootConfig` file, validates it once, and sends post-boot values such as `DATABASE_URL` as an update to that same file, with no serve-env channel; `boxinit` supervises `harness serve` in phase 5.
-- There is no comment purge. A history comment leaves when its code is rewritten or deleted; the gates stop new ones.
+- A history comment leaves when its code is rewritten or deleted, or in a comment-only cleanup that Andy approved on 2026-10-10 (harness cleanup, PRs 1-7); the gates stop new ones.

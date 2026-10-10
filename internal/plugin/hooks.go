@@ -6,7 +6,7 @@ import (
 	"github.com/majorcontext/harness/internal/message"
 )
 
-// Hook names a dispatch point in the engine. Sync hooks chain across plugins
+// Hook names a dispatch point in the runtime. Sync hooks chain across plugins
 // in config order — each plugin sees the previous plugin's mutations — and
 // every sync dispatch carries a deadline.
 type Hook string
@@ -78,7 +78,7 @@ type InitializeParams struct {
 	RunToken string `json:"run_token,omitempty"`
 }
 
-// Event is one entry in the engine's event stream.
+// Event is one entry in the runtime's event stream.
 type Event struct {
 	Type       string          `json:"type"`
 	SessionID  string          `json:"session_id,omitempty"`
@@ -138,7 +138,7 @@ type EventBatch struct {
 }
 
 // ChatParams are the mutable model request parameters. Nil fields mean "use
-// the engine default".
+// the runtime default".
 type ChatParams struct {
 	Model       message.ModelRef `json:"model,omitzero"`
 	Temperature *float64         `json:"temperature,omitempty"`

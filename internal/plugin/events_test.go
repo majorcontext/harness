@@ -12,7 +12,7 @@ import (
 
 // TestEventOrderingPerPlugin proves that, for any given call id, a
 // tool.execute.start always arrives at a plugin before the matching
-// tool.execute.end — even though the engine calls Emit for both from the
+// tool.execute.end — even though the runtime calls Emit for both from the
 // same goroutine back-to-back and the host fans events out asynchronously.
 // The event queue is sized comfortably above the total event count so the
 // run is guaranteed to be drop-free (see TestEventQueueFullDropsWithoutBlocking
@@ -58,7 +58,7 @@ func TestEventOrderingPerPlugin(t *testing.T) {
 // TestEventQueueFullDropsWithoutBlocking proves that Emit never blocks the
 // caller, even when a plugin's connection is wedged: events queue up to a
 // small bounded capacity and anything beyond that is dropped and counted,
-// rather than stalling the engine goroutine that called Emit.
+// rather than stalling the runtime goroutine that called Emit.
 //
 // The wedge is a connection nobody reads from, so the sender goroutine's
 // very first write blocks durably — inside a synctest bubble this is

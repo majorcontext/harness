@@ -86,7 +86,7 @@ func MarkPermanent(err error) error {
 
 // AsPermanent reports whether err (or any error it wraps, per errors.As) was
 // marked permanent by an adapter. Mirrors AsRetryable's shape exactly; this
-// is the ONLY sanctioned way for the engine to fail fast on a
+// is the ONLY sanctioned way for the runtime to fail fast on a
 // deterministically-unrecoverable provider error — never string-matching.
 // A PermanentError and a RetryableError are mutually exclusive: an adapter
 // never marks the same error both ways (see classifyStatus/apiError in

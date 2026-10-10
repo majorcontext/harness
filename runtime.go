@@ -96,8 +96,8 @@ type Options struct {
 	Version string
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
-	// MaxTokens caps the response of each model call of a turn, as the engine
-	// flag -max-tokens did. Zero or less: the backend default.
+	// MaxTokens caps the response of each model call of a turn.
+	// Zero or less: the backend default.
 	MaxTokens int
 }
 

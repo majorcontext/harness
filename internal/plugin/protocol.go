@@ -253,7 +253,7 @@ func (c *conn) serveRequest(msg rpcMessage) {
 // wmu across the whole frame, so two callers can never interleave bytes on
 // the stream. Two sessions already dispatch hooks to one plugin this way,
 // because Host is a box-scoped singleton. Parallel tool execution in the
-// engine will depend on the same property within ONE session: one assistant
+// runtime depends on the same property within ONE session: one assistant
 // message's tool calls will dispatch their tool.execute.before/after hooks
 // to one plugin at the same time. See PROTOCOL.md, "Concurrency", and
 // plugin/concurrency_test.go.

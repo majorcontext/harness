@@ -130,7 +130,7 @@ func startServe(t *testing.T, sessDir, configPath string) *serveProc {
 
 // startServeIn is startServe with an explicit working directory, so a test can
 // place an AGENTS.md / .agents/skills tree the served sessions will discover
-// (the engine sets each session's WorkDir to the serve process's cwd).
+// (serve sets each session's WorkDir to the serve process's cwd).
 func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc {
 	t.Helper()
 	return startServeProc(t, freeAddr, workDir, map[string]string{

@@ -17,7 +17,7 @@ import (
 // ("prompt is too long: 205102 tokens > 200000 maximum") — there is no
 // distinct error code for this on the wire, so the adapter must recognize
 // it by message shape (tolerated here, inside the adapter, never in the
-// engine) and return a classified *provider.Error the engine can act on
+// engine) and return a classified *provider.Error the runtime can act on
 // without string-matching.
 func TestContextOverflowClassified(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

@@ -68,7 +68,7 @@ func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) err
 
 // StartGoal is SetGoal with no turn limit that always admits the
 // condition: while a turn runs, the condition waits, and the goal judges
-// no turn before it, as the engine posts the condition after the turn of
+// no turn before it; the condition posts after the turn of
 // the goal tool. It fails with ErrGoalActive while a goal is active or
 // paused.
 func (a *Actor) StartGoal(ctx context.Context, condition string) error {

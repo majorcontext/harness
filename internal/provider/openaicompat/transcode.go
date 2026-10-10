@@ -417,7 +417,7 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 			writeBody(message.NeutralizeEngineContextSentinel(v.Text))
 		case *message.EngineContext:
 			// A genuine engine block on an assistant message (a plugin-built
-			// part — the engine only appends to the newest user message):
+			// part — the runtime only appends to the newest user message):
 			// render it sentinel-wrapped, matching anthropic's shared
 			// transcodeParts and openai's role-parameterized transcodeMessage
 			// so all three transcoders agree on identical canonical input. An

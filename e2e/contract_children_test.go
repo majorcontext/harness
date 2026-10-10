@@ -360,7 +360,7 @@ func TestContractChildrenEnd(t *testing.T) {
 	})
 }
 
-// The engine refuses input to a session that its DELETE canceled, so no serve
+// The serve binary refuses input to a session that its DELETE canceled, so no serve
 // golden holds these rows: they run on the runtime host only. A stop that
 // the end walk made sends no report; any other stop still reports canceled.
 func TestContractRuntimeChildReportsAfterEnd(t *testing.T) {

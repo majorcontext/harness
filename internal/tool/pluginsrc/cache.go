@@ -17,8 +17,7 @@ import (
 	"github.com/majorcontext/harness/internal/plugin"
 )
 
-// cache holds the probed manifest of each plugin, in the file format that the
-// engine wrote, so a file written by either one serves both.
+// cache holds the probed manifest of each plugin, in a JSON file.
 type cache struct {
 	Entries map[string]cacheEntry `json:"entries"`
 }

@@ -13,7 +13,7 @@ import (
 // TestStreamHTTPErrorClassification is the red-first test for GitHub issue
 // #61: an Anthropic HTTP 529 (overloaded_error), 429 (rate limit), or any
 // 5xx must come back from Stream marked provider.RetryableError so the goal
-// loop's long backoff can apply — never by the engine
+// loop's long backoff can apply — never by the runtime
 // string-matching "overloaded_error" out of the error text. Every other
 // status (400s, auth) must stay unmarked, so it keeps failing fast exactly
 // as before.
@@ -195,7 +195,7 @@ func TestStreamMidEventTruncationClassification(t *testing.T) {
 // TestStreamActivityDuringToolArgumentStreaming: wire events that queue no
 // content event — pings, input_json_delta while a tool call's arguments
 // stream, message_start — used to be swallowed inside Next's internal loop,
-// so the engine saw NOTHING between one content event and the next. The
+// so the runtime saw NOTHING between one content event and the next. The
 // engine's idle-stream watchdog kicks once per Next return; a large
 // write_file argument block streams for minutes with zero content events,
 // so a healthy request got cut at the idle timeout. Every handled wire

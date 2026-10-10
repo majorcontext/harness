@@ -168,7 +168,7 @@ func (t taskTool) spawn(ctx context.Context, in taskToolArgs) (any, error) {
 // cancel stops session id and each of its descendants, and withdraws
 // their queued inputs. The report of session id and the report of each
 // descendant reach the nearest ancestor of session id that has not ended its
-// work when the report is delivered, as the engine routed it: the parent of
+// work when the report is delivered: the parent of
 // session id, or the session of the tool when the parents between are done.
 func (t taskTool) cancel(ctx context.Context, id string, up []string) (any, error) {
 	if err := t.tree.Cancel(ctx, id, up, t.parent); err != nil {

@@ -200,7 +200,7 @@ func classifyWireCode(raw json.RawMessage) (provider.RetryableClass, bool) {
 // structural (code-based) classification below with token counts, and as
 // the sole classifier for compat deployments (self-hosted vLLM/Ollama/etc.)
 // that emit this same wording but omit the "code" field OpenAI itself sets
-// — the message-matching fallback the adapter (never the engine) tolerates.
+// — the message-matching fallback the adapter (never the runtime) tolerates.
 var (
 	contextLimitPattern  = regexp.MustCompile(`maximum context length is (\d+) tokens`)
 	contextResultPattern = regexp.MustCompile(`resulted in (\d+) tokens`)

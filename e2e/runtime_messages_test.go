@@ -22,7 +22,7 @@ func (d *runtimeDriver) MessagesQuery(t *testing.T, id, rawQuery string) callRes
 }
 
 // Bootstrap reads the newest messages. The runtime has one page route and
-// one event cursor, so the engine bootstrap envelope has no counterpart.
+// one event cursor, so the serve bootstrap envelope has no counterpart.
 func (d *runtimeDriver) Bootstrap(t *testing.T, id string, limit int) callResult {
 	t.Helper()
 	return d.callPage(t, withQuery("/sessions/"+id+"/messages", "limit", limit))
