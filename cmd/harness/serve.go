@@ -94,7 +94,7 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	bound := ln.Addr().String()
 	if unauthenticated {
 		warnUnauthenticated(logger, bound)
