@@ -37,7 +37,7 @@ type callInfo struct {
 }
 
 // callOf names a call. A backend that owns its loop reports no request size
-// and no tier or effort, as the engine logged its CLI line.
+// and no tier or effort.
 func callOf(req Request, retry int, ownsLoop bool) callInfo {
 	if ownsLoop {
 		return callInfo{sessionID: req.SessionID, model: req.Model, retry: retry}

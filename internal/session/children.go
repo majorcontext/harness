@@ -127,7 +127,7 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, b
 }
 
 // Parts returns the report as the parts of an input: the trigger sentence of
-// the engine, which is the text of a turn that only reports start, and the
+// the runtime, which is the text of a turn that only reports start, and the
 // task line, which holds the result as the Task tool of Claude Code returns
 // the last assistant text. result is the text of the child as the parent
 // reads it.

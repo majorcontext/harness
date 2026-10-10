@@ -92,7 +92,7 @@ func New(s Sessions, cfg Config) *Tree {
 	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, held: map[string]int{}, routed: map[string][]*route{}}
 }
 
-// The refusals of a spawn, with the text of the engine.
+// The refusals of a spawn.
 var (
 	errDepth   = errors.New("engine: task depth limit reached")
 	errRunning = errors.New("engine: tree concurrency limit reached")
@@ -302,7 +302,7 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // that the runtime runs, and never opens one: the end never opens a session,
 // and a parent that has stopped settles the child when it opens. A child that
 // a cancel walk marked reports to the nearest ancestor of the target that has
-// not ended its work when the report is delivered, as the engine routed it. It
+// not ended its work when the report is delivered. It
 // settles in its own parent with no report input when that ancestor is not
 // the parent. It holds that child until it has settled, so Recover never
 // settles the child with the report that the ancestor gets.

@@ -1,6 +1,6 @@
 package message
 
-// SubscriptionUsage is a provider-reported subscription limit snapshot. The engine captures it without an extra request.
+// SubscriptionUsage is a provider-reported subscription limit snapshot. The runtime captures it without an extra request.
 
 type SubscriptionUsage struct {
 	// Provider names which lane captured this snapshot: "claude" or

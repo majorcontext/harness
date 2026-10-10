@@ -1,4 +1,4 @@
-// Package provider defines the interface between the engine and model APIs.
+// Package provider defines the interface between the runtime and model APIs.
 //
 // Each adapter transcodes canonical history (package message) to its wire
 // format from scratch on every request — transcoding is stateless, which is
@@ -102,7 +102,7 @@ const (
 	// — a keep-alive ping, a tool call's arguments still streaming
 	// (input_json_delta), a message_start. Adapters surface one per such
 	// wire event instead of looping silently, so a consumer timing the
-	// gaps between Next returns (the engine's idle-stream watchdog)
+	// gaps between Next returns (the runtime's idle-stream watchdog)
 	// measures real wire activity rather than content cadence — a large
 	// tool-argument block can stream for minutes with zero content
 	// events. Consumers that only want content simply skip it.
@@ -246,8 +246,8 @@ type Stream interface {
 
 // StartupPrewarmer is an optional provider capability that prepares transport-local
 // state before the first model call. StartupPrewarmEnabled must be side-effect free;
-// the engine calls it before startup discovery, hooks, or tool assembly. Warm must
-// not emit provider events and MUST return promptly when ctx is canceled. The engine
+// the runtime calls it before startup discovery, hooks, or tool assembly. Warm must
+// not emit provider events and MUST return promptly when ctx is canceled. The runtime
 // bounds prompt waiting and session ownership at that deadline, but Go cannot forcibly
 // stop a callback that ignores cancellation.
 type StartupPrewarmer interface {

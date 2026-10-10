@@ -260,7 +260,7 @@ func settled(v protocol.Session) bool {
 // printer renders the events of a run: text as it streams, the tools of the
 // model, and a retry. With jsonOut it prints each event as one JSON line with
 // the ID of its session. It follows each task child of the run, which the
-// runtime runs, as the engine printed them through its shared callback.
+// runtime runs.
 type printer struct {
 	out, errW   io.Writer
 	jsonOut     bool

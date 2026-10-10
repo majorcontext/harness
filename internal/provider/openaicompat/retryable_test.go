@@ -123,7 +123,7 @@ func TestStreamMidChunkTruncationClassification(t *testing.T) {
 // TestStreamActivityDuringToolArgumentStreaming mirrors internal/provider/anthropic's
 // test of the same name: chunks whose only content is tool_call argument
 // deltas (buffered until the finish chunk) must surface as EventActivity so
-// the engine's idle-stream watchdog sees the wire is alive.
+// the runtime's idle-stream watchdog sees the wire is alive.
 func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
 	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

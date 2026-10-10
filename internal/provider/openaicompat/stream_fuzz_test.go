@@ -87,7 +87,7 @@ func checkFuzzEvent(t *testing.T, ev provider.Event) {
 // checkFuzzDoneMessage asserts a Done event's message is well-formed per the
 // message package's own invariants. Normalize is the package's documented
 // ingest-time well-formedness gate (see Message.Normalize's doc comment):
-// every message the engine accepts passes through it before it is safe to
+// every message the runtime accepts passes through it before it is safe to
 // marshal. Requiring a clean Marshal after Normalize is exactly the
 // guarantee the message package promises for any message a provider adapter
 // can produce, not an invented deeper semantic check.

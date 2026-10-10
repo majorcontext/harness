@@ -427,7 +427,7 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 // for a reasoning turn that would otherwise raise it.
 //
 // harness's own accounting is untouched — this only ever mutates the wire
-// copy (out), never req or the engine's internal MaxTokens/Temperature/TopP
+// copy (out), never req or the runtime's internal MaxTokens/Temperature/TopP
 // bookkeeping, and the fields it can clear are all optional on the
 // Responses API; nothing here can drop a required field like model or
 // input.

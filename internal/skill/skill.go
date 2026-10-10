@@ -2,8 +2,8 @@
 // Skills specification (agentskills.io/specification). A skill is a directory
 // containing a SKILL.md file: YAML frontmatter followed by a Markdown body.
 //
-// This package covers parsing and validation only — there is no engine
-// integration here. It is built for the specification's progressive-disclosure
+// This package covers parsing and validation only; it has no runtime
+// integration. It is built for the specification's progressive-disclosure
 // contract:
 //
 //   - Stage 1 (cheap metadata scan): Load reads only the frontmatter and

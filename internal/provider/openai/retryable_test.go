@@ -255,7 +255,7 @@ func TestStreamMidEventTruncationClassification(t *testing.T) {
 // TestStreamActivityDuringSilentWireEvents mirrors internal/provider/anthropic's
 // TestStreamActivityDuringToolArgumentStreaming: wire events that queue no
 // content (response.created, unrecognized delta kinds) must surface as
-// EventActivity so the engine's idle-stream watchdog sees the wire is alive.
+// EventActivity so the runtime's idle-stream watchdog sees the wire is alive.
 func TestStreamActivityDuringSilentWireEvents(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

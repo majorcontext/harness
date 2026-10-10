@@ -656,7 +656,7 @@ func TestGroupByConversation(t *testing.T) {
 	}
 }
 
-// apiMessage and apiEvent are the messages and the events of the engine wire,
+// apiMessage and apiEvent are the messages and the events of the serve wire,
 // which the normalizer tests decode.
 type apiMessage struct {
 	ID        string `json:"id"`

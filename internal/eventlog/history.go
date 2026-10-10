@@ -49,7 +49,7 @@ func IsReport(parts []Part) bool {
 // turn at an item boundary: one numbered block that tells the model to
 // address the inputs and then to continue its task, and then the pinned
 // segment that holds the task lines of the reports. A report is not in the
-// block, as the engine pinned its task lines.
+// block; its task line is pinned.
 func SteerMessages(inputs [][]Part) []Message {
 	var ops, reports [][]Part
 	for _, parts := range inputs {
@@ -119,7 +119,7 @@ func pinMessage(reports [][]Part) Message {
 	return Message{Role: RoleUser, Parts: []Part{{Type: PartEngineContext, Text: TaskSegment(lines)}}}
 }
 
-// TaskSegment is the segment of the engine that holds the task lines of
+// TaskSegment is the segment that holds the task lines of
 // reports: one line for each report between "[tasks:" and "]".
 func TaskSegment(lines []string) string {
 	return "[tasks:\n- " + strings.Join(lines, "\n- ") + "\n]"
@@ -220,7 +220,7 @@ func (s *State) remember(env Envelope) {
 // movePins returns h with each pinned segment after the other messages, in
 // their order, and the start of the running turn less the pins that moved
 // from before it. A pin that a compaction keeps follows the last message of
-// the kept history, as the engine clamped its slot to the end.
+// the kept history; its slot is clamped to the end.
 func movePins(h []entry, turnAt int, seq uint64) ([]entry, int) {
 	out := make([]entry, 0, len(h))
 	var pins []entry

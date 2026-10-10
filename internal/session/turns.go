@@ -324,7 +324,7 @@ func withError(e eventlog.TurnEnded, msg string) eventlog.TurnEnded {
 }
 
 // errorClass types a failure that is not a usage limit, in the order that the
-// engine classified it: a rate limit that outlasted the retries counts as a
+// runtime classifies it: a rate limit that outlasted the retries counts as a
 // wall of the account, any other retryable class keeps its name, and an error
 // that a retry cannot resolve is permanent.
 func errorClass(err error) eventlog.ErrorClass {

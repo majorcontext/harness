@@ -55,7 +55,7 @@ func TestContextOverflowClassifiedStructurally(t *testing.T) {
 // TestContextOverflowClassifiedWithoutCode covers a compat deployment (some
 // self-hosted vLLM/Ollama-style backend) that returns the same message shape
 // but omits the "code" field entirely — the adapter's message-matching
-// fallback (tolerated here, never in the engine) must still classify it.
+// fallback (tolerated here, never in the runtime) must still classify it.
 func TestContextOverflowClassifiedWithoutCode(t *testing.T) {
 	c := testClient(t, "vllm", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

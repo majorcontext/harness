@@ -423,7 +423,7 @@ func TestTranscodeEmptyHistoryFails(t *testing.T) {
 
 // TestTranscodeOrphanToolUseMidHistory covers an orphan tool_use at the
 // transcoder level: an assistant tool_use with no result at all in history
-// (the turn died before the engine could execute it, or append one),
+// (the turn died before the runtime could execute it, or append one),
 // buried mid-transcript, followed by
 // ordinary later turns. Before the transcoder called
 // message.NormalizeForWire, this produced a wire request with a
@@ -831,7 +831,7 @@ func TestTranscodeCompactionDoubleRoleUserMerges(t *testing.T) {
 // TestTranscodeMergesToolResultsWithInjectedUserText pins the coupling
 // mid-turn prompt-queue injection depends on (the tool-call boundary queue
 // drain): after tool results
-// land, the engine appends a REAL RoleUser message straight into history —
+// land, the runtime appends a REAL RoleUser message straight into history —
 // immediately after the RoleTool results message, with no assistant turn in
 // between. Both RoleTool and RoleUser transcode to wire role "user" here, so
 // without the adjacent-same-role merge below (~line 159), this shape would
@@ -847,7 +847,7 @@ func TestTranscodeMergesToolResultsWithInjectedUserText(t *testing.T) {
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 			&message.ToolCall{CallID: "toolu_abc", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)},
 		}},
-		// The tool-results message the engine appends after executing the
+		// The tool-results message the runtime appends after executing the
 		// call.
 		message.Message{Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "toolu_abc", Content: message.Parts{

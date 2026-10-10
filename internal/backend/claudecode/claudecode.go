@@ -349,10 +349,10 @@ func (r *run) prompt(req turn.Request) (input, error) {
 
 // startParts returns the parts of the line that starts a turn. The task lines
 // of the reports of children follow in one segment, after the text of the
-// other inputs, as the engine appended the reports that waited for the turn;
+// other inputs, after the reports that waited for the turn;
 // the text of a report is left out, because its task line holds the result.
 // When only reports start the turn, the segment follows the trigger sentence
-// of the engine.
+// of the runtime.
 func startParts(inputs []eventlog.Message) []eventlog.Part {
 	report := func(m eventlog.Message) bool {
 		return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartTaskReport })

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// processPath is the path of a process route: the engine serves /process
+// processPath is the path of a process route: the serve binary serves /process
 // and the runtime serves /processes.
 func processPath(root, name, rest string) string {
 	if name == "" {

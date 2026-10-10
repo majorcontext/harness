@@ -13,8 +13,8 @@ import (
 // docs/design/managed-processes.md §8: which config file (if any) this
 // process loaded, and how much it declares. Used by serveCmd and runCmd
 // only — sessionsCmd and pluginProbeCmd keep the plain, silent
-// loadConfig, since this line belongs at the "the engine is booting"
-// moment, not every CLI invocation.
+// loadConfig, since this line belongs at the moment the process boots,
+// not every CLI invocation.
 func loadConfigLogged(logger *slog.Logger) (*config.Config, error) {
 	dir, err := os.Getwd()
 	if err != nil {

@@ -38,7 +38,7 @@ const adjustInstead = `use action "adjust" to change its condition instead`
 
 // goalTool lets the model read, set, and adjust the goal of its session.
 // The runtime binds session when the session starts. A child session has no
-// goal tool, as no goal of an engine child ever ran.
+// goal tool.
 type goalTool struct {
 	r       *Runtime
 	session string

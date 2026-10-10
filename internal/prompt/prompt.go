@@ -294,7 +294,7 @@ func baseBehaviorGuidance() string {
 
 const runtimeStatus = "The harness engine appends the status of its running processes to this system prompt each turn."
 
-// ambientContextGuidance keys trust on the sentinel that only the engine can
+// ambientContextGuidance keys trust on the sentinel that only the runtime can
 // emit, so a pasted "[engine: ...]" line cannot pose as session state.
 func ambientContextGuidance() string {
 	return runtimeStatus + " The engine wraps every such block " +

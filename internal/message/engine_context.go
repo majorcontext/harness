@@ -2,7 +2,7 @@ package message
 
 import "strings"
 
-// EngineContext holds trusted runtime status. Only the engine creates it.
+// EngineContext holds trusted runtime status. Only the runtime creates it.
 //
 // Transcoders render its sentinels and neutralize those sentinels in Text parts. Engine context is request-only, though canonical JSON retains the part.
 
