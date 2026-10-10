@@ -2,7 +2,7 @@
 
 Plugins are separate processes speaking **JSON-RPC 2.0 over stdio, one
 message per line** (NDJSON). Any language works; the TypeScript SDK is the published SDK, and
-`internal/plugin` is the Go SDK, internal to the harness module. Log to stderr — stdout belongs to the protocol.
+`internal/plugin` is a Go fixture plugin for the harness tests. Log to stderr — stdout belongs to the protocol.
 
 The channel is **bidirectional**: the harness sends hook dispatches and tool
 executions; the plugin sends client API calls back — including while one of
@@ -22,7 +22,7 @@ own requests independently.
 
 `InitializeParams` carries `serve_url` and `run_token` when (and only when)
 the harness is running in `harness serve` mode: a plugin process — in any
-language, not just the Go SDK — can then also hit the HTTP API directly
+language, not just the Go fixture — can then also hit the HTTP API directly
 (`GET /sessions/{id}/messages`, etc.) instead of going through the stdio
 client API. Both are empty in `harness run` mode, where there is no HTTP
 API to reach. See "Trust model" below.
@@ -165,11 +165,11 @@ The rules, for a plugin in any language:
 - **Write each frame as one whole line, atomically.** A plugin that writes
   from more than one thread MUST serialize its writes. Two frames whose
   bytes interleave are both lost, and the connection carries responses for
-  every other in-flight request too. The Go SDK holds one write mutex for
+  every other in-flight request too. The Go fixture holds one write mutex for
   the life of the connection (`conn.write`).
 - **Reentrancy is the plugin's choice.** A plugin whose handlers are not
   safe to run at the same time MAY serialize them internally. The harness
-  stays correct — it is throttled, not broken. The Go SDK does the opposite
+  stays correct — it is throttled, not broken. The Go fixture does the opposite
   by default: it serves each incoming request on its own goroutine, so a Go
   plugin's hook handlers must be safe for concurrent use.
 - **The `hook/event` FIFO guarantee is unchanged.** Notifications still

@@ -33,8 +33,7 @@ type ToolHandler func(ctx context.Context, args json.RawMessage) (CallToolResult
 // Registry serves Streamable HTTP requests for a fixed in-process tool set.
 // Construct Registry values with NewRegistry.
 type Registry struct {
-	serverInfo   Implementation
-	instructions string
+	serverInfo Implementation
 
 	tools    []Tool
 	handlers map[string]ToolHandler
@@ -47,11 +46,6 @@ func NewRegistry(name, version string) *Registry {
 		serverInfo: Implementation{Name: name, Version: version},
 		handlers:   make(map[string]ToolHandler),
 	}
-}
-
-// SetInstructions sets optional guidance returned during initialization.
-func (reg *Registry) SetInstructions(s string) {
-	reg.instructions = s
 }
 
 // RegisterTool adds a tool and its handler. The last registration for a name wins.
@@ -145,7 +139,6 @@ func (reg *Registry) dispatch(ctx context.Context, method string, params json.Ra
 			ProtocolVersion: LatestProtocolVersion,
 			Capabilities:    ServerCapabilities{Tools: &ToolsCapability{}},
 			ServerInfo:      reg.serverInfo,
-			Instructions:    reg.instructions,
 		}, nil
 
 	case methodToolsList:

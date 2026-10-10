@@ -56,8 +56,8 @@ type Spec struct {
 type Options struct {
 	HarnessVersion string
 	WorkspaceDir   string
-	// HTTPHeaders are stamped on all plugin outbound HTTP traffic via
-	// Client.HTTPClient (e.g. workspace attribution headers).
+	// HTTPHeaders are passed to every plugin in InitializeParams for its
+	// outbound HTTP traffic (e.g. workspace attribution headers).
 	HTTPHeaders map[string]string
 	// ServeURL and RunToken are forwarded verbatim into every plugin's
 	// InitializeParams (see that type's doc comment for the trust model).
