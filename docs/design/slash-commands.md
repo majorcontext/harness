@@ -279,8 +279,7 @@ the work.
 
 **Some rejections are pure topology.** `rejectManagedChildTurn`
 (`server/handlers.go`) refuses a session whose `TaskParentID` is set and
-names `POST /session/{id}/send` instead (see
-`design/session-send-unification.md`). That is routing, not an engine
+names `POST /session/{id}/send` instead. That is routing, not an engine
 rule. The engine has no opinion about it and should not grow one.
 
 **The concurrency shape differs per verb.** `SetModel` does not take the

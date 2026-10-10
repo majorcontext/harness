@@ -25,15 +25,9 @@ a standalone document.
 | [architecture.md](architecture.md) | Target architecture and migration phases |
 | [context-compaction.md](design/context-compaction.md) | Automatic and manual context compaction |
 | [codex-websocket-chaining.md](design/codex-websocket-chaining.md) | Codex response chaining and startup prewarm |
-| [event-sink.md](design/event-sink.md) | Outbound journal forwarding to a configured HTTP receiver |
-| [fast-transcript-bootstrap.md](design/fast-transcript-bootstrap.md) | Windowed, index-backed transcript bootstrap for a non-resident session |
 | [fleet-model.md](design/fleet-model.md) | Task lineage, fleet state, and provider exhaustion |
 | [git-changes.md](design/git-changes.md) | GET /git/changes: constant-cost diff computation without touching the index |
-| [goal-retry-directive-reuse.md](design/goal-retry-directive-reuse.md) | Durable directive reuse across goal retries |
-| [journal-snapshotting.md](design/journal-snapshotting.md) | Journal snapshot format and recovery |
-| [live-event-tip-cursor.md](design/live-event-tip-cursor.md) | Backlog-free SSE resume cursor for the console bootstrap read |
 | [managed-processes.md](design/managed-processes.md) | Box-scoped managed process lifecycle |
 | [mcp-lazy-tools.md](design/mcp-lazy-tools.md) | Deferred MCP schema design |
 | [nested-instruction-loading.md](design/nested-instruction-loading.md) | Project instruction discovery and truncation |
-| [session-send-unification.md](design/session-send-unification.md) | Single-owner session.send/prompt_async routing for a root and a managed child |
 | [slash-commands.md](design/slash-commands.md) | Human-invoked control and prompt commands in one registry |
