@@ -17,31 +17,20 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "reasoning",
-            "text": "Let me reason."
-          },
-          {
-            "type": "text",
-            "text": "Let me check that."
-          },
-          {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
-            "arguments": {
-              "command": "echo hi"
-            }
+            "name": "Task",
+            "arguments": {}
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "tool",
+        "role": "assistant",
         "parts": [
           {
-            "type": "tool_result",
-            "call_id": "toolu#1",
-            "content": "hi\n"
+            "type": "reasoning",
+            "text": "Main thinking."
           }
         ]
       },
@@ -51,38 +40,43 @@
         "parts": [
           {
             "type": "text",
-            "text": "It printed hi."
+            "text": "Subagent text."
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Main text."
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "subagent done"
           }
         ]
       }
     ]
   },
   "calls": {
-    "claude_invocations.a": {
-      "status": 200,
-      "body": [
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        }
-      ]
-    },
     "get_session.a": {
       "status": 200,
       "body": {
         "context": {
-          "tokens": 12,
+          "tokens": 14,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
+        "head_seq": 12,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -101,8 +95,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 12,
-          "output_tokens": 8
+          "input_tokens": 14,
+          "output_tokens": 6
         }
       }
     },
@@ -112,35 +106,40 @@
         "stream": [
           {
             "item": "assistant",
-            "reasoning": {
-              "pieces": [
-                "Let me ",
-                "reason."
-              ],
-              "text": "Let me reason."
-            },
-            "text": {
-              "pieces": [
-                "Let me ",
-                "check ",
-                "that."
-              ],
-              "text": "Let me check that."
-            },
-            "tool_call": "Bash"
+            "tool_call": "Task"
           },
           {
-            "item": "tool"
+            "item": "assistant",
+            "reasoning": {
+              "pieces": [
+                "Main ",
+                "thinking."
+              ],
+              "text": "Main thinking."
+            }
+          },
+          {
+            "item": "assistant",
+            "parent": "toolu#1",
+            "text": {
+              "pieces": [
+                "Subagent text."
+              ],
+              "text": "Subagent text."
+            }
           },
           {
             "item": "assistant",
             "text": {
               "pieces": [
-                "It printed ",
-                "hi."
+                "Main ",
+                "text."
               ],
-              "text": "It printed hi."
+              "text": "Main text."
             }
+          },
+          {
+            "item": "tool"
           }
         ]
       }

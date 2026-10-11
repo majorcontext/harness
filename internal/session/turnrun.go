@@ -28,6 +28,11 @@ type turnRun struct {
 func (t *turnRun) Item(m eventlog.Message) error {
 	id := t.item
 	t.item = ""
+	return t.ItemAs(id, m)
+}
+
+// ItemAs records m under id, or a new ID when id is "".
+func (t *turnRun) ItemAs(id string, m eventlog.Message) error {
 	_, err := call(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.item(t.r, id, m)) })
 	return err
 }
@@ -45,9 +50,15 @@ func (t *turnRun) Attach(mediaType string, data []byte) (eventlog.Part, error) {
 
 // Started announces a new item and makes it the item of the next Item.
 func (t *turnRun) Started() string {
-	t.item = newID("item")
-	t.a.frame(protocol.KindItemStarted, protocol.ItemFrame{ItemID: t.item, TurnID: t.r.id})
+	t.item = t.Announce()
 	return t.item
+}
+
+// Announce announces a new item that only ItemAs records.
+func (t *turnRun) Announce() string {
+	id := newID("item")
+	t.a.frame(protocol.KindItemStarted, protocol.ItemFrame{ItemID: id, TurnID: t.r.id})
+	return id
 }
 
 // Delta streams d into the item itemID.
