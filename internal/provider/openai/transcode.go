@@ -423,7 +423,7 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 
 // applyOmitResponseParams clears each field named in omitParams so its
 // omitempty tag drops it from the marshaled request — the same allowlist
-// config.OmitResponseParamValues validates. Applied last, it always wins
+// that Provider.OmitResponseParams validates. Applied last, it always wins
 // over every earlier adjustment (e.g. the reasoning-floor bump raising
 // MaxOutputTokens): an entry that lists max_output_tokens sends none, even
 // for a reasoning turn that would otherwise raise it.
