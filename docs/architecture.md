@@ -136,7 +136,7 @@ func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command men
 // end of its ctx with context.Cause(ctx). When the ctx of the first call ends,
 // it cancels every run and kills the processes, and does not wait for a tool
 // that ignores ctx. A session that Sync rejected for good does not fail
-// Close; SyncStopped reports it.
+// Close; SyncStopped reports it. A model, plugin, or MCP teardown that the ctx cuts short also returns context.Cause(ctx).
 func (r *Runtime) Close(ctx context.Context) error
 
 // CatchUp replicates every stored session through Sync, opening none. A box harness calls it at start.
@@ -146,10 +146,10 @@ func (r *Runtime) SyncStopped() bool
 // ProbePlugins probes each configured plugin, refreshes the manifest cache only before the first Create or Open, and returns each plugin with its tools and hooks.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 
-// Session is a handle on one running session. Open returns the same handle for a session until it stops. It stops for good at Done; call Open to run the session again.
+// Session is a handle on one running session. Open returns the same handle for a session until its Done closes: the runtime forgets the session and closes Done in one step. It stops for good at Done; call Open to run the session again.
 func (s *Session) ID() string
 func (s *Session) Done() <-chan struct{} // closes when the session stops on this runtime
-func (s *Session) Err() error            // nil before Done; then matches ErrSessionNotOwned and the cause: ErrSessionReleased, ErrSessionEnded, or ErrOwnershipLost
+func (s *Session) Err() error            // nil before Done; then matches ErrSessionNotOwned and one cause: ErrSessionReleased, ErrSessionEnded, or ErrOwnershipLost; a Store failure or a Sync rejection that stops the session matches ErrSessionNotOwned and that error instead
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error

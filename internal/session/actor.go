@@ -132,8 +132,10 @@ type Config struct {
 	Base context.Context
 	// Go runs a goroutine that the runtime waits for at shutdown.
 	Go func(func())
-	// Done runs once after the actor stops.
-	Done func()
+	// Done runs once after the actor stops, with the function that closes
+	// the Done channel of the actor. The runtime forgets the session and calls
+	// closeDone in one step, so Open returns the actor until its Done closes.
+	Done func(closeDone func())
 }
 
 // View is an immutable snapshot that the actor publishes after each append.
@@ -442,8 +444,7 @@ func (a *Actor) finish() {
 		slog.Warn("harness: release ownership", "session", a.cfg.ID, "err", a.releaseErr)
 	}
 	a.settleCause()
-	a.cfg.Done()
-	close(a.done)
+	a.cfg.Done(func() { close(a.done) })
 }
 
 // settleCause gives a stop that no request or revocation explained its cause:

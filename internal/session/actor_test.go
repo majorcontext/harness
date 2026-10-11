@@ -61,7 +61,7 @@ func actorConfig(t *testing.T, log Storage, own Ownership, b turn.Backend) Confi
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	return Config{ID: "s1", Store: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func() {},
+	return Config{ID: "s1", Store: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() },
 		Prompt: func() string { return "" }}
 }
 

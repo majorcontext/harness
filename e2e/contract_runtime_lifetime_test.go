@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -77,6 +78,11 @@ func TestContractRuntimeLifetime(t *testing.T) {
 		{"a_lost_grant_stops_the_session_with_cause_ownership_lost", rowALostGrantStopsTheSessionWithCauseOwnershipLost},
 		{"events_end_with_the_stop_cause", rowEventsEndWithTheStopCause},
 		{"open_after_a_stop_returns_a_new_handle", rowOpenAfterAStopReturnsANewHandle},
+		{"open_returns_the_same_handle_until_done_closes", rowOpenReturnsTheSameHandleUntilDoneCloses},
+		{"an_append_conflict_stops_the_session_with_cause_ownership_lost", rowAnAppendConflictStopsTheSessionWithCauseOwnershipLost},
+		{"a_stale_sync_epoch_stops_the_session_with_cause_ownership_lost", rowAStaleSyncEpochStopsTheSessionWithCauseOwnershipLost},
+		{"a_store_failure_stops_the_session_with_not_owned_and_the_failure", rowAStoreFailureStopsTheSessionWithNotOwnedAndTheFailure},
+		{"a_sync_rejection_stops_the_session_with_not_owned_and_the_rejection", rowASyncRejectionStopsTheSessionWithNotOwnedAndTheRejection},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -173,5 +179,135 @@ func rowOpenAfterAStopReturnsANewHandle(t *testing.T) {
 	case <-second.Done():
 		t.Fatal("the new handle is done")
 	default:
+	}
+}
+
+func rowOpenReturnsTheSameHandleUntilDoneCloses(t *testing.T) {
+	r := lifetimeRuntime(t, nil)
+	s := lifetimeSession(t, r)
+	same, err := r.Open(t.Context(), "s1")
+	if err != nil || same != s {
+		t.Fatalf("Open = %p, %v; want the handle %p", same, err, s)
+	}
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		_ = r.End(t.Context(), "s1")
+	}()
+	for {
+		var doneBefore bool
+		select {
+		case <-s.Done():
+			doneBefore = true
+		default:
+		}
+		got, err := r.Open(t.Context(), "s1")
+		if err != nil {
+			break
+		}
+		if got != s {
+			select {
+			case <-s.Done():
+			default:
+				t.Fatal("Open returned a new handle while the old one was not done")
+			}
+			break
+		}
+		if doneBefore {
+			t.Fatal("Open returned the old handle after Done closed")
+		}
+	}
+	<-ended
+}
+
+// flaky is a Store whose Append fails with err once armed.
+type flaky struct {
+	harness.Store
+	armed atomic.Bool
+	err   error
+}
+
+func (f *flaky) Append(ctx context.Context, id string, seq uint64, recs ...[]byte) error {
+	if f.armed.Load() {
+		return f.err
+	}
+	return f.Store.Append(ctx, id, seq, recs...)
+}
+
+func submitAfterArming(t *testing.T, st *flaky) *harness.Session {
+	t.Helper()
+	s := lifetimeSession(t, lifetimeRuntimeOn(t, st, nil))
+	st.armed.Store(true)
+	_, _ = s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
+	awaitDone(t, s)
+	return s
+}
+
+func rowAnAppendConflictStopsTheSessionWithCauseOwnershipLost(t *testing.T) {
+	st := &flaky{Store: harness.NewMemStore(), err: harness.ErrConflict}
+	s := submitAfterArming(t, st)
+	for _, w := range []error{harness.ErrOwnershipLost, harness.ErrSessionNotOwned, harness.ErrConflict} {
+		if !errors.Is(s.Err(), w) {
+			t.Errorf("Err = %v, want a match for %v", s.Err(), w)
+		}
+	}
+}
+
+func rowAStoreFailureStopsTheSessionWithNotOwnedAndTheFailure(t *testing.T) {
+	disk := errors.New("disk full")
+	st := &flaky{Store: harness.NewMemStore(), err: disk}
+	s := submitAfterArming(t, st)
+	for _, w := range []error{harness.ErrSessionNotOwned, disk} {
+		if !errors.Is(s.Err(), w) {
+			t.Errorf("Err = %v, want a match for %v", s.Err(), w)
+		}
+	}
+	for _, other := range []error{harness.ErrSessionReleased, harness.ErrSessionEnded, harness.ErrOwnershipLost} {
+		if errors.Is(s.Err(), other) {
+			t.Errorf("Err = %v, matches %v too", s.Err(), other)
+		}
+	}
+}
+
+// rejecting is a Sync that rejects every batch with err.
+type rejecting struct{ err error }
+
+func (r rejecting) Deliver(context.Context, protocol.SyncBatch) (protocol.SyncAck, error) {
+	return protocol.SyncAck{}, r.err
+}
+
+func syncedSession(t *testing.T, sync harness.Sync) *harness.Session {
+	t.Helper()
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Sync: sync, Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	s := lifetimeSession(t, r)
+	awaitDone(t, s)
+	return s
+}
+
+func rowAStaleSyncEpochStopsTheSessionWithCauseOwnershipLost(t *testing.T) {
+	s := syncedSession(t, rejecting{harness.ErrStaleEpoch})
+	for _, w := range []error{harness.ErrOwnershipLost, harness.ErrSessionNotOwned} {
+		if !errors.Is(s.Err(), w) {
+			t.Errorf("Err = %v, want a match for %v", s.Err(), w)
+		}
+	}
+}
+
+func rowASyncRejectionStopsTheSessionWithNotOwnedAndTheRejection(t *testing.T) {
+	s := syncedSession(t, rejecting{harness.ErrSyncRejected})
+	for _, w := range []error{harness.ErrSessionNotOwned, harness.ErrSyncRejected} {
+		if !errors.Is(s.Err(), w) {
+			t.Errorf("Err = %v, want a match for %v", s.Err(), w)
+		}
+	}
+	for _, other := range []error{harness.ErrSessionReleased, harness.ErrSessionEnded, harness.ErrOwnershipLost} {
+		if errors.Is(s.Err(), other) {
+			t.Errorf("Err = %v, matches %v too", s.Err(), other)
+		}
 	}
 }
