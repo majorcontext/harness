@@ -33,7 +33,7 @@ type storeReads struct {
 }
 
 func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) {
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	v, err := OpenView(ctx, s.st, id)
@@ -45,7 +45,7 @@ func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) 
 
 // Session returns the session with the IDs of the queued inputs of the log and then those of the queue.
 func (s storeReads) Session(ctx context.Context, id string) (protocol.Session, error) {
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	rd, err := s.open(ctx, id)
@@ -74,7 +74,7 @@ func (s storeReads) waiting(ctx context.Context, id string) ([]protocol.QueuedIn
 // Inputs returns the queued inputs of the log and then those of the queue. A session with no log lists those of
 // the queue alone.
 func (s storeReads) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	rd, err := s.open(ctx, id)

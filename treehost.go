@@ -59,7 +59,7 @@ func (h host) Created(ctx context.Context, id string) (eventlog.SessionCreated, 
 
 // valid reports a session ID that no store holds as a session with no log.
 func (h host) valid(id string) error {
-	if checkName("session", id) != nil {
+	if CheckName(id) != nil {
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	}
 	return nil

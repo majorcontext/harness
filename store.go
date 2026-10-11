@@ -2,12 +2,8 @@
 package harness
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"io"
-	"strings"
 
 	"github.com/majorcontext/harness/internal/session"
 )
@@ -37,19 +33,3 @@ type Record struct {
 // ErrConflict reports an Append whose expectedSeq is not the session head,
 // or a SyncBatch whose records differ from the records of the receiver.
 var ErrConflict = session.ErrConflict
-
-func checkName(kind, name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
-		return fmt.Errorf("harness: invalid %s %q", kind, name)
-	}
-	return nil
-}
-
-func checkRecords(records [][]byte) error {
-	for _, r := range records {
-		if len(r) == 0 || bytes.IndexByte(r, '\n') >= 0 {
-			return errors.New("harness: record is empty or contains a newline")
-		}
-	}
-	return nil
-}

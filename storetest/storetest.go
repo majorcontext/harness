@@ -317,12 +317,18 @@ func testUnknownSessionIsEmpty(t *testing.T, st store) {
 }
 
 func testInvalidSessionRejected(t *testing.T, st store) {
-	for _, id := range []string{"", "..", "a/b"} {
+	for _, id := range []string{"", ".", "..", "a/b", `a\b`, "a\x00b"} {
 		if _, err := st.Head(ctx, id); err == nil {
 			t.Errorf("Head(%q) succeeded", id)
 		}
 		if _, err := st.Read(ctx, id, 0, 10); err == nil {
 			t.Errorf("Read(%q) succeeded", id)
+		}
+		if err := st.PutBlob(ctx, id, "k", strings.NewReader("x")); err == nil {
+			t.Errorf("PutBlob(session %q) succeeded", id)
+		}
+		if err := st.PutBlob(ctx, "a", id, strings.NewReader("x")); err == nil {
+			t.Errorf("PutBlob(key %q) succeeded", id)
 		}
 	}
 }
@@ -359,6 +365,15 @@ func testBlobRoundTrip(t *testing.T, st store) {
 	}
 	if _, err := st.GetBlob(ctx, "a", "absent"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("GetBlob(absent) = %v, want fs.ErrNotExist", err)
+	}
+	if _, err := st.GetBlob(ctx, "a", "../k"); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("GetBlob with an invalid key = %v, want a name error", err)
+	}
+	if _, err := st.GetBlob(ctx, "", "k"); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("GetBlob with an invalid session = %v, want a name error", err)
+	}
+	if err := st.Append(ctx, "../a", 0, rec("1")); err == nil || errors.Is(err, harness.ErrConflict) {
+		t.Errorf("Append with an invalid session = %v, want a name error", err)
 	}
 }
 

@@ -32,10 +32,10 @@ func (m *MemStore) Append(ctx context.Context, session string, expectedSeq uint6
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := checkName("session", session); err != nil {
+	if err := CheckName(session); err != nil {
 		return err
 	}
-	if err := checkRecords(records); err != nil {
+	if err := CheckRecords(records); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -68,7 +68,7 @@ func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, li
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := checkName("session", session); err != nil {
+	if err := CheckName(session); err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
@@ -87,7 +87,7 @@ func (m *MemStore) Head(ctx context.Context, session string) (uint64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if err := checkName("session", session); err != nil {
+	if err := CheckName(session); err != nil {
 		return 0, err
 	}
 	m.mu.Lock()
@@ -120,10 +120,10 @@ func (m *MemStore) PutBlob(ctx context.Context, session, key string, r io.Reader
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := checkName("session", session); err != nil {
+	if err := CheckName(session); err != nil {
 		return err
 	}
-	if err := checkName("blob key", key); err != nil {
+	if err := CheckName(key); err != nil {
 		return err
 	}
 	b, err := io.ReadAll(r)
@@ -139,6 +139,12 @@ func (m *MemStore) PutBlob(ctx context.Context, session, key string, r io.Reader
 // GetBlob implements Store.
 func (m *MemStore) GetBlob(ctx context.Context, session, key string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := CheckName(session); err != nil {
+		return nil, err
+	}
+	if err := CheckName(key); err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
