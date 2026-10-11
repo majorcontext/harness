@@ -21,7 +21,7 @@ a standalone document.
 
 | Design | Subject |
 |---|---|
-| [architecture.md](architecture.md) | Target architecture and migration phases |
+| [architecture.md](architecture.md) | Architecture, wire contract, and the rules that bind changes |
 | [context-compaction.md](design/context-compaction.md) | Automatic and manual context compaction |
 | [codex-websocket-chaining.md](design/codex-websocket-chaining.md) | Codex response chaining and startup prewarm |
 | [fleet-model.md](design/fleet-model.md) | Task lineage, fleet state, and provider exhaustion |

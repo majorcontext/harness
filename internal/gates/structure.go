@@ -39,7 +39,7 @@ var providerOwners = []string{
 // the spec, each with the dated reason. An entry that stops being a violation
 // fails, so the list shrinks to nothing.
 var providerAllow = map[string]string{
-	"modeltool.go#billing":            "2026-10-08: billing of the model tool names the claude-code and codex families; Built-in tools gives the billing by provider, while Four rules, 3, the Problem table and the CI gates Structure row list no such place, so the replacement (config sets the billing of each provider entry) waits for a spec decision",
+	"modeltool.go#billing":            "2026-10-08: billing of the model tool names the claude-code and codex families; Built-in tools gives the billing by provider, while Four rules, 3 and the CI gates Structure row list no such place, so the replacement (config sets the billing of each provider entry) waits for a spec decision",
 	"cmd/harness/runline.go#refuseOn": "2026-10-08: harness run tests for the claude-code provider to refuse an unknown /name, as the engine did; rule 3 forbids the name and no spec text lists this place, so the replacement (a capability of the backend) waits for a spec decision",
 }
 

@@ -1,0 +1,15 @@
+builtin-commands-rows The builtin_commands rows pin the receipt, the record, and the routes of a typed command.
+child-report-segment A child report to a busy parent reaches the model as the tasks segment.
+drain-two-messages A drain that holds a prompt and a report gives two messages.
+external-items-complete An item of a third-party harness becomes an item.completed record.
+goal-evaluator-prompt The goal evaluator prompt has a form for met, not_met, and impossible.
+goal-tool-wording The goal tool text and errors carry the engine: prefix.
+later-send-not-refused A send to a child after a tree interrupt is not refused.
+no-box-global-journal No box-global events journal exists; each session has one log.
+no-deferred-goal The runtime has no deferred or parked goal; SetGoal on a busy session starts nothing.
+no-status-routes No wait, request, session status, or event tip route exists.
+one-page-route A session has one page route and one event cursor; no bootstrap form exists.
+status-line-follows The base prompt says that the process status follows the system prompt.
+task-notice-is-input A task notification is an input with source child.
+task-tool-wording The task tool has the actions spawn, cancel, status, send, and log.
+workspace-changes-rows The git_changes rows pin GET /workspace/changes and its error body.

@@ -85,14 +85,14 @@ const (
 	rowRegolden
 	// rowDeleted: the spec deletes what the row pins. It does not run.
 	rowDeleted
-	// rowPending: the row waits for a fix or a later phase. It runs as an
+	// rowPending: the row waits for a fix. It runs as an
 	// expected failure.
 	rowPending
 )
 
 // runtimeRow is the disposition of one row. cites are the lines of
-// docs/architecture.md and the finding IDs and phases that the
-// disposition rests on.
+// the sentences of docs/architecture.md and the reason ids of
+// testdata/runtime-reasons.txt that the disposition rests on.
 type runtimeRow struct {
 	kind  rowKind
 	cites []string
@@ -213,34 +213,49 @@ func compareSame(t *testing.T, name string, obs observation) {
 	}
 }
 
-// pendingCite matches a finding of the re-architecture review, which is not
-// in the repository, or a phase.
-var pendingCite = regexp.MustCompile(`^(F(0[1-9]|1\d|2[0-4])|phase \d)$`)
+// reasonsFile lists the closed set of reasons that a row may cite when the
+// doc cannot hold them: one line of "<id> <reason>" for each.
+const reasonsFile = "testdata/runtime-reasons.txt"
 
-// citeErrors reports each cite of row that is neither a finding, a phase, nor
-// a line of spec, and a cite list that the kind of row does not allow.
-func citeErrors(row runtimeRow, spec string) []string {
+func loadReasons(t *testing.T) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(reasonsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		id, text, ok := strings.Cut(line, " ")
+		if !ok || id == "" || strings.TrimSpace(text) == "" {
+			t.Fatalf("%s: line %q is not \"<id> <reason>\"", reasonsFile, line)
+		}
+		if _, dup := out[id]; dup {
+			t.Fatalf("%s: id %q repeats", reasonsFile, id)
+		}
+		out[id] = text
+	}
+	return out
+}
+
+// citeErrors reports each cite that is neither a sentence of spec nor a
+// reason id of reasons, and each cite list that the kind of row does not allow.
+func citeErrors(row runtimeRow, spec string, reasons map[string]string) []string {
 	var errs []string
-	lines, pending := 0, 0
 	for _, c := range row.cites {
-		switch {
-		case pendingCite.MatchString(c):
-			pending++
-		case strings.Contains(spec, c):
-			lines++
-		default:
-			errs = append(errs, fmt.Sprintf("cites %q, which is not a line of docs/architecture.md, a finding F01 to F24, or a phase", c))
+		_, listed := reasons[c]
+		if c == "" || (!listed && !strings.Contains(spec, c)) {
+			errs = append(errs, fmt.Sprintf("cites %q, which is neither text of docs/architecture.md nor an id of %s", c, reasonsFile))
 		}
 	}
 	switch {
 	case row.kind == rowSame && len(row.cites) > 0:
 		errs = append(errs, "a same row cites nothing")
-	case row.kind == rowRegolden && lines == 0:
-		errs = append(errs, "a re-golden row cites at least one line of docs/architecture.md")
-	case row.kind == rowDeleted && (lines != 1 || pending > 0):
-		errs = append(errs, "a deleted row cites one line of docs/architecture.md")
+	case row.kind == rowRegolden && len(row.cites) == 0:
+		errs = append(errs, "a re-golden row cites at least one sentence of docs/architecture.md or one reason id")
+	case row.kind == rowDeleted && len(row.cites) != 1:
+		errs = append(errs, "a deleted row cites one sentence of docs/architecture.md or one reason id")
 	case row.kind == rowPending && len(row.cites) == 0:
-		errs = append(errs, "a pending row cites a finding, a phase, or a line of docs/architecture.md")
+		errs = append(errs, "a pending row cites a sentence of docs/architecture.md or a reason id")
 	}
 	return errs
 }
@@ -267,6 +282,8 @@ func TestRuntimeRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reasons := loadReasons(t)
+	used := map[string]bool{}
 	serve, runtime := goldenNames(t, "contract"), goldenNames(t, "runtime")
 	for _, name := range serve {
 		if _, ok := runtimeRows[name]; !ok {
@@ -280,8 +297,16 @@ func TestRuntimeRows(t *testing.T) {
 		case row.kind == rowRegolden != slices.Contains(runtime, name):
 			t.Errorf("row %s is %s, and a runtime golden exists = %t", name, row, slices.Contains(runtime, name))
 		}
-		for _, e := range citeErrors(row, string(spec)) {
+		for _, c := range row.cites {
+			used[c] = true
+		}
+		for _, e := range citeErrors(row, string(spec), reasons) {
 			t.Errorf("row %s: %s", name, e)
+		}
+	}
+	for id := range reasons {
+		if !used[id] {
+			t.Errorf("%s lists %q, which no row cites", reasonsFile, id)
 		}
 	}
 	for _, name := range runtime {
@@ -295,23 +320,24 @@ func TestCiteErrors(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	const spec = "line one\nline two"
+	reasons := map[string]string{"gone": "the runtime has no such route"}
 	for _, tc := range []struct {
 		name string
 		row  runtimeRow
 		bad  bool
 	}{
-		{"known finding", pendingOn("F24"), false},
-		{"phase", pendingOn("phase 4"), false},
-		{"unknown finding", pendingOn("F99"), true},
-		{"finding zero", pendingOn("F00"), true},
-		{"unowned", pendingOn("unowned"), true},
-		{"spec line on a pending row", pendingOn("line two"), false},
-		{"line not in the spec", reGolden("line three"), true},
-		{"re-golden without a line", reGolden("F02"), true},
+		{"sentence of the spec", reGolden("line two"), false},
+		{"reason id", pendingOn("gone"), false},
+		{"deleted by a reason id", deletedBy("gone"), false},
+		{"text not in the spec", reGolden("line three"), true},
+		{"unlisted id", deletedBy("missing"), true},
+		{"empty cite", reGolden(""), true},
+		{"re-golden without a cite", reGolden(), true},
+		{"deleted with two cites", runtimeRow{kind: rowDeleted, cites: []string{"gone", "line one"}}, true},
 		{"pending without a cite", pendingOn(), true},
 		{"same with a cite", runtimeRow{kind: rowSame, cites: []string{"line one"}}, true},
 	} {
-		if got := len(citeErrors(tc.row, spec)) > 0; got != tc.bad {
+		if got := len(citeErrors(tc.row, spec, reasons)) > 0; got != tc.bad {
 			t.Errorf("%s: citeErrors reports an error = %t, want %t", tc.name, got, tc.bad)
 		}
 	}

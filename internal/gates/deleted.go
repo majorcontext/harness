@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// deletedPathRE matches a reference to a package path that the spec deletes or
-// moves under internal/: a path under engine, server, or mcpserver at the
+// deletedPathRE matches a reference to a package path that does not exist or
+// lives under internal/: a path under engine, server, or mcpserver at the
 // module root, a symbol of the engine package, provider/claudecode, the
 // module path of a package that moved under internal/ (provider included), and harness-migrate.
 var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server)/\w|` +
@@ -20,7 +20,7 @@ var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server
 	`\bharness-migrate\b`)
 
 // CheckDeletedReferences fails each Go file, in code or in a comment, that
-// names a deleted package path (spec: Phase 6, Internal packages), except the
+// names a deleted package path (spec: Internal packages), except the
 // files of allow. The gate package is out of scope: it holds the pattern.
 func CheckDeletedReferences(fsys fs.FS, allow map[string]string) ([]Violation, error) {
 	var out []Violation

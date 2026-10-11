@@ -45,7 +45,7 @@ jobs:
             .github/skills/harness-architecture-review/SKILL.md and apply them, and
             .agents/skills/go-guide/SKILL.md for Go code: judge the
             change against the architecture as a whole (docs/architecture.md),
-            not the diff alone, and cite the spec line for each architecture
+            not the diff alone, and cite the spec section for each architecture
             finding. Review with these priorities:
             - Architecture as a whole: apply every question of the architecture-review
               skill

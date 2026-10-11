@@ -67,7 +67,7 @@ func detach(s protocol.Session) protocol.Session {
 // and a queue input waits for the next turn. A repeated input ID returns
 // the original receipt with Repeat set; the verdict is atomic with the
 // admission. A typed slash command records command.recorded instead of an
-// input, and the receipt carries its status; see docs/architecture.md.
+// input, and the receipt carries its status; see docs/architecture.md, Inputs.
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
 		return protocol.Admitted{}, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
