@@ -141,6 +141,12 @@ func (m *MemStore) GetBlob(ctx context.Context, session, key string) (io.ReadClo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := CheckName(session); err != nil {
+		return nil, err
+	}
+	if err := CheckName(key); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s := m.sessions[session]; s != nil {

@@ -366,6 +366,15 @@ func testBlobRoundTrip(t *testing.T, st store) {
 	if _, err := st.GetBlob(ctx, "a", "absent"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("GetBlob(absent) = %v, want fs.ErrNotExist", err)
 	}
+	if _, err := st.GetBlob(ctx, "a", "../k"); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("GetBlob with an invalid key = %v, want a name error", err)
+	}
+	if _, err := st.GetBlob(ctx, "", "k"); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("GetBlob with an invalid session = %v, want a name error", err)
+	}
+	if err := st.Append(ctx, "../a", 0, rec("1")); err == nil || errors.Is(err, harness.ErrConflict) {
+		t.Errorf("Append with an invalid session = %v, want a name error", err)
+	}
 }
 
 func testStoredRecordsAreCopies(t *testing.T, st store) {

@@ -265,7 +265,7 @@ type Resolution struct {
 // counts as no answer.
 func (r Resolution) Validate() error {
 	if r.Dismiss {
-		if len(r.Answer) > 0 {
+		if hasAnswer(r.Answer) {
 			return errors.New("a resolution holds one answer, or a dismissal")
 		}
 		return nil
