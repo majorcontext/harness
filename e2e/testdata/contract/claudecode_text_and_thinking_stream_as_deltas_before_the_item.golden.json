@@ -1,0 +1,147 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "Let me reason."
+          },
+          {
+            "type": "text",
+            "text": "Let me check that."
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "It printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 12,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 10,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 8
+        }
+      }
+    },
+    "live_stream.a": {
+      "status": 200,
+      "body": [
+        {
+          "item": "assistant",
+          "reasoning": {
+            "pieces": [
+              "Let me ",
+              "reason."
+            ],
+            "text": "Let me reason."
+          },
+          "text": {
+            "pieces": [
+              "Let me ",
+              "check ",
+              "that."
+            ],
+            "text": "Let me check that."
+          },
+          "tool_call": "Bash"
+        },
+        {
+          "item": "tool"
+        },
+        {
+          "item": "assistant",
+          "text": {
+            "pieces": [
+              "It printed ",
+              "hi."
+            ],
+            "text": "It printed hi."
+          }
+        }
+      ]
+    }
+  }
+}

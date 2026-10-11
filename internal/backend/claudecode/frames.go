@@ -39,6 +39,25 @@ type envelope struct {
 	StopReason      string                `json:"stop_reason,omitempty"`
 	RequestID       string                `json:"request_id,omitempty"`
 	Request         *controlRequest       `json:"request,omitempty"`
+	Event           *streamEvent          `json:"event,omitempty"`
+}
+
+// streamEvent is the API stream event of a stream_event frame, which the CLI
+// prints with --include-partial-messages.
+type streamEvent struct {
+	Type    string `json:"type"`
+	Index   int    `json:"index"`
+	Message *struct {
+		ID string `json:"id"`
+	} `json:"message,omitempty"`
+	ContentBlock *struct {
+		Type string `json:"type"`
+	} `json:"content_block,omitempty"`
+	Delta *struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		Thinking string `json:"thinking"`
+	} `json:"delta,omitempty"`
 }
 
 type controlRequest struct {

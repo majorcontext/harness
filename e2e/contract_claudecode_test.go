@@ -96,6 +96,24 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 	})
 }
 
+func TestContractClaudeCodePartialMessages(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:   "claudecode_text_and_thinking_stream_as_deltas_before_the_item",
+			driver: claudeLaneDriver("partial_messages"),
+			actions: []action{
+				create{as: "a"},
+				claudeWatchLive{as: "a"},
+				submit{as: "a", text: "run it"},
+				waitIdle{as: "a"},
+				claudeLive{as: "a"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+			},
+		},
+	})
+}
+
 func TestContractClaudeCodeChildReport(t *testing.T) {
 	settled := []action{waitIdle{as: "a"}, claudeInputs{as: "a"}}
 	reported := func(n int) []action {
