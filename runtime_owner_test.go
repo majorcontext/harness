@@ -23,7 +23,7 @@ type killable struct{ lost chan struct{} }
 func (k killable) Acquire(context.Context, string) (harness.Ownership, error) { return k, nil }
 func (k killable) Epoch() uint64                                              { return 1 }
 func (k killable) Lost() <-chan struct{}                                      { return k.lost }
-func (k killable) Release()                                                   {}
+func (k killable) Release(context.Context) error                              { return nil }
 
 // held is a Store whose Append fails with err, or waits for hold while armed.
 type held struct {

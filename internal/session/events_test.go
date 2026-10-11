@@ -62,9 +62,9 @@ func (l *memLog) Read(_ context.Context, after uint64, limit int) ([]eventlog.Re
 
 type owned struct{}
 
-func (owned) Epoch() uint64         { return 1 }
-func (owned) Lost() <-chan struct{} { return nil }
-func (owned) Release()              {}
+func (owned) Epoch() uint64                 { return 1 }
+func (owned) Lost() <-chan struct{}         { return nil }
+func (owned) Release(context.Context) error { return nil }
 
 func TestFramesNeverTrailTheDurableHead(t *testing.T) {
 	const appends = 3000

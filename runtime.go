@@ -40,6 +40,8 @@ var (
 	ErrSessionExists = session.ErrExists
 	// ErrSessionNotOwned reports a session that this runtime does not run.
 	ErrSessionNotOwned = session.ErrNotOwned
+	// ErrSessionHeld reports a session that another owner holds. It matches ErrSessionNotOwned. An Owner fails Acquire with it.
+	ErrSessionHeld = fmt.Errorf("%w: held by another owner", session.ErrNotOwned)
 	// ErrSessionReleased is the cause that Session.Err reports after Release, or after Close handed the session off. It matches ErrSessionNotOwned.
 	ErrSessionReleased = session.ErrReleased
 	// ErrSessionEnded is the cause that Session.Err reports after End. It matches ErrSessionNotOwned.
@@ -62,11 +64,13 @@ var (
 type Options struct {
 	// Store holds every session log. It is required.
 	Store Store
-	// Owner grants sessions. nil: this Runtime owns every session. The
-	// default does not exclude another Runtime on the same Store; the fence
-	// that Open appends stops the earlier one.
+	// Owner grants sessions. nil: NewLocalOwner(1), which owns every
+	// session. The default does not exclude another Runtime on the same
+	// Store; the fence that Open appends stops the earlier one.
 	Owner Owner
-	// Sync replicates every record that this Runtime appends. nil: no replication.
+	// Sync replicates every record that this Runtime appends. nil: no
+	// replication. New reads neither Config.OwnerEpoch nor Config.Sync; the
+	// embedder passes NewLocalOwner and NewHTTPSync.
 	Sync Sync
 	// Config configures the model providers and the MCP servers. A model
 	// ref "provider/model" selects the entry of Config.Providers named
@@ -170,8 +174,8 @@ func New(opts Options) (*Runtime, error) {
 	if err := opts.Config.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	if err := checkEmbedder(opts); err != nil {
-		return nil, err
+	if opts.RunToken != "" && opts.ServeURL == "" {
+		return nil, errors.New("harness: Options.RunToken needs Options.ServeURL")
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
@@ -217,10 +221,7 @@ func New(opts Options) (*Runtime, error) {
 		r.tools = append(r.tools, t)
 	}
 	if r.owner == nil {
-		r.owner = newLocalOwner(uint64(cmp.Or(opts.Config.OwnerEpoch, 1)))
-	}
-	if r.sync == nil && opts.Config.Sync != nil {
-		r.sync = newHTTPSync(*opts.Config.Sync)
+		r.owner = NewLocalOwner(1)
 	}
 	r.name = sync.OnceValue(func() string {
 		host, _ := os.Hostname()
@@ -321,12 +322,12 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if l.created != nil {
 		c = *l.created
 	} else if c, err = r.created(ctx, id); err != nil {
-		own.Release()
+		session.Discard(own, id)
 		return nil, err
 	}
 	root, depth, err := r.tree.Lineage(ctx, id, c.ParentID)
 	if err != nil {
-		own.Release()
+		session.Discard(own, id)
 		return nil, err
 	}
 	profile := r.profile(c.Agent, l.profile)

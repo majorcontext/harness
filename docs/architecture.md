@@ -101,9 +101,9 @@ func New(opts Options) (*Runtime, error) // no I/O; sessions load on Create, Ope
 
 type Options struct {
 	Store  Store         // required
-	Owner  Owner         // nil: the local process owns every session
-	Sync   Sync          // nil: no replication, unless the config key sync is set
-	Config config.Config // New checks it with Validate
+	Owner  Owner         // nil: NewLocalOwner(1)
+	Sync   Sync          // nil: no replication
+	Config config.Config // New checks it with Validate; it reads neither owner_epoch nor sync
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
@@ -171,6 +171,11 @@ func (v *View) Resumable() bool
 
 // ReadEvents yields the stored events after `after`, through the head it reads first; it neither owns the session nor replays the log.
 func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error]
+
+// NewLocalOwner grants every session to this process at epoch, one grant at a time.
+func NewLocalOwner(epoch uint64) Owner
+// NewHTTPSync posts each batch to spec.URL and reads spec.TokenFile again for each post.
+func NewHTTPSync(spec config.SyncSpec) Sync
 
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
@@ -396,13 +401,14 @@ Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` 
 package harness
 
 type Owner interface {
+	// Acquire returns at once. For a held session it fails with an error that matches ErrSessionHeld.
 	Acquire(ctx context.Context, session string) (Ownership, error)
 }
 
 type Ownership interface {
 	Epoch() uint64 // recorded in owner.acquired and carried by every SyncBatch
-	Lost() <-chan struct{}
-	Release()
+	Lost() <-chan struct{} // closes when the grant ends without Release; nil means never lost
+	Release(ctx context.Context) error // ends the grant; the runtime calls it once
 }
 ```
 
@@ -414,7 +420,7 @@ Start-up order of `Open` after `Acquire`:
 2. Append `owner.acquired{epoch, owner}` at that head. On `ErrConflict`, read `Head` again and retry. An old owner's append that lands first is ordered before the fence.
 3. Replay through the fence record, then run.
 
-After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The default `Owner` grants every session to the local process, one grant at a time, at epoch 1 or at the `owner_epoch` of the config. An embedder supplies a lease, or writes `owner_epoch` for a box harness.
+After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. `ErrSessionHeld` wraps `ErrSessionNotOwned`, so the code `session_not_owned` does not change, and `CatchUp` skips a session whose `Acquire` fails with it. The default `Owner` is `NewLocalOwner(1)`: it grants every session to the local process, one grant at a time. An embedder supplies a lease, or passes `NewLocalOwner` with the epoch of its claim; `cmd/harness` reads the config key `owner_epoch` for that epoch. The actor calls `Release` once, after the last record is acknowledged, with a bound of 10 s. A failure is logged and `Session.Release` and `Runtime.Close` return it. A path that has no caller to return it to, such as a failed `Open`, only logs it.
 
 ### State machines
 
@@ -613,7 +619,7 @@ A typed slash command answers the same way. Its receipt adds `command`, the newe
 - A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
 - Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The blobs of a batch are those that its records name: the chunk of a `backend.state` record, the blob of `tool_result.retained`, the blob parts of `input.admitted`, and the blobs of the tool results in `item.completed`. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
 - The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch), `ErrConflict` (different bytes at a seq), and `ErrSyncRejected` (a request that a resend cannot fix) are final: each stops the session with no further append and releases its `Ownership`, and `Session.Release` then returns the rejection (`ErrSessionNotOwned` after a stale epoch). Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. On start, a box harness replicates every session that its `Store` holds, not only the sessions that it opens. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
-- A box harness replicates through the config keys `owner_epoch` and `sync {url, token_file}`, which the box boot code writes. With `sync` set and no `Options.Sync`, `New` builds a sender that posts each `protocol.SyncBatch` as JSON to `sync.url` with `Authorization: Bearer <token>`, and reads the token from `token_file` for each post. The receiver replies `200` with `SyncAck{head}` (also on a seq mismatch); `409` with `protocol.CodeStaleEpoch` (`ErrStaleEpoch`) or `protocol.CodeSyncConflict` (`ErrConflict`); `400` with `invalid_request` (`ErrInvalidRequest`); `413` with `payload_too_large` when the body is over `protocol.MaxSyncBatchBytes` (32 MiB); `401`; or `403`. The `400`, `413`, `401`, and `403` rejections also match `ErrSyncRejected`. Only those rejections (`409` with either code, `400 invalid_request`, any `413`, `401`, `403`) are final; the sender takes every `413` as final whatever its code. Any other status and a transport error resend with backoff. The sender keeps the JSON body of a batch under `protocol.MaxSyncBatchBytes` by cutting it after fewer records than the page of 512, so a `413` happens only when one record with its blobs is over the bound. `New` refuses `owner_epoch` beside `Options.Owner`, and `sync` beside `Options.Sync`.
+- A box harness replicates through the config keys `owner_epoch` and `sync {url, token_file}`, which the box boot code writes. `New` reads neither key. `cmd/harness` passes `NewLocalOwner(owner_epoch)` and, with `sync` set, `NewHTTPSync(sync)`. `NewHTTPSync` returns a sender that posts each `protocol.SyncBatch` as JSON to `sync.url` with `Authorization: Bearer <token>`, and reads the token from `token_file` for each post. The receiver replies `200` with `SyncAck{head}` (also on a seq mismatch); `409` with `protocol.CodeStaleEpoch` (`ErrStaleEpoch`) or `protocol.CodeSyncConflict` (`ErrConflict`); `400` with `invalid_request` (`ErrInvalidRequest`); `413` with `payload_too_large` when the body is over `protocol.MaxSyncBatchBytes` (32 MiB); `401`; or `403`. The `400`, `413`, `401`, and `403` rejections also match `ErrSyncRejected`. Only those rejections (`409` with either code, `400 invalid_request`, any `413`, `401`, `403`) are final; the sender takes every `413` as final whatever its code. Any other status and a transport error resend with backoff. The sender keeps the JSON body of a batch under `protocol.MaxSyncBatchBytes` by cutting it after fewer records than the page of 512, so a `413` happens only when one record with its blobs is over the bound.
 - `Runtime.CatchUp` is the start of a box harness: for each session in the `Store` that this runtime does not run, it takes a grant of the `Owner`, sends the log in pages from seq 1 (each acknowledgement moves the next page to the head that the receiver reports), and releases the grant. It appends nothing, so an idle session gets no `owner.acquired`. `Open` of a session that `CatchUp` holds ends the catch-up of that session first, and the opened session replicates itself. `Close` ends `CatchUp` with `ErrDraining`, and the next start catches up again. A stale epoch ends it with `ErrStaleEpoch`. If that `Open` fails, `CatchUp` replicates the session itself. Two calls at once run one after the other. A session that fails for another reason, such as a log that cannot be read, is skipped, and `CatchUp` returns each failure with its session ID after the other sessions finish.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch.
 
@@ -686,7 +692,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 ### Command
 
-`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds one `harness.Runtime`, and holds no runtime behavior.
+`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds the `Owner` and `Sync` that `owner_epoch` and `sync` name, builds one `harness.Runtime`, and holds no runtime behavior.
 
 - `serve` applies the `HARNESS_*` variables with `config.ApplyEnv`, then the flags `-no-instructions`, `-skills-dir`, and `-agent-def-dir`, so a flag wins. It keeps the sessions in a `DiskStore` at `HARNESS_SESSION_DIR`, else `session_dir`, else `~/.harness/sessions`. It serves `Runtime.Handler` behind the bearer token of `HARNESS_RUN_TOKEN`; `GET /health` needs no token, a request without the token gets 401 with the error code `unauthorized`, and an empty token is allowed only on a loopback bind or with `-unauthenticated` or `HARNESS_UNAUTHENTICATED`. With `-cors-origin` it adds the CORS headers, and a preflight skips the token. It binds `-addr` before it builds the runtime and takes `Options.ServeURL` from the bound address, so `-addr 127.0.0.1:0` serves on a free port that the `addr` field of the `serve start` log line names. Then it calls `CatchUp` and opens each session that has work to resume, and a failure of either is logged and never stops `serve`.
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
@@ -979,7 +985,7 @@ One `Config` struct. `Defaults` is the one defaults table, and each accessor rea
 
 `plugin_cache` (a path; `HARNESS_PLUGIN_CACHE`) names the plugin manifest cache. Only the user file sets it: a project file cannot. `cmd/harness` sets it to `plugin_cache.json` beside the user config when no variable names it, and the Go API has no default.
 
-`owner_epoch` (a number) and `sync {url, token_file}` are the keys of a box harness; `Validate` requires an `http` or `https` URL with no userinfo, and a token file. Only the user file sets them: a project file cannot. A project file is still read as a file, so an invalid `sync` there fails the load, and a valid one is dropped.
+`owner_epoch` (a number) and `sync {url, token_file}` are the keys of a box harness, which `cmd/harness` reads and `harness.New` does not; `Validate` requires an `http` or `https` URL with no userinfo, and a token file. Only the user file sets them: a project file cannot. A project file is still read as a file, so an invalid `sync` there fails the load, and a valid one is dropped.
 
 `ApplyEnv` sets each top-level string, number, or bool key from `HARNESS_<KEY>`. An empty variable keeps the key. A map, slice, or struct key has no variable. A parse error names the variable and never the value. There are no env-only knobs. `cmd/harness` applies it in `serve` and `run`, and a flag wins over a variable.
 

@@ -100,7 +100,8 @@ func serveCmd(args []string) error {
 		warnUnauthenticated(logger, bound)
 	}
 	store := newObservedStore(harness.NewDiskStore(dir), logger)
-	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask,
+	owner, replica := replication(cfg)
+	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask,
 		ServeURL: serveURLForAddr(bound), RunToken: token})
 	if err != nil {
 		return err

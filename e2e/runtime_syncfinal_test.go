@@ -38,7 +38,7 @@ func TestContractRuntimeSyncReceiverContract(t *testing.T) {
 func finalRejection(t *testing.T, status int, code string, want error) {
 	t.Helper()
 	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return status, code })
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(harness.Options{Store: harness.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func rowSyncServerErrorIsSentAgain(t *testing.T) {
 		return 0, ""
 	})
 	st := harness.NewMemStore()
-	r, err := harness.New(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func rowSyncSplitsABatchUnderTheBodyCap(t *testing.T) {
 		return 0, ""
 	})
 	fake, st := harnesstest.NewChat(t, syncReply, syncReply), harness.NewMemStore()
-	r, err := harness.New(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, fake.URL(), nil)})
+	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, fake.URL(), nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func rowCatchUpConflictSkipsTheSessionAndReportsIt(t *testing.T) {
 		}
 		return 0, ""
 	})
-	r, err := harness.New(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}

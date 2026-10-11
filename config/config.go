@@ -103,11 +103,11 @@ type Config struct {
 	// configures no processes. Merge rules mirror MCPServers: keys merge,
 	// but a same-name project entry replaces the user entry wholesale.
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
-	// OwnerEpoch is the epoch of the grant of each session. 0 keeps epoch 1.
+	// OwnerEpoch is the epoch of the grant of each session. 0 keeps epoch 1. cmd/harness reads it; harness.New does not.
 	OwnerEpoch int `json:"owner_epoch,omitempty"`
 	// PluginCache is the file that holds the probed manifest of each plugin. Only the user file sets it.
 	PluginCache string `json:"plugin_cache,omitempty"`
-	// Sync posts each record to a control plane. Only the user file sets it.
+	// Sync posts each record to a control plane. Only the user file sets it. cmd/harness reads it; harness.New does not.
 	Sync *SyncSpec `json:"sync,omitempty"`
 	// ContextWindowTokens is the context window of every model, in tokens,
 	// and replaces the built-in table (package modelmeta, sourced from

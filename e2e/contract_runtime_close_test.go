@@ -36,7 +36,10 @@ type counted struct{ released *atomic.Int32 }
 func (c counted) Acquire(context.Context, string) (harness.Ownership, error) { return c, nil }
 func (c counted) Epoch() uint64                                              { return 1 }
 func (c counted) Lost() <-chan struct{}                                      { return nil }
-func (c counted) Release()                                                   { c.released.Add(1) }
+func (c counted) Release(context.Context) error {
+	c.released.Add(1)
+	return nil
+}
 
 // stuckRuntime runs a session whose turn waits in a tool that ignores ctx.
 func stuckRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, stubborn) {

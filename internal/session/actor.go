@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -67,7 +68,20 @@ type Storage interface {
 type Ownership interface {
 	Epoch() uint64
 	Lost() <-chan struct{}
-	Release()
+	Release(ctx context.Context) error
+}
+
+// releaseBound bounds the Release call of an Ownership that no caller waits for.
+const releaseBound = 10 * time.Second
+
+// Discard releases own on a path with no caller to return the error to. It
+// bounds the call and logs a failure.
+func Discard(own Ownership, id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), releaseBound)
+	defer cancel()
+	if err := own.Release(ctx); err != nil {
+		slog.Warn("harness: release ownership", "session", id, "err", err)
+	}
 }
 
 // Config is what an actor needs. The actor releases Ownership when it stops,
@@ -166,10 +180,12 @@ type Actor struct {
 	// endCause is the cause that a requested stop gives, and cause is the
 	// first cause of the stop. Only the actor goroutine writes them, before
 	// done closes.
-	endCause  error
-	cause     error
-	retryStop context.CancelFunc
-	retryAt   time.Time
+	endCause error
+	cause    error
+	// releaseErr is the error of Ownership.Release, set before done closes.
+	releaseErr error
+	retryStop  context.CancelFunc
+	retryAt    time.Time
 	// pins holds the engine context that the model reads inside the history.
 	pins turn.Pins
 }
@@ -193,7 +209,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 		events = append(events, *first, eventlog.TurnStarted{TurnID: turnID, InputIDs: []string{first.InputID}})
 	}
 	if err := a.appendCtx(ctx, events...); err != nil {
-		cfg.Ownership.Release()
+		Discard(cfg.Ownership, cfg.ID)
 		if errors.Is(err, ErrConflict) {
 			return nil, fmt.Errorf("%w: %s", ErrExists, cfg.ID)
 		}
@@ -211,7 +227,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 func Open(ctx context.Context, cfg Config) (*Actor, error) {
 	a, err := open(ctx, cfg)
 	if err != nil {
-		cfg.Ownership.Release()
+		Discard(cfg.Ownership, cfg.ID)
 		return nil, err
 	}
 	return a, nil
@@ -419,7 +435,12 @@ func (a *Actor) finish() {
 	close(a.quit)
 	a.runs.Wait()
 	<-a.flushed
-	a.cfg.Ownership.Release()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(a.cfg.Base), releaseBound)
+	a.releaseErr = a.cfg.Ownership.Release(ctx)
+	cancel()
+	if a.releaseErr != nil {
+		slog.Warn("harness: release ownership", "session", a.cfg.ID, "err", a.releaseErr)
+	}
 	a.settleCause()
 	a.cfg.Done()
 	close(a.done)

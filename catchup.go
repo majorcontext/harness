@@ -136,14 +136,14 @@ func (r *Runtime) catchUp(ctx context.Context, id string) (again bool, err error
 	}()
 	own, err := r.owner.Acquire(sctx, id)
 	switch {
-	case errors.Is(err, errHeld):
+	case errors.Is(err, ErrSessionHeld):
 		return false, nil
 	case err != nil && g.preempted.Load() && ctx.Err() == nil:
 		return true, nil
 	case err != nil:
 		return false, fmt.Errorf("session %s: %w", id, err)
 	}
-	defer own.Release()
+	defer session.Discard(own, id)
 	err = session.CatchUp(sctx, storeLog{r.store, id}, r.sync, own.Epoch(), id)
 	switch {
 	case err == nil:

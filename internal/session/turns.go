@@ -507,6 +507,9 @@ func (a *Actor) halt(ctx context.Context, begin func(reply func(struct{}, error)
 		if a.syncErr != nil {
 			return a.syncErr
 		}
+		if a.releaseErr != nil {
+			return a.releaseErr
+		}
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
