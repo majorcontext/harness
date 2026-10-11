@@ -3,7 +3,7 @@
 // HARNESS_RECORD_WIRE=1. Keys come from ANTHROPIC_API_KEY and OPENAI_API_KEY;
 // the Claude Code CLI uses its own login.
 //
-//	HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire [-only anthropic,chat,responses,claudecode]
+//	HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire [-only anthropic,chat,responses,claudecode,claudecode-partial]
 package main
 
 import (
@@ -38,7 +38,7 @@ func (r *recorder) save(name string, data []byte) error {
 
 func main() {
 	out := flag.String("out", "testdata/wire", "output directory")
-	only := flag.String("only", "anthropic,chat,responses,claudecode", "comma-separated wires to record")
+	only := flag.String("only", "anthropic,chat,responses,claudecode,claudecode-partial", "comma-separated wires to record")
 	flag.Parse()
 	if os.Getenv("HARNESS_RECORD_WIRE") != "1" {
 		fmt.Fprintln(os.Stderr, "wirerecord: set HARNESS_RECORD_WIRE=1 to make real model calls")
@@ -54,7 +54,7 @@ func main() {
 	defer func() { _ = os.RemoveAll(work) }()
 	r := &recorder{out: *out, scrubber: wirescrub.New(work)}
 	runners := map[string]func(*recorder, string) error{
-		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode,
+		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode, "claudecode-partial": recordClaudeCodePartial,
 	}
 	for _, name := range strings.Split(*only, ",") {
 		run, ok := runners[name]

@@ -21,7 +21,7 @@
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
-// modes_stdin.go, modes_question.go, modes_mirror.go, modes_mcp.go, and modes_children.go.
+// modes_stdin.go, modes_question.go, modes_mirror.go, modes_mcp.go, modes_children.go, and modes_partial.go.
 //
 // The normal turn is not byte-faithful to the real CLI in two ways. Its
 // result frame has no num_turns or session_id, so the driver takes its

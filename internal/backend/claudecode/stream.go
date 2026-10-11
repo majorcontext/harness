@@ -67,6 +67,9 @@ type run struct {
 	lastCall   *usage
 	compact    string
 	sawCompact bool
+	// live is the API response that the stream events of each thread are
+	// streaming, by parent tool call ID.
+	live map[string]*liveMessage
 	// compacting reports a compaction that the CLI started and did not settle.
 	compacting bool
 }
@@ -204,7 +207,8 @@ func (r *run) save() error {
 
 // tail maps a frame that the CLI writes after its result or after the turn
 // failed: only its transcript and its result. After a stop, it maps every
-// frame: the CLI still writes the items that it already ran.
+// frame but the stream events: the CLI still writes the items that it already
+// ran, and a block that it did not finish arrives as one assistant frame.
 func (r *run) tail(line []byte) {
 	var env envelope
 	if json.Unmarshal(line, &env) != nil || env.Type == "result" && r.result != nil {
@@ -218,7 +222,7 @@ func (r *run) tail(line []byte) {
 		}
 		r.result = &env
 		err = r.settle(env)
-	case r.stopped || env.Type == "transcript_mirror":
+	case r.stopped && env.Type != "stream_event" || env.Type == "transcript_mirror":
 		err = r.handle(env)
 	}
 	if r.tailErr == nil {
@@ -238,12 +242,12 @@ func (r *run) handle(env envelope) error {
 	if r.allowed != nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
-	if r.compact != "" && env.Type != "transcript_mirror" {
+	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
 		if summary, err := r.compacted(env); err != nil || summary {
 			return err
 		}
 	}
-	if r.dismissing() && (env.Type == "assistant" || env.Type == "user") {
+	if r.dismissing() && (env.Type == "assistant" || env.Type == "user" || env.Type == "stream_event") {
 		return nil
 	}
 	switch env.Type {
@@ -253,6 +257,8 @@ func (r *run) handle(env envelope) error {
 		return r.assistant(env)
 	case "user":
 		return r.toolResults(env)
+	case "stream_event":
+		return r.streamEvent(env)
 	case "control_request":
 		return r.control(env)
 	case "result":
@@ -383,7 +389,9 @@ func (r *run) assistant(env envelope) error {
 	for i, p := range parts {
 		switch p.Type {
 		case eventlog.PartText, eventlog.PartReasoning:
-			r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: p.Text})
+			if text := r.unstreamed(env.ParentToolUseID, m.ID, p); text != "" {
+				r.thread(env.ParentToolUseID).Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
+			}
 		case eventlog.PartToolCall:
 			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
 				parts[i].Name = name
@@ -420,7 +428,11 @@ func (r *run) flush() error {
 	}
 	m := *r.pending
 	r.pending, r.pendingID, r.spoke = nil, "", true
-	return r.out.Item(m)
+	if err := r.thread(m.ParentCallID).Item(m); err != nil {
+		return err
+	}
+	r.replay(m.ParentCallID)
+	return nil
 }
 
 // steered writes the queued steer inputs to stdin.

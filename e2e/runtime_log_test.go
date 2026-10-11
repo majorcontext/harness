@@ -26,8 +26,9 @@ type logInput struct {
 type logItem struct {
 	ItemID  string `json:"item_id"`
 	Message struct {
-		Role  string    `json:"role"`
-		Parts []logPart `json:"parts"`
+		Role         string    `json:"role"`
+		Parts        []logPart `json:"parts"`
+		ParentCallID string    `json:"parent_call_id"`
 	} `json:"message"`
 }
 
