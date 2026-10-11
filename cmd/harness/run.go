@@ -118,7 +118,8 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version})
+	owner, replica := replication(cfg)
+	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version})
 	if err != nil {
 		return err
 	}

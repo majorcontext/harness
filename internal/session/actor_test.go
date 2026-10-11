@@ -51,7 +51,10 @@ type lease struct {
 
 func (*lease) Epoch() uint64           { return 1 }
 func (l *lease) Lost() <-chan struct{} { return l.lost }
-func (l *lease) Release()              { l.released.Store(true) }
+func (l *lease) Release(context.Context) error {
+	l.released.Store(true)
+	return nil
+}
 
 func actorConfig(t *testing.T, log Storage, own Ownership, b turn.Backend) Config {
 	t.Helper()

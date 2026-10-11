@@ -19,7 +19,7 @@ const (
 	syncPostTimeout = time.Minute
 )
 
-// httpSync posts each SyncBatch to a control plane. The reply is a SyncAck.
+// httpSync, the Sync of NewHTTPSync, posts each SyncBatch to a control plane. The reply is a SyncAck.
 // A 409 with protocol.CodeStaleEpoch is ErrStaleEpoch, and one with
 // protocol.CodeSyncConflict is ErrConflict. A 400 with invalid_request is
 // ErrInvalidRequest, and any 413, 401, or 403 is ErrSyncRejected, whatever its
@@ -30,7 +30,9 @@ type httpSync struct {
 	client    *http.Client
 }
 
-func newHTTPSync(s config.SyncSpec) *httpSync {
+// NewHTTPSync returns a Sync that posts each batch to spec.URL as JSON with
+// the bearer token that it reads from spec.TokenFile for each post.
+func NewHTTPSync(s config.SyncSpec) Sync {
 	return &httpSync{url: s.URL, tokenFile: s.TokenFile, client: &http.Client{Timeout: syncPostTimeout}}
 }
 

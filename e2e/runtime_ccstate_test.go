@@ -140,7 +140,7 @@ func (l *ccLane) runtime() *harness.Runtime {
 		"providers": map[string]any{"claude-code": map[string]any{
 			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true}},
 	})
-	r, err := harness.New(harness.Options{Store: l.st, Config: cfg})
+	r, err := newWired(harness.Options{Store: l.st, Config: cfg})
 	if err != nil {
 		l.t.Fatal(err)
 	}

@@ -16,11 +16,16 @@ type leased struct{ lost chan struct{} }
 func (l leased) Acquire(context.Context, string) (harness.Ownership, error) { return l, nil }
 func (l leased) Epoch() uint64                                              { return 1 }
 func (l leased) Lost() <-chan struct{}                                      { return l.lost }
-func (l leased) Release()                                                   {}
+func (l leased) Release(context.Context) error                              { return nil }
 
 func lifetimeRuntime(t *testing.T, owner harness.Owner) *harness.Runtime {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Owner: owner, Config: config.Config{ContextWindowTokens: 100000,
+	return lifetimeRuntimeOn(t, harness.NewMemStore(), owner)
+}
+
+func lifetimeRuntimeOn(t *testing.T, st harness.Store, owner harness.Owner) *harness.Runtime {
+	t.Helper()
+	r, err := harness.New(harness.Options{Store: st, Owner: owner, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

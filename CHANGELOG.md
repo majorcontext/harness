@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Owner contract** (`harness`) — `ErrSessionHeld`, which wraps `ErrSessionNotOwned`, is the error that `Owner.Acquire` returns for a held session, and `CatchUp` skips such a session. `Ownership.Release` takes a context and returns an error, which `Session.Release` and `Runtime.Close` return. A nil `Lost` means never lost. `NewLocalOwner(epoch)` and `NewHTTPSync(spec)` are exported. `harness.New` no longer reads the config keys `owner_epoch` and `sync`, and no longer refuses an `Owner` or `Sync` beside them; `cmd/harness` wires them. `Options.RunToken` without `Options.ServeURL` fails with a plain error.
 - **Close** (`harness`) — `Runtime.Close` is idempotent: a later call returns the result of the first, and each call returns by the end of its context with `context.Cause`. When the context of the first call ends, it cancels every run and kills the processes without waiting for a tool that ignores its context; that session keeps its ownership until the tool returns.
 - **Session lifetime** (`harness`) — `Session.ID`, `Session.Done`, and `Session.Err` tell every holder of a shared handle when and why the session stopped here. `Err` is nil before `Done` and then matches `ErrSessionNotOwned` and one cause: `ErrSessionReleased`, `ErrSessionEnded`, or `ErrOwnershipLost`. `Session.Events` ends with `Err`.
 - **Sessions** (`harness`) — sessions are append-only logs of canonical messages. A session can change provider or model between turns with no history migration. Persisted sessions resume by ID.
