@@ -131,9 +131,9 @@ func withoutTaskReports(parts []Part) []Part {
 	return slices.DeleteFunc(slices.Clone(parts), func(p Part) bool { return p.Type == PartTaskReport })
 }
 
-// History returns the conversation that readers see: the summary of the
-// newest compaction as a user message, then each later message in log order.
-// A pinned segment is not in it.
+// History returns the summary of the newest compaction as a user message, then
+// each later message in log order, with no pinned segment. Readers see more:
+// see Transcript.
 func (s *State) History() []Message { return s.messages(false) }
 
 // ModelHistory returns History with each pinned segment at its place: the

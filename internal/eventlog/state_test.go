@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 var t0 = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -283,6 +285,21 @@ func TestAccessorsDoNotAliasState(t *testing.T) {
 	s.History()[1].Parts[0].Arguments[0] = 'x'
 	if !reflect.DeepEqual(s, replay(t, events)) {
 		t.Fatal("a caller changed the state through an accessor")
+	}
+	folded := with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), result("t1", "i2", "c1"), end("t1", StopCompleted, ""))
+	folded = with(folded, says("b", DeliveryQueue, "two"), start("t2", "b"), CompactionApplied{FromSeq: 1, ToSeq: 6, Summary: "sum"})
+	s = replay(t, folded)
+	page := s.MessagePage(0, 10)
+	if len(page.Messages) < 3 || page.Messages[0].ID != "msg_a" {
+		t.Fatalf("page after a compaction = %+v, want the folded messages first", page.Messages)
+	}
+	for i := range page.Messages {
+		page.Messages[i].Parts[0].Text = "x"
+		page.Messages[i].OperatorBatch = append(page.Messages[i].OperatorBatch, protocol.OperatorBatchEntry{})
+	}
+	page.Messages[1].Parts[0].Arguments[0] = 'x'
+	if !reflect.DeepEqual(s.MessagePage(0, 10), replay(t, folded).MessagePage(0, 10)) {
+		t.Fatal("a caller changed the state through a message page")
 	}
 }
 

@@ -531,6 +531,60 @@
       "status": 200,
       "body": {
         "commands": [],
+        "first_seq": 2,
+        "has_more": true,
+        "last_seq": 3,
+        "total": 7
+      },
+      "messages": [
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#4": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 1,
+        "total": 7
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#5": {
+      "status": 200,
+      "body": {
+        "commands": [],
         "first_seq": 1,
         "has_more": false,
         "last_seq": 7,
@@ -609,7 +663,7 @@
         }
       ]
     },
-    "messages_page.a#4": {
+    "messages_page.a#6": {
       "status": 200,
       "body": {
         "commands": [],

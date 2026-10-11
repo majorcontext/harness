@@ -131,6 +131,8 @@ func TestContractReplayReadsB(t *testing.T) {
 				compact{as: "a"},
 				messagesPage{as: "a", limit: 1},
 				messagesPage{as: "a", limit: 2, beforeSeq: 6},
+				messagesPage{as: "a", limit: 2, beforeSeq: 4},
+				messagesPage{as: "a", limit: 2, beforeSeq: 2},
 				messagesPage{as: "a", limit: 10},
 				bootstrap{as: "a", limit: 2},
 				journalPage{as: "a", from: 10},

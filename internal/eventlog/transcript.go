@@ -32,7 +32,9 @@ func summaryID(seq uint64) string { return "cmpsum_" + strconv.FormatUint(seq, 1
 // messages after the newest summary. The model reads less: see ModelHistory.
 func (s *State) Transcript() []protocol.Message {
 	out := make([]protocol.Message, 0, len(s.folded)+len(s.history)+1)
-	out = append(out, s.folded...)
+	for _, m := range s.folded {
+		out = append(out, cloneReaderMessage(m))
+	}
 	if _, ok := s.Compaction(); ok {
 		out = append(out, s.summaryMessage())
 	}
@@ -48,6 +50,15 @@ func (s *State) Transcript() []protocol.Message {
 func (s *State) summaryMessage() protocol.Message {
 	return protocol.Message{ID: summaryID(s.compactedAt), Role: RoleUser, CreatedAt: s.compactedTime,
 		Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: s.compaction.Summary}}}
+}
+
+func cloneReaderMessage(m protocol.Message) protocol.Message {
+	m.Parts = slices.Clone(m.Parts)
+	for i := range m.Parts {
+		m.Parts[i].Arguments = slices.Clone(m.Parts[i].Arguments)
+	}
+	m.OperatorBatch = slices.Clone(m.OperatorBatch)
+	return m
 }
 
 func readerMessage(e entry) protocol.Message {
