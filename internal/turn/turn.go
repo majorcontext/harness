@@ -468,7 +468,7 @@ func (t thread) Delta(_ string, d Delta) {
 func (t thread) Item(m eventlog.Message) error {
 	id := t.threads[t.key]
 	delete(t.threads, t.key)
-	if err := t.Turn.ItemAs(id, m); err != nil {
+	if err := t.ItemAs(id, m); err != nil {
 		return err
 	}
 	t.items = append(t.items, m)
