@@ -3,7 +3,7 @@
 Rules for agents that edit harness. Also read the AGENTS.md in each directory you change.
 
 ## Design
-- The target architecture is docs/architecture.md. New code follows it.
+- The architecture is docs/architecture.md. New code follows it.
 - Design each interface from its consumer's need. Nothing is kept because it exists. There is no backward compatibility.
 - One owner and one source of truth for each piece of state.
 - Build session state from the event log with one `Apply` function, live and on replay.
@@ -19,9 +19,9 @@ Rules for agents that edit harness. Also read the AGENTS.md in each directory yo
 - Only the runtime creates `message.EngineContext`. User text never gains that trust.
 
 ## Spec and review
-- `docs/architecture.md` is the binding spec. Cite the sections and lines a change implements in the PR body. When the spec is silent or unclear, stop and ask; do not invent.
-- A difference from the spec is a blocker. A spec change needs a dated Andy decision recorded in the spec text (`Decided`, `Deliberate parity breaks`), in the same PR or a docs PR.
-- Keep parity with the old engine. Add no feature the spec does not list; simplify structure, not behavior.
+- `docs/architecture.md` is the binding spec. Cite the sections a change implements in the PR body. When the spec is silent or unclear, stop and ask; do not invent.
+- A difference from the spec is a blocker. A spec change needs an Andy decision, and the same PR or a docs PR edits the spec to describe the system as it is. The spec holds no history: no phases, no earlier-system comparison, no dated notes.
+- Add no feature the spec does not list.
 - Judge a change against the architecture as a whole, not the diff: answer the installed `.agents/skills/architecture-review/SKILL.md` and then `.github/skills/harness-architecture-review/SKILL.md` for every review.
 - Follow the installed `.agents/skills/go-guide/SKILL.md` for Go layout, API design, concurrency, tests, and comments. Where it differs from this file, this file wins.
 - One concern per PR. Describe the change in the PR body: problem, design, semantic change, verification. Do not hard-wrap a PR body.
@@ -29,7 +29,7 @@ Rules for agents that edit harness. Also read the AGENTS.md in each directory yo
 
 ## Gates (`internal/gates`, `docs/architecture.md` `CI gates`)
 - Routes: the route table, its read routes, and the mounts of `Runtime.Handler` and `ReadHandler` equal the spec's route list.
-- Errors: every code is a `protocol` constant, an entry of the `internal/server` status map, a row of the spec `Errors` table with the same status, and a value of the `openapi.json` `Error.code` enum. `internal`, `payload_too_large`, and `unauthorized` need no sentinel error (`docs/architecture.md:617`).
+- Errors: every code is a `protocol` constant, an entry of the `internal/server` status map, a row of the spec `Errors` table with the same status, and a value of the `openapi.json` `Error.code` enum. `internal`, `payload_too_large`, and `unauthorized` need no sentinel error (`docs/architecture.md` `Errors`).
 - Structure: `internal/gates/structure.go` lists the one owner of each concept (for example the context window, `Store.Append`, `State.Apply`, `message.EngineContext`) and bans provider-name branches outside `config`, the router, and provider wires. An allow-list entry carries a date and a reason; a stale entry fails.
 - Wire: a test double emits only what `testdata/wire` holds; a recording holds no secret or id. `testdata/wire/allowed.txt` lists exceptions with reasons; `HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire` refreshes recordings with real model calls. Every `e2e/` HTTP client comes from `wireClient`.
 
@@ -57,7 +57,7 @@ Add none of these without a new design decision:
 - After a change to a `protocol` type or to `internal/server` `Table`, commit the `go generate ./protocol` output (`protocol/openapi.json`, `protocol/protocol.ts`). CI fails on a diff.
 
 ## Tests
-- TDD means: write the failing contract test first, see it fail for the named reason, then implement. A contract test is a scenario row in `e2e/`; a row runs on both drivers with `HARNESS_E2E_RUNTIME=1`, except a row marked `rowDeleted` (the spec deletes what it pins). A behavior change adds a row; a bug fix adds one row to the nearest table.
+- TDD means: write the failing contract test first, see it fail for the named reason, then implement. A contract test is a scenario row in `e2e/`; a row runs on both drivers with `HARNESS_E2E_RUNTIME=1`, except a row marked `rowDeleted` (the contract has no such behavior). A behavior change adds a row; a bug fix adds one row to the nearest table.
 - Write no other test unless the code is pure: `internal/eventlog` Apply, wire transcoders (`internal/provider/*/`, `internal/backend/modelapi/convert_test.go`, `internal/backend/claudecode/frames_test.go`), `config`, `internal/message`, `internal/gates`. Otherwise list the file with a one-line reason in `testdata/test-exceptions.txt` (path, space, reason). `internal/gates` fails a change that nets new lines inside Test, Benchmark, Fuzz, or Example functions or package-level vars elsewhere. Top-level helpers, fakes, and types do not count. A listed file still meets the 1.5 test:code ratio of its package.
 - Name a test by its behavior, never by an incident. No test reads another package's unexported state.
 - No `time.Sleep` or `time.After` in tests. Use `testing/synctest` or channels. Use `internal/testpoll` only for cross-process waits.
