@@ -54,7 +54,7 @@ func (d *DiskStore) logPath(session string) string {
 
 // lock returns the session locked; the caller unlocks it.
 func (d *DiskStore) lock(session string) (*diskSession, error) {
-	if err := checkName("session", session); err != nil {
+	if err := CheckName(session); err != nil {
 		return nil, err
 	}
 	d.mu.Lock()
@@ -165,7 +165,7 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := checkRecords(records); err != nil {
+	if err := CheckRecords(records); err != nil {
 		return err
 	}
 	s, err := d.lock(session)
@@ -359,10 +359,10 @@ func hasRecord(path string) bool {
 }
 
 func (d *DiskStore) blobPath(session, key string) (string, error) {
-	if err := checkName("session", session); err != nil {
+	if err := CheckName(session); err != nil {
 		return "", err
 	}
-	if err := checkName("blob key", key); err != nil {
+	if err := CheckName(key); err != nil {
 		return "", err
 	}
 	return filepath.Join(d.root, session, "blobs", key), nil

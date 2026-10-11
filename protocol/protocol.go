@@ -2,7 +2,10 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"slices"
 	"time"
 )
 
@@ -255,6 +258,35 @@ type Compacted struct {
 type Resolution struct {
 	Answer  json.RawMessage `json:"answer,omitempty"`
 	Dismiss bool            `json:"dismiss,omitempty"`
+}
+
+// Validate reports a Resolution that holds both an answer and a dismissal, or
+// neither, or an answer that is not valid JSON. An answer of null, {}, or ""
+// counts as no answer.
+func (r Resolution) Validate() error {
+	if r.Dismiss {
+		if len(r.Answer) > 0 {
+			return errors.New("a resolution holds one answer, or a dismissal")
+		}
+		return nil
+	}
+	if !hasAnswer(r.Answer) {
+		return errors.New("a resolution holds one answer, or a dismissal")
+	}
+	if !json.Valid(r.Answer) {
+		return errors.New("the answer of a resolution is not valid JSON")
+	}
+	return nil
+}
+
+// hasAnswer reports whether answer is a JSON value other than null, an empty
+// object, or an empty string, whatever whitespace surrounds it.
+func hasAnswer(answer json.RawMessage) bool {
+	var b bytes.Buffer
+	if json.Compact(&b, answer) != nil {
+		return len(answer) > 0
+	}
+	return !slices.Contains([]string{"", "null", "{}", `""`}, b.String())
 }
 
 // Resolved is the receipt of a Resolution: the seq of its request.resolved

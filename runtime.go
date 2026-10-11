@@ -254,7 +254,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, err
 	}
 	id := cmp.Or(req.ID, "ses_"+newSuffix())
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
@@ -274,7 +274,7 @@ func newSuffix() string { return strings.ToLower(rand.Text()) }
 // Open acquires a session, fences earlier owners, replays its log, and runs
 // it. A session that this runtime already runs is returned as is.
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return r.load(ctx, id, launch{})
@@ -444,7 +444,7 @@ func (r *Runtime) loaded(ctx context.Context, id string) *Session {
 // session that this runtime does not run is ended already; an ID with no log
 // fails with ErrSessionNotFound.
 func (r *Runtime) End(ctx context.Context, id string) error {
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	s := r.loaded(ctx, id)

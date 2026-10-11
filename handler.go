@@ -68,7 +68,7 @@ func (w withdrawing) Withdraw(ctx context.Context, inputID string) error {
 // Read returns session id. A session that this runtime runs answers from its
 // actor; any other session replays from the store. Nothing acquires it.
 func (r reads) Read(ctx context.Context, id string) (server.Reader, error) {
-	if err := checkName("session", id); err != nil {
+	if err := CheckName(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	if s := r.running(id); s != nil {

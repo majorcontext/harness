@@ -250,8 +250,14 @@ type Record struct {
 }
 
 var ErrConflict = errors.New("harness: append conflict")
+
+// CheckName reports a session ID or blob key that a Store must refuse.
+func CheckName(name string) error
+// CheckRecords reports an empty record, or a record with a newline.
+func CheckRecords(records [][]byte) error
 ```
 
+- A `Store` refuses what `CheckName` and `CheckRecords` report: an empty name, `.`, `..`, or a name with a slash, a backslash, or a NUL; and an empty record or a record with a newline. `DiskStore` and `MemStore` call them, and so does the runtime for a session ID in a path. A store of another storage calls them too, so a name or record that one store accepts, every store accepts.
 - `seq` starts at 1 and has no gaps. `Head` returns the last seq, or 0 for an empty session. `expectedSeq` is the last seq the writer has seen, so it equals the record count.
 - A stale writer gets `ErrConflict` and stops. This holds across `Store` instances on one storage, in one process or in many: the fence is in the storage, not in an instance.
 - Any other append error also stops the session actor, with no retry. The next `Open` fences and replays from the store, so an append that landed is in the replay, and one that did not land is not.
@@ -582,6 +588,8 @@ A part is `{type: "text", text}` or an attachment `{type: "blob", media_type, da
 | New id | `201 {input_id, seq}` |
 | Same id, same body | `200` with the original receipt |
 | Same id, other body | `409 input_conflict` |
+
+`protocol.Resolution.Validate` reports a resolution that holds both an answer and a dismissal, or neither, or an answer that is not valid JSON. An answer of `null`, `{}`, or `""` counts as none. `Session.Resolve` calls it and fails with `ErrInvalidRequest`; a remote client calls it before it posts.
 
 A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command, and its `seq` is the first `command.recorded` record. See Slash commands.
 
