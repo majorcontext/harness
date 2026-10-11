@@ -428,6 +428,7 @@ var runtimeRows = map[string]runtimeRow{
 	"a_kill_interrupts_an_unfinished_command":                            reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_stays_after_the_results_when_a_compaction_follows_two_calls": reGolden(specMessages),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":          reGolden(specOverflowFolds, specBannerPrefix, specView),
+	"codex_http_reasoning_only_responses_stop_after_five":                sameAsServe(),
 	"codex_http_reasoning_only_responses_continue_the_turn":              sameAsServe(),
 	"codex_http_truncated_and_empty_responses_are_retried":               reGolden(specView, specItems, specRetryable),
 	"codex_service_tier_reaches_the_request":                             reGolden(specView, specItems, specUpdate),

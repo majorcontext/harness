@@ -192,6 +192,56 @@
     ]
   },
   "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 2,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 3,
+            "reasoning_items": 1,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 4,
+            "reasoning_items": 2,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 5,
+            "reasoning_items": 3,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          }
+        ]
+      }
+    },
     "get_session.a": {
       "status": 200,
       "body": {

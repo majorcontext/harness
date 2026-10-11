@@ -388,12 +388,29 @@ func codexHTTPRows() []codexScenario {
 					{Name: "plan_c", Match: harnesstest.LastUserText("go")},
 					turn("go", "go", "done"),
 				},
-				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}}),
+				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}, recordWire{}}),
 			},
 			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
 				"plan_a": {Reasoning: []string{"plan a"}},
 				"plan_b": {Reasoning: []string{"plan b"}},
 				"plan_c": {Reasoning: []string{"plan c"}},
+			}},
+		},
+		{
+			scenario: scenario{
+				name: "codex_http_reasoning_only_responses_stop_after_five",
+				model: []harnesstest.Step{
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+				},
+				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}, recordWire{}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
+				"plan_a": {Reasoning: []string{"plan"}},
 			}},
 		},
 		{
