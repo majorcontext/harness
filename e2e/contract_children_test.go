@@ -167,6 +167,8 @@ func busyChildReport(name string, config map[string]any, finish harnesstest.Repl
 			awaitRequests{n: 3},
 			release{step: "child"},
 			awaitRequests{n: 4},
+			bindChild{as: "kid", parent: "a"},
+			awaitSettled{as: "kid", parent: "a"},
 			release{step: "ack"},
 			waitIdle{as: "a"},
 		},

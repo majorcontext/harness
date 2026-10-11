@@ -321,21 +321,63 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 	return obs
 }
 
-// groupByConversation orders requests by the first user text, in order of
-// first arrival, and keeps arrival order inside each group.
+// groupByConversation orders requests by conversation and keeps arrival order
+// inside each group. The conversation of the first request leads. Each later
+// group follows the conversation that spawned it, in the order of the task
+// calls of that conversation, because the arrival order of concurrent children
+// depends on scheduling. A group that no task call names, such as the parent
+// after a compaction, comes last, in order of first arrival.
 func groupByConversation(reqs []harnesstest.Request) []harnesstest.Request {
-	var roots []string
+	if len(reqs) == 0 {
+		return nil
+	}
 	groups := map[string][]harnesstest.Request{}
+	var arrival []string
 	for _, r := range reqs {
 		root := conversationRoot(r)
 		if _, ok := groups[root]; !ok {
-			roots = append(roots, root)
+			arrival = append(arrival, root)
 		}
 		groups[root] = append(groups[root], r)
 	}
+	seen := map[string]bool{}
 	var out []harnesstest.Request
-	for _, root := range roots {
-		out = append(out, groups[root]...)
+	var visit func(root string)
+	visit = func(root string) {
+		if seen[root] {
+			return
+		}
+		seen[root] = true
+		g := groups[root]
+		out = append(out, g...)
+		for _, prompt := range taskPrompts(g[len(g)-1]) {
+			for _, other := range arrival {
+				if !seen[other] && (other == prompt || strings.HasPrefix(other, prompt+"\n")) {
+					visit(other)
+				}
+			}
+		}
+	}
+	visit(conversationRoot(reqs[0]))
+	for _, root := range arrival {
+		visit(root)
+	}
+	return out
+}
+
+// taskPrompts lists the prompts of the task calls in the last request of a
+// conversation, in call order.
+func taskPrompts(r harnesstest.Request) []string {
+	var out []string
+	for _, m := range r.Messages {
+		for _, p := range m.Parts {
+			if p.Kind != "tool_use" || p.ToolName != "task" {
+				continue
+			}
+			if prompt, ok := p.ToolInput["prompt"].(string); ok && prompt != "" {
+				out = append(out, prompt)
+			}
+		}
 	}
 	return out
 }
@@ -629,8 +671,15 @@ func TestInvariants(t *testing.T) {
 func TestGroupByConversation(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	req := func(root, last string) harnesstest.Request {
+	req := func(root, last string, spawns ...string) harnesstest.Request {
 		msgs := []harnesstest.Message{{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: root}}}}
+		if len(spawns) > 0 {
+			var calls []harnesstest.Part
+			for _, prompt := range spawns {
+				calls = append(calls, harnesstest.Part{Kind: "tool_use", ToolName: "task", ToolInput: map[string]any{"prompt": prompt}})
+			}
+			msgs = append(msgs, harnesstest.Message{Role: "assistant", Parts: calls})
+		}
 		if last != "" {
 			msgs = append(msgs, harnesstest.Message{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: last}}})
 		}
@@ -643,14 +692,17 @@ func TestGroupByConversation(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	// The child request arrives between the parent's first and second request,
-	// or after its second; both arrival orders must normalize alike.
+	// Children arrive between the requests of the parent or after them, and in
+	// either order; every arrival order must normalize to the order of the task
+	// calls of the parent.
 	arrivals := [][]harnesstest.Request{
-		{req("p", ""), req("c", ""), req("p", "ack")},
-		{req("p", ""), req("p", "ack"), req("c", "")},
+		{req("p", ""), req("c", ""), req("d", ""), req("p", "ack", "c", "d")},
+		{req("p", ""), req("d", ""), req("c", ""), req("p", "ack", "c", "d")},
+		{req("p", ""), req("p", "ack", "c", "d"), req("d", ""), req("c", "")},
+		{req("p", ""), req("d", ""), req("p", "ack", "c", "d"), req("c", "")},
 	}
 	for _, in := range arrivals {
-		if got, want := label(groupByConversation(in)), "p,ack,c"; got != want {
+		if got, want := label(groupByConversation(in)), "p,ack,c,d"; got != want {
 			t.Errorf("groupByConversation(%s) = %s, want %s", label(in), got, want)
 		}
 	}
