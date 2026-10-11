@@ -12,7 +12,7 @@ import (
 
 // NewChat starts a Server that speaks the OpenAI chat-completions wire at
 // a path ending in "/chat/completions", as a gateway such as Bifrost does.
-// Steps, matching, Block, Release, and error replies behave as for New. A
+// Steps, matching, Block, Release, and error replies behave as for NewAnthropic. A
 // request that a real gateway rejects fails the test: a wrong path, a body
 // without stream and stream_options.include_usage set to true, an unknown
 // role, malformed tool-call arguments, or a tool message with no matching

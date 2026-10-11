@@ -83,7 +83,7 @@ func fakeAnthropicShape(t *testing.T) Shape {
 	}
 	s := Shape{}
 	for _, rep := range replies {
-		srv := harnesstest.New(t, harnesstest.Step{Name: "only", Reply: rep})
+		srv := harnesstest.NewAnthropic(t, harnesstest.Step{Name: "only", Reply: rep})
 		status, body := post(t, srv.URL()+"/v1/messages", nil, anthropicRequest)
 		observeRun(t, AnthropicWire, s, fakeRun{status, body})
 	}

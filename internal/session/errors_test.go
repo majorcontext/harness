@@ -123,7 +123,7 @@ func TestModelCallErrors(t *testing.T) {
 				"turn.ended failed turn: the response reached max_tokens after 1 continuations"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := harnesstest.New(t, tc.steps...)
+			s := harnesstest.NewAnthropic(t, tc.steps...)
 			a, log := runOn(t, &anthropic.Client{APIKey: "k", BaseURL: s.URL()}, turn.Limits{Retries: 1, Continuations: 1})
 			head := uint64(len(lines(t, log, 0)))
 			converse(t, a, "charlie")

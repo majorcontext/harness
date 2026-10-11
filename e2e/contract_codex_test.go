@@ -211,7 +211,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 		Secondary: &harnesstest.RateWindow{UsedPercent: 7, WindowMinutes: 300, ResetAt: 1_800_000_000},
 	}
 	if withBengalfox {
-		limits.BengalfoxPrimary = &harnesstest.RateWindow{UsedPercent: 1.5, WindowMinutes: 300, ResetAt: 1_700_000_000}
+		limits.Extra = map[string]*harnesstest.RateWindow{"bengalfox-primary": {UsedPercent: 1.5, WindowMinutes: 300, ResetAt: 1_700_000_000}}
 	}
 	return harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"reply": {RateLimits: limits}}}
 }

@@ -55,7 +55,11 @@ type CodexReply struct {
 type RateLimits struct {
 	Plan               string
 	Primary, Secondary *RateWindow
-	BengalfoxPrimary   *RateWindow // x-codex-bengalfox-primary-* headers only; the websocket frame has no such window
+	// Extra holds further windows by limit name, such as "bengalfox-primary". They go out as
+	// x-codex-<name>-* headers only; the websocket frame has no such window.
+	// The names "primary" and "secondary" belong to the fields above, and an Extra entry of either
+	// name is ignored.
+	Extra map[string]*RateWindow
 }
 
 // RateWindow is one rate-limit window of RateLimits.
@@ -123,7 +127,7 @@ type OpenAI struct {
 
 const heldPrewarm = "prewarm"
 
-// NewOpenAI starts an OpenAI Responses server that matches Steps as New does.
+// NewOpenAI starts an OpenAI Responses server that matches Steps as NewAnthropic does.
 // A websocket prewarm consumes no Step, and a chain to an unknown response
 // gets the chain-miss error. Cleanup fails t for a wire-contract violation.
 func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {

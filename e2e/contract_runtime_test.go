@@ -48,7 +48,7 @@ func onHosts(t *testing.T, fn func(t *testing.T, h host)) {
 // top-level config keys.
 func startOn(t *testing.T, h host, workdir string, extra map[string]any, steps ...harnesstest.Step) (*runtimeDriver, *harnesstest.Server) {
 	t.Helper()
-	fake := harnesstest.New(t, steps...)
+	fake := harnesstest.NewAnthropic(t, steps...)
 	return h.openIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(extra)), workdir, nil).(*runtimeDriver), fake
 }
 

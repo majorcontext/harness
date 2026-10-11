@@ -57,7 +57,7 @@ func serveSyncConfig(t *testing.T, fake *harnesstest.Server, receiverURL string)
 func TestContractServeStopReportsHandoffAndSynced(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	receiver := newSyncReceiver(t, nil)
 	d := newServeDriverIn(t, serveSyncConfig(t, fake, receiver.srv.URL), nil, t.TempDir())
 	runTurn(t, d, "go")
@@ -70,7 +70,7 @@ func TestContractServeStopReportsHandoffAndSynced(t *testing.T) {
 func TestContractServeStopWithoutSyncReportsUnsynced(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	runTurn(t, d, "go")
 	d.proc.terminate(t)
@@ -82,7 +82,7 @@ func TestContractServeStopWithoutSyncReportsUnsynced(t *testing.T) {
 func TestContractServeStopReportsCrashedWhenSyncDoesNotAcknowledge(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"), replyText("again"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"), replyText("again"))
 	var down atomic.Bool
 	receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
 		if down.Load() {
@@ -119,7 +119,7 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			fake := harnesstest.New(t, replyText("ok"), replyText("again"))
+			fake := harnesstest.NewAnthropic(t, replyText("ok"), replyText("again"))
 			var refuse atomic.Bool
 			receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
 				if refuse.Load() {
@@ -151,7 +151,7 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	store := t.TempDir()
 	stale := filepath.Join(store, stopReportFile)
 	if err := os.WriteFile(stale, []byte(`{"stop":"handoff","sync":"synced"}`+"\n"), 0o644); err != nil {

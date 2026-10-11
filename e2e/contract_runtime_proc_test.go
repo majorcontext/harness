@@ -64,7 +64,7 @@ func TestContractRuntimeProcesses(t *testing.T) {
 // processHost opens h on a scripted model with the dev process configured.
 func processHost(t *testing.T, h host, steps ...harnesstest.Step) (driver, *harnesstest.Server) {
 	t.Helper()
-	fake := harnesstest.New(t, steps...)
+	fake := harnesstest.NewAnthropic(t, steps...)
 	return h.open(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(devProcesses())), nil), fake
 }
 
@@ -202,7 +202,7 @@ func processStatusLine(t *testing.T, h host) {
 }
 
 func processNeedsWorkdir(t *testing.T) {
-	fake := harnesstest.New(t,
+	fake := harnesstest.NewAnthropic(t,
 		harnesstest.Step{Name: "start", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{processStart("dev")}}},
 		harnesstest.Step{Name: "failed", Match: harnesstest.LastToolResult("process"), Reply: harnesstest.Reply{Text: "ok"}})
 	d := newRuntimeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(devProcesses())), false, "", nil)

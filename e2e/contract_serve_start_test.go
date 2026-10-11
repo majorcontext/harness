@@ -49,7 +49,7 @@ func awaitLog(t *testing.T, d *runtimeDriver, wants ...string) {
 func TestContractServeStartOpensOnlySessionsWithWork(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := runTurn(t, d, "go")
 	before := d.view(t, id).HeadSeq
@@ -65,7 +65,7 @@ func TestContractServeStartOpensOnlySessionsWithWork(t *testing.T) {
 func TestContractServeStartSkipsALogThatDoesNotReplay(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := runTurn(t, d, "go")
 	d.Restart(t, false)
@@ -90,7 +90,7 @@ func TestContractServeStartSkipsALogThatDoesNotReplay(t *testing.T) {
 func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := runTurn(t, d, "go")
 	first, err := os.ReadFile(filepath.Join(d.store, id, "log.jsonl"))
@@ -120,7 +120,7 @@ func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
 func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	first := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	a, b := runTurn(t, first, "one"), runTurn(t, first, "two")
 	headA, headB := first.view(t, a).HeadSeq, first.view(t, b).HeadSeq
@@ -163,7 +163,7 @@ func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 func TestContractServeLogsItsStartAndEachCreate(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := d.Create(t)
 	awaitLog(t, d, `"msg":"serve start"`, `"msg":"config: `, `"msg":"session created"`, `"session":"`+id+`"`)
@@ -199,7 +199,7 @@ func startServePortZero(t *testing.T, env map[string]string) *serveProc {
 func TestContractServeAddrPortZeroReportsTheBoundPort(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("ok"))
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
 	cfg := writeGoalConfigWith(t, fake.URL(), scenarioConfig(pluginConfig(t, map[string]any{"serve": true})))
 	p := startServePortZero(t, map[string]string{"HARNESS_SESSION_DIR": t.TempDir(), "HARNESS_CONFIG": cfg, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
 	host, port, err := net.SplitHostPort(p.addr)

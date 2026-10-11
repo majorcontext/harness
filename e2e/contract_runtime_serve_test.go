@@ -12,7 +12,7 @@ import (
 
 func startServeFlags(t *testing.T, workdir string, extra map[string]any, env map[string]string, args []string, steps ...harnesstest.Step) (*runtimeDriver, *harnesstest.Server) {
 	t.Helper()
-	fake := harnesstest.New(t, steps...)
+	fake := harnesstest.NewAnthropic(t, steps...)
 	cfg := writeGoalConfigWith(t, fake.URL(), scenarioConfig(extra))
 	return serveHost.openIn(t, cfg, workdir, env, args...).(*runtimeDriver), fake
 }

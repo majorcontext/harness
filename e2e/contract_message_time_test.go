@@ -130,7 +130,7 @@ func TestContractMessageTime(t *testing.T) {
 
 func dismissalTime(t *testing.T, h host) {
 	t.Helper()
-	fake := harnesstest.New(t)
+	fake := harnesstest.NewAnthropic(t)
 	drv := claudeLane{mode: "question", ask: true}.newDriver(t, h, fake.URL()).(*claudeDriver)
 	d := drv.laneHost.(*runtimeDriver)
 	id := d.Create(t)

@@ -230,7 +230,7 @@ func TestServeProcessesDieWithTheirTest(t *testing.T) {
 	t.Parallel()
 	var pids []int
 	t.Run("body", func(t *testing.T) {
-		fake := harnesstest.New(t)
+		fake := harnesstest.NewAnthropic(t)
 		d := newServeDriverIn(t, writeGoalConfig(t, fake.URL()), nil, t.TempDir())
 		pids = append(pids, d.proc.cmd.Process.Pid)
 		d.Restart(t, true)

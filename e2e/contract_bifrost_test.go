@@ -17,7 +17,7 @@ const (
 func scenarioFake(t *testing.T, sc scenario) (*harnesstest.Server, map[string]any) {
 	t.Helper()
 	if !sc.chat {
-		fake := harnesstest.New(t, sc.model...)
+		fake := harnesstest.NewAnthropic(t, sc.model...)
 		extra, ok := sc.config["providers"].(map[string]any)
 		if !ok {
 			return fake, sc.config

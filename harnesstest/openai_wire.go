@@ -3,9 +3,12 @@ package harnesstest
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -325,10 +328,20 @@ func (rl *RateLimits) setHeaders(h http.Header) {
 	if rl.Plan != "" {
 		h.Set("x-codex-plan-type", rl.Plan)
 	}
-	for _, w := range []struct {
+	windows := []struct {
 		prefix string
 		window *RateWindow
-	}{{"primary", rl.Primary}, {"secondary", rl.Secondary}, {"bengalfox-primary", rl.BengalfoxPrimary}} {
+	}{{"primary", rl.Primary}, {"secondary", rl.Secondary}}
+	for _, name := range slices.Sorted(maps.Keys(rl.Extra)) {
+		if n := strings.ToLower(name); n == "primary" || n == "secondary" {
+			continue
+		}
+		windows = append(windows, struct {
+			prefix string
+			window *RateWindow
+		}{name, rl.Extra[name]})
+	}
+	for _, w := range windows {
 		if w.window == nil {
 			continue
 		}

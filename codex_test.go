@@ -139,7 +139,7 @@ func TestEachWireRunsATurn(t *testing.T) {
 		serve       func(testing.TB, ...harnesstest.Step) *harnesstest.Server
 		p           config.Provider
 	}{
-		{"anthropic/claude-opus-5", "", harnesstest.New, config.Provider{APIKeyEnv: "HARNESS_TEST_KEY"}},
+		{"anthropic/claude-opus-5", "", harnesstest.NewAnthropic, config.Provider{APIKeyEnv: "HARNESS_TEST_KEY"}},
 		{"bifrost/fireworks/accounts/fireworks/routers/firerouter", "/v1", harnesstest.NewChat,
 			config.Provider{Type: config.TypeOpenAICompat, APIKeyEnv: "HARNESS_TEST_KEY"}},
 	} {
