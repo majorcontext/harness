@@ -239,7 +239,7 @@ func claudeRuns(modes []string) []claudeRun {
 }
 
 func runClaudeSpawn(ctx context.Context, bin string, env []string, sp claudeSpawn) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := exec.CommandContext(ctx, bin, "--include-partial-messages")
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(strings.Join(sp.stdin, "\n") + "\n")
 	stdout, err := cmd.StdoutPipe()

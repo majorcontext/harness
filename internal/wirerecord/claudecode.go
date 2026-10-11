@@ -272,3 +272,18 @@ func runResume(dir string, args []string, decision obj) ([]byte, error) {
 		return nil, fmt.Errorf("claude did not finish")
 	}
 }
+
+// recordClaudeCodePartial records a turn with thinking and text that the CLI
+// streams block by block, as the claudecode backend runs it.
+func recordClaudeCodePartial(r *recorder, work string) error {
+	dir := filepath.Join(work, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	raw, err := runCLI(dir, []string{"Think it over, say in one short sentence what you will do, run echo hi with the Bash tool, then greet me in one short sentence."},
+		cliArgs(claudeModel, "Bash", "--effort", "medium", "--include-partial-messages"), false)
+	if err != nil {
+		return fmt.Errorf("partial run: %w", err)
+	}
+	return r.saveJSONL("claudecode.partial.jsonl", raw)
+}
