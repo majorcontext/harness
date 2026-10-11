@@ -122,7 +122,7 @@ func startNonLoopbackServe(t *testing.T, env map[string]string, args ...string) 
 		g := startGroup(t, cmd)
 		// Real cross-process startup: poll on a short interval bounded by a
 		// deadline (synctest N/A).
-		if !testpoll.UntilNoT(10*time.Second, func() bool {
+		if !testpoll.UntilNoT(serveReadyBudget(t), func() bool {
 			return !g.alive() || strings.Contains(stderr.String(), `"serve start"`)
 		}, 15*time.Millisecond) {
 			t.Fatalf("serve neither started nor exited on %s\nstderr:\n%s", addr, stderr.String())
@@ -172,7 +172,7 @@ func freeAddrOnHost(t *testing.T, host string) string {
 // different address than the one passed to -addr).
 func waitHealthyAt(t *testing.T, dialAddr string, stderr *lockedBuffer) {
 	t.Helper()
-	if !testpoll.UntilNoT(10*time.Second, func() bool {
+	if !testpoll.UntilNoT(serveReadyBudget(t), func() bool {
 		resp, err := wireClient(t, http.DefaultClient).Get("http://" + dialAddr + "/health")
 		if err == nil {
 			resp.Body.Close()

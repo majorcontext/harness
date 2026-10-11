@@ -13,6 +13,18 @@ import (
 	"github.com/majorcontext/harness/internal/testpoll"
 )
 
+const serveReadyFallback = 2 * time.Minute
+
+// serveReadyBudget bounds the wait for a serve process by the test's own
+// deadline, so a loaded machine fails only when the whole test would.
+func serveReadyBudget(t *testing.T) time.Duration {
+	t.Helper()
+	if d, ok := t.Deadline(); ok {
+		return max(0, time.Until(d)-5*time.Second)
+	}
+	return serveReadyFallback
+}
+
 func newRunToken(t *testing.T) string {
 	t.Helper()
 	b := make([]byte, 16)
@@ -86,7 +98,7 @@ func TestStartServeProcMovesOffATakenPort(t *testing.T) {
 // (synctest N/A).
 func (p *serveProc) waitOwned() bool {
 	p.t.Helper()
-	if !testpoll.UntilNoT(10*time.Second, func() bool {
+	if !testpoll.UntilNoT(serveReadyBudget(p.t), func() bool {
 		if !p.alive() {
 			return true
 		}
