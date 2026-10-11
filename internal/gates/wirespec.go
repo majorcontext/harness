@@ -144,10 +144,10 @@ func ParserReads(fsys fs.FS) ([]ParserRead, error) {
 	if err := add(caseParserReads(fsys, "anthropic", "internal/provider/anthropic", "anthropic.go", "apiError", httpError, nil)); err != nil {
 		return nil, err
 	}
-	if err := add(caseParserReads(fsys, "responses", "internal/provider/openai", "openai.go", "handle", nil, map[string]string{"head": "item"})); err != nil {
+	if err := add(caseParserReads(fsys, "responses", "internal/provider/openai", "stream.go", "handle", nil, map[string]string{"head": "item"})); err != nil {
 		return nil, err
 	}
-	if err := add(caseParserReads(fsys, "responses", "internal/provider/openai", "openai.go", "apiError", httpError, nil)); err != nil {
+	if err := add(caseParserReads(fsys, "responses", "internal/provider/openai", "client.go", "apiError", httpError, nil)); err != nil {
 		return nil, err
 	}
 	if err := add(caseParserReads(fsys, "chat", "internal/provider/openaicompat", "openaicompat.go", "apiError", httpError, nil)); err != nil {
