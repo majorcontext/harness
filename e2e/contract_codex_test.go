@@ -218,7 +218,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexPluginRows(t)))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexReasoningOnlyRows(), codexPluginRows(t)))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -234,6 +234,45 @@ func (a recordPrewarmHas) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 		got = append(got, strings.Contains(instructions, a.contains))
 	}
 	r.record(t, "prewarm_instructions_have", "", callResult{Status: 200, Body: got})
+}
+
+func codexReasoningOnlyRows() []codexScenario {
+	return []codexScenario{
+		{
+			scenario: scenario{
+				name: "codex_http_reasoning_only_responses_continue_the_turn",
+				model: []harnesstest.Step{
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_b", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_c", Match: harnesstest.LastUserText("go")},
+					{Name: "go", Match: harnesstest.LastUserText("go"), Reply: codexText("done")},
+				},
+				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}, recordWire{}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
+				"plan_a": {Reasoning: []string{"plan a"}},
+				"plan_b": {Reasoning: []string{"plan b"}},
+				"plan_c": {Reasoning: []string{"plan c"}},
+			}},
+		},
+		{
+			scenario: scenario{
+				name: "codex_http_reasoning_only_responses_stop_after_five",
+				model: []harnesstest.Step{
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
+				},
+				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}, recordWire{}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
+				"plan_a": {Reasoning: []string{"plan"}},
+			}},
+		},
+	}
 }
 
 func codexPluginRows(t *testing.T) []codexScenario {
@@ -377,40 +416,6 @@ func codexHTTPRows() []codexScenario {
 			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
 				"dropped":   {Drop: true},
 				"plan_only": {Reasoning: []string{"plan"}},
-			}},
-		},
-		{
-			scenario: scenario{
-				name: "codex_http_reasoning_only_responses_continue_the_turn",
-				model: []harnesstest.Step{
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_b", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_c", Match: harnesstest.LastUserText("go")},
-					turn("go", "go", "done"),
-				},
-				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}, recordWire{}}),
-			},
-			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
-				"plan_a": {Reasoning: []string{"plan a"}},
-				"plan_b": {Reasoning: []string{"plan b"}},
-				"plan_c": {Reasoning: []string{"plan c"}},
-			}},
-		},
-		{
-			scenario: scenario{
-				name: "codex_http_reasoning_only_responses_stop_after_five",
-				model: []harnesstest.Step{
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-					{Name: "plan_a", Match: harnesstest.LastUserText("go")},
-				},
-				actions: codexSession(codexTurn("a", "go"), []action{getSession{as: "a"}, recordWire{}}),
-			},
-			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
-				"plan_a": {Reasoning: []string{"plan"}},
 			}},
 		},
 		{
