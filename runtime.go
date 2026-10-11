@@ -151,6 +151,9 @@ type Runtime struct {
 
 	mu     sync.Mutex
 	closed bool
+	// closeDone closes when the first Close returns; closeErr is its result.
+	closeDone chan struct{}
+	closeErr  error
 	// syncStopped is set once a Sync rejects a batch for good.
 	syncStopped atomic.Bool
 	sessions    map[string]*entry
@@ -496,13 +499,34 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 	return out, nil
 }
 
-// Close hands off every session, waits for every goroutine of the runtime,
-// closes the model connections, and stops the processes. When ctx ends
-// first, it stops the remaining sessions without an append, which cancels
-// their turns, and still waits for every goroutine before it closes the
-// model connections and kills the processes; their next Open finds a
-// crashed turn. An external harness ends within its own stop grace.
+// Close hands off every session, then closes the model connections and stops
+// the processes. It is idempotent: the first call shuts the runtime down and
+// every later call returns its result. Each call returns by the end of its
+// ctx with context.Cause(ctx). When the ctx of the first call ends, it
+// cancels every run and kills the processes, and does not wait for a tool
+// that ignores its ctx; a session whose run is still going keeps its
+// Ownership until that run returns, and the next Open finds a crashed turn.
+// An external harness ends within its own stop grace.
 func (r *Runtime) Close(ctx context.Context) error {
+	r.mu.Lock()
+	if r.closeDone != nil {
+		done := r.closeDone
+		r.mu.Unlock()
+		select {
+		case <-done:
+			return r.closeErr
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	r.closeDone = make(chan struct{})
+	r.mu.Unlock()
+	r.closeErr = r.shutdown(ctx)
+	close(r.closeDone)
+	return r.closeErr
+}
+
+func (r *Runtime) shutdown(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
 	r.closeStart()
@@ -539,9 +563,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 	select {
 	case <-stopped:
 	case <-ctx.Done():
-		errs = append(errs, ctx.Err())
-		r.cancel()
-		<-stopped
+		errs = append(errs, context.Cause(ctx))
 	}
 	r.cancel()
 	r.models.Close()

@@ -125,7 +125,7 @@ func TestCreateReturnsTheStoreError(t *testing.T) {
 	}
 }
 
-func TestCloseWaitsForTheTurnsThatItsEndedContextCancels(t *testing.T) {
+func TestCloseWithAnEndedContextDoesNotWaitForAStuckTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFake()
 		f.stuck = make(chan struct{})
@@ -135,18 +135,11 @@ func TestCloseWaitsForTheTurnsThatItsEndedContextCancels(t *testing.T) {
 		<-f.runs
 		ctx, cancel := context.WithCancel(bg)
 		cancel()
-		closed := make(chan error, 1)
-		go func() { closed <- r.Close(ctx) }()
-		synctest.Wait()
-		select {
-		case err := <-closed:
-			t.Fatalf("Close returned %v while a canceled turn still runs", err)
-		default:
-		}
-		close(f.stuck)
-		if err := <-closed; !errors.Is(err, context.Canceled) {
+		if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Close = %v, want Canceled", err)
 		}
+		close(f.stuck)
+		synctest.Wait()
 		wantLog(t, st, 2, "input.admitted a", "turn.started a")
 	})
 }
@@ -164,6 +157,7 @@ func TestCloseWithAnEndedContextNeverHandsOff(t *testing.T) {
 			if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
 				t.Fatalf("Close = %v, want Canceled", err)
 			}
+			synctest.Wait()
 			wantLog(t, st, 2, "input.admitted a", "turn.started a")
 		})
 	}

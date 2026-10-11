@@ -131,9 +131,12 @@ func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.S
 func (r *Runtime) Models() []protocol.Model
 func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
 // Close hands off every session, then returns once Sync has acknowledged
-// every record through each handoff, or, when ctx ends first, once the
-// turns that it cancels have ended. A session that Sync rejected for good
-// does not fail Close; SyncStopped reports it.
+// every record through each handoff. It is idempotent: the first call shuts
+// the runtime down and later calls return its result. Each call returns by the
+// end of its ctx with context.Cause(ctx). When the ctx of the first call ends,
+// it cancels every run and kills the processes, and does not wait for a tool
+// that ignores ctx. A session that Sync rejected for good does not fail
+// Close; SyncStopped reports it.
 func (r *Runtime) Close(ctx context.Context) error
 
 // CatchUp replicates every stored session through Sync, opening none. A box harness calls it at start.
@@ -538,7 +541,7 @@ A child is a session with `parent_id`. The `task` tool starts it in the backgrou
 
 ### Shutdown
 
-One `sync.WaitGroup` per runtime tracks every goroutine that the runtime starts. `Runtime.Close` releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers, once. When its ctx ends first, it stops the remaining sessions without an append, which cancels their turns, and still waits for the group before it closes them; their next `Open` finds a crashed turn. A turn ends when its tools and its backend return: a tool gets the canceled context, and an external harness gets SIGINT and is killed after its grace (5 s for Claude Code). New work that `Close` would wait for fails with `ErrDraining` after `Close` starts; work that already runs finishes or is canceled.
+One `sync.WaitGroup` per runtime tracks every goroutine that the runtime starts. `Runtime.Close` is idempotent: the first call shuts down, and each later call waits for that result, bounded by its own ctx. It releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers, once. Each call returns by the end of its ctx with `context.Cause(ctx)`. When the ctx of the first call ends first, it stops the remaining sessions without an append, which cancels their turns, kills the processes, and returns without waiting for the group: a tool that ignores its ctx keeps its goroutine, and its session keeps its `Ownership` until the tool returns. A lease expires, and `DiskStore` fences on the next `Open`, which finds a crashed turn. A turn ends when its tools and its backend return: a tool gets the canceled context, and an external harness gets SIGINT and is killed after its grace (5 s for Claude Code). New work that `Close` would wait for fails with `ErrDraining` after `Close` starts; work that already runs finishes or is canceled.
 
 ## HTTP
 
@@ -690,7 +693,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Submit` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, or a typed command did not succeed, and 3 when `-goal` does not reach `achieved` and no turn failed. It prints `session: <id>` on stderr when it saved the session.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins`, which probes each plugin again and refreshes the manifest cache, and prints each plugin with its hooks.
-- `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
+- `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline; a session whose tool ignores the cancel then keeps its lease until the lease expires. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
 
 ## turn and backend
 
@@ -951,7 +954,7 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 - A result reports no elapsed time. The status line names instants instead.
 - When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
 - Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
-- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns, waits for them to end, and kills the processes before it returns.
+- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes, and returns without waiting for a turn to end.
 - The process tool and the `/processes` routes share the one manager. A `start`, `stop`, or `restart` route is work that `Runtime.Close` waits for, and fails with `draining` (503) after `Close` starts, so no route starts a process that `Close` does not stop. The runtime does not expose the manager. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message.
 
 ### workspace
