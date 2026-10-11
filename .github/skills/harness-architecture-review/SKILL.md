@@ -1,11 +1,11 @@
 ---
-name: architecture-review
-description: Judge a pull request against the architecture as a whole, not the diff alone. Use on every review of harness code, docs, or CI config. Checks single sources of truth, layering, deleted surfaces, workarounds, unrecorded spec divergence, test doubles, generated types, and code structure (imports, package purpose and size, grab-bag names, Go API design).
+name: harness-architecture-review
+description: Harness-specific checks for the shared architecture-review skill: the spec sections, layering, deleted surfaces, single owners, wire doubles, and structure gates. Use on every review of harness code, docs, or CI config.
 ---
 
-# Architecture review
+# Harness architecture checks
 
-A diff can be correct and still be wrong for the system. Review the change against the architecture as a whole. This skill adds to the correctness review; it does not replace it.
+Apply the installed shared skills first: `.agents/skills/architecture-review/SKILL.md` for the review method and questions, and `.agents/skills/go-guide/SKILL.md` for Go layout, API, and test rules. This file adds only what is specific to harness. This file points; the spec decides.
 
 ## Where the architecture is written
 
@@ -17,7 +17,7 @@ Read these before you judge. Do not rely on memory or on this file. This file po
 
 If the spec file is not in your checkout, say so in the review. Do not guess its content.
 
-## Questions to answer for every change
+## Harness questions for every change
 
 Answer each one with a spec line, written as `docs/architecture.md:<line>`. A finding without a cited line is an opinion. State the question, the line, and the code that breaks it.
 
@@ -51,14 +51,14 @@ These are pointers. Open the section named, read the current text, and check the
 
 ## Structure
 
-The questions above check contracts. Check the code layout too. A "yes" is a finding; cite the file and line. The Go rules are `Four rules` and its Go guidance table in `docs/architecture.md`, and the root `AGENTS.md` `Code` section.
+Check the code layout too. A "yes" is a finding; cite the file and line. The Go rules are `Four rules` and its Go guidance table in `docs/architecture.md`, and the root `AGENTS.md` `Code` section.
 
 - Imports. A new import follows `Internal packages` and passes the `depguard` rules in `.golangci.yml`. A change that widens a `depguard` rule needs a spec line.
 - Second definition. A type or concept defined a second time is a finding. Each record has one owner; name it.
-- Package purpose and size. A package has one purpose. A file over about 1,000 lines or a function over about 150 lines needs a stated reason; `internal/gates` fails changed code above its lower limits.
+- Package purpose and size. A package has one purpose. A file over about 1,000 lines or a function over about 150 lines needs a stated reason; `internal/gates` fails changed code above its lower limits (800 and 80).
 - Logic in `cmd/`. Logic in `cmd/` that is not flag parsing and wiring belongs in `internal/`.
-- Grab-bag names. No `util`, `common`, or `helpers` packages; no files named `types.go` or `interfaces.go`. Name a package or file by its purpose.
-- Go API design. `context.Context` is the first parameter; the consumer declares the interface; the doc comment states concurrency safety and ownership; callers match errors with `errors.Is` or `errors.As`; a stream is an `iter.Seq`; names do not stutter (`session.Actor`, not `session.SessionActor`).
+- Grab-bag names. No `util`, `common`, or `helpers` packages; no files named `types.go` or `interfaces.go`.
+- Go API design. Apply the `go-guide` skill; names do not stutter (`session.Actor`, not `session.SessionActor`).
 
 ## How to report
 

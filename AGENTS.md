@@ -22,7 +22,8 @@ Rules for agents that edit harness. Also read the AGENTS.md in each directory yo
 - `docs/architecture.md` is the binding spec. Cite the sections and lines a change implements in the PR body. When the spec is silent or unclear, stop and ask; do not invent.
 - A difference from the spec is a blocker. A spec change needs a dated Andy decision recorded in the spec text (`Decided`, `Deliberate parity breaks`), in the same PR or a docs PR.
 - Keep parity with the old engine. Add no feature the spec does not list; simplify structure, not behavior.
-- Judge a change against the architecture as a whole, not the diff: answer `.github/skills/architecture-review/SKILL.md` for every review.
+- Judge a change against the architecture as a whole, not the diff: answer the installed `.agents/skills/architecture-review/SKILL.md` and then `.github/skills/harness-architecture-review/SKILL.md` for every review.
+- Follow the installed `.agents/skills/go-guide/SKILL.md` for Go layout, API design, concurrency, tests, and comments. Where it differs from this file, this file wins.
 - One concern per PR. Describe the change in the PR body: problem, design, semantic change, verification. Do not hard-wrap a PR body.
 - Never resolve a review thread without a reply: fix it and say how, or say why you decline.
 

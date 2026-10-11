@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "architecture-review": {
+      "source": "andybons/kit",
+      "sourceType": "github",
+      "skillPath": "skills/architecture-review/SKILL.md",
+      "computedHash": "c2f08c33b872d89039f2e577e48741ff3494ca7b698c6d55f54a0e020772625a"
+    },
+    "go-guide": {
+      "source": "andybons/kit",
+      "sourceType": "github",
+      "skillPath": "skills/go-guide/SKILL.md",
+      "computedHash": "1888085fa84fa0d11580ac5d77252b997b7fb64d920e947bcb62f261f76dd678"
+    }
+  }
+}
