@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
@@ -83,17 +82,4 @@ func fromMessage(m *message.Message) eventlog.Message {
 		}
 	}
 	return out
-}
-
-func hasOutput(m eventlog.Message) bool {
-	return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool {
-		return p.Type == eventlog.PartToolCall || p.Type == eventlog.PartText && p.Text != ""
-	})
-}
-
-// hasReasoning reports a reasoning part that the next request can replay.
-func hasReasoning(m eventlog.Message) bool {
-	return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool {
-		return p.Type == eventlog.PartReasoning && len(p.ProviderData) > 0
-	})
 }
