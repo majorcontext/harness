@@ -27,9 +27,10 @@ Rules for agents that edit harness. Also read the AGENTS.md in each directory yo
 - Never resolve a review thread without a reply: fix it and say how, or say why you decline.
 
 ## Gates (`internal/gates`, `docs/architecture.md` `CI gates`)
-- Routes: mounted routes equal the spec's route table and `protocol/openapi.json`. Errors: each code is a `protocol` constant, a sentinel, and a row of the `Errors` table with one status; each producer owns its codes, and one writer builds the error body.
-- Structure: `internal/gates/structure.go` lists the one owner of each concept (context window, `Store.Append`, `State.Apply`, `message.EngineContext`) and bans provider-name branches outside `config`, the router, and provider wires. An allow-list entry carries a date and a reason; a stale entry fails.
-- Wire: a test double emits only what `testdata/wire` holds; a recording holds no secret or id. Refresh a recording with `HARNESS_RECORD_WIRE=1`. Every `e2e/` HTTP client comes from `wireClient`.
+- Routes: the route table, its read routes, and the mounts of `Runtime.Handler` and `ReadHandler` equal the spec's route list.
+- Errors: every code is a `protocol` constant, an entry of the `internal/server` status map, a row of the spec `Errors` table with the same status, and a value of the `openapi.json` `Error.code` enum. `internal`, `payload_too_large`, and `unauthorized` need no sentinel error (`docs/architecture.md:617`).
+- Structure: `internal/gates/structure.go` lists the one owner of each concept (for example the context window, `Store.Append`, `State.Apply`, `message.EngineContext`) and bans provider-name branches outside `config`, the router, and provider wires. An allow-list entry carries a date and a reason; a stale entry fails.
+- Wire: a test double emits only what `testdata/wire` holds; a recording holds no secret or id. `testdata/wire/allowed.txt` lists exceptions with reasons; `HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire` refreshes recordings with real model calls. Every `e2e/` HTTP client comes from `wireClient`.
 
 ## Settled non-goals
 Add none of these without a new design decision:
