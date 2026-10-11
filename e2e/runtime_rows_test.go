@@ -98,7 +98,7 @@ const (
 	specSameBody       = "| Same id, same body | `200` with the original receipt |"
 	specOtherBody      = "| Same id, other body | `409 input_conflict` |"
 	specTurnMismatch   = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
-	specRetryable      = "`ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times"
+	specRetryable      = "`ErrRetryable` (a 429, a 5xx, a truncated stream) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times"
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
 	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
@@ -428,9 +428,8 @@ var runtimeRows = map[string]runtimeRow{
 	"a_kill_interrupts_an_unfinished_command":                            reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_stays_after_the_results_when_a_compaction_follows_two_calls": reGolden(specMessages),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":          reGolden(specOverflowFolds, specBannerPrefix, specView),
-	"codex_http_reasoning_only_responses_stop_after_five":                sameAsServe(),
-	"codex_http_reasoning_only_responses_continue_the_turn":              sameAsServe(),
-	"codex_http_truncated_and_empty_responses_are_retried":               reGolden(specView, specItems, specRetryable),
+	"codex_http_responses_without_a_tool_call_end_the_turn":              sameAsServe(),
+	"codex_http_truncated_responses_are_retried":                         sameAsServe(),
 	"codex_service_tier_reaches_the_request":                             reGolden(specView, specItems, specUpdate),
 	"codex_settings_switch_to_another_provider_keeps_the_history":        reGolden(specView, specItems, specUpdate),
 	"commands_menu_lists_builtin_and_prompt_commands":                    reGolden(specCmdMenuRoutes, specCmdUnsupport),

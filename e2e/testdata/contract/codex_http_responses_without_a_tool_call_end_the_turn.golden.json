@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             },
             {
               "kind": "text",
@@ -58,79 +58,15 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "gpt-5.6-sol",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "go"
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "gpt-5.6-sol",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "go"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "text": "two"
             }
           ]
         }
@@ -145,17 +81,17 @@
         "parts": [
           {
             "type": "text",
-            "text": "go"
+            "text": "one"
           }
         ]
       },
       {
         "id": "msg#2",
-        "role": "assistant",
+        "role": "user",
         "parts": [
           {
-            "type": "reasoning",
-            "text": "plan a"
+            "type": "text",
+            "text": "two"
           }
         ]
       },
@@ -165,27 +101,7 @@
         "parts": [
           {
             "type": "reasoning",
-            "text": "plan b"
-          }
-        ]
-      },
-      {
-        "id": "msg#4",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "reasoning",
-            "text": "plan c"
-          }
-        ]
-      },
-      {
-        "id": "msg#5",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "done"
+            "text": "plan"
           }
         ]
       }
@@ -213,29 +129,6 @@
               "reasoning.encrypted_content"
             ],
             "input_items": 3,
-            "reasoning_items": 1,
-            "reasoning_summary": "auto",
-            "transport": "sse"
-          },
-          {
-            "content_encoding": "zstd",
-            "event": "request",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "input_items": 4,
-            "reasoning_items": 2,
-            "reasoning_summary": "auto",
-            "transport": "sse"
-          },
-          {
-            "content_encoding": "zstd",
-            "event": "request",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "input_items": 5,
-            "reasoning_items": 3,
             "reasoning_summary": "auto",
             "transport": "sse"
           }
@@ -250,7 +143,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 11,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -263,8 +156,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 20,
-          "output_tokens": 12
+          "input_tokens": 10,
+          "output_tokens": 6
         }
       }
     }
