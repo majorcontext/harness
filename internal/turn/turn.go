@@ -480,7 +480,7 @@ func (t thread) Item(m eventlog.Message) error {
 func (t thread) Drop() {
 	if id, ok := t.threads[t.key]; ok {
 		delete(t.threads, t.key)
-		t.Turn.Discard(id)
+		t.Discard(id)
 	}
 }
 
