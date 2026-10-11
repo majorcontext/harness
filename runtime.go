@@ -556,6 +556,7 @@ func (r *Runtime) shutdown(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
+	var waitCut bool
 	stopped := make(chan struct{})
 	go func() {
 		r.group.Wait()
@@ -565,13 +566,14 @@ func (r *Runtime) shutdown(ctx context.Context) error {
 	case <-stopped:
 	case <-ctx.Done():
 		errs = append(errs, context.Cause(ctx))
+		waitCut = true
 	}
 	r.cancel()
 	clean := closeBy(ctx, r.models.Close)
 	if !r.closeTools(ctx) {
 		clean = false
 	}
-	if !clean && ctx.Err() != nil {
+	if !clean && !waitCut {
 		errs = append(errs, context.Cause(ctx))
 	}
 	return errors.Join(errs...)
@@ -668,13 +670,11 @@ func (r *Runtime) history(ctx context.Context, id string) ([]eventlog.Message, e
 }
 
 // closeTools stops the processes, the plugins, and the MCP servers, and
-// returns when ctx ends.
-// closeTools closes the processes, plugins, and MCP clients, and reports
-// whether each finished before ctx ended.
+// reports whether each finished before ctx ended.
 func (r *Runtime) closeTools(ctx context.Context) bool {
 	clean := true
 	if r.procs != nil {
-		r.procs.Close(ctx)
+		clean = r.procs.Close(ctx)
 	}
 	if r.plugins != nil {
 		clean = closeBy(ctx, r.plugins.Close) && clean

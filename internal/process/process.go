@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/config"
@@ -483,9 +484,9 @@ func (m *Manager) Undeclare(name string) error {
 	return nil
 }
 
-// Close stops every currently-active process, bounded by ctx. Intended for
-// process shutdown.
-func (m *Manager) Close(ctx context.Context) {
+// Close stops every currently-active process, bounded by ctx, and reports
+// whether each stop finished before ctx ended. Intended for process shutdown.
+func (m *Manager) Close(ctx context.Context) bool {
 	m.mu.Lock()
 	names := make([]string, 0, len(m.procs))
 	for name, p := range m.procs {
@@ -495,15 +496,19 @@ func (m *Manager) Close(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	var wg sync.WaitGroup
+	var cut atomic.Bool
 	for _, name := range names {
 		name := name
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = m.Stop(ctx, name)
+			if _, err := m.Stop(ctx, name); err != nil && ctx.Err() != nil {
+				cut.Store(true)
+			}
 		}()
 	}
 	wg.Wait()
+	return !cut.Load()
 }
 
 // envNames extracts the "K" half of every "K=V" entry, dropping values —
