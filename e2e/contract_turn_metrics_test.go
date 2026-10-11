@@ -60,7 +60,7 @@ func wantAbsent(t *testing.T, what string, rec map[string]any, keys ...string) {
 func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t,
+	fake := harnesstest.NewAnthropic(t,
 		harnesstest.Step{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
 		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{
 			ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: map[string]any{"command": "echo hi"}}},
@@ -95,7 +95,7 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 func TestContractTurnMetricsNamesTheTierAndTheEffortOfTheCall(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("hi"))
+	fake := harnesstest.NewAnthropic(t, replyText("hi"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := d.Create(t)
 	d.SetThinking(t, id, "high")
@@ -109,7 +109,7 @@ func TestContractTurnMetricsNamesTheTierAndTheEffortOfTheCall(t *testing.T) {
 func TestContractTurnMetricsLineOfAClaudeCodeTurn(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	fake := harnesstest.New(t, replyText("unused"))
+	fake := harnesstest.NewAnthropic(t, replyText("unused"))
 	d := claudeLane{mode: "normal"}.newDriver(t, serveHost, fake.URL())
 	id := d.Create(t)
 	d.Submit(t, id, "run it")

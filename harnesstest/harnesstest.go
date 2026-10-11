@@ -186,15 +186,15 @@ func newServer(steps []Step) *Server {
 	}
 }
 
-// New starts a Server that answers each request with the first step, in
+// NewAnthropic starts a Server that answers each request with the first step, in
 // declaration order, that has not been consumed and whose Match accepts it.
 // A step without Repeat is consumed when it matches.
 //
 // A request that no step matches gets HTTP 500. A request whose body does
-// not decode gets HTTP 400. At cleanup New fails t for each such
+// not decode gets HTTP 400. At cleanup NewAnthropic fails t for each such
 // request and for each non-Repeat step that never matched, unless t has
 // already failed.
-func New(t testing.TB, steps ...Step) *Server {
+func NewAnthropic(t testing.TB, steps ...Step) *Server {
 	t.Helper()
 	return start(t, anthropicCodec, steps)
 }

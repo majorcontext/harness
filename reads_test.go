@@ -1,7 +1,6 @@
 package harness_test
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -137,12 +136,7 @@ func withoutPlugins(t *testing.T, path string, rec *httptest.ResponseRecorder, e
 	return string(out)
 }
 
-type frame struct {
-	id   string
-	data string
-}
-
-func frames(t *testing.T, h http.Handler, path string, upTo uint64) []frame {
+func frames(t *testing.T, h http.Handler, path string, upTo uint64) []protocol.Event {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	defer srv.Close()
@@ -158,25 +152,17 @@ func frames(t *testing.T, h http.Handler, path string, upTo uint64) []frame {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var out []frame
-	var cur frame
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(nil, 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case strings.HasPrefix(line, "id: "):
-			cur.id = strings.TrimPrefix(line, "id: ")
-		case strings.HasPrefix(line, "data: "):
-			cur.data = strings.TrimPrefix(line, "data: ")
-		case line == "" && cur.id != "":
-			out = append(out, cur)
-			if n, _ := strconv.ParseUint(cur.id, 10, 64); upTo > 0 && n >= upTo {
-				return out
-			}
-			cur = frame{}
-		case line == "":
-			cur = frame{}
+	var out []protocol.Event
+	for ev, err := range protocol.DecodeSSE(resp.Body) {
+		if err != nil {
+			t.Fatalf("DecodeSSE: %v", err)
+		}
+		if ev.Ephemeral {
+			continue
+		}
+		out = append(out, ev)
+		if upTo > 0 && ev.Seq >= upTo {
+			break
 		}
 	}
 	return out
@@ -234,11 +220,11 @@ func TestTheReadHandlerAnswersAsRuntimeHandlerAnswersForTheSameLog(t *testing.T)
 	t.Run("sse_sends_the_durable_frames_to_the_head_then_ends", func(t *testing.T) {
 		got := frames(t, ro, "/sessions/s1/events?after=1", 0)
 		want := frames(t, r2.Handler(), "/sessions/s1/events?after=1", head)
-		if len(want) == 0 || !slices.Equal(got, want) {
+		if len(want) == 0 || !reflect.DeepEqual(got, want) {
 			t.Fatalf("read handler frames = %v\nruntime handler frames = %v", got, want)
 		}
-		if last := got[len(got)-1].id; last != strconv.FormatUint(head, 10) {
-			t.Errorf("last frame id = %s, want the head %d", last, head)
+		if last := got[len(got)-1].Seq; last != head {
+			t.Errorf("last frame seq = %d, want the head %d", last, head)
 		}
 		now, _ := st.Head(bg, "s1")
 		if all := frames(t, ro, "/sessions/s1/events", 0); uint64(len(all)) != now {

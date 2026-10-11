@@ -107,7 +107,7 @@ func TestContractBlobs(t *testing.T) {
 			}
 		})
 		t.Run("a_backend_state_blob_is_not_served", func(t *testing.T) {
-			fake := harnesstest.New(t)
+			fake := harnesstest.NewAnthropic(t)
 			run1 := mirrorFixtures(t, "run1.stdout.jsonl")
 			lane := claudeLane{mode: "mirror", mirror: true, env: map[string]string{"FAKE_CLAUDE_MIRROR_FIXTURE": run1}}
 			d := lane.newDriver(t, h, fake.URL()).(*claudeDriver).laneHost.(*runtimeDriver)

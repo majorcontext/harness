@@ -55,7 +55,9 @@ type CodexReply struct {
 type RateLimits struct {
 	Plan               string
 	Primary, Secondary *RateWindow
-	BengalfoxPrimary   *RateWindow // x-codex-bengalfox-primary-* headers only; the websocket frame has no such window
+	// Extra holds further windows by limit name, such as "bengalfox-primary". They go out as
+	// x-codex-<name>-* headers only; the websocket frame has no such window.
+	Extra map[string]*RateWindow
 }
 
 // RateWindow is one rate-limit window of RateLimits.

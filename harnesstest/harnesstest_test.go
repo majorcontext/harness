@@ -71,7 +71,7 @@ func textOf(evs []provider.Event) string {
 }
 
 func TestTextReply(t *testing.T) {
-	s := New(t, Step{Reply: Reply{Text: "hello"}})
+	s := NewAnthropic(t, Step{Reply: Reply{Text: "hello"}})
 	st, err := ask(t, s, "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestTextReply(t *testing.T) {
 }
 
 func TestToolCallReply(t *testing.T) {
-	s := New(t, Step{Reply: Reply{ToolCalls: []ToolCall{
+	s := NewAnthropic(t, Step{Reply: Reply{ToolCalls: []ToolCall{
 		{ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "echo hi"}},
 	}}})
 	st, err := ask(t, s, "hi")
@@ -117,7 +117,7 @@ func TestToolCallReply(t *testing.T) {
 }
 
 func TestStepsMatchInOrder(t *testing.T) {
-	s := New(t,
+	s := NewAnthropic(t,
 		Step{Name: "a", Match: LastUserText("one"), Reply: Reply{Text: "A"}},
 		Step{Name: "b", Match: LastUserText("two"), Reply: Reply{Text: "B"}},
 	)
@@ -142,7 +142,7 @@ func TestStepsMatchInOrder(t *testing.T) {
 }
 
 func TestRecordsModelThinkingAndServiceTier(t *testing.T) {
-	s := New(t, Step{Name: "a", Reply: Reply{Text: "A"}})
+	s := NewAnthropic(t, Step{Name: "a", Reply: Reply{Text: "A"}})
 	c := &anthropic.Client{APIKey: "k", BaseURL: s.URL()}
 	st, err := c.Stream(context.Background(), &provider.Request{
 		Model:     modelref.ModelRef{Provider: anthropic.Family, Model: "m"},
@@ -178,7 +178,7 @@ func (r *recorder) runCleanups() {
 
 func TestUnmatchedRequestFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
-	s := New(rec, Step{Match: LastUserText("expected"), Repeat: true, Reply: Reply{Text: "x"}})
+	s := NewAnthropic(rec, Step{Match: LastUserText("expected"), Repeat: true, Reply: Reply{Text: "x"}})
 	if _, err := ask(t, s, "surprise title request"); err == nil {
 		t.Fatal("unmatched request succeeded, want an HTTP error")
 	}
@@ -284,7 +284,7 @@ func TestBlockedStreamExits(t *testing.T) {
 
 func TestUndecodableRequestFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
-	s := New(rec, Step{Repeat: true, Reply: Reply{Text: "x"}})
+	s := NewAnthropic(rec, Step{Repeat: true, Reply: Reply{Text: "x"}})
 	resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages": [`))
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +304,7 @@ func TestUndecodableRequestFailsLoudly(t *testing.T) {
 
 func TestUnconsumedStepFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
-	s := New(rec,
+	s := NewAnthropic(rec,
 		Step{Name: "fired", Match: LastUserText("one"), Reply: Reply{Text: "x"}},
 		Step{Name: "idle", Match: LastUserText("two"), Reply: Reply{Text: "x"}},
 		Step{Name: "fallback", Match: LastUserText("three"), Repeat: true, Reply: Reply{Text: "x"}},
@@ -331,7 +331,7 @@ func TestStepConsumption(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &recorder{TB: t}
-			s := New(rec, Step{Repeat: tc.repeat, Reply: Reply{Text: "x"}})
+			s := NewAnthropic(rec, Step{Repeat: tc.repeat, Reply: Reply{Text: "x"}})
 			var got []int
 			for range tc.wantReplies {
 				resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"q"}]}`))
@@ -363,7 +363,7 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 	    {"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"bash","input":{"command":"ls"}}]},
 	    {"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","is_error":true,"content":[{"type":"text","text":"boom"}]}]}
 	  ]}`
-	s := New(t,
+	s := NewAnthropic(t,
 		Step{Name: "no", Match: both(LastToolResult("bash"), SystemContains("absent")), Repeat: true, Reply: Reply{Text: "no"}},
 		Step{Name: "yes", Match: both(LastToolResult("bash"), SystemContains("sys b")), Reply: Reply{Text: "yes"}},
 	)
@@ -391,7 +391,7 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 }
 
 func TestHTTPErrorReply(t *testing.T) {
-	s := New(t, Step{Reply: Reply{HTTPStatus: 529}})
+	s := NewAnthropic(t, Step{Reply: Reply{HTTPStatus: 529}})
 	_, err := ask(t, s, "hi")
 	if err == nil {
 		t.Fatal("err = nil, want an HTTP error")
@@ -415,7 +415,7 @@ func TestErrorReplyBody(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := New(t, Step{Reply: tc.reply})
+			s := NewAnthropic(t, Step{Reply: tc.reply})
 			resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
 			if err != nil {
 				t.Fatal(err)
@@ -438,7 +438,7 @@ func TestErrorReplyBody(t *testing.T) {
 }
 
 func TestContextOverflowReplyIsClassified(t *testing.T) {
-	s := New(t, Step{Reply: Reply{HTTPStatus: 400, ErrorMessage: ContextOverflowMessage}})
+	s := NewAnthropic(t, Step{Reply: Reply{HTTPStatus: 400, ErrorMessage: ContextOverflowMessage}})
 	_, err := ask(t, s, "hi")
 	if !provider.IsContextOverflow(err) {
 		t.Fatalf("IsContextOverflow(%v) = false, want true", err)
@@ -446,7 +446,7 @@ func TestContextOverflowReplyIsClassified(t *testing.T) {
 }
 
 func TestMaxTokensStopReason(t *testing.T) {
-	s := New(t, Step{Reply: Reply{Text: "cut", StopReason: "max_tokens", Usage: Usage{Input: 900, Output: 1}}})
+	s := NewAnthropic(t, Step{Reply: Reply{Text: "cut", StopReason: "max_tokens", Usage: Usage{Input: 900, Output: 1}}})
 	st, err := ask(t, s, "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -517,7 +517,7 @@ func TestAwaitRequests(t *testing.T) {
 
 func TestMatchMayCallServer(t *testing.T) {
 	var s *Server
-	s = New(t, Step{Name: "a", Match: func(Request) bool { _ = s.Requests(); return true }, Reply: Reply{Text: "ok"}})
+	s = NewAnthropic(t, Step{Name: "a", Match: func(Request) bool { _ = s.Requests(); return true }, Reply: Reply{Text: "ok"}})
 	errc := make(chan error, 1)
 	go func() {
 		st, err := ask(t, s, "hi")

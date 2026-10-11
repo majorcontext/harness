@@ -26,7 +26,7 @@ type cliHost struct {
 
 func newCLIHost(t *testing.T, extra map[string]any, steps ...harnesstest.Step) *cliHost {
 	t.Helper()
-	fake := harnesstest.New(t, steps...)
+	fake := harnesstest.NewAnthropic(t, steps...)
 	return &cliHost{t: t, fake: fake, dir: t.TempDir(), work: t.TempDir(),
 		config: writeGoalConfigWith(t, fake.URL(), scenarioConfig(extra))}
 }
