@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Session lifetime** (`harness`) — `Session.ID`, `Session.Done`, and `Session.Err` tell every holder of a shared handle when and why the session stopped here. `Err` is nil before `Done` and then matches `ErrSessionNotOwned` and one cause: `ErrSessionReleased`, `ErrSessionEnded`, or `ErrOwnershipLost`. `Session.Events` ends with `Err`.
 - **Sessions** (`harness`) — sessions are append-only logs of canonical messages. A session can change provider or model between turns with no history migration. Persisted sessions resume by ID.
 - **Providers** (`internal/provider/...`) — Anthropic Messages, OpenAI Responses, any OpenAI-compatible chat-completions endpoint (OpenRouter, Ollama, vLLM), and delegated turns through the Claude Code CLI.
 - **CLI** (`cmd/harness`) — `harness run` for one-shot prompts, `-goal` for evaluator-checked goals, `harness serve` for the HTTP+SSE session API, and `harness sessions` to list saved sessions.

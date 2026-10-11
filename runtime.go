@@ -40,6 +40,12 @@ var (
 	ErrSessionExists = session.ErrExists
 	// ErrSessionNotOwned reports a session that this runtime does not run.
 	ErrSessionNotOwned = session.ErrNotOwned
+	// ErrSessionReleased is the cause that Session.Err reports after Release, or after Close handed the session off. It matches ErrSessionNotOwned.
+	ErrSessionReleased = session.ErrReleased
+	// ErrSessionEnded is the cause that Session.Err reports after End. It matches ErrSessionNotOwned.
+	ErrSessionEnded = session.ErrEnded
+	// ErrOwnershipLost is the cause that Session.Err reports after the Ownership ended without Release, or after an append or Sync found a newer owner. It matches ErrSessionNotOwned.
+	ErrOwnershipLost = session.ErrOwnershipLost
 	// ErrInputConflict reports a repeated input ID with another body.
 	ErrInputConflict = session.ErrInputConflict
 	// ErrTurnMismatch reports a turn ID that is not the running turn.
