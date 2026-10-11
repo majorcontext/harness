@@ -12,8 +12,13 @@ import (
 	"strings"
 )
 
+// receiverCodes are the Sync receiver codes. The receiver is not the session
+// API, so they are not rows of the Errors table.
+var receiverCodes = map[string]bool{"CodeStaleEpoch": true, "CodeSyncConflict": true}
+
 // ProtocolCodes returns the value of each error code constant of the protocol
-// source: a constant of a const declaration whose name starts with "Code".
+// source: a constant of a const declaration whose name starts with "Code",
+// except the Sync receiver codes.
 func ProtocolCodes(srcs ...string) ([]string, error) {
 	var out []string
 	for _, src := range srcs {
@@ -29,7 +34,7 @@ func ProtocolCodes(srcs ...string) ([]string, error) {
 			for _, spec := range gd.Specs {
 				vs := spec.(*ast.ValueSpec)
 				for i, name := range vs.Names {
-					if !strings.HasPrefix(name.Name, "Code") || i >= len(vs.Values) {
+					if !strings.HasPrefix(name.Name, "Code") || receiverCodes[name.Name] || i >= len(vs.Values) {
 						continue
 					}
 					lit, ok := vs.Values[i].(*ast.BasicLit)

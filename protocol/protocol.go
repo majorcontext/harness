@@ -323,20 +323,6 @@ type SessionPage struct {
 	Next     string    `json:"next,omitempty"`
 }
 
-// SyncBatch is a remote append of session records from FromSeq, under the sender's Ownership epoch.
-type SyncBatch struct {
-	Epoch   uint64            `json:"epoch"`
-	Session string            `json:"session"`
-	FromSeq uint64            `json:"from_seq"`
-	Records [][]byte          `json:"records"`
-	Blobs   map[string][]byte `json:"blobs,omitempty"`
-}
-
-// SyncAck is the head of the receiver after a SyncBatch, also on a seq mismatch.
-type SyncAck struct {
-	Head uint64 `json:"head"`
-}
-
 // Model is a model that a configured provider serves.
 type Model struct {
 	ID       string `json:"id"`
