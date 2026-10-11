@@ -20,9 +20,7 @@ const serveReadyFallback = 2 * time.Minute
 func serveReadyBudget(t *testing.T) time.Duration {
 	t.Helper()
 	if d, ok := t.Deadline(); ok {
-		if left := time.Until(d) - 5*time.Second; left > 0 {
-			return left
-		}
+		return max(0, time.Until(d)-5*time.Second)
 	}
 	return serveReadyFallback
 }
