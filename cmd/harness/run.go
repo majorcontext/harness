@@ -433,6 +433,12 @@ func (p *printer) handle(id string, ev protocol.Event) {
 			_, _ = fmt.Fprint(p.out, f.Text)
 			p.printedText, p.streamedThis, p.streamed[f.ItemID] = true, true, true
 		}
+	case protocol.KindItemDiscarded:
+		if p.streamedThis {
+			_, _ = fmt.Fprintln(p.out)
+			_, _ = fmt.Fprintln(p.errW, "[re-streaming after a dropped reply]")
+			p.streamedThis = false
+		}
 	case protocol.KindStatus:
 		var f protocol.StatusFrame
 		if json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusRetrying && p.streamedThis {
