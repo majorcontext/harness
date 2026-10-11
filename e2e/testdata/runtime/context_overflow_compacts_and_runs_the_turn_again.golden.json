@@ -250,6 +250,46 @@
   "sessions": {
     "a": [
       {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "alpha"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "re alpha"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "bravo"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "re bravo"
+          }
+        ]
+      },
+      {
         "id": "cmpsum#1",
         "role": "user",
         "parts": [
@@ -260,7 +300,7 @@
         ]
       },
       {
-        "id": "msg#1",
+        "id": "msg#5",
         "role": "user",
         "parts": [
           {
@@ -270,7 +310,7 @@
         ]
       },
       {
-        "id": "msg#2",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {

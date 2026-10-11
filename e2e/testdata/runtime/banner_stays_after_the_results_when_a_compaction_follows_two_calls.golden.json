@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "alpha"
             },
             {
               "kind": "text",
@@ -58,7 +58,77 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
             },
             {
               "kind": "text",
@@ -70,8 +140,62 @@
           "role": "assistant",
           "parts": [
             {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo zero"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "zero\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
               "kind": "text",
-              "text": "re one"
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
             }
           ]
         },
@@ -80,7 +204,185 @@
           "parts": [
             {
               "kind": "text",
-              "text": "two"
+              "text": "bravo"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo zero"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "zero\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re bravo"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "charlie"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "alpha"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo zero"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "zero\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re bravo"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "charlie"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo one"
+              },
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo two"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "one\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_result",
+              "text": "two\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3"
             }
           ]
         }
@@ -96,7 +398,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "alpha"
             }
           ]
         },
@@ -105,7 +407,49 @@
           "parts": [
             {
               "kind": "text",
-              "text": "re one"
+              "text": "re alpha"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo zero"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "zero\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "re bravo"
             }
           ]
         },
@@ -148,7 +492,45 @@
             },
             {
               "kind": "text",
-              "text": "two"
+              "text": "charlie"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo one"
+              },
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo two"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "one\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_result",
+              "text": "two\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3"
             }
           ]
         },
@@ -157,7 +539,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "re two"
+              "text": "re charlie"
             }
           ]
         },
@@ -170,303 +552,7 @@
             },
             {
               "kind": "text",
-              "text": "three"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
-            },
-            {
-              "kind": "text",
-              "text": "two"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re two"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            },
-            {
-              "kind": "text",
-              "text": "three"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re three"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "four"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
-            },
-            {
-              "kind": "text",
-              "text": "two"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re two"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            },
-            {
-              "kind": "text",
-              "text": "three"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re three"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "four"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re four"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "five"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
-            },
-            {
-              "kind": "text",
-              "text": "two"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re two"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "three"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re three"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "four"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re four"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "Summarize the conversation above, following the system prompt's instructions."
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
-            },
-            {
-              "kind": "text",
-              "text": "five"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "re five"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            },
-            {
-              "kind": "text",
-              "text": "six"
+              "text": "delta"
             }
           ]
         }
@@ -481,7 +567,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "one"
+            "text": "alpha"
           }
         ]
       },
@@ -491,7 +577,52 @@
         "parts": [
           {
             "type": "text",
-            "text": "re one"
+            "text": "re alpha"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "bravo"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo zero"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "zero\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "re bravo"
           }
         ]
       },
@@ -506,52 +637,12 @@
         ]
       },
       {
-        "id": "msg#3",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "two"
-          }
-        ]
-      },
-      {
-        "id": "msg#4",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "re two"
-          }
-        ]
-      },
-      {
-        "id": "msg#5",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "three"
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "re three"
-          }
-        ]
-      },
-      {
         "id": "msg#7",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "four"
+            "text": "charlie"
           }
         ]
       },
@@ -560,89 +651,84 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "re four"
-          }
-        ]
-      },
-      {
-        "id": "cmpsum#2",
-        "role": "user",
-        "parts": [
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "bash",
+            "arguments": {
+              "command": "echo one"
+            }
+          },
           {
-            "type": "text",
-            "text": "[compacted summary of earlier conversation]\n\ngist"
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "bash",
+            "arguments": {
+              "command": "echo two"
+            }
           }
         ]
       },
       {
         "id": "msg#9",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "five"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "one\n"
           }
         ]
       },
       {
         "id": "msg#10",
-        "role": "assistant",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "re five"
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "two\n"
           }
         ]
       },
       {
         "id": "msg#11",
-        "role": "user",
+        "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "six"
+            "text": "re charlie"
           }
         ]
       },
       {
         "id": "msg#12",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "delta"
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "re six"
+            "text": "re delta"
           }
         ]
       }
     ]
   },
   "calls": {
-    "get_session.a": {
+    "compact.a": {
       "status": 200,
       "body": {
-        "compaction_count": 2,
-        "context": {
-          "tokens": 5,
-          "window": 1000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 34,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#1"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 2725,
-          "output_tokens": 12
-        }
+        "folded": true,
+        "from_seq": 1,
+        "to_seq": 17
       }
     }
   }

@@ -10,6 +10,7 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
         "model",
         "process",
         "read_file",
@@ -24,7 +25,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",
@@ -44,6 +49,12 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -58,7 +69,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",
@@ -71,10 +86,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "mcp",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "connect",
+                "server": "weather"
               },
               "tool_use_id": "toolu#1"
             }
@@ -85,9 +100,13 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every configured server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -103,6 +122,12 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -117,7 +142,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",
@@ -130,10 +159,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "mcp",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "connect",
+                "server": "weather"
               },
               "tool_use_id": "toolu#1"
             }
@@ -144,9 +173,13 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every configured server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -154,12 +187,8 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "tool_use",
-              "tool_name": "bash",
-              "tool_input": {
-                "command": "sleep 0.3"
-              },
-              "tool_use_id": "toolu#2"
+              "kind": "text",
+              "text": "connected"
             }
           ]
         },
@@ -167,14 +196,8 @@
           "role": "user",
           "parts": [
             {
-              "kind": "tool_result",
-              "text": "(no output)",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#2"
-            },
-            {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "bravo"
             }
           ]
         }
@@ -190,6 +213,12 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -204,7 +233,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",
@@ -217,10 +250,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "mcp",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "connect",
+                "server": "weather"
               },
               "tool_use_id": "toolu#1"
             }
@@ -231,9 +264,31 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every configured server is connected again.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "connected"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "bravo"
             }
           ]
         },
@@ -242,9 +297,9 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "bash",
+              "tool_name": "mcp__weather__forecast",
               "tool_input": {
-                "command": "sleep 0.3"
+                "city": "Oslo"
               },
               "tool_use_id": "toolu#2"
             }
@@ -255,125 +310,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "(no output)",
-              "tool_name": "bash",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp__weather__forecast",
               "tool_use_id": "toolu#2"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "parent done"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "next"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "looking"
-            },
-            {
-              "kind": "tool_use",
-              "tool_name": "ls",
-              "tool_input": {
-                "path": "."
-              },
-              "tool_use_id": "toolu#3"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "(empty directory)",
-              "tool_name": "ls",
-              "tool_use_id": "toolu#3"
             }
           ]
         }
@@ -389,7 +328,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "go"
             }
           ]
         },
@@ -398,10 +337,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "task",
+              "tool_name": "mcp",
               "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
+                "action": "connect",
+                "server": "weather"
               },
               "tool_use_id": "toolu#1"
             }
@@ -412,33 +351,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
-              "tool_name": "task",
+              "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "bash",
-              "tool_input": {
-                "command": "sleep 0.3"
-              },
-              "tool_use_id": "toolu#2"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "(no output)",
-              "tool_name": "bash",
-              "tool_use_id": "toolu#2"
             }
           ]
         },
@@ -447,7 +362,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "parent done"
+              "text": "connected"
             }
           ]
         },
@@ -472,6 +387,12 @@
         "goal",
         "grep",
         "ls",
+        "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -490,7 +411,31 @@
             },
             {
               "kind": "text",
-              "text": "next"
+              "text": "bravo"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp__weather__forecast",
+              "tool_input": {
+                "city": "Oslo"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp__weather__forecast",
+              "tool_use_id": "toolu#2"
             }
           ]
         },
@@ -499,7 +444,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "parent done"
+              "text": "snow"
             }
           ]
         },
@@ -508,7 +453,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "third"
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",
@@ -516,7 +461,129 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: every configured server is connected again.]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "charlie"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[compacted summary of earlier conversation]\n\ngist"
+            },
+            {
+              "kind": "text",
+              "text": "bravo"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp__weather__forecast",
+              "tool_input": {
+                "city": "Oslo"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp__weather__forecast",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "snow"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every configured server is connected again.]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "charlie"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp__weather__forecast",
+              "tool_input": {
+                "city": "Oslo"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp__weather__forecast",
+              "tool_use_id": "toolu#3"
             }
           ]
         }
@@ -531,7 +598,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "delegate"
+            "text": "go"
           }
         ]
       },
@@ -542,10 +609,10 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "task",
+            "name": "mcp",
             "arguments": {
-              "agent": "general-purpose",
-              "prompt": "child work"
+              "action": "connect",
+              "server": "weather"
             }
           }
         ]
@@ -557,7 +624,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
+            "content": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}"
           }
         ]
       },
@@ -566,33 +633,8 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#2",
-            "name": "bash",
-            "arguments": {
-              "command": "sleep 0.3"
-            }
-          }
-        ]
-      },
-      {
-        "id": "msg#5",
-        "role": "tool",
-        "parts": [
-          {
-            "type": "tool_result",
-            "call_id": "toolu#2",
-            "content": "(no output)"
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
-        "role": "assistant",
-        "parts": [
-          {
             "type": "text",
-            "text": "parent done"
+            "text": "connected"
           }
         ]
       },
@@ -607,12 +649,37 @@
         ]
       },
       {
-        "id": "msg#7",
+        "id": "msg#5",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "next"
+            "text": "bravo"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "mcp__weather__forecast",
+            "arguments": {
+              "city": "Oslo"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "Oslo: 3C, snow"
           }
         ]
       },
@@ -622,7 +689,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "parent done"
+            "text": "snow"
           }
         ]
       },
@@ -632,7 +699,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "third"
+            "text": "charlie"
           }
         ]
       },
@@ -641,8 +708,33 @@
         "role": "assistant",
         "parts": [
           {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "mcp__weather__forecast",
+            "arguments": {
+              "city": "Oslo"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "Oslo: 3C, snow"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
             "type": "text",
-            "text": "parent done"
+            "text": "still snow"
           }
         ]
       }
@@ -654,7 +746,7 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 18
+        "to_seq": 11
       }
     }
   }

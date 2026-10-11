@@ -212,6 +212,46 @@
   "sessions": {
     "a": [
       {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "2"
+          }
+        ]
+      },
+      {
         "id": "cmpsum#1",
         "role": "user",
         "parts": [
@@ -222,7 +262,7 @@
         ]
       },
       {
-        "id": "msg#1",
+        "id": "msg#5",
         "role": "user",
         "parts": [
           {
@@ -232,7 +272,7 @@
         ]
       },
       {
-        "id": "msg#2",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
@@ -248,14 +288,14 @@
       "status": 200,
       "body": {
         "commands": [],
-        "first_seq": 2,
+        "first_seq": 6,
         "has_more": true,
-        "last_seq": 3,
-        "total": 3
+        "last_seq": 7,
+        "total": 7
       },
       "messages": [
         {
-          "id": "msg#1",
+          "id": "msg#5",
           "role": "user",
           "parts": [
             {
@@ -265,7 +305,7 @@
           ]
         },
         {
-          "id": "msg#2",
+          "id": "msg#6",
           "role": "assistant",
           "parts": [
             {
@@ -280,14 +320,14 @@
       "status": 200,
       "body": {
         "commands": [],
-        "first_seq": 2,
+        "first_seq": 6,
         "has_more": true,
-        "last_seq": 3,
-        "total": 3
+        "last_seq": 7,
+        "total": 7
       },
       "messages": [
         {
-          "id": "msg#1",
+          "id": "msg#5",
           "role": "user",
           "parts": [
             {
@@ -297,7 +337,7 @@
           ]
         },
         {
-          "id": "msg#2",
+          "id": "msg#6",
           "role": "assistant",
           "parts": [
             {
@@ -437,14 +477,14 @@
       "status": 200,
       "body": {
         "commands": [],
-        "first_seq": 3,
+        "first_seq": 7,
         "has_more": true,
-        "last_seq": 3,
-        "total": 3
+        "last_seq": 7,
+        "total": 7
       },
       "messages": [
         {
-          "id": "msg#2",
+          "id": "msg#6",
           "role": "assistant",
           "parts": [
             {
@@ -459,44 +499,22 @@
       "status": 200,
       "body": {
         "commands": [],
-        "first_seq": 2,
+        "first_seq": 4,
         "has_more": true,
-        "last_seq": 3,
-        "total": 3
+        "last_seq": 5,
+        "total": 7
       },
       "messages": [
         {
-          "id": "msg#1",
-          "role": "user",
-          "parts": [
-            {
-              "type": "text",
-              "text": "three"
-            }
-          ]
-        },
-        {
-          "id": "msg#2",
+          "id": "msg#4",
           "role": "assistant",
           "parts": [
             {
               "type": "text",
-              "text": "3"
+              "text": "2"
             }
           ]
-        }
-      ]
-    },
-    "messages_page.a#3": {
-      "status": 200,
-      "body": {
-        "commands": [],
-        "first_seq": 1,
-        "has_more": false,
-        "last_seq": 3,
-        "total": 3
-      },
-      "messages": [
+        },
         {
           "id": "cmpsum#1",
           "role": "user",
@@ -506,24 +524,36 @@
               "text": "[compacted summary of earlier conversation]\n\ngist"
             }
           ]
-        },
-        {
-          "id": "msg#1",
-          "role": "user",
-          "parts": [
-            {
-              "type": "text",
-              "text": "three"
-            }
-          ]
-        },
+        }
+      ]
+    },
+    "messages_page.a#3": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 2,
+        "has_more": true,
+        "last_seq": 3,
+        "total": 7
+      },
+      "messages": [
         {
           "id": "msg#2",
           "role": "assistant",
           "parts": [
             {
               "type": "text",
-              "text": "3"
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "two"
             }
           ]
         }
@@ -535,10 +565,72 @@
         "commands": [],
         "first_seq": 1,
         "has_more": false,
-        "last_seq": 3,
-        "total": 3
+        "last_seq": 1,
+        "total": 7
       },
       "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#5": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 7,
+        "total": 7
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "2"
+            }
+          ]
+        },
         {
           "id": "cmpsum#1",
           "role": "user",
@@ -550,7 +642,7 @@
           ]
         },
         {
-          "id": "msg#1",
+          "id": "msg#5",
           "role": "user",
           "parts": [
             {
@@ -560,7 +652,89 @@
           ]
         },
         {
+          "id": "msg#6",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#6": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 7,
+        "total": 7
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
           "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "id": "cmpsum#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "[compacted summary of earlier conversation]\n\ngist"
+            }
+          ]
+        },
+        {
+          "id": "msg#5",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "msg#6",
           "role": "assistant",
           "parts": [
             {

@@ -30,7 +30,7 @@ type MessagePart struct {
 	Key       string          `json:"key,omitempty"`
 }
 
-// Message is one message of the conversation that the model reads. Its ID derives from the log.
+// Message is one message of the conversation that a reader sees: a compaction keeps the messages it folded, and its summary stands between them and the kept messages. Its ID derives from the log.
 type Message struct {
 	ID    string        `json:"id"`
 	Role  string        `json:"role"`

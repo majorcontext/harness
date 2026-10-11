@@ -131,9 +131,9 @@ func withoutTaskReports(parts []Part) []Part {
 	return slices.DeleteFunc(slices.Clone(parts), func(p Part) bool { return p.Type == PartTaskReport })
 }
 
-// History returns the conversation that readers see: the summary of the
-// newest compaction as a user message, then each later message in log order.
-// A pinned segment is not in it.
+// History returns the summary of the newest compaction as a user message, then
+// each later message in log order, with no pinned segment. Readers see more:
+// see Transcript.
 func (s *State) History() []Message { return s.messages(false) }
 
 // ModelHistory returns History with each pinned segment at its place: the
@@ -207,6 +207,11 @@ func (s *State) remember(env Envelope) {
 		i := slices.IndexFunc(s.history, func(h entry) bool { return h.seq > e.ToSeq })
 		if i < 0 {
 			i = len(s.history)
+		}
+		for _, h := range s.history[:i] {
+			if !h.pinned {
+				s.folded = append(s.folded, readerMessage(h))
+			}
 		}
 		folded := slices.DeleteFunc(slices.Clone(s.history[:i]), func(h entry) bool { return !h.pinned })
 		s.history, s.turnAt = movePins(s.history[i:], max(0, s.turnAt-i), env.Seq)

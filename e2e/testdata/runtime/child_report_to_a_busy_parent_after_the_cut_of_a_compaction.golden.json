@@ -509,6 +509,26 @@
   "sessions": {
     "a": [
       {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
         "id": "cmpsum#1",
         "role": "user",
         "parts": [
@@ -519,7 +539,7 @@
         ]
       },
       {
-        "id": "msg#1",
+        "id": "msg#3",
         "role": "user",
         "parts": [
           {
@@ -529,7 +549,7 @@
         ]
       },
       {
-        "id": "msg#2",
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {
@@ -544,7 +564,7 @@
         ]
       },
       {
-        "id": "msg#3",
+        "id": "msg#5",
         "role": "tool",
         "parts": [
           {
@@ -555,7 +575,7 @@
         ]
       },
       {
-        "id": "msg#4",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
@@ -569,7 +589,7 @@
         ]
       },
       {
-        "id": "msg#5",
+        "id": "msg#7",
         "role": "tool",
         "parts": [
           {
@@ -580,7 +600,7 @@
         ]
       },
       {
-        "id": "msg#6",
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -590,7 +610,7 @@
         ]
       },
       {
-        "id": "msg#7",
+        "id": "msg#9",
         "role": "user",
         "parts": [
           {
@@ -600,7 +620,7 @@
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {

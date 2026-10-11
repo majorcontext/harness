@@ -45,6 +45,9 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64, at time.Time) e
 	if e.FromSeq == 0 || e.FromSeq > e.ToSeq || e.ToSeq >= seq {
 		return illegal("compaction from_seq %d to_seq %d at seq %d", e.FromSeq, e.ToSeq, seq)
 	}
+	if s.compactedAt != 0 {
+		s.folded = append(s.folded, s.summaryMessage())
+	}
 	s.compaction, s.compactedAt, s.compactedTime = e, seq, at
 	s.compacted++
 	s.usage = s.usage.Add(e.Usage)
