@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -102,7 +103,7 @@ func newWSTestServer(t *testing.T) *wsTestServer {
 
 func wsRequest(sessionKey string) *provider.Request {
 	return &provider.Request{
-		Model:      message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Model:      modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 		Messages:   []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens:  10,
 		SessionKey: sessionKey,

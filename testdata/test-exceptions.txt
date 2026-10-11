@@ -13,3 +13,5 @@ internal/prompt/prompt_test.go an empty Options.WorkDir is Go API: no file is re
 internal/tool/builtin/builtin_test.go an empty Options.WorkDir is Go API: no built-in tool exists
 internal/tool/mcpsrc/mcpsrc_test.go AllowedTools has no serve oracle; MCP search scoring is a pure table
 internal/toolresult/toolresult_test.go pure secret-mask table with many edge cases (spec Tool-result retention)
+internal/modelref/model_test.go the model ref parser is pure code, moved with its tests from internal/message
+internal/prompt/engine_context_test.go the engine-context sentinel functions are pure code, moved with their tests from internal/message

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // Hook names a dispatch point in the runtime. Sync hooks chain across plugins
@@ -140,10 +141,10 @@ type EventBatch struct {
 // ChatParams are the mutable model request parameters. Nil fields mean "use
 // the runtime default".
 type ChatParams struct {
-	Model       message.ModelRef `json:"model,omitzero"`
-	Temperature *float64         `json:"temperature,omitempty"`
-	TopP        *float64         `json:"top_p,omitempty"`
-	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	Model       modelref.ModelRef `json:"model,omitzero"`
+	Temperature *float64          `json:"temperature,omitempty"`
+	TopP        *float64          `json:"top_p,omitempty"`
+	MaxTokens   *int              `json:"max_tokens,omitempty"`
 }
 
 type ChatParamsRequest struct {
@@ -165,8 +166,8 @@ type ChatMessageResponse struct {
 }
 
 type SystemTransformRequest struct {
-	SessionID string           `json:"session_id"`
-	Model     message.ModelRef `json:"model,omitzero"`
+	SessionID string            `json:"session_id"`
+	Model     modelref.ModelRef `json:"model,omitzero"`
 }
 
 type SystemTransformResponse struct {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -20,7 +21,7 @@ func streamErr(t *testing.T, status int, body string) error {
 		io.WriteString(w, body) //nolint:errcheck
 	})
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -170,7 +171,7 @@ func TestInlineUsageLimitIsProviderExhausted(t *testing.T) {
 			"\n\n")
 	})
 	stream, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})

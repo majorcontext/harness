@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -339,7 +340,7 @@ type assembledBlock struct {
 type stream struct {
 	body  io.Closer
 	r     *bufio.Reader
-	model message.ModelRef
+	model modelref.ModelRef
 
 	msgID        string
 	msgCreatedAt time.Time

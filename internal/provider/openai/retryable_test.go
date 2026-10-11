@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -40,7 +41,7 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 				io.WriteString(w, `{"error":{"type":"`+tc.errType+`","message":"boom"}}`) //nolint:errcheck
 			})
 			_, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -81,7 +82,7 @@ func TestStreamInlineErrorClassification(t *testing.T) {
 				io.WriteString(w, sse("response.failed", `{"type":"response.failed","response":{"error":{"code":"`+tc.code+`","message":"boom"}}}`)) //nolint:errcheck
 			})
 			s, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -170,7 +171,7 @@ func TestUsageLimitExhaustionClassification(t *testing.T) {
 
 func testUsageLimitRequest() *provider.Request {
 	return &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	}
@@ -202,7 +203,7 @@ func TestStreamTruncationClassification(t *testing.T) {
 		io.WriteString(w, sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_77","name":"bash","arguments":"{}"}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -234,7 +235,7 @@ func TestStreamMidEventTruncationClassification(t *testing.T) {
 		io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"resp")                       //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -265,7 +266,7 @@ func TestStreamActivityDuringSilentWireEvents(t *testing.T) {
 		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))                                                       //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -309,7 +310,7 @@ func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
 		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -354,7 +355,7 @@ func TestStreamInsaneOutputIndexRejected(t *testing.T) {
 				io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1"}}`))                            //nolint:errcheck
 			})
 			s, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})

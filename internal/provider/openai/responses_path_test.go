@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -30,7 +31,7 @@ func recordPath(t *testing.T, c *Client) string {
 		c.APIKey = "test-key"
 	}
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err != nil {
@@ -94,7 +95,7 @@ func TestClientFamilyOverrideTagsReasoning(t *testing.T) {
 	c.BaseURL = srv.URL
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "secondary", Model: "gpt-5"},
+		Model:    modelref.ModelRef{Provider: "secondary", Model: "gpt-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err != nil {

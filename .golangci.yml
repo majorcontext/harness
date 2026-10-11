@@ -61,6 +61,20 @@ linters:
               desc: only internal/backend builds a provider wire
             - pkg: github.com/majorcontext/harness/internal/provider/openaicompat
               desc: only internal/backend builds a provider wire
+        message-consumers:
+          files:
+            - $all
+            - "!**/internal/message/**"
+            - "!**/internal/backend/**"
+            - "!**/internal/provider/**"
+            - "!**/internal/plugin/**"
+            - "!**/internal/prompt/**"
+            - "!**/internal/imageclamp/**"
+            - "!**/internal/tool/pluginsrc/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/majorcontext/harness/internal/message
+              desc: only backends, providers, plugins, the prompt, and the wire helpers imageclamp and pluginsrc use the provider-wire conversation model
         config-leaf:
           files:
             - "**/config/**"

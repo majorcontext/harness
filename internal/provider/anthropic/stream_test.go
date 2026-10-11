@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -73,7 +74,7 @@ func TestStreamAssembly(t *testing.T) {
 	})
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		System:    []string{"sys"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ls please"}}}},
 		MaxTokens: 1024,
@@ -171,7 +172,7 @@ func TestStreamAssemblyWithoutMessageStart(t *testing.T) {
 	})
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -200,7 +201,7 @@ func TestStreamHTTPError(t *testing.T) {
 		io.WriteString(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`) //nolint:errcheck
 	})
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -216,7 +217,7 @@ func TestStreamInlineError(t *testing.T) {
 		io.WriteString(w, sse("error", `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))           //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -250,7 +251,7 @@ func TestStreamInlineInvalidRequestErrorIsPermanent(t *testing.T) {
 		io.WriteString(w, sse("error", `{"type":"error","error":{"type":"invalid_request_error","message":"tool_use ids were found without tool_result blocks immediately after"}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -275,7 +276,7 @@ func TestStreamInlineInvalidRequestErrorIsPermanent(t *testing.T) {
 func TestStreamNoAPIKey(t *testing.T) {
 	c := &Client{}
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -307,7 +308,7 @@ func TestStreamUsageFromMessageDelta(t *testing.T) {
 		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                                                                                                                //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})

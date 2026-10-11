@@ -20,7 +20,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -149,11 +149,11 @@ func restriction(req turn.Request) map[string]bool {
 }
 
 func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.Cmd, error) {
-	ref, err := message.ParseModelRef(req.Model)
+	ref, err := modelref.ParseModelRef(req.Model)
 	if err != nil {
 		return nil, err
 	}
-	effort, err := message.ParseEffort(req.Settings.Effort)
+	effort, err := modelref.ParseEffort(req.Settings.Effort)
 	if err != nil {
 		return nil, err
 	}
@@ -325,13 +325,13 @@ func (r *run) writeMCPConfig(servers map[string]mcpServer) (string, error) {
 	return r.mcpConfig, errors.Join(err, f.Close())
 }
 
-func effortArg(e message.Effort) (string, bool) {
+func effortArg(e modelref.Effort) (string, bool) {
 	switch e {
-	case message.EffortOff, message.EffortMinimal, message.EffortLow:
+	case modelref.EffortOff, modelref.EffortMinimal, modelref.EffortLow:
 		return "low", true
-	case message.EffortMedium:
+	case modelref.EffortMedium:
 		return "medium", true
-	case message.EffortHigh:
+	case modelref.EffortHigh:
 		return "high", true
 	}
 	return "", false

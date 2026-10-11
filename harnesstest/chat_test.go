@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/provider/openaicompat"
 )
@@ -20,7 +21,7 @@ func chatStream(t testing.TB, s *Server, req *provider.Request) ([]provider.Even
 	t.Helper()
 	c := &openaicompat.Client{Family: "bifrost", APIKey: "k", BaseURL: s.URL(), ExtraHeaders: map[string]string{"X-Tag": "e2e"}}
 	if req.Model.Model == "" {
-		req.Model = message.ModelRef{Provider: "bifrost", Model: "vendor/m"}
+		req.Model = modelref.ModelRef{Provider: "bifrost", Model: "vendor/m"}
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = 10
@@ -90,7 +91,7 @@ func TestChatRequestDecodeAndMatchers(t *testing.T) {
 	first := &provider.Request{
 		System: []string{"sys one", "sys two"}, Messages: []message.Message{userMsg("run it")},
 		Tools:  []provider.ToolDef{{Name: "ls", InputSchema: json.RawMessage(`{}`)}, {Name: "bash", InputSchema: json.RawMessage(`{}`)}},
-		Effort: message.EffortHigh, SessionKey: "ses_1",
+		Effort: modelref.EffortHigh, SessionKey: "ses_1",
 	}
 	evs, err := chatStream(t, s, first)
 	if err != nil {

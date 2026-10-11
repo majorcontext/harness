@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -74,7 +75,7 @@ func TestStreamAssembly(t *testing.T) {
 	c.ExtraHeaders = map[string]string{"HTTP-Referer": "https://harness.example", "X-Title": "harness"}
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "some/model"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "some/model"},
 		System:    []string{"sys"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ls please"}}}},
 		MaxTokens: 1024,
@@ -181,7 +182,7 @@ func TestStreamReasoningFieldOpenRouter(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "anthropic/claude-3.7-sonnet"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "anthropic/claude-3.7-sonnet"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 1024,
 	})
@@ -228,7 +229,7 @@ func TestStreamReasoningFieldsMutuallyExclusive(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 1024,
 	})
@@ -266,7 +267,7 @@ func TestStreamParallelToolCallsInterleaved(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}}},
 		MaxTokens: 10,
 	})
@@ -316,7 +317,7 @@ func TestStreamFinishReasonMapping(t *testing.T) {
 				io.WriteString(w, fixture) //nolint:errcheck
 			})
 			s, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+				Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -345,7 +346,7 @@ func TestStreamMissingFinishReasonUsesDone(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -380,7 +381,7 @@ func TestStreamUsageTerminalChunk(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -401,7 +402,7 @@ func TestStreamHTTPError(t *testing.T) {
 		io.WriteString(w, `{"error":{"message":"Invalid API key","type":"invalid_request_error","code":"invalid_api_key"}}`) //nolint:errcheck
 	})
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -413,7 +414,7 @@ func TestStreamHTTPError(t *testing.T) {
 func TestStreamNoAPIKey(t *testing.T) {
 	c := &Client{Family: "openrouter"}
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -425,7 +426,7 @@ func TestStreamNoAPIKey(t *testing.T) {
 func TestStreamNoFamily(t *testing.T) {
 	c := &Client{APIKey: "test-key"}
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -457,7 +458,7 @@ func TestStreamMidStreamErrorClassifiedRetryable(t *testing.T) {
 		}, ""))
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "openrouter", Model: "some/model"},
+		Model:    modelref.ModelRef{Provider: "openrouter", Model: "some/model"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err != nil {
@@ -501,7 +502,7 @@ func TestStreamMidStreamErrorStringCode(t *testing.T) {
 		io.WriteString(w, sseData(`{"error":{"message":"slow down","type":"requests","code":"rate_limit_exceeded"}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "openai", Model: "some/model"},
+		Model:    modelref.ModelRef{Provider: "openai", Model: "some/model"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err != nil {

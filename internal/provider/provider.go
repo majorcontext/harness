@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // ToolDef describes a tool offered to the model.
@@ -27,19 +28,19 @@ type ToolDef struct {
 // owns all wire-format concerns, including prompt-cache markers (injected at
 // transcode time, never stored).
 type Request struct {
-	Model       message.ModelRef
+	Model       modelref.ModelRef
 	System      []string // system prompt segments, in order
 	Messages    []message.Message
 	Tools       []ToolDef
 	Temperature *float64
 	TopP        *float64
 	MaxTokens   int
-	// Effort is the unified reasoning-effort level (message.Effort). The
+	// Effort is the unified reasoning-effort level (modelref.Effort). The
 	// zero value (EffortUnset) sends no reasoning control. Each adapter maps
 	// a non-unset level to its own wire shape; a level the target model
 	// rejects surfaces as a provider error, since the adapter cannot know
 	// per-model support from the ref alone.
-	Effort message.Effort
+	Effort modelref.Effort
 	// ServiceTier is an opaque, per-session speed-tier hint (e.g. Codex's
 	// "standard"/"fast"/"ultrafast"), forwarded to the provider verbatim as
 	// the wire "service_tier" field. The zero value (empty string) sends no

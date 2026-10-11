@@ -3,12 +3,12 @@ package modelmeta
 import (
 	"testing"
 
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 func TestContextWindowAnthropic(t *testing.T) {
 	// config.DefaultModel must have context-window metadata.
-	tokens, ok := ContextWindow(message.ModelRef{Provider: "anthropic", Model: "claude-fable-5"})
+	tokens, ok := ContextWindow(modelref.ModelRef{Provider: "anthropic", Model: "claude-fable-5"})
 	if !ok || tokens != 1_000_000 {
 		t.Fatalf("ContextWindow(anthropic/claude-fable-5) = %d, %v; want 1000000, true", tokens, ok)
 	}
@@ -24,7 +24,7 @@ func TestContextWindowOpenAI(t *testing.T) {
 		{"gpt-6.1-sol", 1_050_000},
 	}
 	for _, c := range cases {
-		tokens, ok := ContextWindow(message.ModelRef{Provider: "openai", Model: c.model})
+		tokens, ok := ContextWindow(modelref.ModelRef{Provider: "openai", Model: c.model})
 		if !ok || tokens != c.want {
 			t.Errorf("ContextWindow(openai/%s) = %d, %v; want %d, true", c.model, tokens, ok, c.want)
 		}
@@ -49,7 +49,7 @@ func TestContextWindowCodex(t *testing.T) {
 		{"gpt-6-luna", 1_050_000},
 	}
 	for _, c := range cases {
-		tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: c.model})
+		tokens, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: c.model})
 		if !ok || tokens != c.want {
 			t.Errorf("ContextWindow(codex/%s) = %d, %v; want %d, true", c.model, tokens, ok, c.want)
 		}
@@ -60,7 +60,7 @@ func TestContextWindowCodex(t *testing.T) {
 // model absent from openaiContextWindows misses, so the backend marks its
 // default window as an estimate.
 func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
-	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
+	if tokens, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
 		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
 	}
 }
@@ -75,7 +75,7 @@ func TestContextWindowBedrockRegionPrefixes(t *testing.T) {
 		"global.anthropic.claude-opus-4-8",
 	}
 	for _, model := range cases {
-		tokens, ok := ContextWindow(message.ModelRef{Provider: "amazon-bedrock", Model: model})
+		tokens, ok := ContextWindow(modelref.ModelRef{Provider: "amazon-bedrock", Model: model})
 		if !ok || tokens != 1_000_000 {
 			t.Errorf("ContextWindow(amazon-bedrock/%s) = %d, %v; want 1000000, true", model, tokens, ok)
 		}
@@ -87,7 +87,7 @@ func TestContextWindowBedrockVersionedSuffix(t *testing.T) {
 	// plain "anthropic" provider's IDs don't — this table keys on the
 	// bedrock ID verbatim (see bedrockAnthropicContextWindows), so a mismatch
 	// here would silently disable compaction on every bedrock session.
-	tokens, ok := ContextWindow(message.ModelRef{Provider: "amazon-bedrock", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"})
+	tokens, ok := ContextWindow(modelref.ModelRef{Provider: "amazon-bedrock", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"})
 	if !ok || tokens != 200_000 {
 		t.Fatalf("ContextWindow(amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0) = %d, %v; want 200000, true", tokens, ok)
 	}
@@ -114,9 +114,9 @@ func TestContextWindowBifrost(t *testing.T) {
 		{"bifrost/vertex/gemini-3.8-flash", 1_048_576},
 	}
 	for _, tt := range cases {
-		ref, err := message.ParseModelRef(tt.refString)
+		ref, err := modelref.ParseModelRef(tt.refString)
 		if err != nil {
-			t.Fatalf("message.ParseModelRef(%q) error: %v", tt.refString, err)
+			t.Fatalf("modelref.ParseModelRef(%q) error: %v", tt.refString, err)
 		}
 		tokens, ok := ContextWindow(ref)
 		if !ok || tokens != tt.want {
@@ -128,7 +128,7 @@ func TestContextWindowBifrost(t *testing.T) {
 // TestContextWindowBoxesThreeSegmentRefs verifies that the boxes platform
 // (majorcontext/bailey internal/api/bifrost_models.go) passes THREE-segment
 // model refs exclusively, e.g. "anthropic/anthropic/claude-fable-5" and
-// "anthropic/bedrock_mantle/anthropic.claude-opus-5". message.ParseModelRef
+// "anthropic/bedrock_mantle/anthropic.claude-opus-5". modelref.ParseModelRef
 // splits on the FIRST slash only, so these refs parse to
 // Provider "anthropic" and a Model that still carries the routing
 // namespace segment ("anthropic/claude-fable-5",
@@ -176,9 +176,9 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 		{"anthropic/claude-opus-5", 1_000_000},
 	}
 	for _, tt := range cases {
-		ref, err := message.ParseModelRef(tt.refString)
+		ref, err := modelref.ParseModelRef(tt.refString)
 		if err != nil {
-			t.Fatalf("message.ParseModelRef(%q) error: %v", tt.refString, err)
+			t.Fatalf("modelref.ParseModelRef(%q) error: %v", tt.refString, err)
 		}
 		tokens, ok := ContextWindow(ref)
 		if !ok || tokens != tt.want {
@@ -210,7 +210,7 @@ func TestContextWindowBedrockVersionSuffixNormalized(t *testing.T) {
 		{"us.anthropic.claude-sonnet-4-5-20250929", 200_000},
 	}
 	for _, tt := range cases {
-		tokens, ok := ContextWindow(message.ModelRef{Provider: "amazon-bedrock", Model: tt.model})
+		tokens, ok := ContextWindow(modelref.ModelRef{Provider: "amazon-bedrock", Model: tt.model})
 		if !ok || tokens != tt.want {
 			t.Errorf("ContextWindow(amazon-bedrock/%s) = %d, %v; want %d, true", tt.model, tokens, ok, tt.want)
 		}
@@ -218,7 +218,7 @@ func TestContextWindowBedrockVersionSuffixNormalized(t *testing.T) {
 }
 
 func TestContextWindowUnknown(t *testing.T) {
-	cases := []message.ModelRef{
+	cases := []modelref.ModelRef{
 		{Provider: "anthropic", Model: "claude-nonexistent"},
 		{Provider: "some-unconfigured-provider", Model: "claude-fable-5"},
 		{Provider: "amazon-bedrock", Model: "amazon.titan-text-express-v1"},
@@ -290,7 +290,7 @@ func TestCodexModelsAreKnownToContextWindow(t *testing.T) {
 		t.Error(`Models("codex") is empty`)
 	}
 	for _, m := range models {
-		if _, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: m}); !ok {
+		if _, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: m}); !ok {
 			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m)
 		}
 	}

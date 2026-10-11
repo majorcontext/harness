@@ -11,7 +11,7 @@ Read the root AGENTS.md. Read `internal/provider/AGENTS.md` for wire adapters.
 - Keep relocation within `computeRelocationBarrier`.
 - Derive `wire_oracle_test.go` from the provider contract, not an implementation.
 - `EngineContext` is distinct from `Text`.
-- `NeutralizeEngineContextSentinel` defangs the sentinel in user text.
+- `prompt.NeutralizeEngineContextSentinel` defangs the sentinel in user text.
 - Never persist `EngineContext` as ambient status.
 - Keep `Message.Normalize` pointer-stable for in-place cleanup.
 - Test round trips for every part variant. Assert real tool output is never lost.

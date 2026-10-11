@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"testing"
+
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // FuzzUnmarshalMessage fuzzes json.Unmarshal into a Message with arbitrary
@@ -43,7 +45,7 @@ func FuzzUnmarshalMessage(f *testing.F) {
 			&ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)},
 			&Blob{MediaType: "image/png", Data: []byte{0x89, 0x50}},
 		},
-		Model: ModelRef{Provider: "anthropic", Model: "claude-fable-5"},
+		Model: modelref.ModelRef{Provider: "anthropic", Model: "claude-fable-5"},
 	})
 	seed(Message{
 		ID:   "msg_2",

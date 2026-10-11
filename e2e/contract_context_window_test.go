@@ -12,8 +12,8 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelmeta"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -44,7 +44,7 @@ func TestContractContextWindowOfAModel(t *testing.T) {
 		})
 		t.Run("a known model reports its table window, not estimated", func(t *testing.T) {
 			d, _ := startOn(t, h, t.TempDir(), noWindow, replyText("hi"))
-			want, ok := modelmeta.ContextWindow(message.ModelRef{Provider: "anthropic", Model: "claude-opus-5"})
+			want, ok := modelmeta.ContextWindow(modelref.ModelRef{Provider: "anthropic", Model: "claude-opus-5"})
 			if !ok {
 				t.Fatal("the table does not know anthropic/claude-opus-5")
 			}

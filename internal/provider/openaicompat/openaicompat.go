@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -262,7 +263,7 @@ func (tc *assembledToolCall) toolCall() *message.ToolCall {
 type stream struct {
 	body   io.Closer
 	r      *bufio.Reader
-	model  message.ModelRef
+	model  modelref.ModelRef
 	family string
 
 	id        string

@@ -9,6 +9,8 @@ import (
 
 	"github.com/majorcontext/harness/internal/imageclamp"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -175,7 +177,7 @@ func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOp
 	// so no local adjustment is needed for the deployed route. A future
 	// non-normalizing gateway would need per-provider handling here.
 	switch {
-	case req.Effort == message.EffortOff:
+	case req.Effort == modelref.EffortOff:
 		out.ReasoningEffort = "off"
 	case req.Effort.Reasoning():
 		out.ReasoningEffort = string(req.Effort)
@@ -320,7 +322,7 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 			// part must never forge the engine-context sentinel on the wire
 			// (see message.EngineContext). Only the *message.EngineContext
 			// case below emits it.
-			t := message.NeutralizeEngineContextSentinel(v.Text)
+			t := prompt.NeutralizeEngineContextSentinel(v.Text)
 			texts = append(texts, t)
 			parts = append(parts, apiContentPart{Type: "text", Text: t})
 		case *message.EngineContext:
@@ -332,7 +334,7 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 			// part on the wire — no new provider feature. The empty guard
 			// mirrors anthropic/openai so all three transcoders agree on
 			// identical input (never a bare empty envelope).
-			t := message.RenderEngineContext(v.Text)
+			t := prompt.RenderEngineContext(v.Text)
 			texts = append(texts, t)
 			parts = append(parts, apiContentPart{Type: "text", Text: t})
 		case *message.Blob:
@@ -414,7 +416,7 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 			// injection) to echo the sentinel in its reply must not carry a
 			// live sentinel when this assistant message is replayed on a
 			// later turn (see message.EngineContext).
-			writeBody(message.NeutralizeEngineContextSentinel(v.Text))
+			writeBody(prompt.NeutralizeEngineContextSentinel(v.Text))
 		case *message.EngineContext:
 			// A genuine engine block on an assistant message (a plugin-built
 			// part — the runtime only appends to the newest user message):
@@ -425,7 +427,7 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 			// so this position is trusted (see anthropic transcodeParts's
 			// topLevel split).
 			if v.Text != "" {
-				writeBody(message.RenderEngineContext(v.Text))
+				writeBody(prompt.RenderEngineContext(v.Text))
 			}
 		case *message.ToolCall:
 			args := string(v.Arguments)
@@ -544,7 +546,7 @@ func toolResultOutput(v *message.ToolResult) string {
 		}
 		b.WriteString(text)
 	}
-	out := message.NeutralizeEngineContextSentinel(b.String())
+	out := prompt.NeutralizeEngineContextSentinel(b.String())
 	if blobs > 0 {
 		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
 		if out == "" {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/majorcontext/harness/internal/backend"
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // ErrModelUnavailable reports a model that no configured provider serves.
@@ -14,7 +14,7 @@ var ErrModelUnavailable = backend.ErrUnavailable
 // names. A backend that owns the loop runs only its built-in tools and the
 // tools that no model owns.
 func (r *Runtime) checkModel(model string, names []string) error {
-	ref, err := message.ParseModelRef(model)
+	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}

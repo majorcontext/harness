@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -39,7 +40,7 @@ type stream struct {
 	// decode loop and event mapping for the ws case: stream.handle below
 	// is shared, unmodified, between both transports.
 	wsConn *wsFrameSource
-	model  message.ModelRef
+	model  modelref.ModelRef
 	// family is the client's resolved provider family: the ProviderData tag
 	// this stream writes reasoning attachments under. Empty means the
 	// package Family constant (see familyOrDefault), which keeps a stream

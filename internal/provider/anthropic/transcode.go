@@ -10,6 +10,8 @@ import (
 
 	"github.com/majorcontext/harness/internal/imageclamp"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -59,15 +61,15 @@ type apiThinking struct {
 // budget in tokens. It returns (0, false) for a level that requests no
 // reasoning (EffortUnset, EffortOff), so the caller emits no thinking block.
 // 1024 is the Anthropic minimum budget.
-func thinkingBudget(e message.Effort) (int, bool) {
+func thinkingBudget(e modelref.Effort) (int, bool) {
 	switch e {
-	case message.EffortMinimal:
+	case modelref.EffortMinimal:
 		return 1024, true
-	case message.EffortLow:
+	case modelref.EffortLow:
 		return 4096, true
-	case message.EffortMedium:
+	case modelref.EffortMedium:
 		return 8192, true
-	case message.EffortHigh:
+	case modelref.EffortHigh:
 		return 16384, true
 	default:
 		return 0, false
@@ -336,7 +338,7 @@ func transcodeParts(parts message.Parts, thinkingEnabled, topLevel bool) ([]apiB
 			// part must never be able to forge the engine-context sentinel on
 			// the wire (see message.EngineContext). Only the *message.Engine-
 			// Context case below emits it.
-			blocks = append(blocks, apiBlock{Type: "text", Text: message.NeutralizeEngineContextSentinel(v.Text)})
+			blocks = append(blocks, apiBlock{Type: "text", Text: prompt.NeutralizeEngineContextSentinel(v.Text)})
 
 		case *message.EngineContext:
 			if v.Text == "" {
@@ -351,14 +353,14 @@ func transcodeParts(parts message.Parts, thinkingEnabled, topLevel bool) ([]apiB
 				// closes. Render it inert (neutralized text) instead. No
 				// current path places an EngineContext in a tool result; this
 				// is defense against a plugin-built one.
-				blocks = append(blocks, apiBlock{Type: "text", Text: message.NeutralizeEngineContextSentinel(v.Text)})
+				blocks = append(blocks, apiBlock{Type: "text", Text: prompt.NeutralizeEngineContextSentinel(v.Text)})
 				continue
 			}
 			// A genuine top-level engine block: emit it sentinel-wrapped so
 			// the model can trust it as engine context, exactly as the base
 			// system prompt (cmd/harness) describes. This is an ordinary text
 			// block on the wire — no new provider feature.
-			blocks = append(blocks, apiBlock{Type: "text", Text: message.RenderEngineContext(v.Text)})
+			blocks = append(blocks, apiBlock{Type: "text", Text: prompt.RenderEngineContext(v.Text)})
 
 		case *message.Blob:
 			b, err := transcodeBlob(v)

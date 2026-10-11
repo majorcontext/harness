@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -37,7 +38,7 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 				io.WriteString(w, `{"error":{"message":"boom","type":"some_error","code":"x"}}`) //nolint:errcheck
 			})
 			_, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+				Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -69,7 +70,7 @@ func TestStreamTruncationClassification(t *testing.T) {
 		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":"{}"}}]}}]}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -102,7 +103,7 @@ func TestStreamMidChunkTruncationClassification(t *testing.T) {
 		io.WriteString(w, `data: {"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"par`)            //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -133,7 +134,7 @@ func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
 		io.WriteString(w, sseDone)                                                                                                                                              //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -177,7 +178,7 @@ func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
 		io.WriteString(w, sseDone)                                                                                                //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Model:     modelref.ModelRef{Provider: "openrouter", Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})

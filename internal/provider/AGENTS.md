@@ -9,7 +9,7 @@ Read the root AGENTS.md. Read `internal/message/AGENTS.md` for canonical data ru
 - Keep prompt-cache markers out of history. Keep request bytes stable and ordered.
 - Classify errors with typed `provider.Error`. No caller matches error text.
 - A stream that ends without a terminal event is `RetryableStreamTruncated`.
-- `message.EffortUnset` sends no control. It is not `message.EffortOff`.
+- `modelref.EffortUnset` sends no control. It is not `modelref.EffortOff`.
 - Reasoning-history stripping differs by adapter. Never use one shared `!Reasoning()` check.
 - Never replay encrypted reasoning between two Responses endpoints. `Client.Family` is the boundary.
 - `Request.SessionKey` is the routing hint. Omit empty keys.

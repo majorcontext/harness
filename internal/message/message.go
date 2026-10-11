@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // Role identifies the author of a Message.
@@ -35,8 +37,8 @@ type Message struct {
 	Parts Parts  `json:"parts"`
 	// Model records which model produced an assistant message. It is zero
 	// for user and tool messages.
-	Model     ModelRef  `json:"model,omitzero"`
-	CreatedAt time.Time `json:"created_at,omitzero"`
+	Model     modelref.ModelRef `json:"model,omitzero"`
+	CreatedAt time.Time         `json:"created_at,omitzero"`
 	// Origin marks who or what produced this message beyond Role. Empty
 	// means an ordinary source. It is presentation metadata: no transcoder
 	// reads it and it never reaches a provider.

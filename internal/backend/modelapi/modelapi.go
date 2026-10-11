@@ -15,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelmeta"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -47,7 +48,7 @@ func New(p provider.Provider, window int) *Backend {
 // else the modelmeta window, else defaultContextWindow marked as estimated.
 // It is the only place that resolves a window.
 func (b *Backend) Capabilities(model string) turn.Capabilities {
-	ref, err := message.ParseModelRef(model)
+	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return turn.Capabilities{}
 	}
@@ -184,11 +185,11 @@ func (b *Backend) Close() {
 }
 
 func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
-	ref, err := message.ParseModelRef(req.Model)
+	ref, err := modelref.ParseModelRef(req.Model)
 	if err != nil {
 		return nil, err
 	}
-	effort, err := message.ParseEffort(req.Settings.Effort)
+	effort, err := modelref.ParseEffort(req.Settings.Effort)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -27,7 +28,7 @@ func newFuzzStream(data []byte) *stream {
 	return &stream{
 		body:  io.NopCloser(bytes.NewReader(nil)),
 		r:     bufio.NewReader(bytes.NewReader(data)),
-		model: message.ModelRef{Provider: Family, Model: "fuzz-model"},
+		model: modelref.ModelRef{Provider: Family, Model: "fuzz-model"},
 	}
 }
 

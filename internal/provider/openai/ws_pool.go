@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -106,7 +107,7 @@ type wsStreamRequest struct {
 	URL        string
 	Headers    http.Header
 	Body       []byte // the marshaled apiRequest, same bytes the HTTP path POSTs
-	Model      message.ModelRef
+	Model      modelref.ModelRef
 	Family     string
 	HTTPClient *http.Client
 	Prewarm    bool

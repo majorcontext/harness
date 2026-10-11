@@ -41,12 +41,13 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
 // liveCodexClient builds a Client configured exactly like a box's "codex"
 // provider entry, or skips.
-func liveCodexClient(t *testing.T) (*Client, message.ModelRef) {
+func liveCodexClient(t *testing.T) (*Client, modelref.ModelRef) {
 	t.Helper()
 	if os.Getenv("HARNESS_LIVE") == "" {
 		t.Skip("HARNESS_LIVE unset; skipping live Codex websocket probe")
@@ -74,7 +75,7 @@ func liveCodexClient(t *testing.T) (*Client, message.ModelRef) {
 		OmitResponseParams:    []string{"max_output_tokens", "temperature", "top_p", "metadata"},
 		SanitizeToolSchemas:   true,
 		UseWebSocketTransport: true,
-	}, message.ModelRef{Provider: "codex", Model: model}
+	}, modelref.ModelRef{Provider: "codex", Model: model}
 }
 
 // liveDial opens one Codex Responses websocket through the production dial.

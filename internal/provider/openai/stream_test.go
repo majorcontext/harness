@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -72,7 +73,7 @@ func TestStreamAssembly(t *testing.T) {
 	})
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 		System:    []string{"sys"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ls please"}}}},
 		MaxTokens: 1024,
@@ -170,7 +171,7 @@ func TestStreamEndTurnNoTools(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -208,7 +209,7 @@ func TestStreamIncomplete(t *testing.T) {
 				io.WriteString(w, fixture) //nolint:errcheck
 			})
 			s, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: Family, Model: "gpt-5"},
+				Model:     modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -244,7 +245,7 @@ func TestStreamHTTPError(t *testing.T) {
 		io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"Incorrect API key provided"}}`) //nolint:errcheck
 	})
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -260,7 +261,7 @@ func TestStreamInlineError(t *testing.T) {
 		io.WriteString(w, sse("response.failed", `{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -288,7 +289,7 @@ func TestStreamErrorWithoutCodeOmitsEmptyParentheses(t *testing.T) {
 func TestStreamNoAPIKey(t *testing.T) {
 	c := &Client{}
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -322,7 +323,7 @@ func TestStreamReasoningItemsStayApart(t *testing.T) {
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ship it"}}}},
 		MaxTokens: 64,
 	})
@@ -387,7 +388,7 @@ func TestStreamReasoningSummaryPartsStayApart(t *testing.T) {
 	})
 	c.Family = CodexFamily
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
+		Model:     modelref.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ship it"}}}},
 		MaxTokens: 64,
 	})

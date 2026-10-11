@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // TestEffortSetsReasoningEffort: a non-off effort level sets the top-level
 // reasoning_effort field to the same string.
 func TestEffortSetsReasoningEffort(t *testing.T) {
-	for _, e := range []message.Effort{message.EffortMinimal, message.EffortLow, message.EffortMedium, message.EffortHigh} {
+	for _, e := range []modelref.Effort{modelref.EffortMinimal, modelref.EffortLow, modelref.EffortMedium, modelref.EffortHigh} {
 		req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 		req.Effort = e
 		out := mustTranscode(t, req)
@@ -33,7 +34,7 @@ func TestEffortSetsReasoningEffort(t *testing.T) {
 // string).
 func TestEffortUnsetNoReasoningEffort(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
-	req.Effort = message.EffortUnset
+	req.Effort = modelref.EffortUnset
 	out := mustTranscode(t, req)
 	if out.ReasoningEffort != "" {
 		t.Errorf("effort unset: reasoning_effort must be empty, got %q", out.ReasoningEffort)
@@ -54,7 +55,7 @@ func TestEffortUnsetNoReasoningEffort(t *testing.T) {
 // told to disable reasoning. Unset must never gain this field.
 func TestEffortOffSendsLiteralOff(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
-	req.Effort = message.EffortOff
+	req.Effort = modelref.EffortOff
 	out := mustTranscode(t, req)
 	if out.ReasoningEffort != "off" {
 		t.Errorf("effort off: reasoning_effort = %q, want %q", out.ReasoningEffort, "off")
