@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `provider`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, and boxes cut over on 2026-10-10 (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `provider`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 

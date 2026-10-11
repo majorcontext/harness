@@ -5,7 +5,7 @@ A fast, extensible, composable agent harness in Go.
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 - **Fast** — millisecond startup, CI-enforced budgets
-- **Extensible** — language-agnostic process plugins (TypeScript SDK published; the Go SDK is internal)
+- **Extensible** — language-agnostic process plugins (TypeScript SDK published)
 - **Composable** — headless runtime, event streams, client/server, MCP both directions
 - **Model-fluid** — swap providers/models mid-session or per-subagent with no migration
 
@@ -53,7 +53,7 @@ Serve the HTTP+SSE session API on `localhost:4096`:
 harness serve
 ```
 
-Run `harness --help` for all commands and flags.
+Run `harness --help` for all commands and flags. `harness sessions` lists saved sessions, and `harness plugin probe` starts the configured plugins and prints what they register.
 
 ## Use the library
 
@@ -94,7 +94,7 @@ for e, err := range s.Events(ctx, head) {
 	}
 	if e.Kind == protocol.KindItemDelta {
 		var f protocol.ItemFrame
-		if json.Unmarshal(e.Data, &f) == nil {
+		if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
 			fmt.Print(f.Text)
 		}
 	}
