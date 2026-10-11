@@ -1,5 +1,7 @@
 package config
 
+import "maps"
+
 // DefaultModel is the model ref used when neither a flag nor config names one.
 const DefaultModel = "anthropic/claude-fable-5"
 
@@ -23,9 +25,11 @@ func Defaults() Config {
 	}
 }
 
-// EnsureProviderDefaults fills the empty fields of each Defaults().Providers entry present in providers, in place.
-func EnsureProviderDefaults(providers map[string]Provider) {
-	applyProviderDefaults(providers)
+// ResolvedProviders returns a new map of the providers of c with the empty fields of each default entry filled.
+func (c *Config) ResolvedProviders() map[string]Provider {
+	out := maps.Clone(c.Providers)
+	applyProviderDefaults(out)
+	return out
 }
 
 // applyProviderDefaults must run on the merged map, because one layer may set only some fields of an entry.

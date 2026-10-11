@@ -53,6 +53,9 @@ func mergeScalars(out, over *Config) {
 	if over.PromptRetries != nil {
 		out.PromptRetries = over.PromptRetries
 	}
+	if over.MaxTokens != 0 {
+		out.MaxTokens = over.MaxTokens
+	}
 	if over.MaxTokensContinuations != nil {
 		out.MaxTokensContinuations = over.MaxTokensContinuations
 	}

@@ -96,9 +96,6 @@ type Options struct {
 	Version string
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
-	// MaxTokens caps the response of each model call of a turn.
-	// Zero or less: the backend default.
-	MaxTokens int
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -171,7 +168,7 @@ func New(opts Options) (*Runtime, error) {
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
-	r.maxTokens = max(opts.MaxTokens, 0)
+	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
 	if opts.Config.GoalEvaluatorModel != "" {

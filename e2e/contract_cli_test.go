@@ -450,15 +450,41 @@ func TestContractCLIRunMaxTokensCapsEachModelResponse(t *testing.T) {
 	}
 }
 
-func TestContractCLIRunNegativeMaxTokensReadsAsTheDefault(t *testing.T) {
+func TestContractCLIRunMaxTokensConfigKeyCapsEachModelResponse(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	h := newCLIHost(t, nil, replyText("hello"))
-	out, errOut, code := h.run("run", "-max-tokens", "-1", "-p", "hi")
-	if code != 0 || out != "hello\n" {
+	h := newCLIHost(t, map[string]any{"max_tokens": 321}, replyText("hello"))
+	if out, errOut, code := h.run("run", "-p", "hi"); code != 0 || out != "hello\n" {
 		t.Fatalf("run = %d %q, want 0 and the reply\n%s", code, out, errOut)
 	}
-	if reqs := h.fake.Requests(); len(reqs) == 0 || reqs[0].MaxTokens != 8192 {
-		t.Errorf("requests = %+v, want a first request with the default max_tokens 8192", reqs)
+	if out, errOut, code := h.run("run", "-max-tokens", "123", "-p", "hi"); code != 0 || out != "hello\n" {
+		t.Fatalf("run with the flag = %d %q, want 0 and the reply\n%s", code, out, errOut)
+	}
+	reqs := h.fake.Requests()
+	if len(reqs) != 2 || reqs[0].MaxTokens != 321 || reqs[1].MaxTokens != 123 {
+		t.Errorf("requests = %+v, want max_tokens 321 from the key, then 123 from the flag", reqs)
+	}
+}
+
+func TestContractCLIRunRefusesANegativeMaxTokens(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	for name, h := range map[string]struct {
+		extra map[string]any
+		args  []string
+	}{
+		"flag":       {args: []string{"-max-tokens", "-1"}},
+		"config key": {extra: map[string]any{"max_tokens": -1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			host := newCLIHost(t, h.extra, replyText("hello"))
+			out, errOut, code := host.run(append([]string{"run"}, append(h.args, "-p", "hi")...)...)
+			if code == 0 || out != "" || !strings.Contains(errOut, "max_tokens") {
+				t.Fatalf("run = %d %q, want a failure that names max_tokens\n%s", code, out, errOut)
+			}
+			if reqs := host.fake.Requests(); len(reqs) != 0 {
+				t.Errorf("requests = %+v, want none", reqs)
+			}
+		})
 	}
 }

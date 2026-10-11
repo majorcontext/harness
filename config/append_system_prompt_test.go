@@ -10,11 +10,10 @@ import (
 func TestLoadProjectAppendSystemPrompt(t *testing.T) {
 	user := filepath.Join(t.TempDir(), "config.json")
 	writeFile(t, user, `{"append_system_prompt":["platform"]}`)
-	t.Setenv("HARNESS_CONFIG", user)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".harness.json"), `{"append_system_prompt":["project"]}`)
 
-	cfg, err := LoadProject(dir)
+	cfg, err := LoadProject(user, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +38,12 @@ func TestLoadProjectRejectsPromptReplacementExtraArg(t *testing.T) {
 		"append_system_prompt":["platform"],
 		"providers":{"claude-code":{"type":"claude-code-cli"}}
 	}`)
-	t.Setenv("HARNESS_CONFIG", user)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".harness.json"), `{
 		"providers":{"claude-code":{"extra_args":["--append-system-prompt","project"]}}
 	}`)
 
-	_, err := LoadProject(dir)
+	_, err := LoadProject(user, dir)
 	if err == nil {
 		t.Fatal("LoadProject accepted conflicting extra_args")
 	}

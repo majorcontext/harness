@@ -1,8 +1,6 @@
-// Package config loads the harness CLI configuration: a single JSON file
-// (plus an optional per-project override) parsed in one flat pass with the
-// standard library only. Nothing here touches the network or spawns
-// processes — config loading sits on the startup path, so it is at most two
-// file reads (the user config, plus the project override when present).
+// Package config is the harness runtime configuration: one JSON file with an
+// optional project override. Loading reads at most two files, and starts no
+// process and makes no network call.
 package config
 
 // Config is the parsed harness configuration. The zero value is valid and
@@ -37,10 +35,10 @@ type Config struct {
 	// exclusions remain: project instructions belong in AGENTS.md, and tool
 	// SHAPE (a schema, a description, when to call one server's tool) belongs
 	// to the tool itself — an MCP server states its own usage through
-	// initialize instructions, which internal/tool/mcpsrc renders as its own
+	// initialize instructions, which the runtime renders as its own
 	// segment. What is left for this key is the text no tool owns: what this
 	// environment is, and what the platform running it guarantees.
-	// internal/prompt.Build places entries after the base prompt and before
+	// The system prompt places entries after the base prompt and before
 	// the AGENTS.md chain. Claude Code receives one blank-line-joined
 	// --append-system-prompt value.
 	//
@@ -79,19 +77,19 @@ type Config struct {
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
 	// Plugins lists the plugin processes to wire into every session's
-	// turn hooks (see internal/tool/pluginsrc). Order matters: sync hooks
+	// turn hooks. Order matters: sync hooks
 	// chain across plugins in this order, each seeing the previous plugin's
 	// mutations. A nil (omitted) value disables plugins entirely. In the
 	// project-config merge a non-empty project value replaces the user
 	// value entirely (arrays override, like SkillsDirs).
 	Plugins []PluginSpec `json:"plugins,omitempty"`
 	// PluginHTTPHeaders are stamped on every plugin's outbound HTTP traffic
-	// (plugin.Options.HTTPHeaders, e.g. workspace attribution). Maps merge
+	// (for example workspace attribution). Maps merge
 	// key by key in the project-config merge, like Aliases and Providers.
 	PluginHTTPHeaders map[string]string `json:"plugin_http_headers,omitempty"`
 	// MCPServers declares named MCP servers the runtime connects to (lazily,
 	// on first use) and registers as namespaced tools (mcp__<server>__<tool>,
-	// the Claude Code convention — see internal/tool/mcpsrc). Keyed by server name;
+	// the Claude Code convention). Keyed by server name;
 	// a nil (omitted) value configures no MCP servers. In the project-config
 	// merge, keys merge like Providers/Aliases (new keys from either layer
 	// are kept) but a same-name project entry replaces the user entry
@@ -101,7 +99,7 @@ type Config struct {
 	MCPServers map[string]MCPServerSpec `json:"mcp_servers,omitempty"`
 	// Processes declares named dev/support processes the runtime can
 	// manage (start/stop/restart/status/logs) via the "process" session
-	// tool and the /process endpoints (see internal/tool/proc). Keyed by process name; a nil (omitted) value
+	// tool and the /process endpoints. Keyed by process name; a nil (omitted) value
 	// configures no processes. Merge rules mirror MCPServers: keys merge,
 	// but a same-name project entry replaces the user entry wholesale.
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
@@ -118,7 +116,7 @@ type Config struct {
 	// estimate. A context overflow error never changes the window.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// PromptRetries sets how many ADDITIONAL
-	// attempts a turn (internal/turn) makes when a model call fails
+	// attempts a turn makes when a model call fails
 	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a
 	// truncated stream). A nil value (the field omitted) leaves the product
 	// default of 2 in place; an explicit 0 disables the retry entirely. A
@@ -126,22 +124,25 @@ type Config struct {
 	// merge, exactly like ModelTool above. Resolve it with
 	// PromptRetriesValue. It is deliberately small and short.
 	PromptRetries *int `json:"prompt_retries,omitempty"`
+	// MaxTokens caps the output tokens of each model call of a turn. Zero is the backend default.
+	// A negative value fails Validate.
+	MaxTokens int `json:"max_tokens,omitempty"`
 	// MaxTokensContinuations sets how many CONSECUTIVE times a
-	// turn (internal/turn) auto-continues
+	// turn auto-continues
 	// a turn that stopped with provider reason "max_tokens" (the provider
 	// cut the model off mid-emission) instead of settling the turn. A nil
 	// value (the field omitted) leaves the
 	// product default of 3 in place; an explicit 0 disables auto-continue
-	// entirely, reverting to the pre-fix behavior. A *int distinguishes
+	// entirely. A *int distinguishes
 	// "unset" (3) from "0" (off) across the project-config merge, exactly
 	// like PromptRetries above. Resolve it with
 	// MaxTokensContinuationsValue.
 	MaxTokensContinuations *int `json:"max_tokens_continuations,omitempty"`
 	// StreamIdleTimeoutS sets the stream idle timeout (in seconds)
 	// of every session this process creates: how long a streamed response
-	// may go without a delta before the idle-stream watchdog of internal/turn
+	// may go without a delta before the idle-stream watchdog
 	// aborts it. Zero (omitted, the default) leaves the 5-minute
-	// default in place (mirroring Codex's stream_idle_timeout_ms=300000);
+	// default in place;
 	// negative disables the watchdog entirely.
 	StreamIdleTimeoutS int `json:"stream_idle_timeout_s,omitempty"`
 	// CompactionThreshold sets the

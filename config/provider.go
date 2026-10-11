@@ -5,21 +5,19 @@ import (
 	"slices"
 )
 
-// TypeOpenAICompat selects the generic OpenAI-compatible chat-completions adapter
-// (internal/provider/openaicompat) for a Provider config entry — the wire format spoken by OpenRouter,
-// Ollama, vLLM, and similar deployments.
+// TypeOpenAICompat selects the generic OpenAI-compatible chat-completions adapter for a Provider
+// config entry: the wire format of OpenRouter, Ollama, vLLM, and similar deployments.
 const TypeOpenAICompat = "openai-compat"
 
-// TypeOpenAI selects the native OpenAI Responses API adapter (internal/provider/openai) for a Provider
-// config entry under ANY providers map key.
+// TypeOpenAI selects the native OpenAI Responses API adapter for a Provider config entry under any
+// providers map key.
 const TypeOpenAI = "openai"
 
 // TypeClaudeCodeCLI selects the Claude Code CLI backend, which runs the `claude` binary as a child process and needs no BaseURL.
 const TypeClaudeCodeCLI = "claude-code-cli"
 
 // nativeProviderKeys are the only providers map keys allowed an empty Type with no further
-// defaulting: the built-in adapters cmd/harness's registry wires directly by name
-// (internal/provider/anthropic.Family and internal/provider/openai.Family).
+// defaulting: the built-in adapters that the runtime wires by name.
 var nativeProviderKeys = map[string]bool{
 	"anthropic": true,
 	"openai":    true,
@@ -42,7 +40,7 @@ type Provider struct {
 	NoPromptCacheKey bool `json:"no_prompt_cache_key,omitempty"`
 	// ResponsesPath overrides the Responses request path, "/v1/responses" when empty.
 	ResponsesPath string `json:"responses_path,omitempty"`
-	// OmitResponseParams names Responses params to leave off the wire; each is in OmitResponseParamValues.
+	// OmitResponseParams names Responses params to leave off the wire; each is an OmitResponseParam constant.
 	OmitResponseParams []string `json:"omit_response_params,omitempty"`
 	// SanitizeToolSchemas rewrites tool schemas through an allowlist before a Responses request.
 	SanitizeToolSchemas bool `json:"sanitize_tool_schemas,omitempty"`
@@ -55,15 +53,15 @@ type Provider struct {
 	BinaryPath string `json:"binary_path,omitempty"`
 	// ExtraArgs are appended after the flags that the Claude Code backend constructs.
 	ExtraArgs []string `json:"extra_args,omitempty"`
-	// PermissionMode is the --permission-mode of the CLI, one of ClaudeCodePermissionModeValues.
+	// PermissionMode is the --permission-mode of the CLI, one of default, acceptEdits, bypassPermissions, or plan.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// SessionMirror runs the CLI with --session-mirror under a scratch CLAUDE_CONFIG_DIR, so the
 	// session state holds the transcript and another host can resume it.
 	SessionMirror bool `json:"session_mirror,omitempty"`
 }
 
-// ClaudeCodePermissionModeValues returns the accepted --permission-mode values, in a fresh slice.
-func ClaudeCodePermissionModeValues() []string {
+// claudeCodePermissionModes returns the accepted --permission-mode values.
+func claudeCodePermissionModes() []string {
 	return []string{
 		"default",
 		"acceptEdits",
@@ -87,8 +85,8 @@ const (
 	OmitResponseParamMetadata        = "metadata"
 )
 
-// OmitResponseParamValues returns every value validateOmitResponseParams accepts, in a fresh slice.
-func OmitResponseParamValues() []string {
+// omitResponseParams returns every value that Provider.OmitResponseParams accepts.
+func omitResponseParams() []string {
 	return []string{
 		OmitResponseParamMaxOutputTokens,
 		OmitResponseParamTemperature,
@@ -145,8 +143,8 @@ func validateProviders(providers map[string]Provider) error {
 // PermissionMode.
 func validateClaudeCodeFields(name string, p Provider) error {
 	if p.Type == TypeClaudeCodeCLI {
-		if p.PermissionMode != "" && !slices.Contains(ClaudeCodePermissionModeValues(), p.PermissionMode) {
-			return fmt.Errorf("providers.%s: unknown permission_mode %q (valid values: %q)", name, p.PermissionMode, ClaudeCodePermissionModeValues())
+		if p.PermissionMode != "" && !slices.Contains(claudeCodePermissionModes(), p.PermissionMode) {
+			return fmt.Errorf("providers.%s: unknown permission_mode %q (valid values: %q)", name, p.PermissionMode, claudeCodePermissionModes())
 		}
 		return nil
 	}
@@ -166,7 +164,7 @@ func validateClaudeCodeFields(name string, p Provider) error {
 }
 
 // buildsResponsesAdapter reports whether a providers entry builds the native OpenAI Responses
-// adapter (internal/provider/openai) — the one adapter that reads ResponsesPath.
+// adapter, the one adapter that reads ResponsesPath.
 func buildsResponsesAdapter(name string, p Provider) bool {
 	if p.Type == TypeOpenAI {
 		return true
@@ -205,8 +203,8 @@ func validateOmitResponseParams(name string, p Provider) error {
 		return fmt.Errorf("providers.%s: omit_response_params is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
 	}
 	for _, param := range p.OmitResponseParams {
-		if !slices.Contains(OmitResponseParamValues(), param) {
-			return fmt.Errorf("providers.%s: unknown omit_response_params entry %q (valid values: %q)", name, param, OmitResponseParamValues())
+		if !slices.Contains(omitResponseParams(), param) {
+			return fmt.Errorf("providers.%s: unknown omit_response_params entry %q (valid values: %q)", name, param, omitResponseParams())
 		}
 	}
 	return nil
@@ -231,13 +229,13 @@ func validateCacheTTL(name string, p Provider) error {
 	if name != "anthropic" || p.Type != "" {
 		return fmt.Errorf("providers.%s: cache_ttl is only valid on the native %q provider (map key %q with no type); only the anthropic adapter sets cache_control", name, "anthropic", "anthropic")
 	}
-	if !slices.Contains(CacheTTLValues(), p.CacheTTL) {
+	if !slices.Contains(cacheTTLs(), p.CacheTTL) {
 		return fmt.Errorf("providers.%s: unknown cache_ttl %q (valid values: %q, %q)", name, p.CacheTTL, CacheTTL5m, CacheTTL1h)
 	}
 	return nil
 }
 
-// CacheTTLValues returns every non-empty cache_ttl validateCacheTTL accepts, in a fresh slice.
-func CacheTTLValues() []string {
+// cacheTTLs returns every non-empty value that Provider.CacheTTL accepts.
+func cacheTTLs() []string {
 	return []string{CacheTTL5m, CacheTTL1h}
 }

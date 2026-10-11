@@ -104,6 +104,9 @@ func runCmd(args []string) error {
 	if opts.system != "" {
 		cfg.AppendSystemPrompt = append(cfg.AppendSystemPrompt[:len(cfg.AppendSystemPrompt):len(cfg.AppendSystemPrompt)], opts.system)
 	}
+	if opts.maxTokens != 0 {
+		cfg.MaxTokens = opts.maxTokens
+	}
 	workDir, err := os.Getwd()
 	if err != nil {
 		return err
@@ -112,7 +115,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version, MaxTokens: opts.maxTokens})
+	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version})
 	if err != nil {
 		return err
 	}
