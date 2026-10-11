@@ -358,11 +358,11 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		KeepTurns:       r.keep,
 		Base:            r.base,
 		Go:              r.group.Go,
-		Done: func() {
+		Done: func(closeDone func()) {
 			if a != nil && a.Rejected() {
 				r.syncStopped.Store(true)
 			}
-			r.forget(id, e)
+			r.forget(id, e, closeDone)
 		},
 		Check: r.changeModel,
 	}
@@ -556,6 +556,7 @@ func (r *Runtime) shutdown(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
+	var waitCut bool
 	stopped := make(chan struct{})
 	go func() {
 		r.group.Wait()
@@ -565,10 +566,16 @@ func (r *Runtime) shutdown(ctx context.Context) error {
 	case <-stopped:
 	case <-ctx.Done():
 		errs = append(errs, context.Cause(ctx))
+		waitCut = true
 	}
 	r.cancel()
-	r.models.Close()
-	r.closeTools(ctx)
+	clean := closeBy(ctx, r.models.Close)
+	if !r.closeTools(ctx) {
+		clean = false
+	}
+	if !clean && !waitCut {
+		errs = append(errs, context.Cause(ctx))
+	}
 	return errors.Join(errs...)
 }
 
@@ -663,20 +670,23 @@ func (r *Runtime) history(ctx context.Context, id string) ([]eventlog.Message, e
 }
 
 // closeTools stops the processes, the plugins, and the MCP servers, and
-// returns when ctx ends.
-func (r *Runtime) closeTools(ctx context.Context) {
+// reports whether each finished before ctx ended.
+func (r *Runtime) closeTools(ctx context.Context) bool {
+	clean := true
 	if r.procs != nil {
-		r.procs.Close(ctx)
+		clean = r.procs.Close(ctx)
 	}
 	if r.plugins != nil {
-		closeBy(ctx, r.plugins.Close)
+		clean = closeBy(ctx, r.plugins.Close) && clean
 	}
 	if r.mcp != nil {
-		closeBy(ctx, r.mcp.Close)
+		clean = closeBy(ctx, r.mcp.Close) && clean
 	}
+	return clean
 }
 
-func closeBy(ctx context.Context, closeFn func()) {
+// closeBy runs closeFn and reports whether it returned before ctx ended.
+func closeBy(ctx context.Context, closeFn func()) bool {
 	done := make(chan struct{})
 	go func() {
 		closeFn()
@@ -684,7 +694,9 @@ func closeBy(ctx context.Context, closeFn func()) {
 	}()
 	select {
 	case <-done:
+		return true
 	case <-ctx.Done():
+		return false
 	}
 }
 

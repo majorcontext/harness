@@ -29,7 +29,7 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 			r.mu.Unlock()
 			e.s, e.err = r.start(ctx, id, e, l)
 			if e.err != nil {
-				r.forget(id, e)
+				r.forget(id, e, nil)
 			}
 			close(e.ready)
 			if e.err == nil {
@@ -69,7 +69,7 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		r.forget(id, e)
+		r.forget(id, e, nil)
 	}
 }
 
@@ -87,10 +87,13 @@ func (r *Runtime) run(s *Session, create bool) {
 	})
 }
 
-func (r *Runtime) forget(id string, e *entry) {
+func (r *Runtime) forget(id string, e *entry, then func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions[id] == e {
 		delete(r.sessions, id)
+	}
+	if then != nil {
+		then()
 	}
 }

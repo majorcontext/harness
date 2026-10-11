@@ -36,7 +36,7 @@ func (s *Session) ID() string { return s.id }
 // Done closes when the session stops here, after its Ownership is released.
 func (s *Session) Done() <-chan struct{} { return s.a.Done() }
 
-// Err is nil before Done, then the stop cause; see ErrSessionReleased.
+// Err is nil before Done, then the stop cause; see ErrSessionReleased. An error of the Store or a Sync rejection that stops the session matches ErrSessionNotOwned and that error, and none of the three causes.
 func (s *Session) Err() error { return s.a.Err() }
 
 // View returns the session as of its last durable record.

@@ -45,7 +45,7 @@ func (b *warmBackend) Warm(ctx context.Context, req turn.Request) error {
 
 func warmConfig(ctx context.Context, wg *sync.WaitGroup, log *memLog, b turn.Backend) Config {
 	return Config{ID: "s1", Store: log, Ownership: owned{}, Backend: b, Source: turn.Fixed{extra("echo")},
-		Base: ctx, Go: wg.Go, Done: func() {}, Prompt: func() string { return "be brief" }}
+		Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() }, Prompt: func() string { return "be brief" }}
 }
 
 func TestWarmEndsWithTheSessionContextOrItsTimeout(t *testing.T) {
