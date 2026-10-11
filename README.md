@@ -53,7 +53,7 @@ Serve the HTTP+SSE session API on `localhost:4096`:
 harness serve
 ```
 
-Run `harness --help` for all commands and flags. `harness sessions` lists saved sessions, and `harness plugin probe` starts the configured plugins and prints what they register.
+Run `harness --help` for all commands and flags. `harness sessions` lists saved sessions, and `harness plugin probe` probes the configured plugins and prints their hooks.
 
 ## Use the library
 
