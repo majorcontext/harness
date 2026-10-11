@@ -1,0 +1,148 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Task",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "Main thinking."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Subagent text."
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Main text."
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "subagent done"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 14,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 14,
+          "output_tokens": 6
+        }
+      }
+    },
+    "live_stream.a": {
+      "status": 200,
+      "body": {
+        "stream": [
+          {
+            "item": "assistant",
+            "tool_call": "Task"
+          },
+          {
+            "item": "assistant",
+            "reasoning": {
+              "pieces": [
+                "Main ",
+                "thinking."
+              ],
+              "text": "Main thinking."
+            }
+          },
+          {
+            "item": "assistant",
+            "parent": "toolu#1",
+            "text": {
+              "pieces": [
+                "Subagent text."
+              ],
+              "text": "Subagent text."
+            }
+          },
+          {
+            "item": "assistant",
+            "text": {
+              "pieces": [
+                "Main ",
+                "text."
+              ],
+              "text": "Main text."
+            }
+          },
+          {
+            "item": "tool"
+          }
+        ]
+      }
+    }
+  }
+}

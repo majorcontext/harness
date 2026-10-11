@@ -164,6 +164,25 @@ type Sink interface {
 	Resolution(id string) (eventlog.RequestResolved, bool)
 }
 
+// Threaded is a Sink that gives each key a live item of its own. A backend
+// that runs several threads of output at once, such as a main thread and a
+// subagent, gives each thread a key, so the deltas of one never join the item
+// of another.
+type Threaded interface {
+	Thread(key string) Thread
+}
+
+// Thread is a Sink whose Delta and Item use the live item of one key. The
+// live item of the key starts with its first Delta and completes with its next
+// Item.
+type Thread interface {
+	Sink
+	// Drop forgets the live item without completing it: the next Delta starts
+	// a new item, and the dropped item never completes, as the item of a
+	// failed attempt.
+	Drop()
+}
+
 // Result is the outcome of a Run that returned.
 type Result struct {
 	// MaxTokens reports a response that the output cap cut off.
@@ -188,6 +207,11 @@ type Limits struct {
 type Turn interface {
 	Sink
 	Started() string
+	// Announce is Started for a keyed thread: it announces an item and returns
+	// its ID, and Item does not use it.
+	Announce() string
+	// ItemAs records m under the ID that Announce returned.
+	ItemAs(id string, m eventlog.Message) error
 	// Attach stores a blob of a tool result and returns the blob part that names it.
 	Attach(mediaType string, data []byte) (eventlog.Part, error)
 	// Settings returns the model and settings of the session now, or "".
@@ -311,7 +335,7 @@ func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits,
 	s.call = callOf(req, 0, ownsLoop)
 	res, err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
-		s.item = ""
+		s.item, s.threads = "", nil
 		if err = s.wait(ctx, n); err == nil {
 			s.call = callOf(req, n+1, ownsLoop)
 			res, err = watch(ctx, b, req, s, lim.Idle)
@@ -355,6 +379,36 @@ func (w watched) Delta(itemID string, d Delta) {
 
 func (w watched) Alive() { w.alive() }
 
+// Thread gives a sink that has no threads one live item for every key.
+func (w watched) Thread(key string) Thread {
+	if t, ok := w.Sink.(Threaded); ok {
+		return watchedThread{t.Thread(key), w.alive}
+	}
+	return flatThread{w}
+}
+
+// flatThread is the thread of a sink that keeps one live item.
+type flatThread struct{ Sink }
+
+func (flatThread) Drop() {}
+
+type liveThread Thread
+
+type watchedThread struct {
+	liveThread
+	alive func()
+}
+
+func (w watchedThread) Item(m eventlog.Message) error {
+	w.alive()
+	return w.liveThread.Item(m)
+}
+
+func (w watchedThread) Delta(itemID string, d Delta) {
+	w.alive()
+	w.liveThread.Delta(itemID, d)
+}
+
 func (s *sink) wait(ctx context.Context, attempt int) error {
 	d := min(retryBackoff<<min(attempt, 3), retryBackoffMax)
 	d += rand.N(d/5) - d/10
@@ -376,6 +430,8 @@ type sink struct {
 	items []eventlog.Message
 	// item is the item that the deltas since the last Item build, or "".
 	item string
+	// threads holds the live item of each keyed thread.
+	threads map[string]string
 	// call describes the model call in flight, for its turn_metrics line.
 	call callInfo
 }
@@ -388,6 +444,38 @@ func (s *sink) Delta(_ string, d Delta) {
 	}
 	s.Turn.Delta(s.item, d)
 }
+
+// thread is the view of a sink with the live item of one key.
+type thread struct {
+	*sink
+	key string
+}
+
+func (s *sink) Thread(key string) Thread { return thread{s, key} }
+
+func (t thread) Delta(_ string, d Delta) {
+	id, ok := t.threads[t.key]
+	if !ok {
+		if t.threads == nil {
+			t.threads = map[string]string{}
+		}
+		id = t.Announce()
+		t.threads[t.key] = id
+	}
+	t.Turn.Delta(id, d)
+}
+
+func (t thread) Item(m eventlog.Message) error {
+	id := t.threads[t.key]
+	delete(t.threads, t.key)
+	if err := t.Turn.ItemAs(id, m); err != nil {
+		return err
+	}
+	t.items = append(t.items, m)
+	return nil
+}
+
+func (t thread) Drop() { delete(t.threads, t.key) }
 
 func (s *sink) Item(m eventlog.Message) error {
 	s.item = ""

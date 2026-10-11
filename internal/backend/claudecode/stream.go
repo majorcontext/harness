@@ -207,7 +207,8 @@ func (r *run) save() error {
 
 // tail maps a frame that the CLI writes after its result or after the turn
 // failed: only its transcript and its result. After a stop, it maps every
-// frame: the CLI still writes the items that it already ran.
+// frame but the stream events: the CLI still writes the items that it already
+// ran, and a block that it did not finish arrives as one assistant frame.
 func (r *run) tail(line []byte) {
 	var env envelope
 	if json.Unmarshal(line, &env) != nil || env.Type == "result" && r.result != nil {
@@ -389,7 +390,7 @@ func (r *run) assistant(env envelope) error {
 		switch p.Type {
 		case eventlog.PartText, eventlog.PartReasoning:
 			if text := r.unstreamed(env.ParentToolUseID, m.ID, p); text != "" {
-				r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
+				r.thread(env.ParentToolUseID).Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
 			}
 		case eventlog.PartToolCall:
 			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
@@ -427,7 +428,11 @@ func (r *run) flush() error {
 	}
 	m := *r.pending
 	r.pending, r.pendingID, r.spoke = nil, "", true
-	return r.out.Item(m)
+	if err := r.thread(m.ParentCallID).Item(m); err != nil {
+		return err
+	}
+	r.replay(m.ParentCallID)
+	return nil
 }
 
 // steered writes the queued steer inputs to stdin.

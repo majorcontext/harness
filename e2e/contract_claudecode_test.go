@@ -97,19 +97,30 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 }
 
 func TestContractClaudeCodePartialMessages(t *testing.T) {
+	live := func(mode string) func(*testing.T, host, string) driver { return claudeLaneDriver(mode) }
+	watched := []action{
+		create{as: "a"},
+		claudeWatchLive{as: "a"},
+		submit{as: "a", text: "run it"},
+		waitIdle{as: "a"},
+		claudeLive{as: "a"},
+		claudeSession{as: "a"},
+	}
 	runScenarios(t, []scenario{
 		{
-			name:   "claudecode_text_and_thinking_stream_as_deltas_before_the_item",
-			driver: claudeLaneDriver("partial_messages"),
-			actions: []action{
-				create{as: "a"},
-				claudeWatchLive{as: "a"},
-				submit{as: "a", text: "run it"},
-				waitIdle{as: "a"},
-				claudeLive{as: "a"},
-				claudeSession{as: "a"},
-				claudeInvocations{as: "a"},
-			},
+			name:    "claudecode_text_and_thinking_stream_as_deltas_before_the_item",
+			driver:  live("partial_messages"),
+			actions: withActions(watched, claudeInvocations{as: "a"}),
+		},
+		{
+			name:    "claudecode_subagent_frame_during_a_main_stream_keeps_each_item_its_deltas",
+			driver:  live("partial_crossing"),
+			actions: watched,
+		},
+		{
+			name:    "claudecode_retried_reply_starts_a_new_live_item",
+			driver:  live("partial_retry"),
+			actions: watched,
 		},
 	})
 }

@@ -108,40 +108,42 @@
     },
     "live_stream.a": {
       "status": 200,
-      "body": [
-        {
-          "item": "assistant",
-          "reasoning": {
-            "pieces": [
-              "Let me ",
-              "reason."
-            ],
-            "text": "Let me reason."
+      "body": {
+        "stream": [
+          {
+            "item": "assistant",
+            "reasoning": {
+              "pieces": [
+                "Let me ",
+                "reason."
+              ],
+              "text": "Let me reason."
+            },
+            "text": {
+              "pieces": [
+                "Let me ",
+                "check ",
+                "that."
+              ],
+              "text": "Let me check that."
+            },
+            "tool_call": "Bash"
           },
-          "text": {
-            "pieces": [
-              "Let me ",
-              "check ",
-              "that."
-            ],
-            "text": "Let me check that."
+          {
+            "item": "tool"
           },
-          "tool_call": "Bash"
-        },
-        {
-          "item": "tool"
-        },
-        {
-          "item": "assistant",
-          "text": {
-            "pieces": [
-              "It printed ",
-              "hi."
-            ],
-            "text": "It printed hi."
+          {
+            "item": "assistant",
+            "text": {
+              "pieces": [
+                "It printed ",
+                "hi."
+              ],
+              "text": "It printed hi."
+            }
           }
-        }
-      ]
+        ]
+      }
     }
   }
 }

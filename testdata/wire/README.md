@@ -7,7 +7,7 @@ These files are real model streams, recorded on 2026-10-08 and scrubbed. `TestWi
 | `anthropic.*` | Anthropic Messages API, `claude-haiku-4-5`: text, tool call, tool result turn, extended thinking, and an unknown-model error |
 | `chat.*` | OpenAI chat completions, `gpt-4.1-nano`: text, tool call, tool result turn, and an unknown-model error |
 | `responses.*` | OpenAI Responses API, `gpt-5-nano`: text with a reasoning summary, tool call, tool result turn, a response cut at the output limit, and an unknown-model error |
-| `claudecode.*` | Claude Code CLI 2.1.290, `claude-haiku-4-5`, with the flags of the claudecode backend: a turn with thinking and one Bash call, a turn interrupted during a tool call, an unknown-model error, an AskUserQuestion turn that the defer hook parks and a resume that answers it over the control channel, and `claudecode.partial.jsonl`, a turn with thinking, text, and a Bash call that the CLI streams with `--include-partial-messages` |
+| `claudecode.*` | Claude Code CLI 2.1.290, `claude-haiku-4-5`, with the flags of the claudecode backend except `--include-partial-messages`, which only the last file uses: a turn with thinking and one Bash call, a turn interrupted during a tool call, an unknown-model error, an AskUserQuestion turn that the defer hook parks and a resume that answers it over the control channel, and `claudecode.partial.jsonl`, a turn with thinking, text, and a Bash call that the CLI streams with `--include-partial-messages` |
 
 A `.sse` file is the response body of a streaming request. A `.jsonl` file is the stdout of the CLI; strings longer than 300 bytes are cut. An `.error.json` file holds the status and body of a failed request.
 
@@ -23,4 +23,4 @@ The recorder makes real model calls. It runs only when `HARNESS_RECORD_WIRE=1`. 
 HARNESS_RECORD_WIRE=1 ANTHROPIC_API_KEY=... OPENAI_API_KEY=... go run ./internal/wirerecord -out testdata/wire
 ```
 
-Use `-only anthropic,chat,responses,claudecode` to record some wires. Run `go test ./internal/gates` afterward and review any new line that `allowed.txt` needs.
+Use `-only anthropic,chat,responses,claudecode,claudecode-partial` to record some wires. Run `go test ./internal/gates` afterward and review any new line that `allowed.txt` needs.

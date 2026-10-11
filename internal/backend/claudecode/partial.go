@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -38,10 +39,13 @@ func (r *run) streamEvent(env envelope) error {
 			delete(r.live, parent)
 			return nil
 		}
-		if r.pending != nil && r.pendingID != ev.Message.ID {
+		if r.pending != nil && r.pendingID != ev.Message.ID && r.pending.ParentCallID == parent {
 			if err := r.flush(); err != nil {
 				return err
 			}
+		}
+		if old := r.live[parent]; old != nil && old.streamed() {
+			r.thread(parent).Drop()
 		}
 		if r.live == nil {
 			r.live = map[string]*liveMessage{}
@@ -84,7 +88,7 @@ func (r *run) streamEvent(env envelope) error {
 			return nil
 		}
 		b.text.WriteString(text)
-		r.out.Delta(lm.id, turn.Delta{Type: b.typ, Text: text})
+		r.thread(parent).Delta(lm.id, turn.Delta{Type: b.typ, Text: text})
 	}
 	return nil
 }
@@ -99,7 +103,7 @@ func (r *run) unstreamed(parent, id string, p eventlog.Part) string {
 		return p.Text
 	}
 	for _, b := range lm.blocks {
-		if b.recorded || b.typ != p.Type {
+		if b.recorded || b.typ != p.Type || b.text.Len() == 0 {
 			continue
 		}
 		b.recorded = true
@@ -110,4 +114,40 @@ func (r *run) unstreamed(parent, id string, p eventlog.Part) string {
 		return rest
 	}
 	return p.Text
+}
+
+// streamed reports a block that streamed text and that no assistant frame
+// recorded: the CLI dropped a reply that it began, such as a retried call.
+func (m *liveMessage) streamed() bool {
+	return slices.ContainsFunc(m.blocks, func(b *liveBlock) bool { return !b.recorded && b.text.Len() > 0 })
+}
+
+// replay sends the text that the thread has streamed for a block that no
+// assistant frame recorded yet, as the first delta of a new live item. The
+// item that just completed ends without that text, and the block joins the
+// item that its assistant frame starts.
+func (r *run) replay(parent string) {
+	lm := r.live[parent]
+	if lm == nil || r.stopped {
+		return
+	}
+	for _, b := range lm.blocks {
+		if !b.recorded && b.text.Len() > 0 {
+			r.thread(parent).Delta(lm.id, turn.Delta{Type: b.typ, Text: b.text.String()})
+		}
+	}
+}
+
+// flatThread is the thread of a sink that keeps one live item.
+type flatThread struct{ turn.Sink }
+
+func (flatThread) Drop() {}
+
+// thread returns the live item of the thread that parent names, "" being the
+// main thread.
+func (r *run) thread(parent string) turn.Thread {
+	if t, ok := r.out.(turn.Threaded); ok {
+		return t.Thread(parent)
+	}
+	return flatThread{r.out}
 }
