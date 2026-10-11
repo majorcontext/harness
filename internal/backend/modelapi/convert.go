@@ -90,3 +90,10 @@ func hasOutput(m eventlog.Message) bool {
 		return p.Type == eventlog.PartToolCall || p.Type == eventlog.PartText && p.Text != ""
 	})
 }
+
+// hasReasoning reports a reasoning part that the next request can replay.
+func hasReasoning(m eventlog.Message) bool {
+	return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool {
+		return p.Type == eventlog.PartReasoning && len(p.ProviderData) > 0
+	})
+}

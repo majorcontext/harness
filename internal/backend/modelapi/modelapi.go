@@ -102,7 +102,9 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			out.Telemetry(tel)
 			res.MaxTokens = ev.StopReason == provider.StopMaxTokens
 			m := fromMessage(ev.Message)
-			if !hasOutput(m) {
+			if !hasOutput(m) && !res.MaxTokens && hasReasoning(m) {
+				res.ReasoningOnly = true
+			} else if !hasOutput(m) {
 				return turn.Result{}, fmt.Errorf("%w: modelapi: the response has no output", turn.ErrRetryable)
 			}
 			if err := out.Item(m); err != nil {

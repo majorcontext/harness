@@ -189,6 +189,10 @@ type Thread interface {
 type Result struct {
 	// MaxTokens reports a response that the output cap cut off.
 	MaxTokens bool
+	// ReasoningOnly reports a response that ended with a reasoning item and
+	// no text and no tool call. The backend recorded the item, and the next
+	// call replays it.
+	ReasoningOnly bool
 }
 
 // Limits bounds how a turn recovers from a failed or cut-off model call.
@@ -230,6 +234,9 @@ const (
 	retryBackoffMax = 8 * time.Second
 )
 
+// maxReasoningOnly bounds the responses in a row that end with reasoning and no output.
+const maxReasoningOnly = 5
+
 const (
 	// notRun is the result of each tool call of a response that max_tokens cut off.
 	notRun       = "not run: the response was cut off at its output limit"
@@ -255,7 +262,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
 	}
-	continued := 0
+	continued, reasoningOnly := 0, 0
 	var nudge []eventlog.Message
 	for {
 		if step.Err() != nil {
@@ -281,8 +288,11 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return err
 		}
 		calls := toolCalls(s.items)
-		if caps.OwnsLoop || len(calls) == 0 && !res.MaxTokens {
+		if caps.OwnsLoop || len(calls) == 0 && !res.MaxTokens && !res.ReasoningOnly {
 			return nil
+		}
+		if reasoningOnly, err = countReasoningOnly(reasoningOnly, res); err != nil {
+			return err
 		}
 		req.History = append(req.History, s.items...)
 		record := func(c protocol.ToolCall, r protocol.ToolResult) error {
@@ -297,16 +307,8 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		if res.MaxTokens {
-			for _, c := range calls {
-				if step.Err() != nil {
-					return context.Cause(step)
-				}
-				if ctx.Err() != nil {
-					return context.Cause(ctx)
-				}
-				if err := record(c, protocol.ToolResult{Text: notRun, IsError: true}); err != nil {
-					return err
-				}
+			if err := skipCalls(ctx, step, calls, record); err != nil {
+				return err
 			}
 		} else if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
 			return err
@@ -329,6 +331,34 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		req.History = append(req.History, in...)
 	}
+}
+
+// skipCalls records the notRun result of each call of a response that max_tokens cut off.
+func skipCalls(ctx, step context.Context, calls []protocol.ToolCall, record func(protocol.ToolCall, protocol.ToolResult) error) error {
+	for _, c := range calls {
+		if step.Err() != nil {
+			return context.Cause(step)
+		}
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
+		if err := record(c, protocol.ToolResult{Text: notRun, IsError: true}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// countReasoningOnly returns the responses in a row that ended with reasoning
+// and no output, after res, and an error when they pass maxReasoningOnly.
+func countReasoningOnly(n int, res Result) (int, error) {
+	if !res.ReasoningOnly {
+		return 0, nil
+	}
+	if n++; n > maxReasoningOnly {
+		return n, fmt.Errorf("%w: turn: the model ended %d responses in a row with reasoning and no output", ErrRetryable, n)
+	}
+	return n, nil
 }
 
 // callModel runs one model call. It calls b again, at most lim.Retries

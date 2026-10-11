@@ -1,0 +1,383 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "plan"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "plan"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "plan"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "plan"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "plan"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "plan"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 2,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 3,
+            "reasoning_items": 1,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 4,
+            "reasoning_items": 2,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 5,
+            "reasoning_items": 3,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 6,
+            "reasoning_items": 4,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7,
+            "reasoning_items": 5,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          }
+        ]
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 17,
+        "id": "ses:a",
+        "last_turn": {
+          "error": "turn: the model ended 6 responses in a row with reasoning and no output",
+          "stop_reason": "failed",
+          "turn_id": "turn#1"
+        },
+        "model": "codex/gpt-5.6-sol",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 30,
+          "output_tokens": 18
+        }
+      }
+    }
+  }
+}
