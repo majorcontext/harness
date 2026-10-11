@@ -51,7 +51,7 @@ These are pointers. Open the section named, read the current text, and check the
 
 ## Structure
 
-The questions above check contracts. Check the code layout too. A "yes" is a finding; cite the file and line. The Go rules are in the root `AGENTS.md` `Code` section and in Effective Go.
+The questions above check contracts. Check the code layout too. A "yes" is a finding; cite the file and line. The Go rules are `Four rules` and its Go guidance table in `docs/architecture.md`, and the root `AGENTS.md` `Code` section.
 
 - Imports. A new import follows `Internal packages` and passes the `depguard` rules in `.golangci.yml`. A change that widens a `depguard` rule needs a spec line.
 - Second definition. A type or concept defined a second time is a finding. Each record has one owner; name it.

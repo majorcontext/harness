@@ -11,9 +11,4 @@ Review each pull request against the architecture as a whole, not the diff alone
 
 ## Structure
 
-- Check each new import against `Internal packages` in `docs/architecture.md` and the `depguard` rules in `.golangci.yml`.
-- Flag a type or concept defined a second time; each record has one owner.
-- Each package has one purpose; a file over about 1,000 lines or a function over about 150 lines needs a stated reason.
-- Flag logic in `cmd/` that belongs in `internal/`.
-- Flag `util`, `common`, or `helpers` packages and files named `types.go` or `interfaces.go`.
-- Apply the Go API rules in the `architecture-review` skill `Structure` section and the root `AGENTS.md` `Code` section: context first, consumer-declared interfaces, documented concurrency and ownership, errors matchable with `errors.Is`/`errors.As`, `iter.Seq` for streams, no stutter.
+- Apply the `Structure` section of the `architecture-review` skill to every change: imports, second definitions, package purpose and size, logic in `cmd/`, grab-bag names, and Go API design.
