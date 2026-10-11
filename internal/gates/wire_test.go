@@ -16,7 +16,7 @@ var recordings = map[string]struct {
 	"anthropic":  {AnthropicWire, []string{"anthropic.text.sse", "anthropic.tool.sse", "anthropic.tool-result.sse", "anthropic.thinking.sse", "anthropic.error.json"}},
 	"chat":       {ChatWire, []string{"chat.text.sse", "chat.tool.sse", "chat.tool-result.sse", "chat.error.json"}},
 	"responses":  {ResponsesWire, []string{"responses.text.sse", "responses.tool.sse", "responses.tool-result.sse", "responses.incomplete.sse", "responses.error.json"}},
-	"claudecode": {ClaudeCodeWire, []string{"claudecode.tool.jsonl", "claudecode.interrupt.jsonl", "claudecode.error.jsonl", "claudecode.question.jsonl", "claudecode.question-resume.jsonl"}},
+	"claudecode": {ClaudeCodeWire, []string{"claudecode.tool.jsonl", "claudecode.interrupt.jsonl", "claudecode.error.jsonl", "claudecode.question.jsonl", "claudecode.question-resume.jsonl", "claudecode.partial.jsonl"}},
 }
 
 func loadAllowed(t *testing.T) *Allowed {

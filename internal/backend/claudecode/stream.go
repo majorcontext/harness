@@ -67,6 +67,9 @@ type run struct {
 	lastCall   *usage
 	compact    string
 	sawCompact bool
+	// live is the API response that the stream events of each thread are
+	// streaming, by parent tool call ID.
+	live map[string]*liveMessage
 	// compacting reports a compaction that the CLI started and did not settle.
 	compacting bool
 }
@@ -218,7 +221,7 @@ func (r *run) tail(line []byte) {
 		}
 		r.result = &env
 		err = r.settle(env)
-	case r.stopped || env.Type == "transcript_mirror":
+	case r.stopped && env.Type != "stream_event" || env.Type == "transcript_mirror":
 		err = r.handle(env)
 	}
 	if r.tailErr == nil {
@@ -238,12 +241,12 @@ func (r *run) handle(env envelope) error {
 	if r.allowed != nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
-	if r.compact != "" && env.Type != "transcript_mirror" {
+	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
 		if summary, err := r.compacted(env); err != nil || summary {
 			return err
 		}
 	}
-	if r.dismissing() && (env.Type == "assistant" || env.Type == "user") {
+	if r.dismissing() && (env.Type == "assistant" || env.Type == "user" || env.Type == "stream_event") {
 		return nil
 	}
 	switch env.Type {
@@ -253,6 +256,8 @@ func (r *run) handle(env envelope) error {
 		return r.assistant(env)
 	case "user":
 		return r.toolResults(env)
+	case "stream_event":
+		return r.streamEvent(env)
 	case "control_request":
 		return r.control(env)
 	case "result":
@@ -383,7 +388,9 @@ func (r *run) assistant(env envelope) error {
 	for i, p := range parts {
 		switch p.Type {
 		case eventlog.PartText, eventlog.PartReasoning:
-			r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: p.Text})
+			if text := r.unstreamed(env.ParentToolUseID, m.ID, p); text != "" {
+				r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
+			}
 		case eventlog.PartToolCall:
 			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
 				parts[i].Name = name

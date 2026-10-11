@@ -54,7 +54,7 @@ func main() {
 	defer func() { _ = os.RemoveAll(work) }()
 	r := &recorder{out: *out, scrubber: wirescrub.New(work)}
 	runners := map[string]func(*recorder, string) error{
-		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode,
+		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode, "claudecode-partial": recordClaudeCodePartial,
 	}
 	for _, name := range strings.Split(*only, ",") {
 		run, ok := runners[name]

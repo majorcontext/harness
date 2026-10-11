@@ -162,7 +162,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		denied += planMode
 	}
 	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--forward-subagent-text", "--thinking-display", "summarized", "--disallowedTools", denied}
+		"--forward-subagent-text", "--include-partial-messages", "--thinking-display", "summarized", "--disallowedTools", denied}
 	if r.questions {
 		pass := ""
 		if r.resolution != nil {

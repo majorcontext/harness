@@ -285,6 +285,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_answer_run_takes_no_steer_input":                    reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt, specClaudeGauge),
 	"claudecode_question_parks_then_answer_resumes":                          reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
 	"claudecode_question_unknown_call_id_conflicts":                          reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
+	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":          sameAsServe(),
 	"claudecode_prompt_attachments":                                          sameAsServe(),
 	"claudecode_queued_prompt_injected_mid_turn":                             reGolden(specView, specClaudeGauge),
 	"claudecode_rate_limit_event_reaches_subscription_usage":                 reGolden(specView, specClaudeGauge),
