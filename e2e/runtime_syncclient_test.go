@@ -27,7 +27,7 @@ const (
 	syncPath  = "/v1/boxes/box-1/sync"
 )
 
-const syncBodyCap = 32 << 20
+const syncBodyCap = protocol.MaxSyncBatchBytes
 
 type syncCall struct {
 	auth  string
@@ -62,7 +62,7 @@ func (r *syncReceiver) handle(w http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, syncBodyCap))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		writeSyncError(w, http.StatusRequestEntityTooLarge, "too_large")
+		writeSyncError(w, http.StatusRequestEntityTooLarge, protocol.CodePayloadTooLarge)
 		return
 	}
 	var b protocol.SyncBatch
@@ -84,9 +84,9 @@ func (r *syncReceiver) handle(w http.ResponseWriter, req *http.Request) {
 		var err error
 		switch ack, err = harness.ApplySync(req.Context(), r.store, b); {
 		case errors.Is(err, harness.ErrStaleEpoch):
-			status, code = http.StatusConflict, "stale_epoch"
+			status, code = http.StatusConflict, protocol.CodeStaleEpoch
 		case errors.Is(err, harness.ErrConflict):
-			status, code = http.StatusConflict, "sync_conflict"
+			status, code = http.StatusConflict, protocol.CodeSyncConflict
 		case errors.Is(err, harness.ErrInvalidRequest):
 			status, code = http.StatusBadRequest, "invalid_request"
 		case err != nil:
@@ -326,7 +326,7 @@ func rowSyncResendsTheSameBatchAfterAFailedPost(t *testing.T) {
 }
 
 func rowSyncStaleEpochIsFinalAndEndsTheSession(t *testing.T) {
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusConflict, "stale_epoch" })
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusConflict, protocol.CodeStaleEpoch })
 	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func rowCatchUpReplicatesEveryStoredSessionWithoutOpeningIt(t *testing.T) {
 func rowCatchUpStaleEpochFails(t *testing.T) {
 	st := harness.NewMemStore()
 	seedSessions(t, st, "s1")
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusConflict, "stale_epoch" })
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusConflict, protocol.CodeStaleEpoch })
 	r, err := harness.New(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)

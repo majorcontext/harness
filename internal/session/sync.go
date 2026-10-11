@@ -97,13 +97,9 @@ func (a *Actor) batch(from, head uint64) (*protocol.SyncBatch, error) {
 	return batch(a.cfg.Base, a.cfg.Store, a.cfg.Ownership.Epoch(), a.cfg.ID, from, head)
 }
 
-// maxBatchBytes bounds the JSON body of a SyncBatch. A receiver answers 413
-// above it, so a sender never builds a larger batch from more than one record.
-const maxBatchBytes = 32 << 20
-
-// batch reads the records from..head of session id, at most one page and
-// under maxBatchBytes, with the blobs that they name. It always returns the
-// first record, so one record that is over the bound is the receiver's to
+// batch reads the records from..head of session id, at most one page and under
+// protocol.MaxSyncBatchBytes, with the blobs that they name. It always returns
+// the first record, so one record that is over the bound is the receiver's to
 // refuse.
 func batch(ctx context.Context, st Storage, epoch uint64, id string, from, head uint64) (*protocol.SyncBatch, error) {
 	recs, err := st.Read(ctx, from-1, int(min(head-from+1, page)))
@@ -124,7 +120,7 @@ func batch(ctx context.Context, st Storage, epoch uint64, id string, from, head 
 		for k, v := range blobs {
 			cost += len(k) + base64Len(len(v)) + jsonOverhead
 		}
-		if len(b.Records) > 0 && size+cost > maxBatchBytes {
+		if len(b.Records) > 0 && size+cost > protocol.MaxSyncBatchBytes {
 			break
 		}
 		size += cost

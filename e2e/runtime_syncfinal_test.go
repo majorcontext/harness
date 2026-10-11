@@ -59,7 +59,7 @@ func finalRejection(t *testing.T, status int, code string, want error) {
 }
 
 func rowSyncConflictIsFinalAndEndsTheSession(t *testing.T) {
-	finalRejection(t, http.StatusConflict, "sync_conflict", harness.ErrConflict)
+	finalRejection(t, http.StatusConflict, protocol.CodeSyncConflict, harness.ErrConflict)
 }
 
 func rowSyncInvalidRequestIsFinalAndEndsTheSession(t *testing.T) {
@@ -67,7 +67,9 @@ func rowSyncInvalidRequestIsFinalAndEndsTheSession(t *testing.T) {
 }
 
 func rowSyncTooLargeIsFinalAndEndsTheSession(t *testing.T) {
+	finalRejection(t, http.StatusRequestEntityTooLarge, protocol.CodePayloadTooLarge, harness.ErrSyncRejected)
 	finalRejection(t, http.StatusRequestEntityTooLarge, "too_large", harness.ErrSyncRejected)
+	finalRejection(t, http.StatusRequestEntityTooLarge, "", harness.ErrSyncRejected)
 }
 
 func rowSyncUnauthorizedAndForbiddenAreFinal(t *testing.T) {
@@ -161,7 +163,7 @@ func rowCatchUpConflictSkipsTheSessionAndReportsIt(t *testing.T) {
 	seedSessions(t, st, "s1", "s2")
 	rcv := newSyncReceiver(t, func(_ int, b protocol.SyncBatch) (int, string) {
 		if b.Session == "s1" {
-			return http.StatusConflict, "sync_conflict"
+			return http.StatusConflict, protocol.CodeSyncConflict
 		}
 		return 0, ""
 	})

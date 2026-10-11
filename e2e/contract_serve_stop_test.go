@@ -113,9 +113,9 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 		status int
 		code   string
 	}{
-		{"sync_conflict", http.StatusConflict, "sync_conflict"},
+		{"sync_conflict", http.StatusConflict, protocol.CodeSyncConflict},
 		{"unauthorized", http.StatusUnauthorized, "unauthorized"},
-		{"too_large", http.StatusRequestEntityTooLarge, "too_large"},
+		{"payload_too_large", http.StatusRequestEntityTooLarge, protocol.CodePayloadTooLarge},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
