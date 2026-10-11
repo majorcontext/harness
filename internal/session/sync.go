@@ -35,8 +35,8 @@ const (
 // delivery resends the same batch, so a lost ack meets a duplicate. It
 // returns nil after the last record of a stopped actor is acknowledged, and
 // ErrNotOwned when the ownership ends first. A rejection stops the actor:
-// ErrStaleEpoch returns ErrNotOwned; ErrConflict and ErrRejected return the
-// rejection.
+// ErrStaleEpoch returns ErrOwnershipLost wrapping it; ErrConflict and
+// ErrRejected return the rejection.
 func (a *Actor) replicate() error {
 	ctx, cancel := context.WithCancel(a.cfg.Base)
 	defer cancel()
@@ -68,7 +68,7 @@ func (a *Actor) replicate() error {
 		}
 		if errors.Is(err, ErrStaleEpoch) {
 			close(a.rejected)
-			return ErrNotOwned
+			return fmt.Errorf("%w: %w", ErrOwnershipLost, err)
 		}
 		if final(err) {
 			close(a.rejected)

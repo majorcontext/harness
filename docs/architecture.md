@@ -143,6 +143,10 @@ func (r *Runtime) SyncStopped() bool
 // ProbePlugins probes each configured plugin, refreshes the manifest cache only before the first Create or Open, and returns each plugin with its tools and hooks.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 
+// Session is a handle on one running session. Open returns the same handle for a session until it stops. It stops for good at Done; call Open to run the session again.
+func (s *Session) ID() string
+func (s *Session) Done() <-chan struct{} // closes when the session stops on this runtime
+func (s *Session) Err() error            // nil before Done; then matches ErrSessionNotOwned and the cause: ErrSessionReleased, ErrSessionEnded, or ErrOwnershipLost
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
@@ -151,7 +155,7 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
 func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
-func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] // ends with Err when the session stops
 func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, release ownership
 
 // OpenView reads a session from any Store without owning it: no Acquire, no appends.
@@ -372,7 +376,9 @@ The turn runner is one goroutine per turn. It gets a `turn.Request` that the act
 Lifecycle:
 
 - `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
-- When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
+- When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, fix its cause, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
+
+The cause of a stop is the first of these. `Release` and a handoff by `Close` give `ErrSessionReleased`. `End` gives `ErrSessionEnded`. A `Lost` that closes, a store `ErrConflict`, and a stale epoch from `Sync` give `ErrOwnershipLost`. A `Close` that passes its deadline gives `ErrSessionReleased`. Each of the three matches `ErrSessionNotOwned`, so the code `session_not_owned` does not change. A store error or a Sync rejection that stops the actor wraps that error under `ErrSessionNotOwned`. `Session.Err` returns the cause once `Done` is closed, and `Events` waits for `Done` and then ends with it.
 
 Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped.
 

@@ -31,6 +31,12 @@ var (
 	ErrExists = errors.New("harness: session exists")
 	// ErrNotOwned reports a session whose actor stopped: it was fenced, lost, or released.
 	ErrNotOwned = errors.New("harness: session not owned")
+	// ErrReleased is the stop cause of a session that Release or a Close handed off.
+	ErrReleased = fmt.Errorf("%w: released", ErrNotOwned)
+	// ErrEnded is the stop cause of a session that End stopped.
+	ErrEnded = fmt.Errorf("%w: ended", ErrNotOwned)
+	// ErrOwnershipLost is the stop cause of a session whose grant ended without Release, or whose append or Sync found another owner.
+	ErrOwnershipLost = fmt.Errorf("%w: ownership lost", ErrNotOwned)
 	// ErrInputConflict reports an input ID admitted with another body.
 	ErrInputConflict = errors.New("harness: input conflict")
 	// ErrTurnMismatch reports a turn ID that is not the running turn.
@@ -157,6 +163,11 @@ type Actor struct {
 	latched   bool
 	releasing []func(struct{}, error)
 	stopped   bool
+	// endCause is the cause that a requested stop gives, and cause is the
+	// first cause of the stop. Only the actor goroutine writes them, before
+	// done closes.
+	endCause  error
+	cause     error
 	retryStop context.CancelFunc
 	retryAt   time.Time
 	// pins holds the engine context that the model reads inside the history.
@@ -333,12 +344,21 @@ func (a *Actor) loop() {
 				f()
 			}
 		case <-a.cfg.Ownership.Lost():
-			a.stopped = true
+			a.stopWith(ErrOwnershipLost)
 		case <-a.cfg.Base.Done():
-			a.stopped = true
+			a.stopWith(ErrReleased)
 		case <-a.rejected:
-			a.stopped = true
+			a.stopWith(nil)
 		}
+	}
+}
+
+// stopWith marks the actor stopped. The first cause stays; nil leaves the
+// cause to finish, which reads the Sync rejection.
+func (a *Actor) stopWith(cause error) {
+	a.stopped = true
+	if a.cause == nil {
+		a.cause = cause
 	}
 }
 
@@ -360,23 +380,32 @@ func (a *Actor) spawn(f func()) {
 // lost reports whether the ownership ended. A select picks among ready
 // cases at random, so the actor checks this before each command and append.
 func (a *Actor) lost() bool {
-	if !a.revoked() {
-		return false
+	revoked, cause := a.revocation()
+	if revoked {
+		a.stopWith(cause)
 	}
-	a.stopped = true
-	return true
+	return revoked
 }
 
 // revoked reports whether Lost closed, Base ended, or Sync rejected a batch.
 func (a *Actor) revoked() bool {
+	revoked, _ := a.revocation()
+	return revoked
+}
+
+// revocation reports whether the ownership ended and why. A Sync rejection
+// has no cause yet.
+func (a *Actor) revocation() (revoked bool, cause error) {
 	select {
 	case <-a.cfg.Ownership.Lost():
+		return true, ErrOwnershipLost
 	case <-a.cfg.Base.Done():
+		return true, ErrReleased
 	case <-a.rejected:
+		return true, nil
 	default:
-		return false
+		return false, nil
 	}
-	return true
 }
 
 // finish waits for every run to exit before it releases the ownership, so
@@ -391,14 +420,42 @@ func (a *Actor) finish() {
 	a.runs.Wait()
 	<-a.flushed
 	a.cfg.Ownership.Release()
+	a.settleCause()
 	a.cfg.Done()
 	close(a.done)
+}
+
+// settleCause gives a stop that no request or revocation explained its cause:
+// the Sync rejection, else a release.
+func (a *Actor) settleCause() {
+	switch {
+	case a.cause != nil:
+	case a.Rejected() && errors.Is(a.syncErr, ErrNotOwned):
+		a.cause = a.syncErr
+	case a.Rejected():
+		a.cause = fmt.Errorf("%w: %w", ErrNotOwned, a.syncErr)
+	default:
+		a.cause = ErrReleased
+	}
 }
 
 // Done closes after the actor stops, each of its runs exits, Sync
 // acknowledges its last record or the ownership ends, and the actor
 // releases its Ownership.
 func (a *Actor) Done() <-chan struct{} { return a.done }
+
+// Err returns nil before Done closes, and then the cause of the stop. The
+// cause matches ErrNotOwned and one of ErrReleased, ErrEnded, and
+// ErrOwnershipLost, or wraps the Sync rejection or the append error that
+// stopped the actor.
+func (a *Actor) Err() error {
+	select {
+	case <-a.done:
+		return a.cause
+	default:
+		return nil
+	}
+}
 
 // View returns the newest published view.
 func (a *Actor) View() *View { return a.view.Load() }
@@ -489,15 +546,16 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 		return ErrNotOwned
 	}
 	if err := a.cfg.Store.Append(ctx, head, recs...); err != nil {
-		a.stopped = true
 		if errors.Is(err, ErrConflict) {
+			a.stopWith(fmt.Errorf("%w: %w", ErrOwnershipLost, err))
 			return fmt.Errorf("%w: %w", ErrNotOwned, err)
 		}
+		a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))
 		return err
 	}
 	for i, data := range recs {
 		if err := a.state.Apply(eventlog.Record{Seq: head + uint64(i) + 1, Data: data}); err != nil {
-			a.stopped = true
+			a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))
 			return err
 		}
 	}

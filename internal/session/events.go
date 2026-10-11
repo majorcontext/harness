@@ -78,8 +78,8 @@ func subscriptionView(u *eventlog.SubscriptionUsage) *protocol.SubscriptionUsage
 // actor appends, with the ephemeral frames of its turns between them. It
 // subscribes before it yields. It loads the view before it drains the
 // frames: a frame sent before an append is then never yielded after the
-// record. A full subscriber drops frames, never records. It ends with
-// ErrNotOwned when the actor stops.
+// record. A full subscriber drops frames, never records. When the actor
+// stops, it waits for Done and ends with Err.
 func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return func(yield func(protocol.Event, error) bool) {
 		frames := a.live.subscribe()
@@ -103,7 +103,12 @@ func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Eve
 				return
 			}
 			if v.Stopped {
-				yield(protocol.Event{}, ErrNotOwned)
+				select {
+				case <-a.done:
+					yield(protocol.Event{}, a.cause)
+				case <-ctx.Done():
+					yield(protocol.Event{}, ctx.Err())
+				}
 				return
 			}
 			select {

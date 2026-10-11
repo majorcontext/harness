@@ -17,7 +17,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// Session is a session that this runtime runs.
+// Session is a shared handle on a running session; it stops for good at Done.
 type Session struct {
 	a  *session.Actor
 	r  *Runtime
@@ -29,6 +29,15 @@ type Session struct {
 	// recovered closes once Open has settled or opened each unsettled child.
 	recovered chan struct{}
 }
+
+// ID returns the session ID.
+func (s *Session) ID() string { return s.id }
+
+// Done closes when the session stops here, after its Ownership is released.
+func (s *Session) Done() <-chan struct{} { return s.a.Done() }
+
+// Err is nil before Done, then the stop cause; see ErrSessionReleased.
+func (s *Session) Err() error { return s.a.Err() }
 
 // View returns the session as of its last durable record.
 func (s *Session) View() protocol.Session {
@@ -170,8 +179,8 @@ func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.C
 // appended, with the ephemeral frames of the running turn between them:
 // item.started, item.delta, and status. A slow reader can miss any frame,
 // never a durable event, so the deltas of an item can have holes; its
-// item.completed holds the whole item. It ends with ErrSessionNotOwned
-// when the session stops here.
+// item.completed holds the whole item. When the session stops here, it ends
+// with Err, which matches ErrSessionNotOwned.
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return s.a.Events(ctx, after)
 }

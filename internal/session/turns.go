@@ -451,7 +451,18 @@ func (a *Actor) endGoal(why error) error {
 // and releases the ownership. An actor that Sync stopped returns the
 // rejection.
 func (a *Actor) Release(ctx context.Context) error {
-	return a.halt(ctx, a.beginRelease)
+	return a.halt(ctx, func(reply func(struct{}, error)) {
+		a.requestStop(ErrReleased)
+		a.beginRelease(reply)
+	})
+}
+
+// requestStop gives the stop that a request begins its cause, unless an
+// earlier request gave one.
+func (a *Actor) requestStop(cause error) {
+	if a.endCause == nil {
+		a.endCause = cause
+	}
 }
 
 func (a *Actor) beginRelease(reply func(struct{}, error)) {
@@ -473,6 +484,7 @@ func (a *Actor) End(ctx context.Context) error {
 			reply(struct{}{}, ErrBusy)
 			return
 		}
+		a.requestStop(ErrEnded)
 		a.beginRelease(reply)
 	})
 	if errors.Is(err, ErrNotOwned) {
@@ -502,7 +514,7 @@ func (a *Actor) halt(ctx context.Context, begin func(reply func(struct{}, error)
 }
 
 func (a *Actor) stop(err error) {
-	a.stopped = true
+	a.stopWith(a.endCause)
 	for _, w := range a.releasing {
 		w(struct{}{}, err)
 	}
