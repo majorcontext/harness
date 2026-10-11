@@ -15,3 +15,4 @@ internal/tool/mcpsrc/mcpsrc_test.go AllowedTools has no serve oracle; MCP search
 internal/toolresult/toolresult_test.go pure secret-mask table with many edge cases (spec Tool-result retention)
 internal/modelref/model_test.go the model ref parser is pure code, moved with its tests from internal/message
 internal/prompt/engine_context_test.go the engine-context sentinel functions are pure code, moved with their tests from internal/message
+protocol/sse_test.go DecodeSSE is a pure decoder of an io.Reader; a serve binary cannot cut a frame or fail a read

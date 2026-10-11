@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -332,6 +333,9 @@ func (rl *RateLimits) setHeaders(h http.Header) {
 		window *RateWindow
 	}{{"primary", rl.Primary}, {"secondary", rl.Secondary}}
 	for _, name := range slices.Sorted(maps.Keys(rl.Extra)) {
+		if n := strings.ToLower(name); n == "primary" || n == "secondary" {
+			continue
+		}
 		windows = append(windows, struct {
 			prefix string
 			window *RateWindow

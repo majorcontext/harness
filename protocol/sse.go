@@ -3,6 +3,7 @@ package protocol
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -63,16 +64,35 @@ func DecodeSSE(r io.Reader) iter.Seq2[Event, error] {
 }
 
 func decodeFrame(name, data string) (Event, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(data), &members); err != nil {
+		return Event{}, fmt.Errorf("decode %s frame: %w", frameName(name), err)
+	}
 	if name == "error" {
 		var body ErrorBody
 		if err := json.Unmarshal([]byte(data), &body); err != nil {
 			return Event{}, fmt.Errorf("decode error frame: %w", err)
 		}
+		if body.Error.Code == "" {
+			return Event{}, errors.New("decode error frame: no error code")
+		}
 		return Event{}, &body.Error
+	}
+	for _, k := range []string{"seq", "t", "k", "d"} {
+		if v, ok := members[k]; !ok || string(v) == "null" {
+			return Event{}, fmt.Errorf("decode event frame: no %q member", k)
+		}
 	}
 	var ev Event
 	if err := json.Unmarshal([]byte(data), &ev); err != nil {
 		return Event{}, fmt.Errorf("decode event frame: %w", err)
 	}
 	return ev, nil
+}
+
+func frameName(name string) string {
+	if name == "error" {
+		return "error"
+	}
+	return "event"
 }
