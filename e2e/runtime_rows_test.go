@@ -9,6 +9,7 @@ const (
 	specRestartOpens  = "A restart opens no session by itself: the embedder opens each session that has work to resume"
 	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
 	specReceipt       = "| New id | `201 {input_id, seq}` |"
+	specDiscard       = "the backend sends an `item.discarded` frame with the `item_id` of the dropped item before the first delta of the new one"
 	specItems         = "| `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |"
 	specOneResult     = "Every tool call item gets exactly one result item, or an open request, before its turn ends."
 	specExternal      = "| Items | External items become `item.completed` | stream-json frames | `item/completed` |"
@@ -287,7 +288,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_unknown_call_id_conflicts":                             reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
 	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":             sameAsServe(),
 	"claudecode_subagent_frame_during_a_main_stream_keeps_each_item_its_deltas": sameAsServe(),
-	"claudecode_retried_reply_starts_a_new_live_item":                           sameAsServe(),
+	"claudecode_retried_reply_starts_a_new_live_item":                           reGolden(specDiscard),
 	"claudecode_prompt_attachments":                                             sameAsServe(),
 	"claudecode_queued_prompt_injected_mid_turn":                                reGolden(specView, specClaudeGauge),
 	"claudecode_rate_limit_event_reaches_subscription_usage":                    reGolden(specView, specClaudeGauge),

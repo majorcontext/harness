@@ -66,6 +66,11 @@ func (t *turnRun) Delta(itemID string, d turn.Delta) {
 	t.a.frame(protocol.KindItemDelta, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id, Type: d.Type, Text: d.Text})
 }
 
+// Discard tells subscribers to remove the live item itemID.
+func (t *turnRun) Discard(itemID string) {
+	t.a.frame(protocol.KindItemDiscarded, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id})
+}
+
 // Alive has nothing to report: the stall watchdog is in the turn loop.
 func (*turnRun) Alive() {}
 

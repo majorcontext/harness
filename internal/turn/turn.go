@@ -143,6 +143,8 @@ type Sink interface {
 	Item(m eventlog.Message) error
 	// Delta streams a piece of the item that the backend calls itemID.
 	Delta(itemID string, d Delta)
+	// Discard tells subscribers to remove the live item itemID.
+	Discard(itemID string)
 	// Alive reports model output that is not a delta yet, such as tool
 	// arguments that still stream.
 	Alive()
@@ -475,7 +477,12 @@ func (t thread) Item(m eventlog.Message) error {
 	return nil
 }
 
-func (t thread) Drop() { delete(t.threads, t.key) }
+func (t thread) Drop() {
+	if id, ok := t.threads[t.key]; ok {
+		delete(t.threads, t.key)
+		t.Turn.Discard(id)
+	}
+}
 
 func (s *sink) Item(m eventlog.Message) error {
 	s.item = ""

@@ -40,6 +40,7 @@ func (*recorder) Attach(string, []byte) (eventlog.Part, error) {
 	return eventlog.Part{}, nil
 }
 func (*recorder) Alive()                   {}
+func (*recorder) Discard(string)           {}
 func (*recorder) Telemetry(turn.Telemetry) {}
 func (r *recorder) Steer() ([]eventlog.Message, error) {
 	if len(r.steer) == 0 {

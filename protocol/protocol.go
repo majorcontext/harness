@@ -283,14 +283,16 @@ type Event struct {
 
 // Ephemeral frame kinds.
 const (
-	KindItemStarted = "item.started"
-	KindItemDelta   = "item.delta"
-	KindStatus      = "status"
+	KindItemStarted   = "item.started"
+	KindItemDelta     = "item.delta"
+	KindItemDiscarded = "item.discarded"
+	KindStatus        = "status"
 )
 
-// ItemFrame is the data of an item.started or item.delta frame. ItemID is
-// the item_id of the item.completed record that ends the item, unless a
-// failed attempt started the item: that item never completes.
+// ItemFrame is the data of an item.started, item.delta, or item.discarded
+// frame. ItemID is the item_id of the item.completed record that ends the
+// item, unless a failed attempt started the item: that item never completes,
+// and an item.discarded frame says to remove it.
 type ItemFrame struct {
 	ItemID string `json:"item_id"`
 	TurnID string `json:"turn_id"`

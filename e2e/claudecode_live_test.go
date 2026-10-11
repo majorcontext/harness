@@ -21,6 +21,8 @@ type liveStep struct {
 	delta  string
 	text   string
 	item   logItem
+	// discard marks a step that removes the live item itemID.
+	discard bool
 }
 
 var (
@@ -55,6 +57,9 @@ func (a claudeWatchLive) run(t *testing.T, r *run) {
 			case protocol.KindItemDelta:
 				f := decodeEvent[protocol.ItemFrame](t, ev)
 				feed.steps = append(feed.steps, liveStep{itemID: f.ItemID, delta: f.Type, text: f.Text})
+			case protocol.KindItemDiscarded:
+				f := decodeEvent[protocol.ItemFrame](t, ev)
+				feed.steps = append(feed.steps, liveStep{itemID: f.ItemID, discard: true})
 			case "item.completed":
 				feed.steps = append(feed.steps, liveStep{item: decodeEvent[logItem](t, ev)})
 			case "turn.ended":
@@ -92,6 +97,10 @@ func (a claudeLive) run(t *testing.T, r *run) {
 	var out []any
 	deltas := map[string]map[string][]string{}
 	for _, s := range feed.steps {
+		if s.discard {
+			out = append(out, map[string]any{"discarded": pendingTexts(deltas[s.itemID])})
+			continue
+		}
 		if s.delta != "" {
 			if deltas[s.itemID] == nil {
 				deltas[s.itemID] = map[string][]string{}
@@ -142,13 +151,7 @@ func (a claudeLive) run(t *testing.T, r *run) {
 			continue
 		}
 		if left, ok := deltas[steps.itemID]; ok {
-			var texts []string
-			for _, typ := range []string{"reasoning", "text"} {
-				if len(left[typ]) > 0 {
-					texts = append(texts, typ+":"+strings.Join(left[typ], ""))
-				}
-			}
-			unfinished = append(unfinished, texts)
+			unfinished = append(unfinished, pendingTexts(left))
 			delete(deltas, steps.itemID)
 		}
 	}
@@ -156,4 +159,15 @@ func (a claudeLive) run(t *testing.T, r *run) {
 		body["unfinished"] = unfinished
 	}
 	r.record(t, "live_stream", a.as, callResult{Status: http.StatusOK, Body: body})
+}
+
+// pendingTexts lists the delta text of one live item by type.
+func pendingTexts(left map[string][]string) []string {
+	var texts []string
+	for _, typ := range []string{"reasoning", "text"} {
+		if len(left[typ]) > 0 {
+			texts = append(texts, typ+":"+strings.Join(left[typ], ""))
+		}
+	}
+	return texts
 }
