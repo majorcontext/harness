@@ -74,6 +74,7 @@ func familyOrDefault(family string) string {
 // override, or the package constant when unset.
 func (c *Client) family() string { return familyOrDefault(c.Family) }
 
+// Name returns the provider family key of this client.
 func (c *Client) Name() string { return c.family() }
 
 // StartupPrewarmEnabled reports whether engine startup assembly can produce
@@ -129,6 +130,8 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 	}, nil
 }
 
+// Stream sends req and returns the response stream, over a websocket when
+// configured and over HTTP + SSE otherwise.
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
 	prepared, err := c.prepareRequest(req, false)
 	if err != nil {
@@ -178,7 +181,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return nil, apiError(resp)
 	}
 	return &stream{
