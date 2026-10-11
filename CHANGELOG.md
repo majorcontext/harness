@@ -14,7 +14,7 @@ First tagged release.
 - **Providers** (`internal/provider/...`) — Anthropic Messages, OpenAI Responses, any OpenAI-compatible chat-completions endpoint (OpenRouter, Ollama, vLLM), and delegated turns through the Claude Code CLI.
 - **CLI** (`cmd/harness`) — `harness run` for one-shot prompts, `-goal` for evaluator-checked goals, `harness serve` for the HTTP+SSE session API, and `harness sessions` to list saved sessions.
 - **Tools** — built-in file and shell tools, custom Go tools through `Options.Tools`, subagents through the `task` tool, and managed long-running processes (`process`).
-- **Plugins** (`internal/plugin`, `sdk/typescript`) — a language-neutral process protocol with a published TypeScript SDK (the Go SDK is internal to the harness module).
+- **Plugins** (`internal/plugin`, `sdk/typescript`) — a language-neutral process protocol with a published TypeScript SDK.
 - **MCP** (`internal/mcp`) — an MCP client with deferred tool loading, and a Streamable HTTP MCP server (`mcp.Registry`). `mcp.CallMeta` gives a tool handler the `_meta` object of its `tools/call` request.
 - **Context management** — automatic and manual compaction, project `AGENTS.md` instructions, and [Agent Skills](https://agentskills.io/specification) (`internal/skill`).
 - **Context-window refresh** (`internal/modelmeta`) — `go generate` rewrites the context-window tables from models.dev, and a daily workflow opens a pull request when they change. A new point release is recognized without a hand edit. Session creation still makes no network call.
