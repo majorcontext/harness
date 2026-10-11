@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // TestEffortSetsReasoning: a non-off effort level sets reasoning.effort to the
@@ -17,13 +18,13 @@ func TestEffortSetsReasoning(t *testing.T) {
 	// LITERAL expected floors (an oracle, NOT a call to reasoningOutputFloor):
 	// caller MaxTokens 8192 is below every floor, so each level is raised to its
 	// floor (minimal's floor is 10000, the lowest — 8192 is raised to it).
-	wantFloor := map[message.Effort]int{
-		message.EffortMinimal: 10000,
-		message.EffortLow:     12000,
-		message.EffortMedium:  18000,
-		message.EffortHigh:    25000,
+	wantFloor := map[modelref.Effort]int{
+		modelref.EffortMinimal: 10000,
+		modelref.EffortLow:     12000,
+		modelref.EffortMedium:  18000,
+		modelref.EffortHigh:    25000,
 	}
-	for _, e := range []message.Effort{message.EffortMinimal, message.EffortLow, message.EffortMedium, message.EffortHigh} {
+	for _, e := range []modelref.Effort{modelref.EffortMinimal, modelref.EffortLow, modelref.EffortMedium, modelref.EffortHigh} {
 		req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 		req.Temperature = &temp
 		req.TopP = &topP
@@ -60,7 +61,7 @@ func TestEffortSetsReasoning(t *testing.T) {
 func TestEffortKeepsLargeMaxOutput(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 	req.MaxTokens = 64000
-	req.Effort = message.EffortHigh
+	req.Effort = modelref.EffortHigh
 	out := mustTranscode(t, req)
 	if out.MaxOutputTokens != 64000 {
 		t.Errorf("max_output_tokens = %d, want 64000 (kept)", out.MaxOutputTokens)
@@ -73,7 +74,7 @@ func TestNoEffortKeepsSampling(t *testing.T) {
 	temp := 0.7
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 	req.Temperature = &temp
-	req.Effort = message.EffortOff
+	req.Effort = modelref.EffortOff
 	out := mustTranscode(t, req)
 	if out.Temperature == nil {
 		t.Error("temperature must be preserved when reasoning is off")
@@ -107,7 +108,7 @@ func TestReasoningStrippedWhenOff(t *testing.T) {
 	// EffortOff: an explicit "reasoning disabled" intent strips the stored item.
 	{
 		req := baseRequest(history()...)
-		req.Effort = message.EffortOff
+		req.Effort = modelref.EffortOff
 		out := mustTranscode(t, req)
 		raw, err := json.Marshal(out)
 		if err != nil {
@@ -126,7 +127,7 @@ func TestReasoningStrippedWhenOff(t *testing.T) {
 	// item MUST be replayed, exactly as every pre-effort-control build did.
 	{
 		req := baseRequest(history()...)
-		req.Effort = message.EffortUnset
+		req.Effort = modelref.EffortUnset
 		out := mustTranscode(t, req)
 		raw, err := json.Marshal(out)
 		if err != nil {
@@ -197,7 +198,7 @@ func TestReasoningReplayedOnUnsetToolContinuation(t *testing.T) {
 // TestEffortOffAndUnsetNoReasoning: EffortOff and EffortUnset send no reasoning
 // control at all (omitempty drops the field).
 func TestEffortOffAndUnsetNoReasoning(t *testing.T) {
-	for _, e := range []message.Effort{message.EffortUnset, message.EffortOff} {
+	for _, e := range []modelref.Effort{modelref.EffortUnset, modelref.EffortOff} {
 		req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 		req.Effort = e
 		out := mustTranscode(t, req)

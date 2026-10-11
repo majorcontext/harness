@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/toolresult"
@@ -80,7 +79,7 @@ func (p *sessionPrompt) system() string {
 	segs := slices.Clone(p.segments)
 	if p.r.procs != nil {
 		if line := proc.StatusLine(p.r.procs, p.r.workDir); line != "" {
-			segs = append(segs, message.RenderEngineContext(line))
+			segs = append(segs, prompt.RenderEngineContext(line))
 		}
 	}
 	p.mu.Lock()

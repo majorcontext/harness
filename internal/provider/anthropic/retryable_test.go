@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -45,7 +46,7 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 				io.WriteString(w, `{"type":"error","error":{"type":"`+tc.errType+`","message":"boom"}}`) //nolint:errcheck
 			})
 			_, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -90,7 +91,7 @@ func TestStreamInlineErrorClassification(t *testing.T) {
 				io.WriteString(w, sse("error", `{"type":"error","error":{"type":"`+tc.errType+`","message":"boom"}}`))                   //nolint:errcheck
 			})
 			s, err := c.Stream(context.Background(), &provider.Request{
-				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 				MaxTokens: 10,
 			})
@@ -136,7 +137,7 @@ func TestStreamTruncationClassification(t *testing.T) {
 		io.WriteString(w, sse("content_block_stop", `{"type":"content_block_stop","index":0}`))                                                                                //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -174,7 +175,7 @@ func TestStreamMidEventTruncationClassification(t *testing.T) {
 		io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_bl") //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -214,7 +215,7 @@ func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
 		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                                                                      //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})
@@ -265,7 +266,7 @@ func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
 		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                        //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "m"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 10,
 	})

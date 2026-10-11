@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 )
@@ -119,7 +119,7 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q (available: %s)", agent, strings.Join(slices.Sorted(maps.Keys(profiles)), ", "))
 	}
-	effort, err := message.ParseEffort(ch.Effort)
+	effort, err := modelref.ParseEffort(ch.Effort)
 	if err != nil {
 		return "", fmt.Errorf("invalid effort %q: %w", ch.Effort, err)
 	}

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // TestEffortEnablesThinking: a non-off effort level sets a thinking block with
@@ -13,14 +14,14 @@ func TestEffortEnablesThinking(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
 	cases := []struct {
-		effort     message.Effort
+		effort     modelref.Effort
 		wantBudget int
 		wantMax    int
 	}{
-		{message.EffortMinimal, 1024, 5120}, // 4096 < 1024+4096 -> 5120
-		{message.EffortLow, 4096, 8192},     // 4096 < 4096+4096 -> 8192
-		{message.EffortMedium, 8192, 12288}, // 8192+4096
-		{message.EffortHigh, 16384, 20480},  // 16384+4096
+		{modelref.EffortMinimal, 1024, 5120}, // 4096 < 1024+4096 -> 5120
+		{modelref.EffortLow, 4096, 8192},     // 4096 < 4096+4096 -> 8192
+		{modelref.EffortMedium, 8192, 12288}, // 8192+4096
+		{modelref.EffortHigh, 16384, 20480},  // 16384+4096
 	}
 	for _, c := range cases {
 		req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
@@ -58,7 +59,7 @@ func TestEffortEnablesThinking(t *testing.T) {
 func TestEffortMinimalBumpsMax(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 	req.MaxTokens = 1024
-	req.Effort = message.EffortMinimal
+	req.Effort = modelref.EffortMinimal
 	out := mustTranscode(t, req)
 	if out.MaxTokens != 1024+thinkingCompletionMargin {
 		t.Errorf("max_tokens = %d, want %d", out.MaxTokens, 1024+thinkingCompletionMargin)
@@ -70,7 +71,7 @@ func TestEffortMinimalBumpsMax(t *testing.T) {
 func TestEffortLargeMaxKept(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 	req.MaxTokens = 64000
-	req.Effort = message.EffortHigh
+	req.Effort = modelref.EffortHigh
 	out := mustTranscode(t, req)
 	if out.MaxTokens != 64000 {
 		t.Errorf("max_tokens = %d, want 64000 (kept)", out.MaxTokens)
@@ -99,7 +100,7 @@ func TestThinkingStrippedWhenOff(t *testing.T) {
 			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "again"}}},
 		}
 	}
-	for _, e := range []message.Effort{message.EffortUnset, message.EffortOff} {
+	for _, e := range []modelref.Effort{modelref.EffortUnset, modelref.EffortOff} {
 		req := baseRequest(history()...)
 		req.Effort = e
 		out := mustTranscode(t, req)
@@ -129,7 +130,7 @@ func TestThinkingStrippedWhenOff(t *testing.T) {
 // block and leave temperature/top_p intact.
 func TestEffortOffAndUnsetNoThinking(t *testing.T) {
 	temp := 0.7
-	for _, e := range []message.Effort{message.EffortUnset, message.EffortOff} {
+	for _, e := range []modelref.Effort{modelref.EffortUnset, modelref.EffortOff} {
 		req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 		req.Temperature = &temp
 		req.Effort = e

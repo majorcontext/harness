@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/provider/anthropic"
 )
@@ -29,7 +30,7 @@ func askCtx(t testing.TB, ctx context.Context, s *Server, text string) (provider
 	t.Helper()
 	c := &anthropic.Client{APIKey: "k", BaseURL: s.URL()}
 	return c.Stream(ctx, &provider.Request{
-		Model:     message.ModelRef{Provider: anthropic.Family, Model: "m"},
+		Model:     modelref.ModelRef{Provider: anthropic.Family, Model: "m"},
 		System:    []string{"sys one", "sys two"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: text}}}},
 		MaxTokens: 10,
@@ -144,8 +145,8 @@ func TestRecordsModelThinkingAndServiceTier(t *testing.T) {
 	s := New(t, Step{Name: "a", Reply: Reply{Text: "A"}})
 	c := &anthropic.Client{APIKey: "k", BaseURL: s.URL()}
 	st, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: anthropic.Family, Model: "m"},
-		Effort:    message.EffortHigh,
+		Model:     modelref.ModelRef{Provider: anthropic.Family, Model: "m"},
+		Effort:    modelref.EffortHigh,
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "q"}}}},
 		MaxTokens: 30000,
 	})

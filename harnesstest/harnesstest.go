@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/prompt"
 )
 
 // Step is one scripted reply and the requests it answers.
@@ -117,7 +117,7 @@ func (r Request) LastUserText() string {
 		for _, p := range r.Messages[i].Parts {
 			if p.Kind == "text" {
 				texts = append(texts, p.Text)
-				engineOnly = engineOnly && strings.HasPrefix(p.Text, message.EngineContextOpenTag)
+				engineOnly = engineOnly && strings.HasPrefix(p.Text, prompt.EngineContextOpenTag)
 			}
 		}
 		if len(texts) > 0 && !engineOnly {

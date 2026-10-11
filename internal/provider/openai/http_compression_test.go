@@ -13,6 +13,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -42,7 +43,7 @@ func decodeZstdRequest(t *testing.T, r *http.Request) []byte {
 
 func compressionRequest(family string) *provider.Request {
 	return &provider.Request{
-		Model:      message.ModelRef{Provider: family, Model: "gpt-test"},
+		Model:      modelref.ModelRef{Provider: family, Model: "gpt-test"},
 		System:     []string{"stable system"},
 		Messages:   []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: strings.Repeat("compressible input ", 128)}}}},
 		MaxTokens:  64,

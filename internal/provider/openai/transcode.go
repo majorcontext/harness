@@ -11,6 +11,8 @@ import (
 
 	"github.com/majorcontext/harness/internal/imageclamp"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -199,7 +201,7 @@ type apiReasoning struct {
 // reasoning.effort string. It returns ("", false) for a level that requests no
 // reasoning (EffortUnset, EffortOff), so the caller sends no reasoning control
 // and the model uses its own default.
-func reasoningEffort(e message.Effort) (string, bool) {
+func reasoningEffort(e modelref.Effort) (string, bool) {
 	if !e.Reasoning() {
 		return "", false
 	}
@@ -213,15 +215,15 @@ func reasoningEffort(e message.Effort) (string, bool) {
 // floor scales with the level — a low level should not silently triple a
 // caller's deliberately-small cap the way a flat floor would — and a caller
 // that set a LARGER cap always keeps it (the floor only raises, never lowers).
-func reasoningOutputFloor(e message.Effort) int {
+func reasoningOutputFloor(e modelref.Effort) int {
 	switch e {
-	case message.EffortMinimal:
+	case modelref.EffortMinimal:
 		// Above the 8192 engine default so even minimal reasoning leaves answer
 		// headroom (a flat-at-default floor would add none).
 		return 10000
-	case message.EffortLow:
+	case modelref.EffortLow:
 		return 12000
-	case message.EffortMedium:
+	case modelref.EffortMedium:
 		return 18000
 	default: // high
 		return 25000
@@ -349,8 +351,8 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 	// clears/re-validates effort on a model swap; the Responses API is lenient
 	// about input reasoning items, so this stays a caller-gated, live-gated
 	// deferral, not something this transcoder guesses at from the model ref.
-	stripReasoning := req.Effort == message.EffortOff
-	if req.Effort != message.EffortOff && family == CodexFamily {
+	stripReasoning := req.Effort == modelref.EffortOff
+	if req.Effort != modelref.EffortOff && family == CodexFamily {
 		// OpenAI Codex supports and defaults to emitting human-readable reasoning
 		// summaries via {"summary":"auto"}, which streaming parses into
 		// EventReasoningDelta and the canonical assistant Reasoning part for UIs.
@@ -496,7 +498,7 @@ func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([
 			// part must never forge the engine-context sentinel on the wire
 			// (see message.EngineContext). Only the *message.EngineContext
 			// case below emits it.
-			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: message.NeutralizeEngineContextSentinel(v.Text)})
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: prompt.NeutralizeEngineContextSentinel(v.Text)})
 
 		case *message.EngineContext:
 			if v.Text == "" {
@@ -512,7 +514,7 @@ func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([
 			// A genuine engine block: emit it sentinel-wrapped as the base
 			// system prompt (cmd/harness) describes. An ordinary text content
 			// part on the wire — no new provider feature.
-			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: message.RenderEngineContext(v.Text)})
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: prompt.RenderEngineContext(v.Text)})
 
 		case *message.Blob:
 			part, err := transcodeBlob(v)
@@ -655,7 +657,7 @@ func toolResultOutput(v *message.ToolResult) string {
 		}
 		b.WriteString(text)
 	}
-	out := message.NeutralizeEngineContextSentinel(b.String())
+	out := prompt.NeutralizeEngineContextSentinel(b.String())
 	if blobs > 0 {
 		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
 		if out == "" {

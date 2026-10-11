@@ -12,7 +12,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -274,7 +274,7 @@ func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq
 // the get_conversation_history tool, so any two models may follow each other.
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
 	if p.Effort != nil {
-		if _, err := message.ParseEffort(*p.Effort); err != nil {
+		if _, err := modelref.ParseEffort(*p.Effort); err != nil {
 			return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 		}
 	}

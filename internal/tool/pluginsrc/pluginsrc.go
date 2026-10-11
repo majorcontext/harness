@@ -18,6 +18,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -157,7 +158,7 @@ type Session struct {
 // Toolset gives the plugin tools that allowed keeps, and the system.transform
 // segments of this model call as its prompt.
 func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []string, model string) turn.Toolset {
-	ref, _ := message.ParseModelRef(model)
+	ref, _ := modelref.ParseModelRef(model)
 	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id, Model: ref})
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
 }
@@ -169,7 +170,7 @@ func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallPa
 	if p.MaxTokens > 0 {
 		in.MaxTokens = &p.MaxTokens
 	}
-	in.Model, _ = message.ParseModelRef(p.Model)
+	in.Model, _ = modelref.ParseModelRef(p.Model)
 	out := s.host.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.id, Params: in})
 	if !out.Model.IsZero() {
 		p.Model = out.Model.String()

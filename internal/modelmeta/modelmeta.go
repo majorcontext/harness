@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // ContextWindow reports ref's advertised context window in tokens. It returns
@@ -25,13 +25,13 @@ import (
 // (majorcontext/bailey internal/api/bifrost_models.go) passes THREE-segment
 // refs exclusively — e.g. "anthropic/anthropic/claude-fable-5" or
 // "anthropic/bedrock_mantle/anthropic.claude-opus-5" — and
-// message.ParseModelRef splits on the FIRST slash only (see ModelRef's doc
+// modelref.ParseModelRef splits on the FIRST slash only (see ModelRef's doc
 // comment: "the model portion may itself contain slashes"), so ref.Model
 // still carries a Bifrost routing-namespace segment ("anthropic",
 // "bedrock_mantle", "bedrock", ...) ahead of the actual model ID. Without
 // stripping that segment first, EVERY box ref misses this table and
 // automatic compaction does not arm for those refs.
-func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
+func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 	model := lastPathSegment(ref.Model)
 	switch ref.Provider {
 	case "anthropic":
@@ -112,20 +112,20 @@ func Models(provider string) []string {
 	return nil
 }
 
-// claudeCodeProvider is the message.ModelRef.Provider value that selects
+// claudeCodeProvider is the modelref.ModelRef.Provider value that selects
 // the Claude Code CLI delegated-turn backend (config.TypeClaudeCodeCLI).
 const claudeCodeProvider = "claude-code"
 
-// codexProvider is the message.ModelRef.Provider value the boxes platform
+// codexProvider is the modelref.ModelRef.Provider value the boxes platform
 // mints for a ChatGPT Codex backend model (see
 // majorcontext/bailey internal/api/codex_models.go, e.g. "codex/gpt-5.6-sol")
 // — distinct from internal/provider/openai.CodexFamily, which names an "openai"-type
 // provider's Client.Family for the same backend's wire format, not a
-// message.ModelRef.Provider value this package switches on.
+// modelref.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"
 
 // lastPathSegment returns the substring of model after its last '/', or
-// model unchanged if it contains no '/'. message.ModelRef.Model may itself
+// model unchanged if it contains no '/'. modelref.ModelRef.Model may itself
 // contain slashes (see that type's doc comment), which is exactly what the
 // boxes platform's three-segment refs put there — a Bifrost routing-
 // namespace segment ("anthropic", "bedrock_mantle", "bedrock", ...) ahead

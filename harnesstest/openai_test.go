@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/provider/openai"
 )
@@ -29,7 +30,7 @@ func codexClient(s *OpenAI, websocket bool) *openai.Client {
 
 func codexRequest(msgs ...message.Message) *provider.Request {
 	return &provider.Request{
-		Model:      message.ModelRef{Provider: openai.CodexFamily, Model: "gpt-5"},
+		Model:      modelref.ModelRef{Provider: openai.CodexFamily, Model: "gpt-5"},
 		System:     []string{"sys"},
 		Tools:      []provider.ToolDef{{Name: "bash", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 		SessionKey: "ses_1",

@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
 func TestCodexRequestIncludesReasoningSummaryAutoWhenUnset(t *testing.T) {
 	req := &provider.Request{
-		Model:    message.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
+		Model:    modelref.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	}
 	wire, err := transcodeRequestFamily(req, CodexFamily, nil, false)
@@ -38,8 +39,8 @@ func TestCodexRequestIncludesReasoningSummaryAutoWhenUnset(t *testing.T) {
 
 func TestCodexRequestIncludesReasoningSummaryWithEnabledEffort(t *testing.T) {
 	req := &provider.Request{
-		Model:    message.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
-		Effort:   message.EffortMedium,
+		Model:    modelref.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
+		Effort:   modelref.EffortMedium,
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	}
 	wire, err := transcodeRequestFamily(req, CodexFamily, nil, false)
@@ -59,8 +60,8 @@ func TestCodexRequestIncludesReasoningSummaryWithEnabledEffort(t *testing.T) {
 
 func TestCodexRequestOmitsReasoningWhenEffortOff(t *testing.T) {
 	req := &provider.Request{
-		Model:    message.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
-		Effort:   message.EffortOff,
+		Model:    modelref.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
+		Effort:   modelref.EffortOff,
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	}
 	wire, err := transcodeRequestFamily(req, CodexFamily, nil, false)
@@ -74,7 +75,7 @@ func TestCodexRequestOmitsReasoningWhenEffortOff(t *testing.T) {
 
 func TestGenericOpenAIRequestOmitsReasoningSummary(t *testing.T) {
 	req := &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	}
 	wire, err := transcodeRequestFamily(req, Family, nil, false)

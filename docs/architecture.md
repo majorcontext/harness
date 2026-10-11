@@ -216,12 +216,13 @@ Free to change.
 | `internal/tool/builtin` | The file, search, and shell tools of a coding agent |
 | `internal/toolresult` | Large-result retention and `read_tool_result`, at parity with the engine |
 | `internal/admit` | Checks each part of an input and returns the `input.admitted` record with the blobs of its attachments |
-| `internal/prompt` | System-prompt segments and agent profiles |
+| `internal/prompt` | System-prompt segments and agent profiles, and the engine-context sentinel: `RenderEngineContext` and `NeutralizeEngineContextSentinel` |
+| `internal/modelref` | `ModelRef` ("provider/model") and `Effort`, with their parsers. A leaf with no harness imports |
 | `internal/workspace` | The git diff of the work tree for `GET /workspace/changes` |
 | `internal/wirerecord` | The program that records the real wire streams of `testdata/wire` and scrubs them. It makes real model calls only with `HARNESS_RECORD_WIRE=1` and reads keys from the environment (Andy, 2026-10-08) |
 | `internal/wirescrub` | Replaces ids, tokens, emails, home and temporary paths, and socket and pid paths in a recording with stable placeholders, and lists what a recording still holds. `wirerecord` and the wire gate use it |
 
-The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, and only `internal/backend` builds a provider wire.
+The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, only `internal/backend` builds a provider wire, and only `internal/backend`, `internal/provider`, `internal/plugin`, `internal/prompt`, `internal/imageclamp`, and `internal/tool/pluginsrc` import `internal/message`.
 
 Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it), `mcp`, `plugin`, `skill`, `command`, `process`, and `provider` (the wire adapters of the model API backend), as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
 

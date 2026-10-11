@@ -15,8 +15,8 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/backend/modelapi"
-	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelmeta"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/provider/anthropic"
 	responses "github.com/majorcontext/harness/internal/provider/openai"
@@ -93,7 +93,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 
 // Check returns the backend of the provider of ref, or reports that no
 // configured provider serves it.
-func (m *Router) Check(ref message.ModelRef) (turn.Backend, error) {
+func (m *Router) Check(ref modelref.ModelRef) (turn.Backend, error) {
 	be, ok := m.backends[ref.Provider]
 	if !ok {
 		return nil, fmt.Errorf("%w: no provider %q is configured for %s", ErrUnavailable, ref.Provider, ref)
@@ -103,7 +103,7 @@ func (m *Router) Check(ref message.ModelRef) (turn.Backend, error) {
 
 // lookup returns the backend of the provider of model.
 func (m *Router) lookup(model string) (turn.Backend, error) {
-	ref, err := message.ParseModelRef(model)
+	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}

@@ -7,7 +7,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/command"
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 const claudeCodeProvider = "claude-code"
@@ -28,7 +28,7 @@ type unknownLine struct{ err error }
 
 // refuseOn refuses the line when model is not a Claude Code model.
 func (u *unknownLine) refuseOn(model string) error {
-	if ref, err := message.ParseModelRef(model); err == nil && ref.Provider == claudeCodeProvider {
+	if ref, err := modelref.ParseModelRef(model); err == nil && ref.Provider == claudeCodeProvider {
 		return nil
 	}
 	return u.err

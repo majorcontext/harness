@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -155,7 +156,7 @@ func TestFiveMinuteTTLOmitsBetaHeader(t *testing.T) {
 func TestInvalidClientCacheTTLFailsStream(t *testing.T) {
 	c := &Client{APIKey: "test-key", CacheTTL: "30m"}
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:     modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		MaxTokens: 16,
 	})

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 // testPlugin runs a plugin in-process over a net.Pipe, with no subprocess,
@@ -60,7 +61,7 @@ func TestChatParamsChain(t *testing.T) {
 				t.Errorf("p2 did not see p1's temperature, got %v", req.Params.Temperature)
 			}
 			params := req.Params
-			params.Model = message.ModelRef{Provider: "openai", Model: "gpt-5.5"}
+			params.Model = modelref.ModelRef{Provider: "openai", Model: "gpt-5.5"}
 			return &ChatParamsResponse{Params: params}, nil
 		},
 	})

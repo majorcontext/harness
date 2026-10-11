@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/majorcontext/harness/internal/modelref"
 	"pgregory.net/rapid"
 )
 
@@ -164,13 +165,13 @@ func genRole(t *rapid.T, label string) Role {
 // file actually checks) but would silently reassign characters from
 // Provider to Model on the first reload, which is a real wrinkle worth
 // avoiding in the generator rather than asserting on.
-func genModelRef(t *rapid.T, label string) ModelRef {
+func genModelRef(t *rapid.T, label string) modelref.ModelRef {
 	if rapid.Bool().Draw(t, label+"ModelZero") {
-		return ModelRef{}
+		return modelref.ModelRef{}
 	}
 	provider := strings.ReplaceAll(rapid.StringN(1, 20, -1).Draw(t, label+"ModelProvider"), "/", "-")
 	model := rapid.StringN(1, 20, -1).Draw(t, label+"ModelModel")
-	return ModelRef{Provider: provider, Model: model}
+	return modelref.ModelRef{Provider: provider, Model: model}
 }
 
 // genCreatedAt draws the zero time.Time (CreatedAt is "omitzero") or a

@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -103,7 +104,7 @@ func TestStreamCapturesCodexSubscriptionUsageOverHTTP(t *testing.T) {
 	t.Run("codex family captures it", func(t *testing.T) {
 		c := &Client{APIKey: "k", BaseURL: srv.URL, Family: CodexFamily}
 		s, err := c.Stream(context.Background(), &provider.Request{
-			Model:    message.ModelRef{Provider: CodexFamily, Model: "gpt-5"},
+			Model:    modelref.ModelRef{Provider: CodexFamily, Model: "gpt-5"},
 			Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		})
 		if err != nil {
@@ -122,7 +123,7 @@ func TestStreamCapturesCodexSubscriptionUsageOverHTTP(t *testing.T) {
 	t.Run("plain openai family does not capture it", func(t *testing.T) {
 		c := &Client{APIKey: "k", BaseURL: srv.URL}
 		s, err := c.Stream(context.Background(), &provider.Request{
-			Model:    message.ModelRef{Provider: Family, Model: "gpt-5"},
+			Model:    modelref.ModelRef{Provider: Family, Model: "gpt-5"},
 			Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 		})
 		if err != nil {

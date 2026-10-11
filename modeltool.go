@@ -7,7 +7,7 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -143,7 +143,7 @@ func (t modelTool) set(ctx context.Context, s *Session, ref string) (protocol.Se
 	if target, ok := t.r.aliases[ref]; ok {
 		ref = target
 	}
-	parsed, err := message.ParseModelRef(ref)
+	parsed, err := modelref.ParseModelRef(ref)
 	if err != nil {
 		return protocol.Session{}, fmt.Errorf("model: %w (%s)", err, t.r.modelChoices())
 	}
@@ -187,7 +187,7 @@ func (r *Runtime) providerInfos() []providerInfo {
 
 // servesProvider reports a model whose provider no backend serves, and names
 // the valid aliases and providers.
-func (r *Runtime) servesProvider(ref message.ModelRef) error {
+func (r *Runtime) servesProvider(ref modelref.ModelRef) error {
 	for _, n := range r.models.Providers() {
 		if n == ref.Provider {
 			return nil
@@ -204,7 +204,7 @@ func (r *Runtime) modelChoices() string {
 
 // checkChildModel reports why no child can run model: it is not a ref, or no configured provider serves it.
 func (r *Runtime) checkChildModel(model string) error {
-	ref, err := message.ParseModelRef(model)
+	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("invalid model %q: %w", model, err)
 	}

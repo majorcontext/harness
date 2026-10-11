@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -30,7 +31,7 @@ func TestContextOverflowClassifiedStructurally(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "openrouter", Model: "m1"},
+		Model:    modelref.ModelRef{Provider: "openrouter", Model: "m1"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {
@@ -69,7 +70,7 @@ func TestContextOverflowClassifiedWithoutCode(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "vllm", Model: "m1"},
+		Model:    modelref.ModelRef{Provider: "vllm", Model: "m1"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if !provider.IsContextOverflow(err) {
@@ -99,7 +100,7 @@ func TestOrdinaryBadRequestNotClassified(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "openrouter", Model: "m1"},
+		Model:    modelref.ModelRef{Provider: "openrouter", Model: "m1"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {

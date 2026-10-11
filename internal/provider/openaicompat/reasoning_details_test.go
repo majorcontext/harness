@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -19,7 +20,7 @@ func TestStreamReasoningDetailsExtracted(t *testing.T) {
 	})
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
+		Model:     modelref.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "calculate"}}}},
 		MaxTokens: 100,
 	})
@@ -77,7 +78,7 @@ func TestStreamReasoningDetailsWithReasoningContentSameText(t *testing.T) {
 	})
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
+		Model:     modelref.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "calculate"}}}},
 		MaxTokens: 100,
 	})
@@ -125,7 +126,7 @@ func TestStreamReasoningDetailsEmptyDoesNotSuppressAlias(t *testing.T) {
 		_, _ = io.WriteString(w, sseData(`[DONE]`))
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
+		Model:     modelref.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}}},
 		MaxTokens: 100,
 	})
@@ -160,7 +161,7 @@ func TestStreamReasoningDetailsDistinctTextsAreAdditive(t *testing.T) {
 		_, _ = io.WriteString(w, sseData(`[DONE]`))
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:     message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
+		Model:     modelref.ModelRef{Provider: "bifrost", Model: "vertex/gemini-2.5-flash"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "calculate"}}}},
 		MaxTokens: 100,
 	})

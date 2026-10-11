@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/modelref"
 )
 
 func TestMessageJSONRoundTrip(t *testing.T) {
@@ -28,7 +30,7 @@ func TestMessageJSONRoundTrip(t *testing.T) {
 			},
 			&Blob{MediaType: "image/png", Data: []byte{0x89, 0x50}},
 		},
-		Model:     ModelRef{Provider: "anthropic", Model: "claude-fable-5"},
+		Model:     modelref.ModelRef{Provider: "anthropic", Model: "claude-fable-5"},
 		CreatedAt: time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
 	}
 
@@ -164,59 +166,6 @@ func TestProviderCallID(t *testing.T) {
 	}
 	if ProviderCallID("call_", "tc_2", 0) == ProviderCallID("call_", "tc_3", 0) {
 		t.Error("distinct call IDs collided")
-	}
-}
-
-func TestModelRef(t *testing.T) {
-	ref, err := ParseModelRef("amazon-bedrock/us.anthropic.claude-opus-4-8")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ref.Provider != "amazon-bedrock" || ref.Model != "us.anthropic.claude-opus-4-8" {
-		t.Errorf("unexpected parse: %+v", ref)
-	}
-
-	// Model portion may contain slashes.
-	ref, err = ParseModelRef("vertex/publishers/google/gemini-3.1-pro")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ref.Model != "publishers/google/gemini-3.1-pro" {
-		t.Errorf("slash split wrong: %+v", ref)
-	}
-
-	for _, bad := range []string{"", "anthropic", "/model", "anthropic/"} {
-		if _, err := ParseModelRef(bad); err == nil {
-			t.Errorf("ParseModelRef(%q) should fail", bad)
-		}
-	}
-
-	raw, err := json.Marshal(ModelRef{Provider: "anthropic", Model: "claude-fable-5"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != `"anthropic/claude-fable-5"` {
-		t.Errorf("marshal = %s", raw)
-	}
-	var out ModelRef
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.String() != "anthropic/claude-fable-5" {
-		t.Errorf("unmarshal = %+v", out)
-	}
-
-	// Zero ref round-trips through "".
-	raw, _ = json.Marshal(ModelRef{})
-	if string(raw) != `""` {
-		t.Errorf("zero marshal = %s", raw)
-	}
-	var zero ModelRef
-	if err := json.Unmarshal(raw, &zero); err != nil {
-		t.Fatal(err)
-	}
-	if !zero.IsZero() {
-		t.Errorf("zero unmarshal = %+v", zero)
 	}
 }
 

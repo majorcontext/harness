@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -297,7 +298,7 @@ func completedLineageFrames(responseID, text string) []string {
 
 func lineageRequest(session string, messages ...message.Message) *provider.Request {
 	return &provider.Request{
-		Model:      message.ModelRef{Provider: CodexFamily, Model: "gpt-5"},
+		Model:      modelref.ModelRef{Provider: CodexFamily, Model: "gpt-5"},
 		Messages:   messages,
 		MaxTokens:  100,
 		SessionKey: session,
@@ -391,9 +392,7 @@ func TestWebSocketToolRoundContinuesResponseLineage(t *testing.T) {
 	client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 
 	streamLineageTurn(t, client, lineageRequest("tool", userMessage("one")))
-	assistant := message.Message{ID: "resp_tool", Role: message.RoleAssistant, Parts: message.Parts{
-		&message.ToolCall{CallID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"one"}`)},
-	}}
+	assistant := message.Message{ID: "resp_tool", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"one"}`)}}}
 	result := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Text{Text: "result"}}}}}
 	streamLineageTurn(t, client, lineageRequest("tool", userMessage("one"), assistant, result))
 
@@ -688,9 +687,7 @@ func TestPreviousResponseNotFoundCodeOnlyDoesNotLeaveEntryBusy(t *testing.T) {
 	server := newWSLineageServer(t)
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 	establishRecoveryLineage(t, server, client, "chain-miss-code-only")
-	server.scripts <- wsLineageScript{beforeWait: []string{
-		`{"type":"error","code":"previous_response_not_found"}`,
-	}}
+	server.scripts <- wsLineageScript{beforeWait: []string{`{"type":"error","code":"previous_response_not_found"}`}}
 	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
 
 	events := streamLineageTurn(t, client, lineageRequest("chain-miss-code-only", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))

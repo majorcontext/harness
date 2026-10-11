@@ -1,4 +1,5 @@
-package message
+// Package modelref parses model references and reasoning-effort levels.
+package modelref
 
 import (
 	"encoding/json"

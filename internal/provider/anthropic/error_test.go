@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -33,7 +34,7 @@ func TestContextOverflowClassified(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {
@@ -75,7 +76,7 @@ func TestOrdinaryInvalidRequestNotClassified(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {
@@ -104,7 +105,7 @@ func TestOverloadedErrorNotClassifiedAsContextOverflow(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {
@@ -138,7 +139,7 @@ func TestOrdinaryInvalidRequestClassifiedPermanent(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {
@@ -178,7 +179,7 @@ func TestContextOverflowNotClassifiedPermanent(t *testing.T) {
 	})
 
 	_, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: Family, Model: "claude-fable-5"},
+		Model:    modelref.ModelRef{Provider: Family, Model: "claude-fable-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err == nil {
