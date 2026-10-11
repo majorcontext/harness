@@ -90,3 +90,7 @@ func hasOutput(m eventlog.Message) bool {
 		return p.Type == eventlog.PartToolCall || p.Type == eventlog.PartText && p.Text != ""
 	})
 }
+
+func hasReasoning(m eventlog.Message) bool {
+	return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartReasoning })
+}
