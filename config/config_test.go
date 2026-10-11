@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -208,33 +207,20 @@ func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
 	}
 }
 
-// TestEnsureProviderDefaultsIdempotent covers the exported defensive entry
-// point: calling it once on a raw providers map (never merged through
-// LoadProject) yields the same result as mergeAndValidate's own call, and
-// calling it a second time on an already-defaulted map changes nothing —
-// the property that makes it safe for a caller like cmd/harness's
-// registry() to call unconditionally, regardless of how its *Config was
-// built.
-func TestEnsureProviderDefaultsIdempotent(t *testing.T) {
-	providers := map[string]Provider{
-		"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"},
+func TestResolvedProviders(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"}}}
+	got := c.ResolvedProviders()["openrouter"]
+	if got.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want inherited %q", got.Type, TypeOpenAICompat)
 	}
-	EnsureProviderDefaults(providers)
-	pr := providers["openrouter"]
-	if pr.Type != TypeOpenAICompat {
-		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
+	if got.BaseURL != Defaults().Providers["openrouter"].BaseURL {
+		t.Errorf("BaseURL = %q, want inherited default", got.BaseURL)
 	}
-	if pr.BaseURL != Defaults().Providers["openrouter"].BaseURL {
-		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
+	if got.APIKeyEnv != "MY_OPENROUTER_KEY" {
+		t.Errorf("APIKeyEnv = %q, want preserved override", got.APIKeyEnv)
 	}
-	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
-		t.Errorf("APIKeyEnv = %q, want preserved override", pr.APIKeyEnv)
-	}
-
-	before := providers["openrouter"]
-	EnsureProviderDefaults(providers)
-	if after := providers["openrouter"]; !reflect.DeepEqual(after, before) {
-		t.Errorf("second call changed the entry: before %+v, after %+v", before, after)
+	if c.Providers["openrouter"].Type != "" {
+		t.Error("ResolvedProviders changed the providers of the Config")
 	}
 }
 
@@ -357,24 +343,6 @@ func TestLoadExpandsHome(t *testing.T) {
 	if c.SessionDir != want {
 		t.Errorf("SessionDir = %q, want %q", c.SessionDir, want)
 	}
-}
-
-func TestPath(t *testing.T) {
-	t.Run("HARNESS_CONFIG wins", func(t *testing.T) {
-		t.Setenv("HARNESS_CONFIG", "/etc/harness.json")
-		if got := Path(); got != "/etc/harness.json" {
-			t.Errorf("Path() = %q, want /etc/harness.json", got)
-		}
-	})
-	t.Run("defaults to HOME/.harness/config.json", func(t *testing.T) {
-		t.Setenv("HARNESS_CONFIG", "")
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		want := filepath.Join(home, ".harness", "config.json")
-		if got := Path(); got != want {
-			t.Errorf("Path() = %q, want %q", got, want)
-		}
-	})
 }
 
 func TestResolveModel(t *testing.T) {
@@ -550,7 +518,7 @@ func TestMergeAgentDefsDirs(t *testing.T) {
 // TestMergeCompactionFields verifies that project non-zero values override user
 // layer, same scalar-override rule as GoalEvaluatorModel.
 func TestMergeCompactionFields(t *testing.T) {
-	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3, MaxTaskDepth: 3, MaxConcurrentTasks: 9, MaxTreeTokens: 100}
+	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3, MaxTaskDepth: 3, MaxConcurrentTasks: 9, MaxTreeTokens: 100, MaxTokens: 100}
 	t.Run("zero project values inherit the user layer", func(t *testing.T) {
 		got := merge(base, &Config{})
 		if got.ContextWindowTokens != 100000 {
@@ -564,15 +532,15 @@ func TestMergeCompactionFields(t *testing.T) {
 		}
 	})
 	t.Run("non-zero project values override", func(t *testing.T) {
-		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1, MaxTaskDepth: 1, MaxConcurrentTasks: 2, MaxTreeTokens: 7})
+		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1, MaxTaskDepth: 1, MaxConcurrentTasks: 2, MaxTreeTokens: 7, MaxTokens: 9})
 		if got.ContextWindowTokens != 50000 {
 			t.Errorf("ContextWindowTokens = %d, want project override 50000", got.ContextWindowTokens)
 		}
 		if got.CompactionThreshold != 0.7 {
 			t.Errorf("CompactionThreshold = %v, want project override 0.7", got.CompactionThreshold)
 		}
-		if got.CompactionKeepTurns != 1 || got.MaxTaskDepth != 1 || got.MaxConcurrentTasks != 2 || got.MaxTreeTokens != 7 {
-			t.Errorf("CompactionKeepTurns, MaxTaskDepth, MaxConcurrentTasks, MaxTreeTokens = %d, %d, %d, %d, want project overrides 1, 1, 2, 7", got.CompactionKeepTurns, got.MaxTaskDepth, got.MaxConcurrentTasks, got.MaxTreeTokens)
+		if got.CompactionKeepTurns != 1 || got.MaxTaskDepth != 1 || got.MaxConcurrentTasks != 2 || got.MaxTreeTokens != 7 || got.MaxTokens != 9 {
+			t.Errorf("CompactionKeepTurns, MaxTaskDepth, MaxConcurrentTasks, MaxTreeTokens, MaxTokens = %d, %d, %d, %d, %d, want project overrides 1, 1, 2, 7, 9", got.CompactionKeepTurns, got.MaxTaskDepth, got.MaxConcurrentTasks, got.MaxTreeTokens, got.MaxTokens)
 		}
 	})
 }
@@ -964,8 +932,7 @@ func TestLoadProject(t *testing.T) {
 	t.Run("no project file returns user config", func(t *testing.T) {
 		userPath := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
-		t.Setenv("HARNESS_CONFIG", userPath)
-		c, err := LoadProject(t.TempDir())
+		c, err := LoadProject(userPath, t.TempDir())
 		if err != nil {
 			t.Fatalf("LoadProject: %v", err)
 		}
@@ -981,14 +948,13 @@ func TestLoadProject(t *testing.T) {
 			"aliases": {"fast": "anthropic/claude-haiku-4-5", "smart": "anthropic/claude-opus-4-8"},
 			"providers": {"anthropic": {"api_key_env": "USER_KEY", "base_url": "http://user"}}
 		}`)
-		t.Setenv("HARNESS_CONFIG", userPath)
 		projDir := t.TempDir()
 		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
 			"model": "openai/gpt-5",
 			"aliases": {"smart": "openai/gpt-5-pro"},
 			"providers": {"anthropic": {"base_url": "http://project"}}
 		}`)
-		c, err := LoadProject(projDir)
+		c, err := LoadProject(userPath, projDir)
 		if err != nil {
 			t.Fatalf("LoadProject: %v", err)
 		}
@@ -1022,12 +988,11 @@ func TestLoadProject(t *testing.T) {
 		writeFile(t, userPath, `{
 			"providers": {"openrouter": {"api_key_env": "USER_OR_KEY"}}
 		}`)
-		t.Setenv("HARNESS_CONFIG", userPath)
 		projDir := t.TempDir()
 		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
 			"providers": {"openrouter": {"api_key_env": "PROJECT_OR_KEY"}}
 		}`)
-		c, err := LoadProject(projDir)
+		c, err := LoadProject(userPath, projDir)
 		if err != nil {
 			t.Fatalf("LoadProject: %v", err)
 		}
@@ -1048,82 +1013,16 @@ func TestLoadProject(t *testing.T) {
 	t.Run("project layer cannot smuggle in an incomplete non-default provider", func(t *testing.T) {
 		userPath := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
-		t.Setenv("HARNESS_CONFIG", userPath)
 		projDir := t.TempDir()
 		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
 			"providers": {"mycompat": {"api_key_env": "PROJECT_KEY"}}
 		}`)
-		_, err := LoadProject(projDir)
+		_, err := LoadProject(userPath, projDir)
 		if err == nil {
 			t.Fatal("LoadProject did not fail on an incomplete non-default provider entry")
 		}
 		if !strings.Contains(err.Error(), "mycompat") {
 			t.Errorf("error %q does not name the offending key", err)
-		}
-	})
-}
-
-// TestLoadProjectWithInfo covers the startup-config-observability
-// contract (see AGENTS.md / docs/design/managed-processes.md): the one
-// piece of information a served/run process needs to log at boot is
-// which config file (if any) it actually loaded, plus how much it
-// declares — this is what tells an operator whose config file was
-// misnamed (and so silently loaded as empty) apart from one who never
-// meant to supply a config at all.
-func TestLoadProjectWithInfo(t *testing.T) {
-	t.Run("project file present: reports its path and merged counts", func(t *testing.T) {
-		userPath := filepath.Join(t.TempDir(), "config.json")
-		writeFile(t, userPath, `{"mcp_servers": {"fs": {"command": ["mcp-fs"]}}}`)
-		t.Setenv("HARNESS_CONFIG", userPath)
-		projDir := t.TempDir()
-		projPath := filepath.Join(projDir, ".harness.json")
-		writeFile(t, projPath, `{
-			"processes": {"dev": {"command": ["pnpm", "dev"]}, "db": {"command": ["postgres"]}},
-			"plugins": [{"name": "gh", "command": ["gh-plugin"]}]
-		}`)
-		_, info, err := LoadProjectWithInfo(projDir)
-		if err != nil {
-			t.Fatalf("LoadProjectWithInfo: %v", err)
-		}
-		if info.Path != projPath {
-			t.Errorf("Path = %q, want the project file %q", info.Path, projPath)
-		}
-		if info.Processes != 2 {
-			t.Errorf("Processes = %d, want 2", info.Processes)
-		}
-		if info.MCPServers != 1 {
-			t.Errorf("MCPServers = %d, want 1 (inherited from user config)", info.MCPServers)
-		}
-		if info.Plugins != 1 {
-			t.Errorf("Plugins = %d, want 1", info.Plugins)
-		}
-	})
-	t.Run("no project file, user file present: reports the user path", func(t *testing.T) {
-		userPath := filepath.Join(t.TempDir(), "config.json")
-		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
-		t.Setenv("HARNESS_CONFIG", userPath)
-		_, info, err := LoadProjectWithInfo(t.TempDir())
-		if err != nil {
-			t.Fatalf("LoadProjectWithInfo: %v", err)
-		}
-		if info.Path != userPath {
-			t.Errorf("Path = %q, want the user config path %q", info.Path, userPath)
-		}
-		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
-			t.Errorf("counts = %+v, want all zero", info)
-		}
-	})
-	t.Run("neither file present: reports no config found", func(t *testing.T) {
-		t.Setenv("HARNESS_CONFIG", filepath.Join(t.TempDir(), "does-not-exist.json"))
-		_, info, err := LoadProjectWithInfo(t.TempDir())
-		if err != nil {
-			t.Fatalf("LoadProjectWithInfo: %v", err)
-		}
-		if info.Path != "" {
-			t.Errorf("Path = %q, want empty (no config file found)", info.Path)
-		}
-		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
-			t.Errorf("counts = %+v, want all zero", info)
 		}
 	})
 }
@@ -1686,17 +1585,4 @@ func TestMergeSessionSync(t *testing.T) {
 			t.Errorf("SessionSync = %q, want project override %q", got.SessionSync, "fsync")
 		}
 	})
-}
-
-func TestLoadProjectWithInfoSessionSync(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".harness.json"), `{"session_sync": "volume"}`)
-	t.Setenv("HARNESS_CONFIG", filepath.Join(dir, "does-not-exist.json"))
-	_, info, err := LoadProjectWithInfo(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.SessionSync != "volume" {
-		t.Errorf("LoadInfo.SessionSync = %q, want %q", info.SessionSync, "volume")
-	}
 }

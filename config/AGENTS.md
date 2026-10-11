@@ -15,6 +15,5 @@ Read the root AGENTS.md. `cmd/harness/AGENTS.md` covers environment resolution.
 - Validate providers after merge and native-default application.
 - Validate an adapter field against the adapter the entry builds, not the map key.
 - Reject unreadable or unsupported values. Never silently pick another policy.
-- `LoadInfo` is observational. It never changes behavior or reads again.
 - Use table tests for merge and validation. Cover absent, zero, negative, and malformed values.
 - Assert the final merged config.

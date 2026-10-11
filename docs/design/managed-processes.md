@@ -386,13 +386,11 @@ or, when neither the project override nor the user config file exists:
 no config file found
 ```
 
-This is `config.LoadProjectWithInfo` (a thin wrapper around
-`LoadProject`, returning the same `*Config` plus a `LoadInfo`): `Path` is
-the project override (`<dir>/.harness.json`) when present, else the user
-config path (`config.Path()`) when present, else empty; `Processes`/
-`MCPServers`/`Plugins` are the **merged** config's counts, so a project
-override that only adds one field to an otherwise-empty processes map
-still reports the right total. `cmd/harness`'s `loadConfigLogged` (used by
-`serveCmd`/`runCmd` only — `sessions`/`plugin probe` keep using the plain
-`loadConfig`, since this line belongs at the "engine is booting" moment,
-not every CLI invocation) turns that into the single log line above.
+`cmd/harness`'s `loadConfigLogged` (used by `serveCmd`/`runCmd` only —
+`sessions`/`plugin probe` keep using the plain `loadConfig`, since this
+line belongs at the "engine is booting" moment, not every CLI invocation)
+builds the line from the merged `*Config` that `config.LoadProject`
+returns: the path is the project override (`<dir>/.harness.json`) when
+present, else the user config path when present, else empty; the counts
+are the **merged** config's, so a project override that only adds one
+field to an otherwise-empty processes map still reports the right total.

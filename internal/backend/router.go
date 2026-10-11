@@ -46,17 +46,16 @@ func NewRouter(backends map[string]turn.Backend) *Router {
 // The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper) *Router {
 	backends := map[string]turn.Backend{}
-	providers := maps.Clone(cfg.Providers)
-	if providers == nil {
-		providers = map[string]config.Provider{}
+	cfg.Providers = maps.Clone(cfg.Providers)
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]config.Provider{}
 	}
 	for _, name := range []string{anthropic.Family, responses.Family, defaultOpenRouter} {
-		if _, ok := providers[name]; !ok {
-			providers[name] = config.Provider{}
+		if _, ok := cfg.Providers[name]; !ok {
+			cfg.Providers[name] = config.Provider{}
 		}
 	}
-	config.EnsureProviderDefaults(providers)
-	for name, p := range providers {
+	for name, p := range cfg.ResolvedProviders() {
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport); c != nil {

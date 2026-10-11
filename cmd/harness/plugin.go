@@ -35,7 +35,7 @@ func pluginCmd(args []string) error {
 // own cache.
 func defaultPluginCache(cfg *config.Config) {
 	if cfg.PluginCache == "" {
-		cfg.PluginCache = filepath.Join(filepath.Dir(config.Path()), "plugin_cache.json")
+		cfg.PluginCache = filepath.Join(filepath.Dir(userConfigPath()), "plugin_cache.json")
 	}
 }
 

@@ -29,6 +29,7 @@ func (c *Config) validateFile() error {
 		validateSync(c.OwnerEpoch, c.Sync),
 		validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold),
 		c.validateTaskLimits(),
+		validateMaxTokens(c.MaxTokens),
 	)
 }
 
@@ -96,6 +97,13 @@ func (c *Config) validateTaskLimits() error {
 		return fmt.Errorf("max_concurrent_tasks must not be negative, got %d", c.MaxConcurrentTasks)
 	case c.MaxTreeTokens < 0:
 		return fmt.Errorf("max_tree_tokens must not be negative, got %d", c.MaxTreeTokens)
+	}
+	return nil
+}
+
+func validateMaxTokens(n int) error {
+	if n < 0 {
+		return fmt.Errorf("max_tokens must not be negative, got %d", n)
 	}
 	return nil
 }

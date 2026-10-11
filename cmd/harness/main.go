@@ -96,7 +96,19 @@ func loadConfig() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return config.LoadProject(dir)
+	return config.LoadProject(userConfigPath(), dir)
+}
+
+// userConfigPath is $HARNESS_CONFIG if set, otherwise ~/.harness/config.json.
+func userConfigPath() string {
+	if p := os.Getenv("HARNESS_CONFIG"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".harness", "config.json")
+	}
+	return filepath.Join(home, ".harness", "config.json")
 }
 
 // applyOverrides applies the HARNESS_* variables to cfg, then the flags, so a

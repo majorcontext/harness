@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/majorcontext/harness/config"
 )
@@ -20,12 +21,37 @@ func loadConfigLogged(logger *slog.Logger) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, info, err := config.LoadProjectWithInfo(dir)
+	userPath := userConfigPath()
+	cfg, err := config.LoadProject(userPath, dir)
 	if err != nil {
 		return nil, err
 	}
-	logConfigSummary(logger, info)
+	logConfigSummary(logger, configSummaryOf(cfg, userPath, filepath.Join(dir, ".harness.json")))
 	return cfg, nil
+}
+
+// configSummary names the config file that loadConfigLogged found and counts what it declares.
+type configSummary struct {
+	// path is the project file when it exists, else the user file when it exists, else empty.
+	path                           string
+	processes, mcpServers, plugins int
+	sessionSync                    string
+}
+
+func configSummaryOf(cfg *config.Config, userPath, projPath string) configSummary {
+	info := configSummary{processes: len(cfg.Processes), mcpServers: len(cfg.MCPServers), plugins: len(cfg.Plugins), sessionSync: cfg.SessionSync}
+	switch {
+	case fileExists(projPath):
+		info.path = projPath
+	case fileExists(userPath):
+		info.path = userPath
+	}
+	return info
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // logConfigSummary emits exactly one slog INFO line naming which config
@@ -34,18 +60,18 @@ func loadConfigLogged(logger *slog.Logger) (*config.Config, error) {
 // operator failure: a misnamed config file loads as silently empty today,
 // indistinguishable from an operator who never intended to configure
 // anything at all.
-func logConfigSummary(logger *slog.Logger, info config.LoadInfo) {
-	if info.Path == "" {
+func logConfigSummary(logger *slog.Logger, info configSummary) {
+	if info.path == "" {
 		logger.Info("no config file found")
 		return
 	}
-	msg := fmt.Sprintf("config: %s (%s)", info.Path, formatConfigCounts(info))
+	msg := fmt.Sprintf("config: %s (%s)", info.path, formatConfigCounts(info))
 	// Only called out when it changes behavior from the built-in default:
 	// "" and the explicit "fsync" are behaviorally identical (see
 	// config.Config.SessionSync), so only "volume" is worth an operator's
 	// attention here.
-	if info.SessionSync == "volume" {
-		msg += fmt.Sprintf(", session_sync=%s", info.SessionSync)
+	if info.sessionSync == "volume" {
+		msg += fmt.Sprintf(", session_sync=%s", info.sessionSync)
 	}
 	logger.Info(msg)
 }
@@ -53,11 +79,11 @@ func logConfigSummary(logger *slog.Logger, info config.LoadInfo) {
 // formatConfigCounts renders the "N processes, N mcp servers, N plugins"
 // clause, pluralizing each count independently (a count of exactly 1 is
 // singular; everything else, including 0, is plural).
-func formatConfigCounts(info config.LoadInfo) string {
+func formatConfigCounts(info configSummary) string {
 	return fmt.Sprintf("%s, %s, %s",
-		pluralizeCount(info.Processes, "process", "processes"),
-		pluralizeCount(info.MCPServers, "mcp server", "mcp servers"),
-		pluralizeCount(info.Plugins, "plugin", "plugins"),
+		pluralizeCount(info.processes, "process", "processes"),
+		pluralizeCount(info.mcpServers, "mcp server", "mcp servers"),
+		pluralizeCount(info.plugins, "plugin", "plugins"),
 	)
 }
 

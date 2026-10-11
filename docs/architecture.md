@@ -120,8 +120,6 @@ type Options struct {
 	AskUserQuestion bool
 	// ServeURL and RunToken go to each plugin in its initialize call. A token needs a URL.
 	ServeURL, RunToken string
-	// MaxTokens caps the response of each model call of a turn. 0 or less: the backend default.
-	MaxTokens int
 }
 
 // A Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -682,7 +680,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 - `serve` applies the `HARNESS_*` variables with `config.ApplyEnv`, then the flags `-no-instructions`, `-skills-dir`, and `-agent-def-dir`, so a flag wins. It keeps the sessions in a `DiskStore` at `HARNESS_SESSION_DIR`, else `session_dir`, else `~/.harness/sessions`. It serves `Runtime.Handler` behind the bearer token of `HARNESS_RUN_TOKEN`; `GET /health` needs no token, a request without the token gets 401 with the error code `unauthorized`, and an empty token is allowed only on a loopback bind or with `-unauthenticated` or `HARNESS_UNAUTHENTICATED`. With `-cors-origin` it adds the CORS headers, and a preflight skips the token. It binds `-addr` before it builds the runtime and takes `Options.ServeURL` from the bound address, so `-addr 127.0.0.1:0` serves on a free port that the `addr` field of the `serve start` log line names. Then it calls `CatchUp` and opens each session that has work to resume, and a failure of either is logged and never stops `serve`.
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
-- `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `Options.MaxTokens`. It submits the prompt as a typed input, so a slash command runs as `Submit` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, or a typed command did not succeed, and 3 when `-goal` does not reach `achieved` and no turn failed. It prints `session: <id>` on stderr when it saved the session.
+- `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Submit` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, or a typed command did not succeed, and 3 when `-goal` does not reach `achieved` and no turn failed. It prints `session: <id>` on stderr when it saved the session.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins`, which probes each plugin again and refreshes the manifest cache, and prints each plugin with its hooks.
 - `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
@@ -961,7 +959,11 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 
 ### config
 
-One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject` runs it on the merged config, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
+One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject(userPath, dir)` merges `<dir>/.harness.json` over the file at `userPath` and runs it on the merged config; it reads no environment variable and no home directory, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
+
+`cmd/harness` resolves `userPath` as `$HARNESS_CONFIG`, else `~/.harness/config.json`, and logs one line at boot that names the file it loaded and counts its processes, MCP servers, and plugins. `ResolvedProviders` returns the providers of a `Config` with the default entries filled, in a new map.
+
+`max_tokens` caps the output tokens of each model call of a turn. 0 is the backend default, and a negative value fails `Validate`. `HARNESS_MAX_TOKENS` sets it.
 
 `Load` rejects a key that `Config` has no field for, with an error that names the key. `session_dir` is for `cmd/harness`, and `session_sync` sets the banner; `model_tool` turns the `model` tool off, and `New` reads it.
 
