@@ -1,6 +1,6 @@
 ---
 name: architecture-review
-description: Judge a pull request against the architecture as a whole, not the diff alone. Use on every review of harness code, docs, or CI config. Checks single sources of truth, layering, deleted surfaces, workarounds, unrecorded spec divergence, test doubles, and generated types.
+description: Judge a pull request against the architecture as a whole, not the diff alone. Use on every review of harness code, docs, or CI config. Checks single sources of truth, layering, deleted surfaces, workarounds, unrecorded spec divergence, test doubles, generated types, and code structure (imports, package purpose and size, grab-bag names, Go API design).
 ---
 
 # Architecture review
@@ -48,6 +48,17 @@ These are pointers. Open the section named, read the current text, and check the
 | Tests live where `Contract suite` and `Unit tests` allow; no `time.Sleep`; `synctest` for time | `Tests and guardrails`, `CI gates` |
 | No history in comments or tests | `CI gates`, root `AGENTS.md` |
 | Routes that boxes forwards stay 1:1 with the harness route | `Boxes integration`, boxes `docs/rearchitecture.md` |
+
+## Structure
+
+The questions above check contracts. Check the code layout too. A "yes" is a finding; cite the file and line. The Go rules are `Four rules` and its Go guidance table in `docs/architecture.md`, and the root `AGENTS.md` `Code` section.
+
+- Imports. A new import follows `Internal packages` and passes the `depguard` rules in `.golangci.yml`. A change that widens a `depguard` rule needs a spec line.
+- Second definition. A type or concept defined a second time is a finding. Each record has one owner; name it.
+- Package purpose and size. A package has one purpose. A file over about 1,000 lines or a function over about 150 lines needs a stated reason; `internal/gates` fails changed code above its lower limits.
+- Logic in `cmd/`. Logic in `cmd/` that is not flag parsing and wiring belongs in `internal/`.
+- Grab-bag names. No `util`, `common`, or `helpers` packages; no files named `types.go` or `interfaces.go`. Name a package or file by its purpose.
+- Go API design. `context.Context` is the first parameter; the consumer declares the interface; the doc comment states concurrency safety and ownership; callers match errors with `errors.Is` or `errors.As`; a stream is an `iter.Seq`; names do not stutter (`session.Actor`, not `session.SessionActor`).
 
 ## How to report
 

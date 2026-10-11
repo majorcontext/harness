@@ -8,3 +8,7 @@ Review each pull request against the architecture as a whole, not the diff alone
 - A change that differs from the spec is a blocker unless it updates the spec in the same PR and cites a dated Andy decision.
 - A PR body must cite the spec lines it implements.
 - Do not flag pure style or formatting. Do not flag a violation that already existed and that the change does not touch.
+
+## Structure
+
+- Apply the `Structure` section of the `architecture-review` skill to every change: imports, second definitions, package purpose and size, logic in `cmd/`, grab-bag names, and Go API design.
