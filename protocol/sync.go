@@ -15,7 +15,8 @@ type SyncAck struct {
 }
 
 // Sync wire contract. A sender stops a session on 409 with CodeStaleEpoch or
-// CodeSyncConflict, 400, any 413, 401, or 403, and resends for any other answer.
+// CodeSyncConflict, 400 with invalid_request, any 413, 401, or 403. A 200 is
+// the SyncAck; it resends for any other status and for a transport error.
 const (
 	MaxSyncBatchBytes = 32 << 20 // largest JSON body of a SyncBatch; a receiver answers 413 with CodePayloadTooLarge above it
 	CodeStaleEpoch    = "stale_epoch"
