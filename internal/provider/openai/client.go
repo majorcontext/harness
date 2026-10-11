@@ -144,7 +144,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 
 	// The websocket transport sends the same url, headers and body as the HTTP
 	// path, so credential injection applies to both. Any failure falls through
-	// to the HTTP POST below.
+	// to the HTTP POST below. Codex HTTP changes only its wire encoding to zstd.
 	if c.UseWebSocketTransport && req.SessionKey != "" {
 		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
 			SessionKey: req.SessionKey,
