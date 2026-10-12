@@ -38,15 +38,23 @@ harness run -c -p "Now write a test for each fix"
 
 ### Go back to an older session
 
-`harness sessions` lists the saved sessions: the ID, the creation time, and the
-message count. `-r` resumes a session by its ID:
+`harness sessions` lists the saved sessions, oldest first. Each line has the ID,
+the creation time, and the message count:
+
+```console
+$ harness sessions
+ses_ctqgq5qegmlzj2xub2rq5qewqj	2026-10-12T19:11:50Z	10
+ses_fplt2uzhgiwsj6celuziopq7nl	2026-10-12T19:12:09Z	2
+```
+
+`-r` resumes a session by its ID:
 
 ```bash
-harness sessions
 harness run -r ses_ctqgq5qegmlzj2xub2rq5qewqj -p "What did we change?"
 ```
 
-Sessions are in `~/.harness/sessions`.
+Sessions are in `~/.harness/sessions`. `harness sessions --json` prints the
+same list as JSON.
 
 ### Give the model more tools
 
