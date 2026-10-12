@@ -33,8 +33,8 @@ func (*warmBackend) CanWarm(string) bool { return true }
 
 func (*warmBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (*warmBackend) Run(context.Context, turn.Request, turn.Sink) (turn.Result, error) {
-	return turn.Result{}, nil
+func (*warmBackend) Run(context.Context, turn.Request, turn.Sink) error {
+	return nil
 }
 
 func (b *warmBackend) Warm(ctx context.Context, req turn.Request) error {

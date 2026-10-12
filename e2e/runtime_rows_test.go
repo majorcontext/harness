@@ -88,7 +88,6 @@ const (
 	specProfileSwap   = "beside the built-in profiles, which a file of the same name replaces"
 	specFileSkipped   = "A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a skill that is not valid or repeats a name."
 
-	specContinuation  = "so the model reads it as harness text"
 	specListOrder     = "list in creation order"
 	specStatusRoute   = "no-status-routes"
 	specAnswerReceipt = "an answer replies 202 {seq, status}, a dismissal 204"
@@ -229,7 +228,6 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_context_overflow":                                                  reGolden(specView, specOverflowFails),
 	"bifrost_goal_met_first_turn":                                               reGolden(specItems),
 	"bifrost_goal_not_met_then_met":                                             reGolden(specItems),
-	"bifrost_max_tokens_continuation":                                           reGolden(specView, specItems, specContinuation),
 	"bifrost_prompt_attachments":                                                reGolden(specItems),
 	"bifrost_reasoning_and_effort":                                              reGolden(specItems, specUpdate),
 	"bifrost_text_reply":                                                        reGolden(specItems),
@@ -345,7 +343,6 @@ var runtimeRows = map[string]runtimeRow{
 	"interrupt_idle_is_noop":                                                    sameAsServe(),
 	"journal_pages_follow_cursor":                                               reGolden(specCursor, specEventsRoute),
 	"kill_mid_turn_then_continue":                                               sameAsServe(),
-	"max_tokens_continuation":                                                   reGolden(specView, specContinuation),
 	"mcp_auto_default_threshold_defers_at_21_tools":                             sameAsServe(),
 	"mcp_auto_default_threshold_stays_eager_at_20_tools":                        sameAsServe(),
 	"mcp_auto_defers_over_threshold":                                            sameAsServe(),
@@ -450,6 +447,10 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_inventory_reports_not_spawned_then_running":                  reGolden(specView),
 	"plugin_sees_the_model_of_each_call":                                 reGolden(specUpdate),
 	"restart_lets_a_running_tool_finish_and_cuts_the_next_alone_call":    reGolden(specView, specHandoff),
+	"bifrost_max_tokens_cut_response_is_retried":                         sameAsServe(),
+	"max_tokens_cut_response_fails_the_turn_after_prompt_retries":        sameAsServe(),
+	"max_tokens_cut_tool_call_is_retried_without_running":                sameAsServe(),
+	"max_tokens_cut_response_is_retried":                                 sameAsServe(),
 	"retries_stop_after_prompt_retries":                                  reGolden(specView, specRetryable),
 	"settings_change_to_claude_code_mid_turn_fails_the_turn":             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
 	"typed_commands_record_their_outcome":                                reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),

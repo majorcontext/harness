@@ -29,7 +29,7 @@ func newHeldBackend(stubborn bool) *heldBackend {
 
 func (*heldBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (b *heldBackend) Run(ctx context.Context, _ turn.Request, out turn.Sink) (turn.Result, error) {
+func (b *heldBackend) Run(ctx context.Context, _ turn.Request, out turn.Sink) error {
 	b.ran <- struct{}{}
 	done := ctx.Done()
 	if b.stubborn {
@@ -38,9 +38,9 @@ func (b *heldBackend) Run(ctx context.Context, _ turn.Request, out turn.Sink) (t
 	select {
 	case <-b.gate:
 	case <-done:
-		return turn.Result{}, context.Cause(ctx)
+		return context.Cause(ctx)
 	}
-	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "ok"}}})
+	return out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "ok"}}})
 }
 
 // lease is an Ownership that the test revokes by closing lost.

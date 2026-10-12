@@ -33,7 +33,7 @@ type family struct {
 
 func (*family) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	f.mu.Lock()
 	f.reqs = append(f.reqs, req)
 	f.mu.Unlock()
@@ -42,14 +42,14 @@ func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 	items := f.answer(m.Parts[len(m.Parts)-1])
 	if items == nil {
 		<-ctx.Done()
-		return turn.Result{}, context.Cause(ctx)
+		return context.Cause(ctx)
 	}
 	for _, it := range items {
 		if err := out.Item(it); err != nil {
-			return turn.Result{}, err
+			return err
 		}
 	}
-	return turn.Result{}, nil
+	return nil
 }
 
 // last returns the last part of the newest request that session sent with

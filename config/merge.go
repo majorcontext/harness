@@ -56,9 +56,6 @@ func mergeScalars(out, over *Config) {
 	if over.MaxTokens != 0 {
 		out.MaxTokens = over.MaxTokens
 	}
-	if over.MaxTokensContinuations != nil {
-		out.MaxTokensContinuations = over.MaxTokensContinuations
-	}
 	if over.StreamIdleTimeoutS != 0 {
 		out.StreamIdleTimeoutS = over.StreamIdleTimeoutS
 	}

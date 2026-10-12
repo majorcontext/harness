@@ -19,7 +19,7 @@ type kindBackend struct {
 
 func (*kindBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (b *kindBackend) Run(_ context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (b *kindBackend) Run(_ context.Context, req turn.Request, out turn.Sink) error {
 	kind, text := kindTurn, "ok"
 	switch req.Instructions {
 	case evaluatorPrompt:
@@ -34,7 +34,7 @@ func (b *kindBackend) Run(_ context.Context, req turn.Request, out turn.Sink) (t
 	}
 	b.reqs[kind] = req
 	b.mu.Unlock()
-	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
+	return out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
 }
 
 func TestSideCallsKeepTheParametersOfTheEngine(t *testing.T) {

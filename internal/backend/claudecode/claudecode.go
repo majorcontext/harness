@@ -85,14 +85,14 @@ func (b *Backend) Capabilities(string) turn.Capabilities {
 // Run runs one turn of the CLI on the external session in the saved state. A
 // session that waits on a question first gets its resolution: an answer with
 // no input is this turn, and anything else is a denial in a run of its own.
-func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	mirror, err := loadMirror(out)
 	if err != nil || mirror.Parked == "" {
 		return b.once(ctx, req, out, mirror, nil, err)
 	}
 	res, only, err := resolve(req, out, mirror.Parked)
 	if err == nil && !only {
-		if _, err = b.once(ctx, req, out, mirror, res, nil); err == nil {
+		if err = b.once(ctx, req, out, mirror, res, nil); err == nil {
 			mirror, err = loadMirror(out)
 		}
 		res = nil
@@ -110,23 +110,23 @@ func loadMirror(out turn.Sink) (external.Mirror, error) {
 
 // once runs the CLI once. A failed earlier step is err. With res, the run
 // sends no prompt and answers the parked call.
-func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mirror external.Mirror, res *resolution, err error) (turn.Result, error) {
+func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mirror external.Mirror, res *resolution, err error) error {
 	if err != nil {
-		return turn.Result{}, err
+		return err
 	}
 	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), names: map[string]string{},
 		continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: req.Questions || res != nil}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {
-		return turn.Result{}, err
+		return err
 	}
 	if r.proc, err = external.Start(cmd, grace); err != nil {
-		return turn.Result{}, fmt.Errorf("claudecode: start %s: %w", cmd.Path, err)
+		return fmt.Errorf("claudecode: start %s: %w", cmd.Path, err)
 	}
 	defer context.AfterFunc(ctx, r.proc.Interrupt)()
 	err = r.drive(ctx, req)
-	return turn.Result{}, r.finish(ctx, err)
+	return r.finish(ctx, err)
 }
 
 // restriction is the set of tools that the CLI may show, or nil to allow

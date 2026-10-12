@@ -10,7 +10,6 @@ func Defaults() Config {
 	return Config{
 		Model:                   DefaultModel,
 		PromptRetries:           new(2),
-		MaxTokensContinuations:  new(3),
 		StreamIdleTimeoutS:      300,
 		CompactionThreshold:     0.8,
 		CompactionKeepTurns:     2,
@@ -58,11 +57,6 @@ func applyProviderDefaults(providers map[string]Provider) {
 // PromptRetriesValue returns prompt_retries, or its default.
 func (c *Config) PromptRetriesValue() int {
 	return valueOr(c, func(c *Config) *int { return c.PromptRetries })
-}
-
-// MaxTokensContinuationsValue returns max_tokens_continuations, or its default.
-func (c *Config) MaxTokensContinuationsValue() int {
-	return valueOr(c, func(c *Config) *int { return c.MaxTokensContinuations })
 }
 
 // ModelToolEnabled returns model_tool, or its default.

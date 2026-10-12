@@ -54,7 +54,7 @@ func (f *fake) Capabilities(string) turn.Capabilities {
 	return turn.Capabilities{OwnsLoop: f.ownsLoop, Steering: f.steering}
 }
 
-func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	items, tele, run := make(chan eventlog.Message), make(chan turn.Telemetry), fakeRun{req: req}
 	run.items, run.tele = items, tele
 	if f.save != "" {
@@ -63,16 +63,16 @@ func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.R
 	select {
 	case f.runs <- run:
 	case <-ctx.Done():
-		return turn.Result{}, context.Cause(ctx)
+		return context.Cause(ctx)
 	}
 	for {
 		select {
 		case m, ok := <-items:
 			if !ok {
-				return turn.Result{}, nil
+				return nil
 			}
 			if err := f.report(out, m); err != nil {
-				return turn.Result{}, err
+				return err
 			}
 		case t := <-tele:
 			out.Telemetry(t)
@@ -112,7 +112,7 @@ func (f *fake) report(out turn.Sink, m eventlog.Message) error {
 	return err
 }
 
-func (f *fake) stop(ctx context.Context, out turn.Sink) (turn.Result, error) {
+func (f *fake) stop(ctx context.Context, out turn.Sink) error {
 	for _, m := range f.late {
 		if out.Item(m) != nil {
 			break
@@ -121,7 +121,7 @@ func (f *fake) stop(ctx context.Context, out turn.Sink) (turn.Result, error) {
 	if f.stuck != nil {
 		<-f.stuck
 	}
-	return turn.Result{}, context.Cause(ctx)
+	return context.Cause(ctx)
 }
 
 func (r fakeRun) emit(m eventlog.Message) {
@@ -283,9 +283,9 @@ type scripted struct {
 
 func (b *scripted) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (b *scripted) Run(_ context.Context, _ turn.Request, out turn.Sink) (turn.Result, error) {
+func (b *scripted) Run(_ context.Context, _ turn.Request, out turn.Sink) error {
 	n := int(b.runs.Add(1)) - 1
-	return turn.Result{}, b.steps[min(n, len(b.steps)-1)](out)
+	return b.steps[min(n, len(b.steps)-1)](out)
 }
 
 func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {

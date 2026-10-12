@@ -82,11 +82,36 @@ func TestContractProviderErrors(t *testing.T) {
 				getSession{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractProviderMaxTokens(t *testing.T) {
+	oneTurn := func(extra ...action) []action {
+		return append([]action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}}, extra...)
+	}
+	runScenarios(t, []scenario{
 		{
-			name: "max_tokens_continuation",
+			name: "max_tokens_cut_response_is_retried",
 			model: []harnesstest.Step{
 				{Name: "cut", Reply: harnesstest.Reply{Text: "first half ", StopReason: "max_tokens"}},
-				{Name: "rest", Reply: harnesstest.Reply{Text: "second half"}},
+				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
+			},
+			actions: oneTurn(getSession{as: "a"}),
+		},
+		{
+			name: "max_tokens_cut_tool_call_is_retried_without_running",
+			model: []harnesstest.Step{
+				{Name: "cut", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "write_file", Input: map[string]any{"path": "cut.txt", "content": "abc"}}}, StopReason: "max_tokens"}},
+				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
+			},
+			actions: oneTurn(getSession{as: "a"}),
+		},
+		{
+			name:   "max_tokens_cut_response_fails_the_turn_after_prompt_retries",
+			config: map[string]any{"prompt_retries": 1},
+			model: []harnesstest.Step{
+				{Name: "cut", Reply: harnesstest.Reply{Text: "first half ", StopReason: "max_tokens"}},
+				{Name: "cut_again", Reply: harnesstest.Reply{Text: "first half ", StopReason: "max_tokens"}},
 			},
 			actions: oneTurn(getSession{as: "a"}),
 		},

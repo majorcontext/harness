@@ -122,10 +122,10 @@ func (m *Router) Capabilities(model string) turn.Capabilities {
 }
 
 // Run runs the turn on the backend of req.Model.
-func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	be, err := m.lookup(req.Model)
 	if err != nil {
-		return turn.Result{}, err
+		return err
 	}
 	return be.Run(ctx, req, out)
 }

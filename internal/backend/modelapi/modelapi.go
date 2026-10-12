@@ -5,6 +5,7 @@ package modelapi
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,9 @@ import (
 
 // maxTokens caps a response that sets no cap. The Anthropic API rejects a request without a cap.
 const maxTokens = 8192
+
+// errIncomplete is a response that the output cap cut off. The turn treats it as a stream that ended before its terminal event.
+var errIncomplete = errors.New("incomplete response returned, reason: max_tokens")
 
 // defaultContextWindow is the window, in tokens, of a model that has no
 // configured window and no entry in the modelmeta table.
@@ -66,27 +70,27 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 }
 
 // Run makes one model call on the history of req and reports its assistant item.
-func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+// A response that the output cap cut off records no item and fails as a retryable error.
+func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	preq, err := request(ctx, req)
 	if err != nil {
-		return turn.Result{}, err
+		return err
 	}
 	sentAt := time.Now()
 	st, err := b.client.Stream(ctx, preq)
 	if err != nil {
-		return turn.Result{}, classify(err)
+		return classify(err)
 	}
 	defer func() { _ = st.Close() }()
-	var res turn.Result
 	var firstAt time.Time
 	for {
 		// A truncated stream wraps io.EOF, so only the bare sentinel is a clean end.
 		ev, err := st.Next()
 		if err == io.EOF {
-			return res, nil
+			return nil
 		}
 		if err != nil {
-			return turn.Result{}, classify(err)
+			return classify(err)
 		}
 		if firstAt.IsZero() && ev.Type != provider.EventActivity {
 			firstAt = time.Now()
@@ -100,13 +104,15 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
 			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
 			out.Telemetry(tel)
-			res.MaxTokens = ev.StopReason == provider.StopMaxTokens
+			if ev.StopReason == provider.StopMaxTokens && !req.AcceptCut {
+				return classify(provider.MarkStreamTruncated(errIncomplete))
+			}
 			m := fromMessage(ev.Message)
 			if len(m.Parts) == 0 {
 				continue
 			}
 			if err := out.Item(m); err != nil {
-				return turn.Result{}, err
+				return err
 			}
 		default:
 			out.Alive()
