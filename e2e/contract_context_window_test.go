@@ -220,7 +220,7 @@ func TestContractUnknownModelWarnsOncePerProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.Session().Context; got.Window != 128000 || !got.WindowEstimated {
+	if got := v.Snapshot().Context; got.Window != 128000 || !got.WindowEstimated {
 		t.Errorf("OpenView gauge = %+v, want window 128000 estimated, as the live session reported", got)
 	}
 }

@@ -27,7 +27,7 @@ func TestViewsShareNoSubscriptionUsageOrLastTurnWithTheirCaller(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for name, read := range map[string]func() protocol.Session{"Session.View": s.View, "View.Session": v.Session} {
+		for name, read := range map[string]func() protocol.Session{"Session.Snapshot": s.Snapshot, "View.Snapshot": v.Snapshot} {
 			got := read()
 			got.SubscriptionUsage.Windows[0].Label = "x"
 			got.SubscriptionUsage.Overage.Status = "x"

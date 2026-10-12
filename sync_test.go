@@ -181,7 +181,7 @@ func TestSyncReplicatesTheLog(t *testing.T) {
 				if got, want := rawLog(t, rep.st), rawLog(t, st); !slices.Equal(got, want) {
 					t.Fatalf("receiver log = %q, want %q", got, want)
 				}
-				if v := s.View(); v.SyncedSeq != 5 || v.HeadSeq != 5 {
+				if v := s.Snapshot(); v.SyncedSeq != 5 || v.HeadSeq != 5 {
 					t.Fatalf("View = %+v, want HeadSeq and SyncedSeq 5", v)
 				}
 			})

@@ -79,7 +79,7 @@ func openCompacting(t *testing.T, s *harnesstest.OpenAI, st harness.Store, keep 
 func ask(t *testing.T, s *harness.Session, texts ...string) {
 	t.Helper()
 	for _, txt := range texts {
-		after := s.View().HeadSeq
+		after := s.Snapshot().HeadSeq
 		if _, err := s.Submit(bg, protocol.Input{ID: txt, Parts: []protocol.Part{{Type: protocol.PartText, Text: txt}}}); err != nil {
 			t.Fatal(err)
 		}
@@ -137,7 +137,7 @@ func TestHandoffDuringCompaction(t *testing.T) {
 			hold := holdNth{n: 4, seen: new(atomic.Int32), held: make(chan struct{}), finish: tc.finish}
 			r1, sess := openCompacting(t, s, st, 1, hold)
 			ask(t, sess, "alpha", "bravo", "charlie")
-			head := sess.View().HeadSeq
+			head := sess.Snapshot().HeadSeq
 			errc := make(chan error, 1)
 			go func() {
 				if _, err := sess.Compact(bg, protocol.Compact{}); err == nil {

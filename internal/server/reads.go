@@ -23,7 +23,7 @@ import (
 // part records.
 type Blob struct {
 	MediaType string
-	Size      int
+	Size      int64
 	Body      io.ReadCloser
 }
 
@@ -200,7 +200,7 @@ func (h *readHandler) blob(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer func() { _ = b.Body.Close() }()
 	w.Header().Set("Content-Type", b.MediaType)
-	w.Header().Set("Content-Length", strconv.Itoa(b.Size))
+	w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, b.Body)
 	return nil
@@ -256,7 +256,7 @@ func (h *readHandler) eventsPage(w http.ResponseWriter, r *http.Request, id stri
 	if err != nil {
 		return err
 	}
-	head := rd.Session().HeadSeq
+	head := rd.Snapshot().HeadSeq
 	page := protocol.EventPage{Events: []protocol.Event{}}
 	if after < head {
 		for e, err := range rd.Events(r.Context(), after) {

@@ -80,7 +80,7 @@ s, err := rt.Create(ctx, protocol.CreateSession{})
 if err != nil {
 	log.Fatal(err)
 }
-head := s.View().HeadSeq
+head := s.Snapshot().HeadSeq
 _, err = s.Submit(ctx, protocol.Input{
 	ID:    "prompt-1",
 	Parts: []protocol.Part{{Type: protocol.PartText, Text: "List the files in this directory."}},

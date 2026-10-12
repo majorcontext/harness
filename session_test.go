@@ -142,7 +142,7 @@ func compactingRuntime(t *testing.T, summary func(turn.Sink) error) *harness.Ses
 func TestEventsAutoCompactionFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := compactingRuntime(t, func(out turn.Sink) error { return out.Item(say("gist")) })
-		head := s.View().HeadSeq
+		head := s.Snapshot().HeadSeq
 		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "13 compaction.applied", "~13 status idle",
 			"14 turn.started", "15 item.completed i1", "16 turn.ended")
 	})
@@ -151,7 +151,7 @@ func TestEventsAutoCompactionFrames(t *testing.T) {
 func TestEventsFailedCompactionFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := compactingRuntime(t, func(turn.Sink) error { return errors.New("summary failed") })
-		head := s.View().HeadSeq
+		head := s.Snapshot().HeadSeq
 		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "~12 status compaction_failed",
 			"13 turn.started", "14 item.completed i1", "15 turn.ended")
 	})

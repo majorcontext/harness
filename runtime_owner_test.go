@@ -197,8 +197,8 @@ func TestOpenViewReadsWithoutAppending(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(v.Session(), s.View()) || v.Session().Status != protocol.StatusRunning {
-			t.Fatalf("OpenView = %+v, want %+v", v.Session(), s.View())
+		if !reflect.DeepEqual(v.Snapshot(), s.Snapshot()) || v.Snapshot().Status != protocol.StatusRunning {
+			t.Fatalf("OpenView = %+v, want %+v", v.Snapshot(), s.Snapshot())
 		}
 		var kinds []string
 		for e, err := range v.Events(bg, 2) {
@@ -234,12 +234,12 @@ func TestViewsReturnACopyOfQueued(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.View().Queued[0] = "x"
-		v.Session().Queued[0] = "x"
-		if got := s.View().Queued[0]; got != "b" {
+		s.Snapshot().Queued[0] = "x"
+		v.Snapshot().Queued[0] = "x"
+		if got := s.Snapshot().Queued[0]; got != "b" {
 			t.Fatalf("Session.View Queued[0] = %q after a caller write, want b", got)
 		}
-		if got := v.Session().Queued[0]; got != "b" {
+		if got := v.Snapshot().Queued[0]; got != "b" {
 			t.Fatalf("View.Session Queued[0] = %q after a caller write, want b", got)
 		}
 		run.end()
@@ -265,7 +265,7 @@ func TestOpenViewEventsEndAtTheHeadItRead(t *testing.T) {
 			}
 			seqs = append(seqs, e.Seq)
 		}
-		if want := v.Session().HeadSeq; len(seqs) == 0 || seqs[len(seqs)-1] != want {
+		if want := v.Snapshot().HeadSeq; len(seqs) == 0 || seqs[len(seqs)-1] != want {
 			t.Fatalf("View.Events seqs = %v, want the last to be %d", seqs, want)
 		}
 		(<-f.runs).end()

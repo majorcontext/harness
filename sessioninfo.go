@@ -143,7 +143,7 @@ func (t *sessionInfoTool) Run(_ context.Context, _ protocol.ToolCall) (protocol.
 	if s == nil {
 		return protocol.ToolResult{}, ErrSessionNotOwned
 	}
-	v := s.View()
+	v := s.Snapshot()
 	system, tools := t.prompt.sent()
 	out := sessionInfoResult{SessionID: v.ID, Model: v.Model, Effort: v.Effort, ServiceTier: v.ServiceTier, Usage: v.Usage,
 		System: system, Tools: tools, Instructions: "none",

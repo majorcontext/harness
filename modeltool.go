@@ -124,7 +124,7 @@ func (t modelTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolR
 	case t.listOnly:
 		return protocol.ToolResult{}, fmt.Errorf("model: action %q is not available on this surface (only \"list\" is exposed here — use task's own model override to select a model for a child session)", in.Action)
 	case in.Action == "status":
-		return jsonResult(t.r.modelStatus(s.View().Model))
+		return jsonResult(t.r.modelStatus(s.Snapshot().Model))
 	case in.Action == "set":
 		v, err := t.set(ctx, s, in.Model)
 		if err != nil {

@@ -53,7 +53,7 @@ func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) 
 	if err != nil {
 		return nil, err
 	}
-	return stored{View: v}, nil
+	return asServer{v}, nil
 }
 
 // Session returns the session with the IDs of the queued inputs of the log and then those of the queue.
@@ -65,7 +65,7 @@ func (s storeReads) Session(ctx context.Context, id string) (protocol.Session, e
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	return rd.Session(), nil
+	return rd.Snapshot(), nil
 }
 
 func (s storeReads) open(ctx context.Context, id string) (queued, error) {
@@ -74,7 +74,7 @@ func (s storeReads) open(ctx context.Context, id string) (queued, error) {
 		return queued{}, err
 	}
 	q, err := s.waiting(ctx, id)
-	return queued{stored: stored{View: v}, waiting: q}, err
+	return queued{View: v, waiting: q}, err
 }
 
 func (s storeReads) waiting(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
@@ -113,18 +113,18 @@ func (s storeReads) List(ctx context.Context, q protocol.ListSessions) (protocol
 		if err != nil {
 			return protocol.Session{}, err
 		}
-		return rd.Session(), nil
+		return rd.Snapshot(), nil
 	})
 }
 
 // queued is a stored session with the inputs of a Queue behind those of its log.
 type queued struct {
-	stored
+	*View
 	waiting []protocol.QueuedInput
 }
 
-func (q queued) Session() protocol.Session {
-	s := q.stored.Session()
+func (q queued) Snapshot() protocol.Session {
+	s := q.View.Snapshot()
 	for _, in := range q.waiting {
 		s.Queued = append(s.Queued, in.ID)
 	}
@@ -132,6 +132,6 @@ func (q queued) Session() protocol.Session {
 }
 
 func (q queued) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) {
-	in, err := q.stored.Inputs(ctx)
+	in, err := q.View.Inputs(ctx)
 	return append(in, q.waiting...), err
 }

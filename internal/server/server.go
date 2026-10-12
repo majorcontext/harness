@@ -20,7 +20,7 @@ import (
 
 // Session is a session that the Runtime runs.
 type Session interface {
-	View() protocol.Session
+	Snapshot() protocol.Session
 	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
@@ -36,7 +36,7 @@ type Session interface {
 
 // Reader is a session for reads: its state and its events, with no owner.
 type Reader interface {
-	Session() protocol.Session
+	Snapshot() protocol.Session
 	// Messages returns the page of the conversation before seq before.
 	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 	// Events yields the events after seq, and ends at the head when the
@@ -321,7 +321,7 @@ func (h *handler[S]) create(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	reply(w, http.StatusCreated, s.View())
+	reply(w, http.StatusCreated, s.Snapshot())
 	return nil
 }
 
@@ -414,7 +414,7 @@ func (h *handler[S]) setGoal(s S, w http.ResponseWriter, r *http.Request) error 
 	if err := s.SetGoal(r.Context(), g); err != nil {
 		return err
 	}
-	reply(w, http.StatusOK, s.View())
+	reply(w, http.StatusOK, s.Snapshot())
 	return nil
 }
 

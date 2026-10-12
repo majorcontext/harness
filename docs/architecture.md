@@ -84,7 +84,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
 | `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`; imports only the standard library | boot code that writes a config |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated `openapi.json` and `protocol.ts` | servers, web clients, CLIs |
 | `harness/storetest` | Conformance suite for a `Store` | store implementations |
@@ -156,8 +156,12 @@ func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 func (s *Session) ID() string
 func (s *Session) Done() <-chan struct{} // closes when the session stops on this runtime
 func (s *Session) Err() error            // nil before Done; then matches ErrSessionNotOwned and one cause: ErrSessionReleased, ErrSessionEnded, or ErrOwnershipLost; a Store failure or a Sync rejection that stops the session matches ErrSessionNotOwned and that error instead
-func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
+func (s *Session) Snapshot() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
+func (s *Session) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) // a limit above protocol.MaxMessageLimit fails with invalid_request
+func (s *Session) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) // queued inputs, oldest first
+func (s *Session) Blob(ctx context.Context, key string) (Blob, error) // an attachment that an input names; else ErrBlobNotFound
+func (s *Session) Withdraw(ctx context.Context, inputID string) error // removes a queued input; an input that is not queued is no error
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error)
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -169,11 +173,33 @@ func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, re
 
 // OpenView reads a session from any Store without owning it: no Acquire, no appends.
 func OpenView(ctx context.Context, st Store, id string) (*View, error)
-func (v *View) Session() protocol.Session
+func (v *View) ID() string
+func (v *View) Snapshot() protocol.Session
+func (v *View) Inputs(ctx context.Context) ([]protocol.QueuedInput, error)
+func (v *View) Blob(ctx context.Context, key string) (Blob, error)
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 func (v *View) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 // Resumable reports whether Open would resume something: a running or suspended turn, a queued input, an active or paused goal, a command that no owner finished, or a child that has not settled.
 func (v *View) Resumable() bool
+
+// Reader is the read surface of a session, live or stored. *Session and *View implement it.
+type Reader interface {
+	Snapshot() protocol.Session
+	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
+	Inputs(ctx context.Context) ([]protocol.QueuedInput, error)
+	Blob(ctx context.Context, key string) (Blob, error)
+	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+}
+
+// Blob is an attachment. The caller closes Body.
+type Blob struct {
+	MediaType string
+	Size      int64
+	Body      io.ReadCloser
+}
+
+// Read returns the running Session of id, or a View of its stored log. It acquires nothing.
+func (r *Runtime) Read(ctx context.Context, id string) (Reader, error)
 
 // ReadEvents yields the stored events after `after`, through the head it reads first; it neither owns the session nor replays the log.
 func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error]
@@ -205,7 +231,7 @@ type Tool interface {
 }
 ```
 
-The HTTP handler is a thin mapping of these methods. An embedder and a remote client see the same types and the same errors.
+The HTTP handler is a thin mapping of the exported methods of these types, and it calls no other method; `Runtime.Read` serves every read route. A read of a session that the runtime does not run names the plugins of that runtime. An embedder and a remote client see the same types and the same errors.
 
 ### Internal packages
 
@@ -397,7 +423,7 @@ The cause of a stop is the first of these. `Release` and a handoff by `Close` gi
 Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped.
 
 - The gauge window is the window of the session model, or the window of the newest reading when the model reports none. A reading (`context.measured`) carries `window_estimated` with its window. `OpenView` has no backend and reads the window and the flag of the newest reading from the log; the runtime reads of a session that it does not run take the window of the session model from the backend, as a running session does.
-- `Session.View`, `Runtime.List`, and a read of a session that the runtime does not run also fill `Plugins`: the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin. The plugin host owns that state, and the log does not hold it.
+- `Session.Snapshot`, `Runtime.List`, and a read of a session that the runtime does not run also fill `Plugins`: the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin. The plugin host owns that state, and the log does not hold it.
 - The `View` also holds the profile of a child session and its unsettled children.
 - A read of the whole `State`, such as the history for a plugin or the usage of a child, goes to the actor through `Actor.Read`, which runs a function on the actor goroutine. The runtime replays a log only for a session that it does not run.
 

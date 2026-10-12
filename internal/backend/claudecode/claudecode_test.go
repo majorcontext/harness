@@ -100,7 +100,7 @@ func await(t *testing.T, s *harness.Session, after uint64, kind string) uint64 {
 // turnOf submits in and waits for the turn that it starts to end.
 func turnOf(t *testing.T, s *harness.Session, in protocol.Input) {
 	t.Helper()
-	after := s.View().HeadSeq
+	after := s.Snapshot().HeadSeq
 	if _, err := s.Submit(bg, in); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestClaudeCodeStreamsDeltas(t *testing.T) {
 	s := createClaude(t, r, nil)
 	var got []string
 	ids := map[string]string{}
-	for e, err := range s.Events(bg, s.View().HeadSeq-1) {
+	for e, err := range s.Events(bg, s.Snapshot().HeadSeq-1) {
 		if err != nil {
 			t.Fatal(err)
 		}

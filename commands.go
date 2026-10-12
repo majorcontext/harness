@@ -35,7 +35,7 @@ var ops = map[command.Op]op{
 		if err := s.SetGoal(ctx, protocol.Goal{Condition: args["condition"].(string)}); err != nil {
 			return nil, err
 		}
-		return s.View(), nil
+		return s.Snapshot(), nil
 	},
 	command.OpClearGoal: func(ctx context.Context, s *Session, _ map[string]any) (any, error) {
 		return nil, s.ClearGoal(ctx)
@@ -44,10 +44,10 @@ var ops = map[command.Op]op{
 	command.OpSetThinking:    update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Effort: &v} }, "effort"),
 	command.OpSetServiceTier: update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{ServiceTier: &v} }, "service_tier"),
 	command.OpStatus: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
-		return s.View(), nil
+		return s.Snapshot(), nil
 	},
 	command.OpQueueList: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
-		return append([]string{}, s.View().Queued...), nil
+		return append([]string{}, s.Snapshot().Queued...), nil
 	},
 	command.OpProcessList: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		if s.r.procs == nil {

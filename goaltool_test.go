@@ -47,7 +47,7 @@ func TestGoalToolAdjustKeepsTheTurnLimit(t *testing.T) {
 				judged++
 			}
 		}
-		if g := s.View().Goal; g == nil || g.State != "exhausted" || judged != 2 || g.Condition != "say done now" {
+		if g := s.Snapshot().Goal; g == nil || g.State != "exhausted" || judged != 2 || g.Condition != "say done now" {
 			t.Errorf("goal %+v after %d judged turns, want say done now exhausted after 2", g, judged)
 		}
 		closeRuntime(t, r)

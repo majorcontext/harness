@@ -60,7 +60,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	head := s.View().HeadSeq
+	head := s.Snapshot().HeadSeq
 	prompt := "Roll a 20-sided die twice and tell me the total."
 	if _, err := s.Submit(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}}); err != nil {
 		log.Fatal(err)

@@ -493,25 +493,11 @@ func (r *Runtime) pluginInfo() []protocol.Plugin {
 }
 
 func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, error) {
-	r.mu.Lock()
-	e := r.sessions[id]
-	r.mu.Unlock()
-	if e != nil {
-		select {
-		case <-e.ready:
-			if e.s != nil {
-				return e.s.View(), nil
-			}
-		default:
-		}
-	}
-	v, err := openView(ctx, r.store, id, r.models.Capabilities)
+	rd, err := r.Read(ctx, id)
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	out := v.Session()
-	out.Plugins = r.pluginInfo()
-	return out, nil
+	return rd.Snapshot(), nil
 }
 
 // Close hands off every session, then closes the model connections and stops

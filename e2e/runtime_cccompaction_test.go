@@ -53,7 +53,7 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 			r := l.runtime()
 			s := l.create(r)
 			var got []string
-			head := s.View().HeadSeq
+			head := s.Snapshot().HeadSeq
 			for e, err := range s.Events(t.Context(), head-1) {
 				if err != nil {
 					t.Fatal(err)

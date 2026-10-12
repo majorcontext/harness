@@ -93,7 +93,7 @@ func (t goalTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("goal: %w", err)
 	}
-	return goalStatus(s.View().Goal)
+	return goalStatus(s.Snapshot().Goal)
 }
 
 func goalStatus(g *protocol.GoalView) (protocol.ToolResult, error) {
