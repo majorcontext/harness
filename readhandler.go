@@ -22,7 +22,7 @@ type Queue interface {
 // session with no log but with waiting inputs answers GET /sessions/{id}/inputs from the queue alone; its other
 // routes answer session_not_found. A nil queue lists the log only.
 func ReadHandler(st Store, queue Queue) http.Handler {
-	return server.NewReads(storeReads{st: st, births: &births{}, queue: queue}, server.Options{Codes: codes})
+	return server.NewReads(storeReads{st: st, births: &births{}, queue: queue}, server.Options{})
 }
 
 // storeReads is a Store and its Queue as the reads of the server.

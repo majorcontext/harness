@@ -301,7 +301,7 @@ func TestCloseEndsAnInputThatWaitsForOwnership(t *testing.T) {
 			t.Fatalf("Close = %v, want context.Canceled", err)
 		}
 		<-done
-		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), protocol.CodeDraining) {
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), string(protocol.CodeDraining)) {
 			t.Fatalf("POST inputs = %d %s, want 503 %s", rec.Code, rec.Body, protocol.CodeDraining)
 		}
 	})
@@ -324,7 +324,7 @@ func TestAnOwnerRefusalIsSessionNotOwned(t *testing.T) {
 	body := strings.NewReader(`{"id":"a","parts":[{"type":"text","text":"hi"}]}`)
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", body))
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), protocol.CodeSessionNotOwned) {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), string(protocol.CodeSessionNotOwned)) {
 		t.Fatalf("POST inputs = %d %s, want 409 %s", rec.Code, rec.Body, protocol.CodeSessionNotOwned)
 	}
 }

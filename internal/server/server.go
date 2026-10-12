@@ -69,21 +69,12 @@ type Processes interface {
 
 // Options configures the handler.
 type Options struct {
-	// Codes maps an error to the code of its first matching entry, or to
-	// CodeInternal.
-	Codes []Code
 	// WorkDir is the root of GET /workspace/changes. Empty: no such route.
 	WorkDir string
 	// Processes serves the /processes routes. nil: no process runs.
 	Processes Processes
 	// Health is the body of GET /health.
 	Health protocol.Health
-}
-
-// Code is the wire code of a sentinel error.
-type Code struct {
-	Err  error
-	Code string
 }
 
 const (
@@ -93,30 +84,6 @@ const (
 	defaultLimit = 100
 	maxLimit     = 1000
 )
-
-var statuses = map[string]int{
-	protocol.CodeInvalidRequest:    http.StatusBadRequest,
-	protocol.CodeSessionNotFound:   http.StatusNotFound,
-	protocol.CodeSessionExists:     http.StatusConflict,
-	protocol.CodeSessionNotOwned:   http.StatusConflict,
-	protocol.CodeInputConflict:     http.StatusConflict,
-	protocol.CodeTurnMismatch:      http.StatusConflict,
-	protocol.CodeSessionBusy:       http.StatusConflict,
-	protocol.CodeRequestNotPending: http.StatusConflict,
-	protocol.CodeModelUnavailable:  http.StatusConflict,
-	protocol.CodePayloadTooLarge:   http.StatusRequestEntityTooLarge,
-	protocol.CodeDraining:          http.StatusServiceUnavailable,
-	protocol.CodeNotAGitRepo:       http.StatusConflict,
-	protocol.CodeNoBase:            http.StatusConflict,
-	protocol.CodeTooManyChanges:    http.StatusConflict,
-	protocol.CodeProcessNotFound:   http.StatusNotFound,
-	protocol.CodeBlobNotFound:      http.StatusNotFound,
-	protocol.CodeUnauthorized:      http.StatusUnauthorized,
-	protocol.CodeInternal:          http.StatusInternalServerError,
-}
-
-// CodeStatuses returns the HTTP status of each error code of the API.
-func CodeStatuses() map[string]int { return maps.Clone(statuses) }
 
 // errInvalid reports a request that the handler cannot decode.
 var errInvalid = errors.New("invalid request")
@@ -190,7 +157,7 @@ func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{readHandler: readHandler{reads: rt, codes: newCodes(opts)}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
+	h := &handler[S]{readHandler: readHandler{reads: rt}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
 	mux := http.NewServeMux()
 	bind(mux, h.handlers(), func(r Route) bool { return !r.WorkDir || h.workDir != "" }, func(r Route) {
 		for _, op := range r.Ops {
@@ -254,10 +221,13 @@ func (h *handler[S]) session(f func(S, http.ResponseWriter, *http.Request) error
 }
 
 // errorBody hides the cause of an internal error: it can hold store details.
-func errorBody(code string, err error) protocol.ErrorBody {
+func errorBody(code protocol.Code, err error) protocol.ErrorBody {
 	msg := err.Error()
-	if code == protocol.CodeInternal {
+	switch code {
+	case protocol.CodeInternal:
 		msg = "internal error"
+	case protocol.CodeSessionUnreplayable:
+		msg = "session log does not replay"
 	}
 	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: msg, Details: map[string]any{}}}
 }

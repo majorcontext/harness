@@ -52,7 +52,7 @@ func TestDecodeSSE(t *testing.T) {
 			t.Errorf("%s: err = %v, want one containing %q", tc.name, gotErr, tc.errMsg)
 		}
 		var pe *Error
-		if tc.code != "" && (!errors.As(gotErr, &pe) || pe.Code != tc.code) {
+		if tc.code != "" && (!errors.As(gotErr, &pe) || string(pe.Code) != tc.code) {
 			t.Errorf("%s: err = %v, want *Error with code %q", tc.name, gotErr, tc.code)
 		}
 	}

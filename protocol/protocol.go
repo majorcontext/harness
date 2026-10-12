@@ -377,37 +377,3 @@ type EventPage struct {
 	Events []Event `json:"events"`
 	Next   uint64  `json:"next,omitempty"`
 }
-
-// Error codes of the HTTP API.
-const (
-	CodeInvalidRequest    = "invalid_request"
-	CodeSessionNotFound   = "session_not_found"
-	CodeSessionExists     = "session_exists"
-	CodeSessionNotOwned   = "session_not_owned"
-	CodeInputConflict     = "input_conflict"
-	CodeTurnMismatch      = "turn_mismatch"
-	CodeSessionBusy       = "session_busy"
-	CodeRequestNotPending = "request_not_pending"
-	CodeModelUnavailable  = "model_unavailable"
-	CodePayloadTooLarge   = "payload_too_large"
-	CodeDraining          = "draining"
-	CodeInternal          = "internal"
-	CodeNotAGitRepo       = "not_a_git_repo"
-	CodeNoBase            = "no_base"
-	CodeTooManyChanges    = "too_many_changes"
-	CodeProcessNotFound   = "process_not_found"
-	CodeBlobNotFound      = "blob_not_found"
-	CodeUnauthorized      = "unauthorized"
-)
-
-// ErrorBody is the body of every HTTP error response.
-type ErrorBody struct {
-	Error Error `json:"error"`
-}
-
-// Error is a failed HTTP request: a code from the Code constants and a message.
-type Error struct {
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Details map[string]any `json:"details"`
-}

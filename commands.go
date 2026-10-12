@@ -14,7 +14,6 @@ import (
 	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/process"
-	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -282,8 +281,17 @@ func outcome(typed string, spec *command.Spec, result any, err error) (status, t
 		return protocol.CommandRefused, refusal(typed), nil, false
 	case errors.Is(err, ErrDraining), errors.Is(err, ErrSessionNotOwned), errors.Is(err, context.Canceled):
 		return protocol.CommandInterrupted, "harness stopped before /" + typed + " finished; it will not run again", nil, false
-	case slices.ContainsFunc(codes, func(c server.Code) bool { return errors.Is(err, c.Err) }):
+	case apiError(err):
 		return protocol.CommandFailed, err.Error(), nil, false
 	}
 	return protocol.CommandFailed, "/" + typed + " failed: internal error", nil, false
+}
+
+// apiError reports whether err is an error that the HTTP API reports with its text: any code except the internal ones.
+func apiError(err error) bool {
+	switch protocol.CodeOf(err) {
+	case protocol.CodeInternal, protocol.CodeSessionUnreplayable, protocol.CodeStaleEpoch, protocol.CodeSyncConflict:
+		return false
+	}
+	return true
 }

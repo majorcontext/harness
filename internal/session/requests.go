@@ -12,7 +12,7 @@ import (
 )
 
 // ErrRequestNotPending reports a request that is not open.
-var ErrRequestNotPending = errors.New("harness: request not pending")
+var ErrRequestNotPending = &protocol.Error{Code: protocol.CodeRequestNotPending, Message: "harness: request not pending"}
 
 // ErrBadAnswer reports an answer that the kind of its request does not take.
 var ErrBadAnswer = errors.New("harness: bad answer")

@@ -385,7 +385,7 @@ func wantBlobs(t *testing.T, h http.Handler, label string) {
 			t.Errorf("%s: GET blob %s = %d %s, want 404 blob_not_found", label, name, rec.Code, rec.Body)
 		}
 	}
-	if rec := get(t, h, "/sessions/nope/blobs/"+key); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), protocol.CodeSessionNotFound) {
+	if rec := get(t, h, "/sessions/nope/blobs/"+key); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), string(protocol.CodeSessionNotFound)) {
 		t.Errorf("%s: GET blob of an unknown session = %d %s, want 404 session_not_found", label, rec.Code, rec.Body)
 	}
 }

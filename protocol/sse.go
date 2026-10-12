@@ -13,9 +13,6 @@ import (
 // maxSSELine bounds one line of an events stream. A frame holds one event on one line.
 const maxSSELine = 64 << 20
 
-// Error returns Message.
-func (e *Error) Error() string { return e.Message }
-
 // DecodeSSE decodes an events stream, the body of GET /sessions/{id}/events with Accept text/event-stream.
 // It yields each frame as an Event, durable and ephemeral. An error frame yields a *Error and ends
 // the sequence, and so does a frame that is not an Event, and a read error of r. The sequence ends

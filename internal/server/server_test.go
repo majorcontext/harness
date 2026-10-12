@@ -159,7 +159,7 @@ func TestErrorsOverHTTP(t *testing.T) {
 	for _, tc := range []struct {
 		method, url, body string
 		status            int
-		code              string
+		code              protocol.Code
 	}{
 		{"POST", base, `{"model":"nope/no-such-model"}`, 409, protocol.CodeModelUnavailable},
 		{"POST", base, `{"model":`, 400, protocol.CodeInvalidRequest},

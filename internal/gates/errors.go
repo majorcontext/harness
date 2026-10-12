@@ -78,7 +78,7 @@ func OpenAPICodeEnum(doc []byte) ([]string, error) {
 }
 
 // ErrorCodeSources holds the four places that name the error codes: the
-// protocol constants, the status map of internal/server, the Errors table of
+// protocol constants, protocol.HTTPStatus, the Errors table of
 // the spec, and the enum of Error.code in protocol/openapi.json.
 type ErrorCodeSources struct {
 	Constants []string
@@ -115,7 +115,7 @@ func CheckErrorCodes(s ErrorCodeSources) []Violation {
 			has  bool
 		}{
 			{"a protocol Code constant", slices.Contains(s.Constants, c)},
-			{"the status map of internal/server", inStatuses},
+			{"an entry of protocol.HTTPStatus", inStatuses},
 			{"the Errors table of the spec", inSpec},
 			{"the enum of Error.code in protocol/openapi.json", slices.Contains(s.Enum, c)},
 		} {
@@ -124,7 +124,7 @@ func CheckErrorCodes(s ErrorCodeSources) []Violation {
 			}
 		}
 		if inStatuses && inSpec && s.Statuses[c] != s.Spec[c] {
-			add(c, fmt.Sprintf("answers %d in internal/server and %d in the Errors table of the spec", s.Statuses[c], s.Spec[c]))
+			add(c, fmt.Sprintf("answers %d in protocol.HTTPStatus and %d in the Errors table of the spec", s.Statuses[c], s.Spec[c]))
 		}
 	}
 	return out

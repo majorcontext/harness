@@ -281,6 +281,7 @@
               "session_exists",
               "session_not_found",
               "session_not_owned",
+              "session_unreplayable",
               "too_many_changes",
               "turn_mismatch",
               "unauthorized"

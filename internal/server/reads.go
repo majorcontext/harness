@@ -41,14 +41,20 @@ type Reads interface {
 // readHandler serves the routes that read sessions.
 type readHandler struct {
 	reads Reads
-	codes []Code
 }
 
-func newCodes(opts Options) []Code {
-	return append([]Code{{errInvalid, protocol.CodeInvalidRequest},
-		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
-		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
-		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)
+// staticCodes are the wire codes of the errors of the handler's own dependencies. Any other error has the
+// code of its first *protocol.Error, or CodeInternal.
+var staticCodes = []struct {
+	err  error
+	code protocol.Code
+}{
+	{errInvalid, protocol.CodeInvalidRequest},
+	{process.ErrUnknownProcess, protocol.CodeProcessNotFound},
+	{workspace.ErrInvalid, protocol.CodeInvalidRequest},
+	{workspace.ErrNotRepo, protocol.CodeNotAGitRepo},
+	{workspace.ErrNoBase, protocol.CodeNoBase},
+	{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges},
 }
 
 // NewReads returns the HTTP API of the routes of Table that only read, over
@@ -56,7 +62,7 @@ func newCodes(opts Options) []Code {
 // answers 405; any other path answers 404. The handler appends nothing, opens
 // nothing, and starts no turn.
 func NewReads(rt Reads, opts Options) http.Handler {
-	h := &readHandler{reads: rt, codes: newCodes(opts)}
+	h := &readHandler{reads: rt}
 	mux := http.NewServeMux()
 	bind(mux, h.readRoutes(h.eventsOf(func(ctx context.Context, id string, after uint64) (iter.Seq2[protocol.Event, error], error) {
 		rd, err := rt.Read(ctx, id)
@@ -93,25 +99,21 @@ func (h *readHandler) serve(f func(http.ResponseWriter, *http.Request) error) ht
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := f(w, r); err != nil {
 			code := h.code(err)
-			status, ok := statuses[code]
-			if !ok {
-				status = http.StatusInternalServerError
-			}
-			reply(w, status, errorBody(code, err))
+			reply(w, protocol.HTTPStatus(code), errorBody(code, err))
 		}
 	}
 }
 
-func (h *readHandler) code(err error) string {
+func (h *readHandler) code(err error) protocol.Code {
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		return protocol.CodePayloadTooLarge
 	}
-	for _, c := range h.codes {
-		if errors.Is(err, c.Err) {
-			return c.Code
+	for _, c := range staticCodes {
+		if errors.Is(err, c.err) {
+			return c.code
 		}
 	}
-	return protocol.CodeInternal
+	return protocol.CodeOf(err)
 }
 
 func (h *readHandler) list(w http.ResponseWriter, r *http.Request) error {

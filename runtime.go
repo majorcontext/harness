@@ -31,17 +31,17 @@ import (
 
 var (
 	// ErrInvalidRequest reports a malformed request.
-	ErrInvalidRequest = errors.New("harness: invalid request")
+	ErrInvalidRequest = &protocol.Error{Code: protocol.CodeInvalidRequest, Message: "harness: invalid request"}
 	// ErrSessionNotFound reports a session with no log.
 	ErrSessionNotFound = session.ErrNotFound
 	// ErrBlobNotFound reports a blob key that no blob part of an input of the session names, or whose bytes the Store lacks.
-	ErrBlobNotFound = errors.New("harness: blob not found")
+	ErrBlobNotFound = &protocol.Error{Code: protocol.CodeBlobNotFound, Message: "harness: blob not found"}
 	// ErrSessionExists reports a Create with the ID of an existing session.
 	ErrSessionExists = session.ErrExists
 	// ErrSessionNotOwned reports a session that this runtime does not run.
 	ErrSessionNotOwned = session.ErrNotOwned
 	// ErrSessionHeld reports a session that another owner holds. It matches ErrSessionNotOwned. An Owner fails Acquire with it.
-	ErrSessionHeld = fmt.Errorf("%w: held by another owner", session.ErrNotOwned)
+	ErrSessionHeld = session.ErrHeld
 	// ErrSessionReleased is the cause that Session.Err reports after Release, or after Close handed the session off. It matches ErrSessionNotOwned.
 	ErrSessionReleased = session.ErrReleased
 	// ErrSessionEnded is the cause that Session.Err reports after End. It matches ErrSessionNotOwned.
@@ -57,7 +57,9 @@ var (
 	// ErrRequestNotPending reports a Resolve of a request that is not open.
 	ErrRequestNotPending = session.ErrRequestNotPending
 	// ErrDraining reports a call after Runtime.Close started.
-	ErrDraining = errors.New("harness: runtime is draining")
+	ErrDraining = &protocol.Error{Code: protocol.CodeDraining, Message: "harness: runtime is draining"}
+	// ErrUnreplayable reports a session log that does not replay: a record that does not decode, or breaks a rule of the log.
+	ErrUnreplayable = session.ErrUnreplayable
 )
 
 // Options configures a Runtime.
@@ -169,10 +171,10 @@ type Runtime struct {
 // New returns a Runtime. It does no I/O; sessions load on Create or Open.
 func New(opts Options) (*Runtime, error) {
 	if opts.Store == nil {
-		return nil, fmt.Errorf("%w: Options.Store is nil", ErrInvalidRequest)
+		return nil, errors.New("harness: Options.Store is nil")
 	}
 	if err := opts.Config.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		return nil, fmt.Errorf("harness: %w", err)
 	}
 	if opts.RunToken != "" && opts.ServeURL == "" {
 		return nil, errors.New("harness: Options.RunToken needs Options.ServeURL")
@@ -199,7 +201,7 @@ func New(opts Options) (*Runtime, error) {
 		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix})
 	tools := opts.Tools
 	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t Tool) bool { return t.Spec().Name == modelToolName }) {
-		return nil, fmt.Errorf("%w: tool name %q is reserved", ErrInvalidRequest, modelToolName)
+		return nil, fmt.Errorf("harness: tool name %q is reserved", modelToolName)
 	}
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
@@ -216,7 +218,7 @@ func New(opts Options) (*Runtime, error) {
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport)
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
-			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
+			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
 	}
@@ -636,11 +638,11 @@ func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreat
 	}
 	env, err := eventlog.Decode(recs[0].Data)
 	if err != nil {
-		return eventlog.SessionCreated{}, err
+		return eventlog.SessionCreated{}, fmt.Errorf("%w: session %s: %w", ErrUnreplayable, id, err)
 	}
 	c, ok := env.Event.(eventlog.SessionCreated)
 	if !ok {
-		return c, fmt.Errorf("harness: session %s starts with %s, not session.created", id, env.Event.Kind())
+		return c, fmt.Errorf("%w: session %s starts with %s, not session.created", ErrUnreplayable, id, env.Event.Kind())
 	}
 	return c, nil
 }

@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
+	"github.com/majorcontext/harness/internal/gates"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -78,8 +80,8 @@ func components() (map[string]*jsonschema.Schema, error) {
 	return defs, closeRequests(defs)
 }
 
-// enumerateCodes limits Error.code to the codes that the server answers with a
-// status.
+// enumerateCodes limits Error.code to the Code constants of the protocol sources in the working directory,
+// which go generate sets to the protocol directory.
 func enumerateCodes(defs map[string]*jsonschema.Schema) error {
 	def, ok := defs[reflect.TypeFor[protocol.Error]().Name()]
 	if !ok {
@@ -89,7 +91,26 @@ func enumerateCodes(defs map[string]*jsonschema.Schema) error {
 	if !ok {
 		return errors.New("the error has no code")
 	}
-	for _, c := range slices.Sorted(maps.Keys(server.CodeStatuses())) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		return err
+	}
+	var srcs []string
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		srcs = append(srcs, string(b))
+	}
+	codes, err := gates.ProtocolCodes(srcs...)
+	if err != nil {
+		return err
+	}
+	for _, c := range codes {
 		code.Enum = append(code.Enum, c)
 	}
 	return nil

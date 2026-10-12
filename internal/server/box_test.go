@@ -73,7 +73,7 @@ func TestBoxRoutesWithoutAWorkDir(t *testing.T) {
 type errorRow struct {
 	method, path string
 	status       int
-	code         string
+	code         protocol.Code
 }
 
 func errorRows(t *testing.T, url string, rows []errorRow) {

@@ -13,7 +13,7 @@ import (
 )
 
 // ErrStaleEpoch reports a SyncBatch whose epoch is older than the receiver's.
-var ErrStaleEpoch = errors.New("harness: stale epoch")
+var ErrStaleEpoch = &protocol.Error{Code: protocol.CodeStaleEpoch, Message: "harness: stale epoch"}
 
 // ErrRejected reports a SyncBatch that the receiver refuses for a reason that
 // a resend cannot change, such as a malformed or oversized batch.

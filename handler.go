@@ -22,22 +22,7 @@ func (r *Runtime) Handler() http.Handler {
 	if r.procs != nil {
 		procs = processRoutes{r}
 	}
-	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health, Codes: codes})
-}
-
-// codes maps each sentinel error of the runtime to its wire code.
-var codes = []server.Code{
-	{Err: ErrInvalidRequest, Code: protocol.CodeInvalidRequest},
-	{Err: ErrSessionNotFound, Code: protocol.CodeSessionNotFound},
-	{Err: ErrSessionExists, Code: protocol.CodeSessionExists},
-	{Err: ErrSessionNotOwned, Code: protocol.CodeSessionNotOwned},
-	{Err: ErrInputConflict, Code: protocol.CodeInputConflict},
-	{Err: ErrTurnMismatch, Code: protocol.CodeTurnMismatch},
-	{Err: ErrSessionBusy, Code: protocol.CodeSessionBusy},
-	{Err: ErrRequestNotPending, Code: protocol.CodeRequestNotPending},
-	{Err: ErrModelUnavailable, Code: protocol.CodeModelUnavailable},
-	{Err: ErrDraining, Code: protocol.CodeDraining},
-	{Err: ErrBlobNotFound, Code: protocol.CodeBlobNotFound},
+	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health})
 }
 
 // reads is the Runtime with the read route of the server.

@@ -23,26 +23,34 @@ import (
 var (
 	// ErrConflict reports an append whose expected seq is not the log head,
 	// or a SyncBatch whose records differ from the records of the receiver.
-	ErrConflict = errors.New("harness: append conflict")
+	ErrConflict = &protocol.Error{Code: protocol.CodeSyncConflict, Message: "harness: append conflict"}
 	// ErrNotFound reports a session with an empty log.
-	ErrNotFound = errors.New("harness: session not found")
+	ErrNotFound = &protocol.Error{Code: protocol.CodeSessionNotFound, Message: "harness: session not found"}
 	// ErrUnreplayable reports a log that does not replay: a record that does not decode or break a rule of the log.
-	ErrUnreplayable = errors.New("harness: log does not replay")
+	ErrUnreplayable = &protocol.Error{Code: protocol.CodeSessionUnreplayable, Message: "harness: log does not replay"}
 	// ErrExists reports a create of a session that has a log.
-	ErrExists = errors.New("harness: session exists")
+	ErrExists = &protocol.Error{Code: protocol.CodeSessionExists, Message: "harness: session exists"}
 	// ErrNotOwned reports a session whose actor stopped: it was fenced, lost, or released.
-	ErrNotOwned = errors.New("harness: session not owned")
+	ErrNotOwned = &protocol.Error{Code: protocol.CodeSessionNotOwned, Message: "harness: session not owned"}
 	// ErrReleased is the stop cause of a session that Release or a Close handed off.
-	ErrReleased = fmt.Errorf("%w: released", ErrNotOwned)
+	ErrReleased = notOwned("released")
 	// ErrEnded is the stop cause of a session that End stopped.
-	ErrEnded = fmt.Errorf("%w: ended", ErrNotOwned)
+	ErrEnded = notOwned("ended")
 	// ErrOwnershipLost is the stop cause of a session whose grant ended without Release, or whose append or Sync found another owner.
-	ErrOwnershipLost = fmt.Errorf("%w: ownership lost", ErrNotOwned)
+	ErrOwnershipLost = notOwned("ownership lost")
+	// ErrHeld reports a session that another owner holds.
+	ErrHeld = notOwned("held by another owner")
 	// ErrInputConflict reports an input ID admitted with another body.
-	ErrInputConflict = errors.New("harness: input conflict")
+	ErrInputConflict = &protocol.Error{Code: protocol.CodeInputConflict, Message: "harness: input conflict"}
 	// ErrTurnMismatch reports a turn ID that is not the running turn.
-	ErrTurnMismatch = errors.New("harness: turn mismatch")
+	ErrTurnMismatch = &protocol.Error{Code: protocol.CodeTurnMismatch, Message: "harness: turn mismatch"}
 )
+
+// notOwned returns a session_not_owned Error that only an Error of the same cause matches, besides ErrNotOwned.
+func notOwned(cause string) *protocol.Error {
+	return &protocol.Error{Code: protocol.CodeSessionNotOwned, Message: "harness: session not owned: " + cause,
+		Details: map[string]any{protocol.CauseKey: cause}}
+}
 
 // Log is the record log of one session. Append fails with an error that
 // matches ErrConflict when expectedSeq is not the head.

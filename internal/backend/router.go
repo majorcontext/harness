@@ -4,7 +4,6 @@ package backend
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -28,7 +27,7 @@ import (
 const defaultOpenRouter = "openrouter"
 
 // ErrUnavailable reports a model that no configured provider serves.
-var ErrUnavailable = errors.New("harness: model unavailable")
+var ErrUnavailable = &protocol.Error{Code: protocol.CodeModelUnavailable, Message: "harness: model unavailable"}
 
 // Router is the turn.Backend of a runtime. It routes each turn to the backend
 // of its model's provider.

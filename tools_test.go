@@ -154,19 +154,19 @@ func (f *family) results(session string) []string {
 
 func TestNewRejectsAToolThatTakesTheHistoryToolName(t *testing.T) {
 	_, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{newProbe("get_conversation_history", false)}})
-	if !errors.Is(err, harness.ErrInvalidRequest) {
-		t.Errorf("New = %v, want ErrInvalidRequest", err)
+	if err == nil || errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("New = %v, want a plain error", err)
 	}
 }
 
 func TestNewRejectsAToolThatTakesTheSessionInfoNameOnlyWithAWorkDir(t *testing.T) {
 	for _, tc := range []struct {
 		workDir string
-		want    error
-	}{{t.TempDir(), harness.ErrInvalidRequest}, {"", nil}} {
+		reject  bool
+	}{{t.TempDir(), true}, {"", false}} {
 		_, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: tc.workDir, Tools: []harness.Tool{newProbe("session_info", false)}})
-		if !errors.Is(err, tc.want) {
-			t.Errorf("New with WorkDir %q = %v, want %v", tc.workDir, err, tc.want)
+		if (err != nil) != tc.reject || errors.Is(err, harness.ErrInvalidRequest) {
+			t.Errorf("New with WorkDir %q = %v, want rejected = %v with a plain error", tc.workDir, err, tc.reject)
 		}
 	}
 }
