@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/plugin"
@@ -29,7 +28,7 @@ import (
 const probeTimeout = 30 * time.Second
 
 // History returns the conversation of a session.
-type History func(ctx context.Context, sessionID string) ([]eventlog.Message, error)
+type History func(ctx context.Context, sessionID string) ([]protocol.LogMessage, error)
 
 // Blob opens the bytes that a session stores under key.
 type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error)
@@ -160,7 +159,7 @@ type Session struct {
 
 // Toolset gives the plugin tools that allowed keeps, and the system.transform
 // segments of this model call as its prompt.
-func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []string, model string) turn.Toolset {
+func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	ref, _ := modelref.ParseModelRef(model)
 	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id, Model: ref})
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
@@ -196,7 +195,7 @@ func (s *Session) Untransformed() turn.Source { return untransformed{s} }
 
 type untransformed struct{ s *Session }
 
-func (u untransformed) Toolset(_ context.Context, _ []eventlog.Message, allowed []string, _ string) turn.Toolset {
+func (u untransformed) Toolset(_ context.Context, _ []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
 	return turn.Toolset{Tools: turn.Restrict(u.s.tools, allowed), Hooks: u.s}
 }
 
@@ -229,15 +228,15 @@ func (s *Session) After(ctx context.Context, c protocol.ToolCall, r protocol.Too
 }
 
 // Appended announces the start and the end of each turn in events.
-func (s *Session) Appended(events []eventlog.Event) {
+func (s *Session) Appended(events []protocol.Payload) {
 	for _, e := range events {
 		switch e := e.(type) {
-		case eventlog.TurnStarted, eventlog.TurnResumed:
+		case protocol.TurnStarted, protocol.TurnResumed:
 			s.emit(plugin.EventSessionStatus, map[string]string{"status": "busy"})
-		case eventlog.TurnSuspended:
+		case protocol.TurnSuspended:
 			s.emit(plugin.EventSessionStatus, map[string]string{"status": "idle"})
-		case eventlog.TurnEnded:
-			if e.StopReason == eventlog.StopFailed {
+		case protocol.TurnEnded:
+			if e.StopReason == protocol.StopFailed {
 				s.emit(plugin.EventSessionError, plugin.SessionErrorProperties{Message: plugin.SanitizeSessionError(e.Error)})
 			}
 			s.emit(plugin.EventSessionStatus, map[string]string{"status": "idle"})
@@ -283,15 +282,15 @@ func (c client) SessionMessages(ctx context.Context, req *plugin.SessionMessages
 		out := message.Message{Role: message.Role(m.Role)}
 		for _, p := range m.Parts {
 			switch p.Type {
-			case eventlog.PartText:
+			case protocol.LogPartText:
 				out.Parts = append(out.Parts, &message.Text{Text: p.Text})
-			case eventlog.PartReasoning:
+			case protocol.LogPartReasoning:
 				out.Parts = append(out.Parts, &message.Reasoning{Text: p.Text})
-			case eventlog.PartToolCall:
+			case protocol.LogPartToolCall:
 				out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
-			case eventlog.PartToolResult:
+			case protocol.LogPartToolResult:
 				out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError, Content: message.Parts{&message.Text{Text: p.Text}}})
-			case eventlog.PartBlob:
+			case protocol.LogPartBlob:
 				data, err := c.readBlob(ctx, req.SessionID, p.BlobKey)
 				if err != nil {
 					return nil, err

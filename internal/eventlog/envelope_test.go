@@ -9,16 +9,18 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestEnvelopeWireShape(t *testing.T) {
 	for _, tc := range []struct {
-		event Event
+		event protocol.Payload
 		want  string
 	}{
-		{TurnEnded{TurnID: "t1", StopReason: StopCompleted},
+		{protocol.TurnEnded{TurnID: "t1", StopReason: protocol.StopCompleted},
 			`{"v":1,"seq":42,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"t1","stop_reason":"completed"}}`},
-		{ContextMeasured{Tokens: 7, Window: 100, Source: "m", Usage: Usage{InputTokens: 1, OutputTokens: 2}},
+		{protocol.ContextMeasured{Tokens: 7, Window: 100, Source: "m", Usage: protocol.Usage{InputTokens: 1, OutputTokens: 2}},
 			`{"v":1,"seq":42,"t":"2026-10-02T12:00:00Z","k":"context.measured","d":{"tokens":7,"window":100,"source":"m","usage":{"input_tokens":1,"output_tokens":2}}}`},
 	} {
 		got, err := Envelope{Seq: 42, Time: t0, Event: tc.event}.Encode()
@@ -65,31 +67,31 @@ func TestCodecRejects(t *testing.T) {
 	}
 }
 
-func everyKind() []Event {
-	return []Event{
-		SessionCreated{ParentID: "p", Model: "openai/gpt-5", Settings: Settings{Effort: "high"}, Origin: "cli"},
-		OwnerAcquired{Epoch: 7, Owner: "box-1"},
-		SettingsChanged{ServiceTier: new("flex")},
-		GoalSet{Condition: "tests pass", MaxTurns: 3},
+func everyKind() []protocol.Payload {
+	return []protocol.Payload{
+		protocol.SessionCreated{ParentID: "p", Model: "openai/gpt-5", Settings: protocol.Settings{Effort: "high"}, Origin: "cli"},
+		protocol.OwnerAcquired{Epoch: 7, Owner: "box-1"},
+		protocol.SettingsChanged{ServiceTier: new("flex")},
+		protocol.GoalSet{Condition: "tests pass", MaxTurns: 3},
 		admit("a"), start("t1", "a"), steer("s"), promote("s", "t1"),
-		ChildSpawned{ChildID: "k", Agent: "explore"},
+		protocol.ChildSpawned{ChildID: "k", Agent: "explore"},
 		call("t1", "i1", "c1"), ask("c1", "i1"),
-		RequestResolved{RequestID: "c1", Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)}, result("t1", "i3", "c1"),
-		ItemCompleted{ItemID: "i2", TurnID: "t1", Message: Message{Role: RoleAssistant, Parts: []Part{{Type: PartText, Text: "done"}}}},
-		ContextMeasured{Tokens: 900, Window: 1000, Source: "provider", Usage: Usage{InputTokens: 10, OutputTokens: 2},
-			SubscriptionUsage: &SubscriptionUsage{Provider: "codex", Plan: "plus", CapturedAt: 5,
-				Windows: []SubscriptionUsageWindow{{Key: "primary", Label: "5-hour", UsedPercent: 12.5, ResetsAt: 9}},
-				Overage: &SubscriptionOverage{InUse: true, Status: "allowed", ResetsAt: 11}}},
-		BackendState{Backend: "codex", BlobKey: "b1"},
-		ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
-		suspend("t1", CauseHandoff), resume("t1", 1),
-		CompactionApplied{FromSeq: 1, ToSeq: 12, Summary: "so far", ByBackend: true},
-		TurnEnded{TurnID: "t1", StopReason: StopCompleted, Error: "short", ErrorDetail: "short and longer"},
-		GoalEvaluated{TurnID: "t1", Verdict: VerdictMet},
-		goal(GoalAchieved),
-		ChildSettled{ChildID: "k", Outcome: OutcomeDone, ResultRef: "blob/k"},
+		protocol.RequestResolved{RequestID: "c1", Resolution: protocol.ResolutionAnswered, Answer: json.RawMessage(`"yes"`)}, result("t1", "i3", "c1"),
+		protocol.ItemCompleted{ItemID: "i2", TurnID: "t1", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "done"}}}},
+		protocol.ContextMeasured{Tokens: 900, Window: 1000, Source: "provider", Usage: protocol.Usage{InputTokens: 10, OutputTokens: 2},
+			SubscriptionUsage: &protocol.SubscriptionUsage{Provider: "codex", Plan: "plus", CapturedAt: 5,
+				Windows: []protocol.SubscriptionUsageWindow{{Key: "primary", Label: "5-hour", UsedPercent: 12.5, ResetsAt: 9}},
+				Overage: &protocol.SubscriptionOverage{InUse: true, Status: "allowed", ResetsAt: 11}}},
+		protocol.BackendState{Backend: "codex", BlobKey: "b1"},
+		protocol.ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
+		suspend("t1", protocol.CauseHandoff), resume("t1", 1),
+		protocol.CompactionApplied{FromSeq: 1, ToSeq: 12, Summary: "so far", ByBackend: true},
+		protocol.TurnEnded{TurnID: "t1", StopReason: protocol.StopCompleted, Error: "short", ErrorDetail: "short and longer"},
+		protocol.GoalEvaluated{TurnID: "t1", Verdict: protocol.VerdictMet},
+		goal(protocol.GoalAchieved),
+		protocol.ChildSettled{ChildID: "k", Outcome: protocol.OutcomeDone, ResultRef: "blob/k"},
 		admit("b"), withdraw("b"),
-		CommandRecorded{InputID: "c", Line: "/thinking high", Name: "thinking", Args: map[string]any{"effort": "high"},
+		protocol.CommandRecorded{InputID: "c", Line: "/thinking high", Name: "thinking", Args: map[string]any{"effort": "high"},
 			Status: "succeeded", Text: "/thinking succeeded", Result: json.RawMessage(`{"effort":"high"}`)},
 	}
 }
@@ -111,7 +113,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		}
 		log.Write(append(data, '\n'))
 	}
-	if got, want := slices.Sorted(maps.Keys(kinds)), slices.Sorted(maps.Keys(registry)); !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(kinds)), slices.Sorted(maps.Keys(goldenKinds())); !slices.Equal(got, want) {
 		t.Fatalf("kinds = %v, want every registered kind %v", got, want)
 	}
 	var replayed State
@@ -130,12 +132,12 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 	if !reflect.DeepEqual(&replayed, &live) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
-	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: StatusIdle, Goal: GoalAchieved,
+	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
 		HeadSeq: 27, CreatedAt: t0, UpdatedAt: t0.Add(26 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}
-	if got := live.Settings(); got != (Settings{Effort: "high", ServiceTier: "flex"}) {
+	if got := live.Settings(); got != (protocol.Settings{Effort: "high", ServiceTier: "flex"}) {
 		t.Fatalf("Settings = %+v", got)
 	}
 	if live.Usage().InputTokens != 10 || live.Context().Tokens != 900 || backendBlob(live) != "b1" || len(live.Retained()) != 1 {
@@ -146,4 +148,49 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 func backendBlob(s State) string {
 	c, _ := s.BackendState("codex")
 	return c.Legacy
+}
+
+func TestAdvanceFoldsWhatStateFolds(t *testing.T) {
+	waiting := with(asking, end("t1", protocol.StopAwaitingInput, ""))
+	paused := with(evaluated, goal(protocol.GoalPaused), goal(protocol.GoalActive), goal(protocol.GoalPaused))
+	for name, log := range map[string][]protocol.Payload{
+		"every kind":         everyKind(),
+		"a waiting session":  with(waiting, resolve("c1"), admit("b"), start("t2", "b"), result("t2", "i2", "c1")),
+		"a dismissed answer": with(waiting, dismiss("c1"), admit("b")),
+		"a suspended turn":   with(suspended, resume("t1", 1), end("t1", protocol.StopCompleted, "")),
+		"a paused goal":      with(paused, goal(protocol.GoalCleared), setGoal),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var s State
+			var p protocol.Progress
+			for i, e := range log {
+				rec := record(t, uint64(i+1), e)
+				var ev protocol.Event
+				if err := json.Unmarshal(rec.Data, &ev); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := json.Marshal(p)
+				next, err := Advance(p, ev)
+				if err != nil {
+					t.Fatalf("Advance %s: %v", e.Kind(), err)
+				}
+				if after, _ := json.Marshal(p); string(before) != string(after) {
+					t.Fatalf("Advance %s changed its input:\n%s\n%s", e.Kind(), before, after)
+				}
+				if err := s.Apply(rec); err != nil {
+					t.Fatal(err)
+				}
+				if p = next; !reflect.DeepEqual(p, s.Progress()) {
+					t.Fatalf("after %s, Advance = %+v, State = %+v", e.Kind(), p, s.Progress())
+				}
+			}
+			ev := protocol.Event{Seq: uint64(len(log)) + 2, Kind: protocol.KindOwnerAcquired, Data: json.RawMessage(`{}`)}
+			if _, err := Advance(p, ev); !errors.Is(err, ErrSeq) {
+				t.Fatalf("Advance out of order = %v, want ErrSeq", err)
+			}
+			if _, err := Advance(p, protocol.Event{Seq: p.Seq + 1, Kind: protocol.KindStatus, Ephemeral: true}); !errors.Is(err, protocol.ErrUnknownKind) {
+				t.Fatalf("Advance of an ephemeral frame = %v, want ErrUnknownKind", err)
+			}
+		})
+	}
 }

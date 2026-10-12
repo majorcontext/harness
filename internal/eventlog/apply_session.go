@@ -3,9 +3,11 @@ package eventlog
 import (
 	"slices"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
-func (s *State) applyCreated(e SessionCreated, t time.Time) error {
+func (s *State) applyCreated(e protocol.SessionCreated, t time.Time) error {
 	if s.created {
 		return illegal("session already created")
 	}
@@ -16,13 +18,14 @@ func (s *State) applyCreated(e SessionCreated, t time.Time) error {
 	s.parentID, s.agent, s.origin, s.model, s.settings, s.allowed = e.ParentID, e.Agent, e.Origin, e.Model, e.Settings, e.AllowedTools
 	s.createdAt = t
 	s.inputs = map[string]input{}
+	s.requests = map[string]pendingRequest{}
 	s.turnIDs = map[string]bool{}
-	s.children = map[string]Outcome{}
+	s.children = map[string]protocol.Outcome{}
 	s.backends = map[string]BackendChain{}
 	return nil
 }
 
-func (s *State) applySettings(e SettingsChanged) error {
+func (s *State) applySettings(e protocol.SettingsChanged) error {
 	if e.Model != nil && *e.Model == "" {
 		return illegal("settings.changed has an empty model")
 	}
@@ -41,7 +44,7 @@ func (s *State) applySettings(e SettingsChanged) error {
 	return nil
 }
 
-func (s *State) applyCompaction(e CompactionApplied, seq uint64, at time.Time) error {
+func (s *State) applyCompaction(e protocol.CompactionApplied, seq uint64, at time.Time) error {
 	if e.FromSeq == 0 || e.FromSeq > e.ToSeq || e.ToSeq >= seq {
 		return illegal("compaction from_seq %d to_seq %d at seq %d", e.FromSeq, e.ToSeq, seq)
 	}
@@ -54,14 +57,14 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64, at time.Time) e
 	return nil
 }
 
-func (s *State) applyMeasured(e ContextMeasured) {
+func (s *State) applyMeasured(e protocol.ContextMeasured) {
 	s.usage = s.usage.Add(e.Usage)
 	if e.Tokens > 0 || e.Source != "" {
 		window, estimated := e.Window, e.WindowEstimated
 		if window == 0 && e.Source != "" && e.Source == s.context.Source {
 			window, estimated = s.context.Window, s.context.WindowEstimated
 		}
-		s.context = ContextMeasured{Tokens: e.Tokens, Window: window, WindowEstimated: estimated, Source: e.Source}
+		s.context = protocol.ContextMeasured{Tokens: e.Tokens, Window: window, WindowEstimated: estimated, Source: e.Source}
 		s.measuredTurn = s.turnN
 	}
 	if e.SubscriptionUsage != nil {
@@ -76,7 +79,7 @@ func (s *State) applyMeasured(e ContextMeasured) {
 	}
 }
 
-func (s *State) applyChildSpawned(e ChildSpawned) error {
+func (s *State) applyChildSpawned(e protocol.ChildSpawned) error {
 	if o, ok := s.children[e.ChildID]; ok && o == "" || e.ChildID == "" {
 		return illegal("child %q already spawned", e.ChildID)
 	}
@@ -84,21 +87,21 @@ func (s *State) applyChildSpawned(e ChildSpawned) error {
 	return nil
 }
 
-func (s *State) applyChildSettled(e ChildSettled) error {
+func (s *State) applyChildSettled(e protocol.ChildSettled) error {
 	outcome, ok := s.children[e.ChildID]
 	switch {
 	case !ok:
 		return illegal("child %s is unknown", e.ChildID)
 	case outcome != "":
 		return illegal("child %s already settled %s", e.ChildID, outcome)
-	case e.Outcome != OutcomeDone && e.Outcome != OutcomeFailed && e.Outcome != OutcomeCanceled:
+	case e.Outcome != protocol.OutcomeDone && e.Outcome != protocol.OutcomeFailed && e.Outcome != protocol.OutcomeCanceled:
 		return illegal("child %s has outcome %q", e.ChildID, e.Outcome)
 	}
 	s.children[e.ChildID] = e.Outcome
 	return nil
 }
 
-func (s *State) applyBackendState(e BackendState) error {
+func (s *State) applyBackendState(e protocol.BackendState) error {
 	if e.Backend == "" {
 		return illegal("backend.state needs a backend")
 	}
@@ -130,8 +133,8 @@ func (s *State) applyBackendState(e BackendState) error {
 	return nil
 }
 
-func (s *State) applyRetained(e ToolResultRetained) error {
-	if e.Handle == "" || e.BlobKey == "" || slices.ContainsFunc(s.retained, func(r ToolResultRetained) bool { return r.Handle == e.Handle }) {
+func (s *State) applyRetained(e protocol.ToolResultRetained) error {
+	if e.Handle == "" || e.BlobKey == "" || slices.ContainsFunc(s.retained, func(r protocol.ToolResultRetained) bool { return r.Handle == e.Handle }) {
 		return illegal("tool_result.retained needs a new handle and a blob key")
 	}
 	s.retained = append(s.retained, e)

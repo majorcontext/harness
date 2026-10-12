@@ -7,26 +7,27 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
 // toMessage maps m to the provider message. A blob part reads its bytes through req.Blob.
 // A tool result whose image the store lacks keeps its text, so one lost blob does not fail every later turn.
-func (be *Backend) toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (message.Message, error) {
+func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.LogMessage) (message.Message, error) {
 	out := message.Message{Role: message.Role(m.Role)}
 	for _, p := range m.Parts {
 		switch p.Type {
-		case eventlog.PartText:
+		case protocol.LogPartText:
 			out.Parts = append(out.Parts, &message.Text{Text: p.Text})
-		case eventlog.PartEngineContext:
+		case protocol.LogPartEngineContext:
 			out.Parts = append(out.Parts, &message.EngineContext{Text: p.Text})
-		case eventlog.PartReasoning:
+		case protocol.LogPartReasoning:
 			out.Parts = append(out.Parts, &message.Reasoning{Text: p.Text, ProviderData: p.ProviderData})
-		case eventlog.PartToolCall:
+		case protocol.LogPartToolCall:
 			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
-		case eventlog.PartToolResult:
+		case protocol.LogPartToolResult:
 			content := message.Parts{&message.Text{Text: p.Text}}
 			for _, b := range p.Blobs {
 				data, err := readBlob(ctx, req, b.BlobKey)
@@ -40,7 +41,7 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m eventlog.M
 				content = append(content, &message.Blob{MediaType: b.MediaType, Data: data})
 			}
 			out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError, Content: content})
-		case eventlog.PartBlob:
+		case protocol.LogPartBlob:
 			data, err := readBlob(ctx, req, p.BlobKey)
 			if err != nil {
 				return message.Message{}, fmt.Errorf("modelapi: attachment %s: %w", p.BlobKey, err)
@@ -58,18 +59,18 @@ func readBlob(ctx context.Context, req turn.Request, key string) ([]byte, error)
 	return req.Blob(ctx, key)
 }
 
-func fromMessage(m *message.Message) eventlog.Message {
-	out := eventlog.Message{Role: eventlog.RoleAssistant}
+func fromMessage(m *message.Message) protocol.LogMessage {
+	out := protocol.LogMessage{Role: protocol.RoleAssistant}
 	if m == nil {
 		return out
 	}
 	for _, p := range m.Parts {
 		switch p := p.(type) {
 		case *message.Text:
-			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartText, Text: p.Text})
+			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartText, Text: p.Text})
 		case *message.Reasoning:
 			if p.Text != "" || len(p.ProviderData) > 0 {
-				out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartReasoning, Text: p.Text, ProviderData: p.ProviderData})
+				out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartReasoning, Text: p.Text, ProviderData: p.ProviderData})
 			}
 		case *message.ToolCall:
 			args := p.Arguments
@@ -77,7 +78,7 @@ func fromMessage(m *message.Message) eventlog.Message {
 			if !json.Valid(args) {
 				args = nil
 			}
-			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args})
+			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args})
 		}
 	}
 	return out

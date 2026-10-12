@@ -11,7 +11,6 @@ import (
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/command"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/protocol"
@@ -155,8 +154,8 @@ func commandEntry(spec *command.Spec) protocol.CommandEntry {
 // plan is the resolution of a typed command: its first record, the record
 // that replaces it while a run is on, and the resolution to dispatch.
 type plan struct {
-	rec  eventlog.CommandRecorded
-	busy *eventlog.CommandRecorded
+	rec  protocol.CommandRecorded
+	busy *protocol.CommandRecorded
 	res  *command.Resolution
 }
 
@@ -195,11 +194,11 @@ func refusal(typed string) string {
 	return "/" + typed + " cannot run while a turn is running; send it again after the turn ends"
 }
 
-func record(id, line, name string, args map[string]any, status, text string) eventlog.CommandRecorded {
+func record(id, line, name string, args map[string]any, status, text string) protocol.CommandRecorded {
 	if len(args) == 0 {
 		args = nil
 	}
-	return eventlog.CommandRecorded{InputID: id, Line: line, Name: name, Args: args, Status: status, Text: text}
+	return protocol.CommandRecorded{InputID: id, Line: line, Name: name, Args: args, Status: status, Text: text}
 }
 
 // prompt returns in as the expanded text of the prompt command name, or as
@@ -253,7 +252,7 @@ func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, erro
 
 // dispatch runs the operation of an accepted command and records its
 // outcome. A panic records failed: no caller above this goroutine recovers.
-func (s *Session) dispatch(rec eventlog.CommandRecorded, res command.Resolution) {
+func (s *Session) dispatch(rec protocol.CommandRecorded, res command.Resolution) {
 	defer func() {
 		if p := recover(); p != nil {
 			s.r.log.Error("harness: command panicked", "input_id", rec.InputID, "command", rec.Name, "panic", p)

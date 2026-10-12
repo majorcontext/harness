@@ -7,7 +7,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -53,7 +52,7 @@ func TestWarmEndsWithTheSessionContextOrItsTimeout(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
 		b := &warmBackend{calls: make(chan warmCall, 1)}
-		a, err := Create(ctx, warmConfig(ctx, &wg, &memLog{}, b), eventlog.SessionCreated{Model: "codex/gpt-5"}, nil)
+		a, err := Create(ctx, warmConfig(ctx, &wg, &memLog{}, b), protocol.SessionCreated{Model: "codex/gpt-5"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +74,7 @@ func TestReleaseEndsAWarmUpThatIsStillRunning(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
 		b := &warmBackend{calls: make(chan warmCall, 1)}
-		a, err := Create(ctx, warmConfig(ctx, &wg, &memLog{}, b), eventlog.SessionCreated{Model: "codex/gpt-5"}, nil)
+		a, err := Create(ctx, warmConfig(ctx, &wg, &memLog{}, b), protocol.SessionCreated{Model: "codex/gpt-5"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

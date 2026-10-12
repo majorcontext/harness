@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 type provenance struct{ source, id, label string }
@@ -16,14 +18,14 @@ type entry struct {
 	at time.Time
 	// id is the ID that a reader sees for the message.
 	id  string
-	msg Message
+	msg protocol.LogMessage
 	// by is the provider that ran the turn of the message, and turn counts
 	// the turns that started before it.
 	by   string
 	turn int
 	// promoted holds the inputs that one append promoted into a running turn
 	// as this message, and last the seq of the newest of them.
-	promoted []InputAdmitted
+	promoted []protocol.InputAdmitted
 	last     uint64
 	// from is the provenance of the one input that started a turn with this
 	// message. A message of promoted inputs keeps each input's own.
@@ -41,8 +43,8 @@ const ReportTrigger = "A background task you started has finished. " +
 // IsReport reports whether parts hold the report of a child. A caller cannot
 // write a task report part, so this tells a report from a prompt that names
 // source child.
-func IsReport(parts []Part) bool {
-	return slices.ContainsFunc(parts, func(p Part) bool { return p.Type == PartTaskReport })
+func IsReport(parts []protocol.LogPart) bool {
+	return slices.ContainsFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartTaskReport })
 }
 
 // SteerMessages returns what the model reads for inputs that join a running
@@ -50,8 +52,8 @@ func IsReport(parts []Part) bool {
 // address the inputs and then to continue its task, and then the pinned
 // segment that holds the task lines of the reports. A report is not in the
 // block; its task line is pinned.
-func SteerMessages(inputs [][]Part) []Message {
-	var ops, reports [][]Part
+func SteerMessages(inputs [][]protocol.LogPart) []protocol.LogMessage {
+	var ops, reports [][]protocol.LogPart
 	for _, parts := range inputs {
 		if IsReport(parts) {
 			reports = append(reports, parts)
@@ -59,7 +61,7 @@ func SteerMessages(inputs [][]Part) []Message {
 			ops = append(ops, parts)
 		}
 	}
-	var out []Message
+	var out []protocol.LogMessage
 	if len(ops) > 0 {
 		out = append(out, SteerMessage(ops))
 	}
@@ -71,52 +73,52 @@ func SteerMessages(inputs [][]Part) []Message {
 
 // SteerMessage is the message for the inputs that join a running turn, with
 // no report among them.
-func SteerMessage(inputs [][]Part) Message {
+func SteerMessage(inputs [][]protocol.LogPart) protocol.LogMessage {
 	var b strings.Builder
-	var blobs []Part
+	var blobs []protocol.LogPart
 	for n, parts := range inputs {
 		if n == 0 {
 			b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
 		}
 		fmt.Fprintf(&b, "%d. %s\n", n+1, textOf(parts))
 		for _, p := range parts {
-			if p.Type == PartBlob {
+			if p.Type == protocol.LogPartBlob {
 				blobs = append(blobs, p)
 			}
 		}
 	}
-	return Message{Role: RoleUser, Parts: append([]Part{{Type: PartText, Text: b.String()}}, blobs...)}
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: append([]protocol.LogPart{{Type: protocol.LogPartText, Text: b.String()}}, blobs...)}
 }
 
 // textOf joins the text parts of an input, one to a line.
-func textOf(parts []Part) string {
+func textOf(parts []protocol.LogPart) string {
 	var text []string
 	for _, p := range parts {
-		if p.Type == PartText {
+		if p.Type == protocol.LogPartText {
 			text = append(text, p.Text)
 		}
 	}
 	return strings.Join(text, "\n")
 }
 
-func partsOf(inputs []InputAdmitted) [][]Part {
-	out := make([][]Part, len(inputs))
+func partsOf(inputs []protocol.InputAdmitted) [][]protocol.LogPart {
+	out := make([][]protocol.LogPart, len(inputs))
 	for i, in := range inputs {
 		out[i] = in.Parts
 	}
 	return out
 }
 
-func pinMessage(reports [][]Part) Message {
+func pinMessage(reports [][]protocol.LogPart) protocol.LogMessage {
 	var lines []string
 	for _, parts := range reports {
 		for _, p := range parts {
-			if p.Type == PartTaskReport {
+			if p.Type == protocol.LogPartTaskReport {
 				lines = append(lines, p.Text)
 			}
 		}
 	}
-	return Message{Role: RoleUser, Parts: []Part{{Type: PartEngineContext, Text: TaskSegment(lines)}}}
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartEngineContext, Text: TaskSegment(lines)}}}
 }
 
 // TaskSegment is the segment that holds the task lines of
@@ -127,33 +129,33 @@ func TaskSegment(lines []string) string {
 
 // withoutTaskReports returns parts with the task lines left out: a turn that
 // an input starts reads the text of the input.
-func withoutTaskReports(parts []Part) []Part {
-	return slices.DeleteFunc(slices.Clone(parts), func(p Part) bool { return p.Type == PartTaskReport })
+func withoutTaskReports(parts []protocol.LogPart) []protocol.LogPart {
+	return slices.DeleteFunc(slices.Clone(parts), func(p protocol.LogPart) bool { return p.Type == protocol.LogPartTaskReport })
 }
 
 // History returns the summary of the newest compaction as a user message, then
 // each later message in log order, with no pinned segment. Readers see more:
 // see Transcript.
-func (s *State) History() []Message { return s.messages(false) }
+func (s *State) History() []protocol.LogMessage { return s.messages(false) }
 
 // ModelHistory returns History with each pinned segment at its place: the
 // conversation that the model reads.
-func (s *State) ModelHistory() []Message { return s.messages(true) }
+func (s *State) ModelHistory() []protocol.LogMessage { return s.messages(true) }
 
-func (s *State) messages(pinned bool) []Message {
-	var out []Message
+func (s *State) messages(pinned bool) []protocol.LogMessage {
+	var out []protocol.LogMessage
 	if c, ok := s.Compaction(); ok {
-		out = append(out, Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: c.Summary}}})
+		out = append(out, protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: c.Summary}}})
 	}
 	for _, e := range s.history {
 		if e.pinned && !pinned {
 			continue
 		}
-		out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
+		out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
 	}
 	if pinned {
 		for _, e := range s.stranded {
-			out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
+			out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
 		}
 	}
 	return out
@@ -162,8 +164,8 @@ func (s *State) messages(pinned bool) []Message {
 // remember records the messages of an applied event.
 func (s *State) remember(env Envelope) {
 	switch e := env.Event.(type) {
-	case TurnStarted:
-		var reports [][]Part
+	case protocol.TurnStarted:
+		var reports [][]protocol.LogPart
 		var others int
 		for _, id := range e.InputIDs {
 			if in := s.inputs[id].event; IsReport(in.Parts) {
@@ -178,7 +180,7 @@ func (s *State) remember(env Envelope) {
 			if IsReport(in.Parts) && !sayReport {
 				continue
 			}
-			s.say(env.Seq, env.Time, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(in.Parts)})
+			s.say(env.Seq, env.Time, "msg_"+id, protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)})
 			s.history[len(s.history)-1].from = provenance{in.Source, in.SourceID, in.SourceLabel}
 			sayReport = false
 		}
@@ -186,7 +188,7 @@ func (s *State) remember(env Envelope) {
 			s.history = append(s.history, entry{seq: env.Seq, at: env.Time, id: "pin_" + e.TurnID, msg: pinMessage(reports), by: s.turnBy, turn: s.turnN, pinned: true})
 		}
 		s.settle(env.Seq)
-	case InputPromoted:
+	case protocol.InputPromoted:
 		in := s.inputs[e.InputID].event
 		pin := IsReport(in.Parts)
 		build := SteerMessage
@@ -200,10 +202,10 @@ func (s *State) remember(env Envelope) {
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, at: env.Time, id: "msg_" + e.InputID, msg: build([][]Part{in.Parts}), by: s.turnBy, turn: s.turnN, promoted: []InputAdmitted{in}, last: env.Seq, pinned: pin})
-	case ItemCompleted:
+		s.history = append(s.history, entry{seq: env.Seq, at: env.Time, id: "msg_" + e.InputID, msg: build([][]protocol.LogPart{in.Parts}), by: s.turnBy, turn: s.turnN, promoted: []protocol.InputAdmitted{in}, last: env.Seq, pinned: pin})
+	case protocol.ItemCompleted:
 		s.say(env.Seq, env.Time, "msg_"+e.ItemID, e.Message)
-	case CompactionApplied:
+	case protocol.CompactionApplied:
 		i := slices.IndexFunc(s.history, func(h entry) bool { return h.seq > e.ToSeq })
 		if i < 0 {
 			i = len(s.history)
@@ -254,7 +256,7 @@ func (s *State) settle(seq uint64) {
 	s.stranded = nil
 }
 
-func (s *State) say(seq uint64, at time.Time, id string, m Message) {
+func (s *State) say(seq uint64, at time.Time, id string, m protocol.LogMessage) {
 	s.history = append(s.history, entry{seq: seq, at: at, id: id, msg: m, by: s.turnBy, turn: s.turnN})
 }
 
@@ -285,7 +287,7 @@ func (s *State) Foreign(model string) bool {
 	return last < end-1
 }
 
-func cloneParts(parts []Part) []Part {
+func cloneParts(parts []protocol.LogPart) []protocol.LogPart {
 	parts = slices.Clone(parts)
 	for i := range parts {
 		parts[i].Arguments = slices.Clone(parts[i].Arguments)
@@ -296,7 +298,7 @@ func cloneParts(parts []Part) []Part {
 // Fold returns the history before the newest keep turns, and the seq before
 // the first kept turn. A user message starts a turn. ok is false when keep
 // turns or fewer exist, or when only the compaction summary would fold.
-func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
+func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok bool) {
 	h := s.History()
 	var seqs []uint64
 	for _, e := range s.history {
@@ -307,7 +309,7 @@ func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
 	lead := len(h) - len(seqs)
 	var starts []int
 	for i, m := range h {
-		if m.Role == RoleUser {
+		if m.Role == protocol.RoleUser {
 			starts = append(starts, i)
 		}
 	}
@@ -323,7 +325,7 @@ func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
 
 // dismissal is the result of the tool call that a dismissed request held
 // open: what the model reads in the history.
-func dismissal(c OpenToolCall) Message {
-	return Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: c.CallID, Name: c.Name,
+func dismissal(c OpenToolCall) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{{Type: protocol.LogPartToolResult, CallID: c.CallID, Name: c.Name,
 		Text: "The user dismissed this question without answering.", IsError: true}}}
 }

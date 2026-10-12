@@ -246,11 +246,11 @@ func (t taskTool) log(ctx context.Context, in taskToolArgs) (any, error) {
 // childView is a child session as its ancestors see it.
 type childView struct {
 	status, result, reason, kind, agent string
-	usage                               eventlog.Usage
+	usage                               protocol.Usage
 	children                            []string
 	// tail holds the newest messages of the conversation that the caller
 	// asked for, and total is the length of the whole conversation.
-	tail  []eventlog.Message
+	tail  []protocol.LogMessage
 	total int
 }
 
@@ -271,12 +271,12 @@ func (t *Tree) child(ctx context.Context, id string, tail int) (childView, error
 		}
 		k.status = string(s.Outcome)
 		switch last := st.LastEnded(); s.Outcome {
-		case eventlog.OutcomeDone:
+		case protocol.OutcomeDone:
 			k.result, _ = session.CapRunes(session.LastText(st.History()), session.ResultCap)
-		case eventlog.OutcomeFailed:
+		case protocol.OutcomeFailed:
 			k.reason = rep.Reason()
-			if last.Cause == eventlog.CauseProviderExhausted {
-				k.kind = string(eventlog.CauseProviderExhausted)
+			if last.Cause == protocol.CauseProviderExhausted {
+				k.kind = string(protocol.CauseProviderExhausted)
 			}
 		}
 	})
@@ -322,11 +322,11 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool,
 		}
 	}
 	queued := c.Actor.View().Session.TurnID != ""
-	in := eventlog.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: eventlog.DeliverySteer, Source: "parent",
-		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+	in := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliverySteer, Source: "parent",
+		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 	if _, _, err := c.Actor.Submit(ctx, in, ""); err != nil {
 		if rearm {
-			err = errors.Join(err, p.Actor.Settle(context.WithoutCancel(ctx), eventlog.ChildSettled{ChildID: child, Outcome: eventlog.OutcomeFailed}, nil))
+			err = errors.Join(err, p.Actor.Settle(context.WithoutCancel(ctx), protocol.ChildSettled{ChildID: child, Outcome: protocol.OutcomeFailed}, nil))
 		}
 		return false, err
 	}

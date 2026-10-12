@@ -24,9 +24,9 @@ import (
 // family is a Backend that answers each model call by the last part of its
 // history and records each request. A nil answer blocks until the call ends.
 type family struct {
-	answer func(last eventlog.Part) []eventlog.Message
+	answer func(last protocol.LogPart) []protocol.LogMessage
 	// usage is the usage of each model call.
-	usage eventlog.Usage
+	usage protocol.Usage
 	mu    sync.Mutex
 	reqs  []turn.Request
 }
@@ -73,7 +73,7 @@ func (f *family) resulted(session, prefix string) bool {
 	for _, req := range f.reqs {
 		for _, m := range req.History {
 			for _, p := range m.Parts {
-				if req.SessionID == session && p.Type == eventlog.PartToolResult && strings.HasPrefix(p.Text, prefix) {
+				if req.SessionID == session && p.Type == protocol.LogPartToolResult && strings.HasPrefix(p.Text, prefix) {
 					return true
 				}
 			}
@@ -83,32 +83,32 @@ func (f *family) resulted(session, prefix string) bool {
 }
 
 // task calls the task tool n times with agent.
-func task(agent string, n int) eventlog.Message {
+func task(agent string, n int) protocol.LogMessage {
 	args, _ := json.Marshal(map[string]string{"agent": agent, "prompt": "child work"})
-	m := eventlog.Message{Role: eventlog.RoleAssistant}
+	m := protocol.LogMessage{Role: protocol.RoleAssistant}
 	for i := range n {
-		m.Parts = append(m.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: fmt.Sprint("t", i), Name: "task", Arguments: args})
+		m.Parts = append(m.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: fmt.Sprint("t", i), Name: "task", Arguments: args})
 	}
 	return m
 }
 
 // delegation answers as the parent and child of the contract scenario. The
 // parent spawns n children of agent, and each child answers with child.
-func delegation(agent string, n int, child func() []eventlog.Message) func(eventlog.Part) []eventlog.Message {
-	return func(p eventlog.Part) []eventlog.Message {
+func delegation(agent string, n int, child func() []protocol.LogMessage) func(protocol.LogPart) []protocol.LogMessage {
+	return func(p protocol.LogPart) []protocol.LogMessage {
 		switch {
 		case p.Text == "delegate":
-			return []eventlog.Message{task(agent, n)}
-		case p.Type == eventlog.PartToolResult:
-			return []eventlog.Message{say("waiting")}
+			return []protocol.LogMessage{task(agent, n)}
+		case p.Type == protocol.LogPartToolResult:
+			return []protocol.LogMessage{say("waiting")}
 		case p.Text == "child work":
 			return child()
 		}
-		return []eventlog.Message{say("parent done")}
+		return []protocol.LogMessage{say("parent done")}
 	}
 }
 
-func done() []eventlog.Message { return []eventlog.Message{say("child done")} }
+func done() []protocol.LogMessage { return []protocol.LogMessage{say("child done")} }
 
 func familyRuntime(t *testing.T, st harness.Store, f *family, own harness.Owner, cfg config.Config, dir string) *harness.Runtime {
 	t.Helper()
@@ -154,7 +154,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		cfg    config.Config
 		// store returns the Store of the runtime, or nil for a MemStore.
 		store func(t *testing.T, dir string) harness.Store
-		child func() []eventlog.Message
+		child func() []protocol.LogMessage
 		kids  int
 		check func(t *testing.T, f *family, children []protocol.Session)
 	}{
@@ -166,14 +166,14 @@ func TestTaskSpawnsAChild(t *testing.T) {
 				}
 			}},
 		{name: "a spawn past max_task_depth is refused", agent: "general-purpose", cfg: config.Config{MaxTaskDepth: 1}, kids: 1,
-			child: func() []eventlog.Message { return []eventlog.Message{task("general-purpose", 1)} },
+			child: func() []protocol.LogMessage { return []protocol.LogMessage{task("general-purpose", 1)} },
 			check: func(t *testing.T, f *family, children []protocol.Session) {
 				if _, got := f.last(children[0].ID, "no such tool available: task"); got == "" {
 					t.Error("the task call of the child at max_task_depth reaches a tool that is there")
 				}
 			}},
 		{name: "a spawn past max_concurrent_tasks is refused", agent: "general-purpose", spawns: 2, cfg: config.Config{MaxConcurrentTasks: 1}, kids: 1,
-			child: func() []eventlog.Message { return nil },
+			child: func() []protocol.LogMessage { return nil },
 			check: func(t *testing.T, f *family, children []protocol.Session) {
 				if !f.resulted("s1", "task: engine: tree concurrency limit reached") {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
@@ -264,12 +264,12 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 		arm  bool
 		// stop leaves the first runtime before s1 settles its child; free lets the child end.
 		stop    func(st *refusing, free func())
-		outcome eventlog.Outcome
+		outcome protocol.Outcome
 		report  string
 	}{
-		{name: "a child that ended before its parent settled it settles done", outcome: eventlog.OutcomeDone, report: "done: child done",
+		{name: "a child that ended before its parent settled it settles done", outcome: protocol.OutcomeDone, report: "done: child done",
 			stop: func(st *refusing, free func()) { st.armed.Store(true); free() }},
-		{name: "a spawned child with no log settles failed with no report", arm: true, outcome: eventlog.OutcomeFailed,
+		{name: "a spawned child with no log settles failed with no report", arm: true, outcome: protocol.OutcomeFailed,
 			stop: func(*refusing, func()) {}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,7 +277,7 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 			eachStore(t, func(t *testing.T, open func() harness.Store) {
 				st, release := &refusing{Store: open(), arm: tc.arm}, make(chan struct{})
 				free := sync.OnceFunc(func() { close(release) })
-				f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { <-release; return done() })}
+				f1 := &family{answer: delegation("general-purpose", 1, func() []protocol.LogMessage { <-release; return done() })}
 				r1 := familyRuntime(t, st, f1, nil, config.Config{}, dir)
 				submit(t, create(t, r1), text("a", "delegate"))
 				tc.stop(st, free)
@@ -303,10 +303,10 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 }
 
 // settled returns the outcome of the first child.settled of session id in st.
-func settled(t *testing.T, st harness.Store, id string) eventlog.Outcome {
+func settled(t *testing.T, st harness.Store, id string) protocol.Outcome {
 	t.Helper()
 	for _, e := range events(t, st, id) {
-		if s, ok := e.(eventlog.ChildSettled); ok {
+		if s, ok := e.(protocol.ChildSettled); ok {
 			return s.Outcome
 		}
 	}
@@ -314,13 +314,13 @@ func settled(t *testing.T, st harness.Store, id string) eventlog.Outcome {
 }
 
 // events returns the events of session id in st.
-func events(t *testing.T, st harness.Store, id string) []eventlog.Event {
+func events(t *testing.T, st harness.Store, id string) []protocol.Payload {
 	t.Helper()
 	recs, err := st.Read(bg, id, 0, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []eventlog.Event
+	var out []protocol.Payload
 	for _, r := range recs {
 		env, err := eventlog.Decode(r.Data)
 		if err != nil {
@@ -333,13 +333,13 @@ func events(t *testing.T, st harness.Store, id string) []eventlog.Event {
 
 func TestTaskNamesArgumentsOfTheWrongType(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		call := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{
-			{Type: eventlog.PartToolCall, CallID: "t0", Name: "task", Arguments: json.RawMessage(`{"prompt":5}`)}}}
-		f := &family{answer: func(p eventlog.Part) []eventlog.Message {
-			if p.Type == eventlog.PartToolResult {
-				return []eventlog.Message{say("waiting")}
+		call := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{
+			{Type: protocol.LogPartToolCall, CallID: "t0", Name: "task", Arguments: json.RawMessage(`{"prompt":5}`)}}}
+		f := &family{answer: func(p protocol.LogPart) []protocol.LogMessage {
+			if p.Type == protocol.LogPartToolResult {
+				return []protocol.LogMessage{say("waiting")}
 			}
-			return []eventlog.Message{call}
+			return []protocol.LogMessage{call}
 		}}
 		r := familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{}, t.TempDir())
 		submit(t, create(t, r), text("a", "delegate"))
@@ -359,7 +359,7 @@ type hooked struct {
 
 func (h *hooked) Append(ctx context.Context, id string, expectedSeq uint64, records ...[]byte) error {
 	for _, rec := range records {
-		if env, err := eventlog.Decode(rec); err == nil && env.Event.Kind() == (eventlog.ChildSpawned{}).Kind() {
+		if env, err := eventlog.Decode(rec); err == nil && env.Event.Kind() == (protocol.ChildSpawned{}).Kind() {
 			h.before(id)
 		}
 	}
@@ -388,7 +388,7 @@ func TestAnOpenedParentCountsItsUnsettledChildrenBeforeItRecoversThem(t *testing
 	synctest.Test(t, func(t *testing.T) {
 		st, dir := harness.NewMemStore(), t.TempDir()
 		cfg := config.Config{MaxConcurrentTasks: 1}
-		f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { return nil })}
+		f1 := &family{answer: delegation("general-purpose", 1, func() []protocol.LogMessage { return nil })}
 		r1 := familyRuntime(t, st, f1, nil, cfg, dir)
 		submit(t, create(t, r1), text("a", "delegate"))
 		kid := children(t, r1)[0].ID
@@ -414,12 +414,12 @@ func TestAnOpenedParentCountsItsUnsettledChildrenBeforeItRecoversThem(t *testing
 func TestTwoSpawnsInOneTreeCountEachOthersChildren(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release, calls := make(chan struct{}), atomic.Int32{}
-		f := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message {
+		f := &family{answer: delegation("general-purpose", 1, func() []protocol.LogMessage {
 			if calls.Add(1) > 1 {
 				return nil
 			}
 			<-release
-			return []eventlog.Message{task("general-purpose", 1)}
+			return []protocol.LogMessage{task("general-purpose", 1)}
 		})}
 		open, spawned := make(chan struct{}), 0
 		st := &hooked{Store: harness.NewMemStore(), before: func(id string) {

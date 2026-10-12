@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -38,10 +37,10 @@ var ErrEmptySummary = errors.New("turn: the compaction summary is empty")
 // Summarize makes one model call, with no tools, that summarizes
 // req.History, and returns the summary after SummaryBanner and the usage of
 // the calls. lim bounds the silence and the retries of a call, as it does for a turn.
-func Summarize(ctx context.Context, b Backend, req Request, lim Limits) (string, eventlog.Usage, error) {
+func Summarize(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
 	req.Instructions, req.MaxTokens = summaryPrompt, summaryMaxTokens
-	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
-		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
+	req.History = append(slices.Clone(req.History), protocol.LogMessage{Role: protocol.RoleUser,
+		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: summaryInstruction}}})
 	text, usage, err := ask(ctx, b, req, lim)
 	if err != nil {
 		return "", usage, err
@@ -58,7 +57,7 @@ func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, error
 	return text, err
 }
 
-func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, eventlog.Usage, error) {
+func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
 	req.AcceptCut = true
 	if b.Capabilities(req.Model).OwnsLoop {
@@ -80,12 +79,12 @@ func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, event
 // answer is the Sink of ask. It keeps the text and the usage.
 type answer struct {
 	text  strings.Builder
-	usage eventlog.Usage
+	usage protocol.Usage
 }
 
-func (a *answer) Item(m eventlog.Message) error {
+func (a *answer) Item(m protocol.LogMessage) error {
 	for _, p := range m.Parts {
-		if p.Type == eventlog.PartText {
+		if p.Type == protocol.LogPartText {
 			a.text.WriteString(p.Text)
 		}
 	}
@@ -94,19 +93,19 @@ func (a *answer) Item(m eventlog.Message) error {
 
 func (a *answer) Telemetry(t Telemetry) { a.usage = a.usage.Add(t.Usage) }
 
-func (*answer) Delta(string, Delta)                {}
-func (*answer) Alive()                             {}
-func (*answer) Discard(string)                     {}
-func (*answer) Steer() ([]eventlog.Message, error) { return nil, nil }
-func (*answer) State(string) (Snapshot, error)     { return Snapshot{}, nil }
-func (*answer) SaveState(string, Snapshot) error   { return nil }
-func (*answer) Compacted(string) error             { return nil }
-func (*answer) Status(protocol.StatusFrame)        {}
+func (*answer) Delta(string, Delta)                   {}
+func (*answer) Alive()                                {}
+func (*answer) Discard(string)                        {}
+func (*answer) Steer() ([]protocol.LogMessage, error) { return nil, nil }
+func (*answer) State(string) (Snapshot, error)        { return Snapshot{}, nil }
+func (*answer) SaveState(string, Snapshot) error      { return nil }
+func (*answer) Compacted(string) error                { return nil }
+func (*answer) Status(protocol.StatusFrame)           {}
 
 func (*answer) Ask(string, string, json.RawMessage) error {
 	return errors.New("turn: a model call with no tools opens no request")
 }
 
-func (*answer) Resolution(string) (eventlog.RequestResolved, bool) {
-	return eventlog.RequestResolved{}, false
+func (*answer) Resolution(string) (protocol.RequestResolved, bool) {
+	return protocol.RequestResolved{}, false
 }

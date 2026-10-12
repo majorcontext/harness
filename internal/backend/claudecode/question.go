@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/turn"
 )
 
 const (
 	askTool  = "AskUserQuestion"
-	askKind  = eventlog.RequestQuestion
+	askKind  = protocol.RequestQuestion
 	planMode = ",EnterPlanMode,ExitPlanMode"
 	// deferHook parks an AskUserQuestion call: the turn ends with stop_reason
 	// tool_deferred, and the CLI runs the call again on the next --resume.
@@ -54,7 +55,7 @@ func controlResponse(requestID string, decision map[string]any) map[string]any {
 // Resolve starts; anything else dismisses the call before the run goes on.
 func resolve(req turn.Request, out turn.Sink, callID string) (*resolution, bool, error) {
 	res, ok := out.Resolution(callID)
-	if !ok || res.Resolution != eventlog.ResolutionAnswered || len(req.Input) > 0 {
+	if !ok || res.Resolution != protocol.ResolutionAnswered || len(req.Input) > 0 {
 		return &resolution{callID: callID, dismiss: true,
 			decision: map[string]any{"behavior": "deny", "message": dismissed, "interrupt": true}}, false, nil
 	}
@@ -67,10 +68,10 @@ func resolve(req turn.Request, out turn.Sink, callID string) (*resolution, bool,
 
 // answeredInput rebuilds the input of the parked call with the answers added,
 // the shape that the AskUserQuestion tool of the CLI reads its result from.
-func answeredInput(history []eventlog.Message, callID string, answers json.RawMessage) (map[string]any, error) {
+func answeredInput(history []protocol.LogMessage, callID string, answers json.RawMessage) (map[string]any, error) {
 	for i := len(history) - 1; i >= 0; i-- {
 		for _, p := range history[i].Parts {
-			if p.Type != eventlog.PartToolCall || p.CallID != callID {
+			if p.Type != protocol.LogPartToolCall || p.CallID != callID {
 				continue
 			}
 			input := map[string]any{}

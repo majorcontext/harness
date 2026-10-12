@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/admit"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -65,11 +64,11 @@ func TestInputKeepsTextAndStoresEachAttachmentUnderItsHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.InputID != "a" || ev.Delivery != eventlog.DeliverySteer || ev.Source != "user" || len(ev.Parts) != 3 {
+	if ev.InputID != "a" || ev.Delivery != protocol.DeliverySteer || ev.Source != "user" || len(ev.Parts) != 3 {
 		t.Fatalf("record = %+v, want input a, steer, from the user, with 3 parts", ev)
 	}
 	img := ev.Parts[1]
-	if img.Type != eventlog.PartBlob || img.MediaType != "image/png" || img.Bytes != len(data) {
+	if img.Type != protocol.LogPartBlob || img.MediaType != "image/png" || img.Bytes != len(data) {
 		t.Errorf("image part = %+v", img)
 	}
 	if len(blobs) != 2 || blobs[0].Key != img.BlobKey || !bytes.Equal(blobs[0].Data, data) || blobs[0].Key == blobs[1].Key {

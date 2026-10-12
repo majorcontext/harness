@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // envelope is one stream-json frame of the Claude Code CLI.
@@ -85,17 +85,17 @@ var windowLabels = map[string]string{"five_hour": "5-hour", "seven_day": "Weekly
 // subscription maps the event to a snapshot of the claude lane. The event
 // has no plan, and the actor stamps the capture time. Windows are sorted by
 // key, so a snapshot is the same from one turn to the next.
-func (i *rateLimitInfo) subscription() *eventlog.SubscriptionUsage {
+func (i *rateLimitInfo) subscription() *protocol.SubscriptionUsage {
 	if i == nil {
 		return nil
 	}
-	u := &eventlog.SubscriptionUsage{Provider: "claude", Windows: []eventlog.SubscriptionUsageWindow{}}
+	u := &protocol.SubscriptionUsage{Provider: "claude", Windows: []protocol.SubscriptionUsageWindow{}}
 	for _, k := range slices.Sorted(maps.Keys(i.UnifiedWindows)) {
 		w := i.UnifiedWindows[k]
-		u.Windows = append(u.Windows, eventlog.SubscriptionUsageWindow{Key: k, Label: cmp.Or(windowLabels[k], k), UsedPercent: w.Utilization * 100, ResetsAt: w.ResetsAt})
+		u.Windows = append(u.Windows, protocol.SubscriptionUsageWindow{Key: k, Label: cmp.Or(windowLabels[k], k), UsedPercent: w.Utilization * 100, ResetsAt: w.ResetsAt})
 	}
 	if i.IsUsingOverage || i.OverageStatus != "" {
-		u.Overage = &eventlog.SubscriptionOverage{InUse: i.IsUsingOverage, Status: i.OverageStatus, ResetsAt: i.OverageResetsAt}
+		u.Overage = &protocol.SubscriptionOverage{InUse: i.IsUsingOverage, Status: i.OverageStatus, ResetsAt: i.OverageResetsAt}
 	}
 	return u
 }
@@ -118,11 +118,11 @@ type usage struct {
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 }
 
-func (u *usage) usage() eventlog.Usage {
+func (u *usage) usage() protocol.Usage {
 	if u == nil {
-		return eventlog.Usage{}
+		return protocol.Usage{}
 	}
-	return eventlog.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
+	return protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
 		CacheReadTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheCreationInputTokens}
 }
 
@@ -203,26 +203,26 @@ func contentText(raw json.RawMessage) string {
 }
 
 // assistantParts maps the blocks of an assistant message to parts in order.
-func assistantParts(m wireMessage) []eventlog.Part {
-	var parts []eventlog.Part
+func assistantParts(m wireMessage) []protocol.LogPart {
+	var parts []protocol.LogPart
 	for _, b := range decodeBlocks(m.Content) {
 		switch b.Type {
 		case "text":
 			if b.Text != "" {
-				parts = append(parts, eventlog.Part{Type: eventlog.PartText, Text: b.Text})
+				parts = append(parts, protocol.LogPart{Type: protocol.LogPartText, Text: b.Text})
 			}
 		case "thinking":
 			data, _ := json.Marshal(struct {
 				Signature string `json:"signature,omitempty"`
 			}{b.Signature})
-			parts = append(parts, eventlog.Part{Type: eventlog.PartReasoning, Text: b.Thinking,
+			parts = append(parts, protocol.LogPart{Type: protocol.LogPartReasoning, Text: b.Thinking,
 				ProviderData: map[string]json.RawMessage{reasoningFamily: data}})
 		case "tool_use":
 			args := b.Input
 			if len(args) == 0 {
 				args = json.RawMessage("{}")
 			}
-			parts = append(parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: b.ID, Name: b.Name, Arguments: args})
+			parts = append(parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: b.ID, Name: b.Name, Arguments: args})
 		}
 	}
 	return parts
@@ -230,11 +230,11 @@ func assistantParts(m wireMessage) []eventlog.Part {
 
 // toolResults maps the tool_result blocks of a user message to parts. A
 // user frame with no tool_result block has none.
-func toolResults(m wireMessage, names map[string]string) []eventlog.Part {
-	var parts []eventlog.Part
+func toolResults(m wireMessage, names map[string]string) []protocol.LogPart {
+	var parts []protocol.LogPart
 	for _, b := range decodeBlocks(m.Content) {
 		if b.Type == "tool_result" {
-			parts = append(parts, eventlog.Part{Type: eventlog.PartToolResult, CallID: b.ToolUseID,
+			parts = append(parts, protocol.LogPart{Type: protocol.LogPartToolResult, CallID: b.ToolUseID,
 				Name: names[b.ToolUseID], Text: contentText(b.Content), IsError: b.IsError})
 		}
 	}
@@ -291,14 +291,14 @@ type blockSource struct {
 
 // userLine is the stdin line of one user message. read returns the bytes of
 // an attachment.
-func userLine(m eventlog.Message, read func(key string) ([]byte, error)) (input, error) {
+func userLine(m protocol.LogMessage, read func(key string) ([]byte, error)) (input, error) {
 	var texts []string
 	var attachments []contentBlock
 	for _, p := range m.Parts {
 		switch p.Type {
-		case eventlog.PartText, eventlog.PartEngineContext:
+		case protocol.LogPartText, protocol.LogPartEngineContext:
 			texts = append(texts, p.Text)
-		case eventlog.PartBlob:
+		case protocol.LogPartBlob:
 			data, err := read(p.BlobKey)
 			if err != nil {
 				return input{}, fmt.Errorf("claudecode: attachment %s: %w", p.BlobKey, err)

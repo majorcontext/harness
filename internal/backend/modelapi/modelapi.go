@@ -13,7 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
@@ -100,9 +101,9 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:
-			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartText, Text: ev.Text})
+			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartText, Text: ev.Text})
 		case provider.EventReasoningDelta:
-			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
+			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartReasoning, Text: ev.Text})
 		case provider.EventDone:
 			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
 			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
@@ -160,27 +161,27 @@ func callMetrics(sentAt, firstAt, doneAt time.Time, md *provider.RequestMetadata
 // telemetry reports u, and the prompt of the call as the context reading.
 // A call with no prompt tokens reports no reading, so the earlier reading stays.
 func (b *Backend) telemetry(model string, u provider.Usage, sub *message.SubscriptionUsage) turn.Telemetry {
-	usage := eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
+	usage := protocol.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
 		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
 	t := turn.Telemetry{Usage: usage, SubscriptionUsage: subscription(sub)}
 	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
 		caps := b.Capabilities(model)
-		t.Context = eventlog.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(caps.ContextWindow), WindowEstimated: caps.WindowEstimated}
+		t.Context = protocol.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(caps.ContextWindow), WindowEstimated: caps.WindowEstimated}
 	}
 	return t
 }
 
 // subscription maps the snapshot of a provider. The actor stamps the capture time.
-func subscription(s *message.SubscriptionUsage) *eventlog.SubscriptionUsage {
+func subscription(s *message.SubscriptionUsage) *protocol.SubscriptionUsage {
 	if s == nil {
 		return nil
 	}
-	u := &eventlog.SubscriptionUsage{Provider: s.Provider, Plan: s.Plan, Windows: make([]eventlog.SubscriptionUsageWindow, len(s.Windows))}
+	u := &protocol.SubscriptionUsage{Provider: s.Provider, Plan: s.Plan, Windows: make([]protocol.SubscriptionUsageWindow, len(s.Windows))}
 	for i, w := range s.Windows {
-		u.Windows[i] = eventlog.SubscriptionUsageWindow(w)
+		u.Windows[i] = protocol.SubscriptionUsageWindow(w)
 	}
 	if o := s.Overage; o != nil {
-		u.Overage = &eventlog.SubscriptionOverage{InUse: o.InUse, Status: o.Status, ResetsAt: o.ResetsAt}
+		u.Overage = &protocol.SubscriptionOverage{InUse: o.InUse, Status: o.Status, ResetsAt: o.ResetsAt}
 	}
 	return u
 }

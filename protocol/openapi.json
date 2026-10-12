@@ -19,6 +19,33 @@
           "seq"
         ]
       },
+      "BackendState": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "blob_key": {
+            "type": "string"
+          },
+          "head": true,
+          "chunk": {
+            "type": "string"
+          },
+          "restart": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "integer"
+          },
+          "sum": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend"
+        ]
+      },
       "BaseRef": {
         "properties": {
           "ref": {
@@ -66,6 +93,44 @@
           "deletions",
           "binary",
           "large"
+        ]
+      },
+      "ChildSettled": {
+        "properties": {
+          "child_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "done",
+              "failed",
+              "canceled"
+            ]
+          },
+          "result_ref": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "child_id",
+          "outcome",
+          "result_ref"
+        ]
+      },
+      "ChildSpawned": {
+        "properties": {
+          "child_id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "child_id"
         ]
       },
       "CommandArg": {
@@ -137,6 +202,39 @@
           "kind",
           "summary",
           "category"
+        ]
+      },
+      "CommandRecorded": {
+        "properties": {
+          "input_id": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "result": true,
+          "result_truncated": {
+            "type": "boolean"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_id",
+          "line",
+          "name",
+          "status"
         ]
       },
       "CommandSupport": {
@@ -216,6 +314,32 @@
           "folded"
         ]
       },
+      "CompactionApplied": {
+        "properties": {
+          "from_seq": {
+            "type": "integer"
+          },
+          "to_seq": {
+            "type": "integer"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "by_backend": {
+            "type": "boolean"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_seq",
+          "to_seq",
+          "summary",
+          "by_backend"
+        ]
+      },
       "Context": {
         "properties": {
           "tokens": {
@@ -232,6 +356,37 @@
         "required": [
           "tokens",
           "window"
+        ]
+      },
+      "ContextMeasured": {
+        "properties": {
+          "tokens": {
+            "type": "integer"
+          },
+          "window": {
+            "type": "integer"
+          },
+          "window_estimated": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "subscription_usage": {
+            "$ref": "#/components/schemas/SubscriptionUsage"
+          },
+          "cost_usd": {
+            "type": "number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tokens",
+          "window",
+          "source"
         ]
       },
       "CreateSession": {
@@ -375,6 +530,73 @@
           "condition"
         ]
       },
+      "GoalChanged": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "achieved",
+              "failed",
+              "exhausted",
+              "cleared"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retry_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ]
+      },
+      "GoalEvaluated": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "impossible"
+            ]
+          },
+          "guidance": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "verdict"
+        ]
+      },
+      "GoalSet": {
+        "properties": {
+          "condition": {
+            "type": "string"
+          },
+          "max_turns": {
+            "type": "integer"
+          },
+          "turns": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "condition",
+          "max_turns"
+        ]
+      },
       "GoalView": {
         "properties": {
           "condition": {
@@ -384,7 +606,15 @@
             "type": "integer"
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "achieved",
+              "failed",
+              "exhausted",
+              "cleared"
+            ]
           },
           "turns": {
             "type": "integer"
@@ -453,7 +683,11 @@
             "type": "array"
           },
           "delivery": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "queue",
+              "steer"
+            ]
           },
           "source": {
             "type": "string"
@@ -475,6 +709,68 @@
           "parts"
         ]
       },
+      "InputAdmitted": {
+        "properties": {
+          "input_id": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "steer"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/LogPart"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_id",
+          "delivery",
+          "source",
+          "parts"
+        ]
+      },
+      "InputPromoted": {
+        "properties": {
+          "input_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_id",
+          "turn_id"
+        ]
+      },
+      "InputWithdrawn": {
+        "properties": {
+          "input_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_id"
+        ]
+      },
       "Interrupt": {
         "properties": {
           "turn_id": {
@@ -486,6 +782,25 @@
         },
         "additionalProperties": false,
         "type": "object"
+      },
+      "ItemCompleted": {
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/LogMessage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_id",
+          "turn_id",
+          "message"
+        ]
       },
       "ItemFrame": {
         "properties": {
@@ -514,10 +829,24 @@
             "type": "string"
           },
           "stop_reason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "completed",
+              "interrupted",
+              "failed",
+              "awaiting_input"
+            ]
           },
           "cause": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "stopped",
+              "ended",
+              "goal_cleared",
+              "handoff",
+              "crashed",
+              "provider_exhausted"
+            ]
           },
           "error": {
             "type": "string"
@@ -527,6 +856,70 @@
         "required": [
           "turn_id",
           "stop_reason"
+        ]
+      },
+      "LogMessage": {
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/LogPart"
+            },
+            "type": "array"
+          },
+          "parent_call_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "parts"
+        ]
+      },
+      "LogPart": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": true,
+          "is_error": {
+            "type": "boolean"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "blob_key": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/LogPart"
+            },
+            "type": "array"
+          },
+          "provider_data": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
         ]
       },
       "Message": {
@@ -730,6 +1123,21 @@
           "source"
         ]
       },
+      "OwnerAcquired": {
+        "properties": {
+          "epoch": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "epoch",
+          "owner"
+        ]
+      },
       "Part": {
         "properties": {
           "type": {
@@ -895,6 +1303,49 @@
           "log"
         ]
       },
+      "Progress": {
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "waiting",
+              "retrying",
+              "compacting",
+              "compaction_failed"
+            ]
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "queued": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/GoalView"
+          },
+          "last_turn": {
+            "$ref": "#/components/schemas/LastTurn"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seq"
+        ]
+      },
       "QueuedInput": {
         "properties": {
           "id": {
@@ -907,7 +1358,11 @@
             "type": "array"
           },
           "delivery": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "queue",
+              "steer"
+            ]
           },
           "source": {
             "type": "string"
@@ -925,6 +1380,46 @@
           "parts",
           "delivery",
           "source"
+        ]
+      },
+      "RequestOpened": {
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": true
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "item_id",
+          "kind"
+        ]
+      },
+      "RequestResolved": {
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "answered",
+              "dismissed"
+            ]
+          },
+          "answer": true
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "resolution"
         ]
       },
       "Resolution": {
@@ -976,7 +1471,15 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "waiting",
+              "retrying",
+              "compacting",
+              "compaction_failed"
+            ]
           },
           "turn_id": {
             "type": "string"
@@ -1048,6 +1551,37 @@
           "updated_at"
         ]
       },
+      "SessionCreated": {
+        "properties": {
+          "parent_id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "allowed_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "settings",
+          "origin"
+        ]
+      },
       "SessionPage": {
         "properties": {
           "sessions": {
@@ -1064,6 +1598,31 @@
         "required": [
           "sessions"
         ]
+      },
+      "Settings": {
+        "properties": {
+          "effort": {
+            "type": "string"
+          },
+          "service_tier": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SettingsChanged": {
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "service_tier": {
+            "type": "string"
+          }
+        },
+        "type": "object"
       },
       "SettingsPatch": {
         "properties": {
@@ -1083,7 +1642,15 @@
       "StatusFrame": {
         "properties": {
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "waiting",
+              "retrying",
+              "compacting",
+              "compaction_failed"
+            ]
           },
           "turn_id": {
             "type": "string"
@@ -1219,6 +1786,140 @@
           "session",
           "from_seq",
           "records"
+        ]
+      },
+      "ToolResultRetained": {
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "blob_key": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "lines": {
+            "type": "integer"
+          },
+          "head": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "tool",
+          "blob_key",
+          "bytes",
+          "lines",
+          "head"
+        ]
+      },
+      "TurnEnded": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "stop_reason": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "interrupted",
+              "failed",
+              "awaiting_input"
+            ]
+          },
+          "cause": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "ended",
+              "goal_cleared",
+              "handoff",
+              "crashed",
+              "provider_exhausted"
+            ]
+          },
+          "task_cancel": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "error_class": {
+            "type": "string"
+          },
+          "recover_hint": {
+            "type": "string"
+          },
+          "error_detail": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "stop_reason"
+        ]
+      },
+      "TurnResumed": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "count"
+        ]
+      },
+      "TurnStarted": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "input_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "input_ids"
+        ]
+      },
+      "TurnSuspended": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "ended",
+              "goal_cleared",
+              "handoff",
+              "crashed",
+              "provider_exhausted"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "cause"
         ]
       },
       "Usage": {

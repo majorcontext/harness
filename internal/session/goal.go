@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/turn"
@@ -61,8 +63,8 @@ var (
 // and no input queued, it admits the condition as an input with source
 // goal. Otherwise the next turn that ends is the first one judged.
 func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) error {
-	return a.setGoal(ctx, func(eventlog.Goal, bool) (*eventlog.GoalSet, bool, error) {
-		return &eventlog.GoalSet{Condition: condition, MaxTurns: maxTurns}, false, nil
+	return a.setGoal(ctx, func(eventlog.Goal, bool) (*protocol.GoalSet, bool, error) {
+		return &protocol.GoalSet{Condition: condition, MaxTurns: maxTurns}, false, nil
 	})
 }
 
@@ -72,11 +74,11 @@ func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) err
 // the goal tool. It fails with ErrGoalActive while a goal is active or
 // paused.
 func (a *Actor) StartGoal(ctx context.Context, condition string) error {
-	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*eventlog.GoalSet, bool, error) {
+	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*protocol.GoalSet, bool, error) {
 		if live {
 			return nil, false, ErrGoalActive
 		}
-		return &eventlog.GoalSet{Condition: condition}, true, nil
+		return &protocol.GoalSet{Condition: condition}, true, nil
 	})
 }
 
@@ -86,17 +88,17 @@ func (a *Actor) StartGoal(ctx context.Context, condition string) error {
 // queue is replaced by the new one. It fails with ErrNoGoal when no goal is
 // active or paused.
 func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
-	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*eventlog.GoalSet, bool, error) {
+	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error) {
 		switch {
 		case !live:
 			return nil, false, ErrNoGoal
 		case g.Condition == condition:
 			return nil, false, nil
 		}
-		waiting := slices.ContainsFunc(a.state.Queue(), func(in eventlog.InputAdmitted) bool {
-			return in.Source == sourceGoal && textOf(eventlog.Message{Parts: in.Parts}) == g.Condition
+		waiting := slices.ContainsFunc(a.state.Queue(), func(in protocol.InputAdmitted) bool {
+			return in.Source == sourceGoal && textOf(protocol.LogMessage{Parts: in.Parts}) == g.Condition
 		})
-		return &eventlog.GoalSet{Condition: condition, MaxTurns: g.MaxTurns, Turns: g.Turns}, waiting, nil
+		return &protocol.GoalSet{Condition: condition, MaxTurns: g.MaxTurns, Turns: g.Turns}, waiting, nil
 	})
 }
 
@@ -104,10 +106,10 @@ func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 // whether that goal is active or paused. A nil goal appends nothing. When
 // set reports post, the condition is an input even while the session is
 // busy.
-func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*eventlog.GoalSet, bool, error)) error {
+func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error)) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		g, _ := a.state.Goal()
-		gs, post, err := set(g, g.State == eventlog.GoalActive || g.State == eventlog.GoalPaused)
+		gs, post, err := set(g, g.State == protocol.GoalActive || g.State == protocol.GoalPaused)
 		if err != nil || gs == nil {
 			reply(struct{}{}, err)
 			return
@@ -133,12 +135,12 @@ func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool
 func (a *Actor) ClearGoal(ctx context.Context) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		g, ok := a.state.Goal()
-		if !ok || g.State == eventlog.GoalCleared {
+		if !ok || g.State == protocol.GoalCleared {
 			reply(struct{}{}, nil)
 			return
 		}
-		err := a.append(append(a.withdrawGoal(), eventlog.GoalChanged{State: eventlog.GoalCleared})...)
-		if r := a.run; err == nil && g.State == eventlog.GoalActive && r != nil && r.kind != kindCompaction {
+		err := a.append(append(a.withdrawGoal(), protocol.GoalChanged{State: protocol.GoalCleared})...)
+		if r := a.run; err == nil && g.State == protocol.GoalActive && r != nil && r.kind != kindCompaction {
 			r.cancel(errGoalCleared)
 			r.waiters = append(r.waiters, replyAppend(reply))
 			return
@@ -151,25 +153,25 @@ func (a *Actor) ClearGoal(ctx context.Context) error {
 	return err
 }
 
-func goalInput(text string) eventlog.InputAdmitted {
-	return eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliveryQueue, Source: sourceGoal,
-		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+func goalInput(text string) protocol.InputAdmitted {
+	return protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliveryQueue, Source: sourceGoal,
+		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }
 
-func (a *Actor) withdrawGoal() []eventlog.Event {
-	var events []eventlog.Event
+func (a *Actor) withdrawGoal() []protocol.Payload {
+	var events []protocol.Payload
 	for _, in := range a.state.Queue() {
 		if in.Source == sourceGoal {
-			events = append(events, eventlog.InputWithdrawn{InputID: in.InputID})
+			events = append(events, protocol.InputWithdrawn{InputID: in.InputID})
 		}
 	}
 	return events
 }
 
 // resumed returns the goal change of an input: any input resumes a paused goal.
-func (a *Actor) resumed() []eventlog.Event {
-	if g, _ := a.state.Goal(); g.State == eventlog.GoalPaused {
-		return []eventlog.Event{eventlog.GoalChanged{State: eventlog.GoalActive}}
+func (a *Actor) resumed() []protocol.Payload {
+	if g, _ := a.state.Goal(); g.State == protocol.GoalPaused {
+		return []protocol.Payload{protocol.GoalChanged{State: protocol.GoalActive}}
 	}
 	return nil
 }
@@ -179,7 +181,7 @@ func (a *Actor) resumed() []eventlog.Event {
 func (a *Actor) judgeable() bool {
 	g, _ := a.state.Goal()
 	last := a.state.LastEnded()
-	return last.TurnID != g.Evaluated && (last.StopReason == eventlog.StopCompleted || last.StopReason == eventlog.StopInterrupted)
+	return last.TurnID != g.Evaluated && (last.StopReason == protocol.StopCompleted || last.StopReason == protocol.StopInterrupted)
 }
 
 // settle judges the last ended turn for an active goal, or starts the next
@@ -187,8 +189,8 @@ func (a *Actor) judgeable() bool {
 // actor runs nothing.
 func (a *Actor) settle(check bool) error {
 	g, _ := a.state.Goal()
-	posted := g.Turns == 0 && slices.ContainsFunc(a.state.Queue(), func(in eventlog.InputAdmitted) bool { return in.Source == sourceGoal })
-	if g.State == eventlog.GoalActive && a.judgeable() && !posted {
+	posted := g.Turns == 0 && slices.ContainsFunc(a.state.Queue(), func(in protocol.InputAdmitted) bool { return in.Source == sourceGoal })
+	if g.State == protocol.GoalActive && a.judgeable() && !posted {
 		a.judge(g)
 		return nil
 	}
@@ -202,8 +204,8 @@ func (a *Actor) judge(g eventlog.Goal) {
 	turnID := a.state.LastEnded().TurnID
 	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History(), a.transcriptBudget())
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
-		Settings: eventlog.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
-		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
+		Settings: protocol.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
+		History: []protocol.LogMessage{{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}}}
 	a.spawn(func() {
 		answer, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
@@ -225,7 +227,7 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	r.cancel(nil)
 	g, _ := a.state.Goal()
 	var appendErr error
-	if stopped == nil && len(a.releasing) == 0 && g.State == eventlog.GoalActive && g.Evaluated != turnID {
+	if stopped == nil && len(a.releasing) == 0 && g.State == protocol.GoalActive && g.Evaluated != turnID {
 		events := append(a.withdrawGoal(), verdict(turnID, g, answer)...)
 		if err != nil {
 			events = a.goalStop(err)
@@ -242,37 +244,37 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	a.finishRun(r, err, appendErr, next)
 }
 
-func verdict(turnID string, g eventlog.Goal, answer string) []eventlog.Event {
+func verdict(turnID string, g eventlog.Goal, answer string) []protocol.Payload {
 	v, why := parseVerdict(answer)
-	ev := eventlog.GoalEvaluated{TurnID: turnID, Verdict: v}
+	ev := protocol.GoalEvaluated{TurnID: turnID, Verdict: v}
 	switch v {
-	case eventlog.VerdictMet:
-		return []eventlog.Event{ev, eventlog.GoalChanged{State: eventlog.GoalAchieved, Reason: why}}
-	case eventlog.VerdictImpossible:
-		return []eventlog.Event{ev, eventlog.GoalChanged{State: eventlog.GoalFailed, Reason: why}}
+	case protocol.VerdictMet:
+		return []protocol.Payload{ev, protocol.GoalChanged{State: protocol.GoalAchieved, Reason: why}}
+	case protocol.VerdictImpossible:
+		return []protocol.Payload{ev, protocol.GoalChanged{State: protocol.GoalFailed, Reason: why}}
 	}
 	ev.Guidance = why
 	if g.MaxTurns > 0 && g.Turns+1 >= g.MaxTurns {
-		return []eventlog.Event{ev, eventlog.GoalChanged{State: eventlog.GoalExhausted, Reason: fmt.Sprintf("max_turns %d reached", g.MaxTurns)}}
+		return []protocol.Payload{ev, protocol.GoalChanged{State: protocol.GoalExhausted, Reason: fmt.Sprintf("max_turns %d reached", g.MaxTurns)}}
 	}
-	return []eventlog.Event{ev, goalInput("The goal has not been met yet.\n\nGOAL: " + g.Condition +
+	return []protocol.Payload{ev, goalInput("The goal has not been met yet.\n\nGOAL: " + g.Condition +
 		"\n\nEVALUATOR FEEDBACK: " + why + "\n\nKeep working until the goal is fully satisfied, then stop.")}
 }
 
 // parseVerdict reads a verdict prefix in any case, after markdown marks. A
 // reply with no verdict is not_met, and the reply is the guidance.
-func parseVerdict(answer string) (eventlog.Verdict, string) {
+func parseVerdict(answer string) (protocol.Verdict, string) {
 	const marks = "*#` \t\n"
 	t := strings.Trim(answer, marks)
 	for _, f := range []struct {
 		prefix  string
-		verdict eventlog.Verdict
-	}{{"NOT MET", eventlog.VerdictNotMet}, {"IMPOSSIBLE", eventlog.VerdictImpossible}, {"MET", eventlog.VerdictMet}} {
+		verdict protocol.Verdict
+	}{{"NOT MET", protocol.VerdictNotMet}, {"IMPOSSIBLE", protocol.VerdictImpossible}, {"MET", protocol.VerdictMet}} {
 		if len(t) >= len(f.prefix) && strings.EqualFold(t[:len(f.prefix)], f.prefix) {
 			return f.verdict, strings.Trim(strings.TrimPrefix(strings.TrimLeft(t[len(f.prefix):], marks), ":"), marks)
 		}
 	}
-	return eventlog.VerdictNotMet, t
+	return protocol.VerdictNotMet, t
 }
 
 // transcriptBudget returns the bytes of transcript that the evaluator model
@@ -292,7 +294,7 @@ func (a *Actor) transcriptBudget() int {
 // part cut at partBytes, and the newest messages within budget bytes, each
 // message counted with the blank line that follows it. It keeps the newest
 // message even over the budget.
-func transcript(h []eventlog.Message, budget int) string {
+func transcript(h []protocol.LogMessage, budget int) string {
 	var blocks []string
 	size := 0
 	for _, m := range slices.Backward(h) {
@@ -301,15 +303,15 @@ func transcript(h []eventlog.Message, budget int) string {
 		for _, p := range m.Parts {
 			s := p.Text
 			switch {
-			case p.Type == eventlog.PartToolCall:
+			case p.Type == protocol.LogPartToolCall:
 				s = "[tool call " + p.Name + "] " + string(p.Arguments)
-			case p.Type == eventlog.PartToolResult && p.IsError:
+			case p.Type == protocol.LogPartToolResult && p.IsError:
 				s = "[tool result (error)] " + p.Text
-			case p.Type == eventlog.PartToolResult:
+			case p.Type == protocol.LogPartToolResult:
 				s = "[tool result] " + p.Text
-			case p.Type == eventlog.PartReasoning:
+			case p.Type == protocol.LogPartReasoning:
 				s = "[reasoning] " + p.Text
-			case p.Type == eventlog.PartBlob:
+			case p.Type == protocol.LogPartBlob:
 				s = "[blob " + p.MediaType + "]"
 			}
 			if len(s) > partBytes {
@@ -330,18 +332,18 @@ func transcript(h []eventlog.Message, budget int) string {
 // goalStop returns the goal change after err ended a goal turn or its
 // evaluation: paused for a retryable error or a usage limit, else failed. The
 // goalMaxPauses+1th pause fails with retries_exhausted.
-func (a *Actor) goalStop(err error) []eventlog.Event {
+func (a *Actor) goalStop(err error) []protocol.Payload {
 	g, _ := a.state.Goal()
-	if g.State != eventlog.GoalActive {
+	if g.State != protocol.GoalActive {
 		return nil
 	}
-	change := eventlog.GoalChanged{State: eventlog.GoalFailed, Reason: plugin.SanitizeSessionError(err.Error())}
+	change := protocol.GoalChanged{State: protocol.GoalFailed, Reason: plugin.SanitizeSessionError(err.Error())}
 	if errors.Is(err, turn.ErrRetryable) || errors.Is(err, turn.ErrExhausted) {
 		if g.Pauses >= goalMaxPauses {
 			change.Reason = goalRetriesExhausted
 			return append(a.withdrawGoal(), change)
 		}
-		change.State, change.RetryAt = eventlog.GoalPaused, time.Now().Add(min(goalRetry<<min(g.Pauses, 10), goalRetryMax))
+		change.State, change.RetryAt = protocol.GoalPaused, time.Now().Add(min(goalRetry<<min(g.Pauses, 10), goalRetryMax))
 	}
 	return append(a.withdrawGoal(), change)
 }
@@ -352,7 +354,7 @@ func (a *Actor) goalStop(err error) []eventlog.Event {
 func (a *Actor) retryLater() {
 	a.stopRetry()
 	g, _ := a.state.Goal()
-	if g.State != eventlog.GoalPaused {
+	if g.State != protocol.GoalPaused {
 		return
 	}
 	ctx, cancel := context.WithCancel(a.cfg.Base)
@@ -383,7 +385,7 @@ func (a *Actor) stopRetry() {
 // the goal.
 func (a *Actor) retry(at time.Time) error {
 	g, _ := a.state.Goal()
-	if g.State != eventlog.GoalPaused || !g.RetryAt.Equal(at) {
+	if g.State != protocol.GoalPaused || !g.RetryAt.Equal(at) {
 		return nil
 	}
 	events := a.resumed()

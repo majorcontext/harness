@@ -5,7 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/session"
 )
 
@@ -31,7 +32,7 @@ type logEntry struct {
 // renderLog renders h under logTotalCap. It fills the newest entries
 // first, so the messages nearest the end of a child survive, and always
 // keeps the newest one.
-func renderLog(h []eventlog.Message) []logEntry {
+func renderLog(h []protocol.LogMessage) []logEntry {
 	out := []logEntry{}
 	budget := logTotalCap
 	for _, m := range slices.Backward(h) {
@@ -47,7 +48,7 @@ func renderLog(h []eventlog.Message) []logEntry {
 	return out
 }
 
-func renderEntry(m eventlog.Message) logEntry {
+func renderEntry(m protocol.LogMessage) logEntry {
 	cut := false
 	capped := func(s string, n int) string {
 		s, c := session.CapRunes(s, n)
@@ -57,15 +58,15 @@ func renderEntry(m eventlog.Message) logEntry {
 	var lines []string
 	for _, p := range m.Parts {
 		switch {
-		case (p.Type == eventlog.PartText || p.Type == eventlog.PartEngineContext) && p.Text != "":
+		case (p.Type == protocol.LogPartText || p.Type == protocol.LogPartEngineContext) && p.Text != "":
 			lines = append(lines, capped(p.Text, logEntryCap))
-		case p.Type == eventlog.PartReasoning && p.Text != "":
+		case p.Type == protocol.LogPartReasoning && p.Text != "":
 			lines = append(lines, "[reasoning] "+capped(p.Text, logEntryCap))
-		case p.Type == eventlog.PartToolCall:
+		case p.Type == protocol.LogPartToolCall:
 			lines = append(lines, "[tool_call] "+p.Name+"("+capped(string(p.Arguments), logArgsCap)+")")
-		case p.Type == eventlog.PartToolResult && p.IsError:
+		case p.Type == protocol.LogPartToolResult && p.IsError:
 			lines = append(lines, "[tool_result error] "+capped(p.Text, logEntryCap))
-		case p.Type == eventlog.PartToolResult:
+		case p.Type == protocol.LogPartToolResult:
 			lines = append(lines, "[tool_result] "+capped(p.Text, logEntryCap))
 		}
 	}

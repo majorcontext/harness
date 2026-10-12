@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/invopop/jsonschema"
@@ -25,8 +30,17 @@ const (
 )
 
 // wireTypes are the types of the wire that no route names: the data of an
-// ephemeral frame, and the replication call of Sync.
-var wireTypes = []any{protocol.ItemFrame{}, protocol.StatusFrame{}, protocol.SyncBatch{}, protocol.SyncAck{}}
+// ephemeral frame, the replication call of Sync, the payload of each durable
+// event, and the progress of a log.
+var wireTypes = append([]any{protocol.ItemFrame{}, protocol.StatusFrame{}, protocol.SyncBatch{}, protocol.SyncAck{}, protocol.Progress{}}, payloadTypes()...)
+
+func payloadTypes() []any {
+	var out []any
+	for _, p := range protocol.DurablePayloads() {
+		out = append(out, reflect.ValueOf(p).Elem().Interface())
+	}
+	return out
+}
 
 func rootTypes() []reflect.Type {
 	types := []reflect.Type{reflect.TypeOf(protocol.ErrorBody{})}
@@ -43,9 +57,66 @@ func rootTypes() []reflect.Type {
 	return types
 }
 
+// unlisted are the string types that get no enum from their constants:
+// ErrorClass is open, because a reader must accept a value that no constant
+// names, and Code gets its list from enumerateCodes.
+var unlisted = map[string]bool{"ErrorClass": true, "Code": true}
+
+// enumValues maps each closed string type of the protocol sources in the
+// working directory to the values of its constants, which go generate sets to
+// the protocol directory.
+var enumValues = sync.OnceValues(func() (map[string][]string, error) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				typ, ok := vs.Type.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				for _, v := range vs.Values {
+					if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING && !unlisted[typ.Name] {
+						val, err := strconv.Unquote(lit.Value)
+						if err != nil {
+							return nil, err
+						}
+						out[typ.Name] = append(out[typ.Name], val)
+					}
+				}
+			}
+		}
+	}
+	return out, nil
+})
+
 func mapper(t reflect.Type) *jsonschema.Schema {
 	if t == reflect.TypeFor[json.RawMessage]() {
 		return &jsonschema.Schema{}
+	}
+	if t.Kind() == reflect.String && t.PkgPath() == reflect.TypeFor[protocol.Error]().PkgPath() {
+		if values, err := enumValues(); err == nil && len(values[t.Name()]) > 0 {
+			s := &jsonschema.Schema{Type: "string"}
+			for _, v := range values[t.Name()] {
+				s.Enum = append(s.Enum, v)
+			}
+			return s
+		}
 	}
 	return nil
 }
@@ -56,6 +127,9 @@ func newReflector() *jsonschema.Reflector {
 
 // components reflects every type that a route or a wire type names.
 func components() (map[string]*jsonschema.Schema, error) {
+	if _, err := enumValues(); err != nil {
+		return nil, err
+	}
 	r := newReflector()
 	defs := map[string]*jsonschema.Schema{}
 	structs := map[string]reflect.Type{}

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -25,27 +24,27 @@ type turnRun struct {
 }
 
 // Item records m under the ID that Started minted for it, or a new ID.
-func (t *turnRun) Item(m eventlog.Message) error {
+func (t *turnRun) Item(m protocol.LogMessage) error {
 	id := t.item
 	t.item = ""
 	return t.ItemAs(id, m)
 }
 
 // ItemAs records m under id, or a new ID when id is "".
-func (t *turnRun) ItemAs(id string, m eventlog.Message) error {
+func (t *turnRun) ItemAs(id string, m protocol.LogMessage) error {
 	_, err := call(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.item(t.r, id, m)) })
 	return err
 }
 
 // Attach stores data under a key that its digest names, so a repeat of the same
 // bytes is one blob. The Store holds the blob before the record that names it.
-func (t *turnRun) Attach(mediaType string, data []byte) (eventlog.Part, error) {
+func (t *turnRun) Attach(mediaType string, data []byte) (protocol.LogPart, error) {
 	sum := sha256.Sum256(data)
 	key := "toolblob-" + hex.EncodeToString(sum[:])
 	if err := t.a.cfg.Store.PutBlob(t.a.cfg.Base, key, bytes.NewReader(data)); err != nil {
-		return eventlog.Part{}, err
+		return protocol.LogPart{}, err
 	}
-	return eventlog.Part{Type: eventlog.PartBlob, MediaType: mediaType, BlobKey: key, Bytes: len(data)}, nil
+	return protocol.LogPart{Type: protocol.LogPartBlob, MediaType: mediaType, BlobKey: key, Bytes: len(data)}, nil
 }
 
 // Started announces a new item and makes it the item of the next Item.
@@ -86,16 +85,16 @@ func (t *turnRun) Telemetry(tel turn.Telemetry) {
 }
 
 // Steer promotes the queued steer inputs into the turn and returns them.
-func (t *turnRun) Steer() ([]eventlog.Message, error) {
-	return call(context.Background(), t.a, func(reply func([]eventlog.Message, error)) { reply(t.a.steer(t.r)) })
+func (t *turnRun) Steer() ([]protocol.LogMessage, error) {
+	return call(context.Background(), t.a, func(reply func([]protocol.LogMessage, error)) { reply(t.a.steer(t.r)) })
 }
 
 // Settings returns the model and the settings of the session while the turn
 // runs, so that a change takes effect at the next model call of the turn.
-func (t *turnRun) Settings() (string, eventlog.Settings) {
+func (t *turnRun) Settings() (string, protocol.Settings) {
 	type held struct {
 		model string
-		set   eventlog.Settings
+		set   protocol.Settings
 	}
 	h, _ := call(context.Background(), t.a, func(reply func(held, error)) {
 		if t.a.run == t.r {
@@ -129,11 +128,11 @@ func (t *turnRun) Ended(runErr error) {
 // CompactTurn folds the turns before the newest Config.KeepTurns into a
 // summary while the turn runs, and returns the new history. ok is false when
 // no turn can fold. When ctx ends, it appends nothing.
-func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, error) {
+func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool, error) {
 	a, r := t.a, t.r
 	type folding struct {
 		req   turn.Request
-		c     eventlog.CompactionApplied
+		c     protocol.CompactionApplied
 		ok    bool
 		metas []toolresult.Meta
 	}
@@ -160,7 +159,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 		return nil, false, err
 	}
 	f.c.Summary, f.c.Usage = a.indexed(summary, f.metas), usage
-	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
+	h, err := call(ctx, a, func(reply func([]protocol.LogMessage, error)) {
 		if a.run != r || ctx.Err() != nil {
 			reply(nil, cmp.Or(context.Cause(ctx), error(ErrTurnMismatch)))
 			return

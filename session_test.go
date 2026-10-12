@@ -12,7 +12,6 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -88,7 +87,7 @@ func TestEventsStreamCodexDeltas(t *testing.T) {
 func deltas(n int, text string) func(turn.Sink) error {
 	return func(out turn.Sink) error {
 		for range n {
-			out.Delta("backend-id", turn.Delta{Type: eventlog.PartText, Text: text})
+			out.Delta("backend-id", turn.Delta{Type: protocol.LogPartText, Text: text})
 		}
 		return out.Item(say(strings.Repeat(text, n)))
 	}
@@ -97,7 +96,7 @@ func deltas(n int, text string) func(turn.Sink) error {
 func TestEventsLiveFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		flaky := func(out turn.Sink) error {
-			out.Delta("backend-id", turn.Delta{Type: eventlog.PartText, Text: "z"})
+			out.Delta("backend-id", turn.Delta{Type: protocol.LogPartText, Text: "z"})
 			return fmt.Errorf("%w: flaky", turn.ErrRetryable)
 		}
 		r := runtime(t, harness.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
@@ -124,7 +123,7 @@ func (windowed) Capabilities(string) turn.Capabilities { return turn.Capabilitie
 func compactingRuntime(t *testing.T, summary func(turn.Sink) error) *harness.Session {
 	t.Helper()
 	full := func(out turn.Sink) error {
-		out.Telemetry(turn.Telemetry{Context: eventlog.ContextMeasured{Tokens: 900, Window: 1000, Source: "test"}})
+		out.Telemetry(turn.Telemetry{Context: protocol.ContextMeasured{Tokens: 900, Window: 1000, Source: "test"}})
 		return out.Item(say("full"))
 	}
 	reply := func(out turn.Sink) error { return out.Item(say("ok")) }

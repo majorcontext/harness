@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -69,14 +71,14 @@ func (owned) Release(context.Context) error { return nil }
 func TestFramesNeverTrailTheDurableHead(t *testing.T) {
 	const appends = 3000
 	a := newActor(Config{ID: "s1", Store: &memLog{}, Ownership: owned{}, Backend: newHeldBackend(false), Base: t.Context()}, &eventlog.State{})
-	if err := a.appendCtx(t.Context(), eventlog.SessionCreated{Model: "m"}); err != nil {
+	if err := a.appendCtx(t.Context(), protocol.SessionCreated{Model: "m"}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for i := range appends {
-			if err := a.appendCtx(t.Context(), eventlog.SettingsChanged{Effort: new([]string{"low", "high"}[i%2])}); err != nil {
+			if err := a.appendCtx(t.Context(), protocol.SettingsChanged{Effort: new([]string{"low", "high"}[i%2])}); err != nil {
 				t.Error(err)
 			}
 		}
@@ -88,7 +90,7 @@ func TestFramesNeverTrailTheDurableHead(t *testing.T) {
 			case <-done:
 				return
 			default:
-				t.Delta("i1", turn.Delta{Type: eventlog.PartText, Text: "x"})
+				t.Delta("i1", turn.Delta{Type: protocol.LogPartText, Text: "x"})
 			}
 		}
 	}()

@@ -13,7 +13,6 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -57,14 +56,14 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		ownsLoop bool
-		last     eventlog.Message
-		late     []eventlog.Message
+		last     protocol.LogMessage
+		late     []protocol.LogMessage
 		want     []string
 	}{
-		{"a tool call after the handoff is refused", false, say("partial"), []eventlog.Message{callTool("c2")},
+		{"a tool call after the handoff is refused", false, say("partial"), []protocol.LogMessage{callTool("c2")},
 			[]string{"item.completed assistant partial"}},
 		{"a tool call that a loop-owning backend ran after the handoff is cut off", true, say("partial"),
-			[]eventlog.Message{callTool("c2")},
+			[]protocol.LogMessage{callTool("c2")},
 			[]string{"item.completed assistant partial", "item.completed assistant c2", "item.completed tool c2 " + cutOff}},
 		{"an open tool call is cut off", true, callTool("c1"), nil,
 			[]string{"item.completed assistant c1", "item.completed tool c1 " + cutOff}},

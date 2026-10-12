@@ -4,15 +4,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestRenderLogKeepsTheNewestEntriesUnderTheBudget(t *testing.T) {
-	msg := func(text string) eventlog.Message {
-		return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+	msg := func(text string) protocol.LogMessage {
+		return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 	}
 	long := strings.Repeat("x", logEntryCap)
-	var h []eventlog.Message
+	var h []protocol.LogMessage
 	for range 12 {
 		h = append(h, msg(long))
 	}

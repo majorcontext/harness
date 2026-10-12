@@ -1,6 +1,8 @@
 package session
 
-import "github.com/majorcontext/harness/internal/eventlog"
+import (
+	"github.com/majorcontext/harness/protocol"
+)
 
 const (
 	bytesPerToken = 4
@@ -10,7 +12,7 @@ const (
 // estimateTokens estimates the prompt size of history for a provider that
 // reports no prompt tokens: one token for each 4 bytes of text, tool call, tool
 // result, and reasoning, and a flat cost for each image.
-func estimateTokens(history []eventlog.Message) int64 {
+func estimateTokens(history []protocol.LogMessage) int64 {
 	var bytes, images int64
 	for _, m := range history {
 		b, i := sizeOf(m.Parts)
@@ -20,10 +22,10 @@ func estimateTokens(history []eventlog.Message) int64 {
 }
 
 // sizeOf returns the bytes of the text-shaped content of parts, and the number of images.
-func sizeOf(parts []eventlog.Part) (bytes, images int64) {
+func sizeOf(parts []protocol.LogPart) (bytes, images int64) {
 	for _, p := range parts {
 		bytes += int64(len(p.Text) + len(p.Name) + len(p.Arguments) + len(p.CallID))
-		if p.Type == eventlog.PartBlob {
+		if p.Type == protocol.LogPartBlob {
 			if len(p.MediaType) >= 6 && p.MediaType[:6] == "image/" {
 				images++
 			} else {

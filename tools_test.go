@@ -10,7 +10,6 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -122,11 +121,11 @@ func TestEmbedderTools(t *testing.T) {
 }
 
 // calls is one assistant message that calls tool once for each argument set.
-func calls(tool string, args ...map[string]any) eventlog.Message {
-	m := eventlog.Message{Role: eventlog.RoleAssistant}
+func calls(tool string, args ...map[string]any) protocol.LogMessage {
+	m := protocol.LogMessage{Role: protocol.RoleAssistant}
 	for i, a := range args {
 		raw, _ := json.Marshal(a)
-		m.Parts = append(m.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: "g" + string(rune('0'+i)), Name: tool, Arguments: raw})
+		m.Parts = append(m.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: "g" + string(rune('0'+i)), Name: tool, Arguments: raw})
 	}
 	return m
 }
@@ -140,7 +139,7 @@ func (f *family) results(session string) []string {
 		var got []string
 		for _, m := range req.History {
 			for _, p := range m.Parts {
-				if p.Type == eventlog.PartToolResult && req.SessionID == session {
+				if p.Type == protocol.LogPartToolResult && req.SessionID == session {
 					got = append(got, p.Text)
 				}
 			}

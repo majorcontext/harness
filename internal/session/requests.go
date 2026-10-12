@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -19,7 +18,7 @@ var ErrBadAnswer = errors.New("harness: bad answer")
 
 // checkAnswer accepts for a question only a non-empty map of text.
 func checkAnswer(kind string, answer json.RawMessage) error {
-	if kind != eventlog.RequestQuestion {
+	if kind != protocol.RequestQuestion {
 		return nil
 	}
 	var choices map[string]string
@@ -34,7 +33,7 @@ func checkAnswer(kind string, answer json.RawMessage) error {
 // session has no user who watches the turn.
 func (a *Actor) questions() bool {
 	g, _ := a.state.Goal()
-	return a.cfg.AskUserQuestion && a.state.Summary().ParentID == "" && g.State != eventlog.GoalActive
+	return a.cfg.AskUserQuestion && a.state.Summary().ParentID == "" && g.State != protocol.GoalActive
 }
 
 // Resolve closes request id and returns the seq of its request.resolved
@@ -43,7 +42,7 @@ func (a *Actor) questions() bool {
 // the backend.
 func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, dismiss bool) (protocol.Resolved, error) {
 	return call(ctx, a, func(reply func(protocol.Resolved, error)) {
-		i := slices.IndexFunc(a.state.Requests(), func(r eventlog.RequestOpened) bool { return r.RequestID == id })
+		i := slices.IndexFunc(a.state.Requests(), func(r protocol.RequestOpened) bool { return r.RequestID == id })
 		if i < 0 {
 			reply(protocol.Resolved{}, ErrRequestNotPending)
 			return
@@ -54,9 +53,9 @@ func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, 
 				return
 			}
 		}
-		ev := eventlog.RequestResolved{RequestID: id, Resolution: eventlog.ResolutionDismissed}
+		ev := protocol.RequestResolved{RequestID: id, Resolution: protocol.ResolutionDismissed}
 		if !dismiss {
-			ev.Resolution, ev.Answer = eventlog.ResolutionAnswered, answer
+			ev.Resolution, ev.Answer = protocol.ResolutionAnswered, answer
 		}
 		got := protocol.Resolved{Seq: a.state.Head() + 1, Status: protocol.ResolvedDismissed}
 		if dismiss {
@@ -68,7 +67,7 @@ func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, 
 			return
 		}
 		turnID := newID("turn")
-		if err := a.append(ev, eventlog.TurnStarted{TurnID: turnID, InputIDs: []string{}}); err != nil {
+		if err := a.append(ev, protocol.TurnStarted{TurnID: turnID, InputIDs: []string{}}); err != nil {
 			reply(protocol.Resolved{}, err)
 			return
 		}

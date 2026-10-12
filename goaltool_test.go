@@ -7,7 +7,6 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -16,10 +15,10 @@ func goalRuntime(t *testing.T, f *family, evaluator string) *harness.Runtime {
 	return familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{GoalEvaluatorModel: evaluator}, "")
 }
 
-func judging(verdict string, more func(eventlog.Part) []eventlog.Message) func(eventlog.Part) []eventlog.Message {
-	return func(p eventlog.Part) []eventlog.Message {
+func judging(verdict string, more func(protocol.LogPart) []protocol.LogMessage) func(protocol.LogPart) []protocol.LogMessage {
+	return func(p protocol.LogPart) []protocol.LogMessage {
 		if strings.HasPrefix(p.Text, "GOAL CONDITION:") {
-			return []eventlog.Message{say(verdict)}
+			return []protocol.LogMessage{say(verdict)}
 		}
 		return more(p)
 	}
@@ -28,12 +27,12 @@ func judging(verdict string, more func(eventlog.Part) []eventlog.Message) func(e
 func TestGoalToolAdjustKeepsTheTurnLimit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		adjusted := false
-		f := &family{answer: judging("NOT MET: more", func(p eventlog.Part) []eventlog.Message {
+		f := &family{answer: judging("NOT MET: more", func(p protocol.LogPart) []protocol.LogMessage {
 			if strings.HasPrefix(p.Text, "The goal has not been met yet.") && !adjusted {
 				adjusted = true
-				return []eventlog.Message{calls("goal", map[string]any{"action": "adjust", "condition": "say done now"})}
+				return []protocol.LogMessage{calls("goal", map[string]any{"action": "adjust", "condition": "say done now"})}
 			}
-			return []eventlog.Message{say("working")}
+			return []protocol.LogMessage{say("working")}
 		})}
 		r := goalRuntime(t, f, "fake/eval")
 		s := create(t, r)

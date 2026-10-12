@@ -15,7 +15,6 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -78,7 +77,7 @@ func toolPartNames(t *testing.T, st harness.Store) []string {
 	var names []string
 	for _, r := range recs {
 		var env struct {
-			D struct{ Message eventlog.Message }
+			D struct{ Message protocol.LogMessage }
 		}
 		_ = json.Unmarshal(r.Data, &env)
 		for _, p := range env.D.Message.Parts {

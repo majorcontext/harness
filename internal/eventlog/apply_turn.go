@@ -4,6 +4,8 @@ import (
 	"maps"
 	"slices"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 func (s *State) runningTurn(id string) error {
@@ -13,7 +15,7 @@ func (s *State) runningTurn(id string) error {
 	return nil
 }
 
-func (s *State) applyStarted(e TurnStarted) error {
+func (s *State) applyStarted(e protocol.TurnStarted) error {
 	switch {
 	case s.turn.ID != "":
 		return illegal("turn %s is current", s.turn.ID)
@@ -42,12 +44,12 @@ func (s *State) applyStarted(e TurnStarted) error {
 	return nil
 }
 
-func (s *State) applyItem(e ItemCompleted) error {
+func (s *State) applyItem(e protocol.ItemCompleted) error {
 	if err := s.runningTurn(e.TurnID); err != nil {
 		return err
 	}
 	switch e.Message.Role {
-	case RoleUser, RoleAssistant, RoleTool:
+	case protocol.RoleUser, protocol.RoleAssistant, protocol.RoleTool:
 	default:
 		return illegal("item %s has role %q", e.ItemID, e.Message.Role)
 	}
@@ -55,20 +57,20 @@ func (s *State) applyItem(e ItemCompleted) error {
 	for _, p := range e.Message.Parts {
 		i := slices.IndexFunc(calls, func(c OpenToolCall) bool { return c.CallID == p.CallID })
 		switch {
-		case p.Type == PartToolCall && p.CallID == "":
+		case p.Type == protocol.LogPartToolCall && p.CallID == "":
 			return illegal("item %s has a tool call with no call_id", e.ItemID)
-		case p.Type == PartToolCall && i >= 0:
+		case p.Type == protocol.LogPartToolCall && i >= 0:
 			return illegal("tool call %s is open", p.CallID)
-		case p.Type == PartToolCall:
+		case p.Type == protocol.LogPartToolCall:
 			calls = append(calls, OpenToolCall{CallID: p.CallID, ItemID: e.ItemID, Name: p.Name})
-		case p.Type == PartToolResult && i < 0:
+		case p.Type == protocol.LogPartToolResult && i < 0:
 			return illegal("no open tool call %s", p.CallID)
-		case p.Type == PartToolResult:
-			if j := slices.IndexFunc(p.Blobs, func(b Part) bool { return b.Type != PartBlob || b.BlobKey == "" }); j >= 0 {
+		case p.Type == protocol.LogPartToolResult:
+			if j := slices.IndexFunc(p.Blobs, func(b protocol.LogPart) bool { return b.Type != protocol.LogPartBlob || b.BlobKey == "" }); j >= 0 {
 				return illegal("tool result %s has a blob %d that is not a blob part with a blob_key", p.CallID, j)
 			}
 			calls = slices.Delete(calls, i, i+1)
-		case p.Type != PartText && p.Type != PartReasoning:
+		case p.Type != protocol.LogPartText && p.Type != protocol.LogPartReasoning:
 			return illegal("item %s has part type %q", e.ItemID, p.Type)
 		}
 	}
@@ -79,18 +81,18 @@ func (s *State) applyItem(e ItemCompleted) error {
 
 func (s *State) unanswered() error {
 	for _, c := range s.calls {
-		if s.openRequest(c.CallID) < 0 {
+		if !s.isOpen(c.CallID) {
 			return illegal("tool call %s has no result", c.CallID)
 		}
 	}
 	return nil
 }
 
-func (s *State) applySuspended(e TurnSuspended) error {
+func (s *State) applySuspended(e protocol.TurnSuspended) error {
 	if err := s.runningTurn(e.TurnID); err != nil {
 		return err
 	}
-	if e.Cause != CauseHandoff {
+	if e.Cause != protocol.CauseHandoff {
 		return illegal("turn %s suspended with cause %s", e.TurnID, e.Cause)
 	}
 	if len(s.calls) > 0 {
@@ -100,7 +102,7 @@ func (s *State) applySuspended(e TurnSuspended) error {
 	return nil
 }
 
-func (s *State) applyResumed(e TurnResumed) error {
+func (s *State) applyResumed(e protocol.TurnResumed) error {
 	if s.turn.ID != e.TurnID || !s.turn.Suspended {
 		return illegal("turn %s is not suspended", e.TurnID)
 	}
@@ -112,7 +114,7 @@ func (s *State) applyResumed(e TurnResumed) error {
 	return nil
 }
 
-func (s *State) applyEnded(e TurnEnded) error {
+func (s *State) applyEnded(e protocol.TurnEnded) error {
 	if s.turn.ID == e.TurnID && s.turn.Suspended {
 		return illegal("turn %s is suspended", e.TurnID)
 	}
@@ -120,23 +122,23 @@ func (s *State) applyEnded(e TurnEnded) error {
 		return err
 	}
 	switch e.StopReason {
-	case StopCompleted:
+	case protocol.StopCompleted:
 		if e.Cause != "" {
 			return illegal("turn %s completes with cause %q", e.TurnID, e.Cause)
 		}
-	case StopFailed:
-		if e.Cause != "" && e.Cause != CauseProviderExhausted {
+	case protocol.StopFailed:
+		if e.Cause != "" && e.Cause != protocol.CauseProviderExhausted {
 			return illegal("turn %s has failure cause %q", e.TurnID, e.Cause)
 		}
-	case StopInterrupted:
-		if c := e.Cause; c != CauseStopped && c != CauseEnded && c != CauseGoalCleared && c != CauseCrashed {
+	case protocol.StopInterrupted:
+		if c := e.Cause; c != protocol.CauseStopped && c != protocol.CauseEnded && c != protocol.CauseGoalCleared && c != protocol.CauseCrashed {
 			return illegal("turn %s has interrupt cause %q", e.TurnID, e.Cause)
 		}
-	case StopAwaitingInput:
+	case protocol.StopAwaitingInput:
 		if e.Cause != "" {
 			return illegal("turn %s awaits input with cause %q", e.TurnID, e.Cause)
 		}
-		if !slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.turnID == e.TurnID }) {
+		if !slices.ContainsFunc(s.prog.Requests, func(id string) bool { return s.requests[id].turnID == e.TurnID }) {
 			return illegal("turn %s awaits input with no open request from this turn", e.TurnID)
 		}
 	default:
@@ -146,7 +148,7 @@ func (s *State) applyEnded(e TurnEnded) error {
 		return err
 	}
 	own := s.turnItems
-	if e.Cause == CauseCrashed {
+	if e.Cause == protocol.CauseCrashed {
 		own--
 	}
 	if own <= 0 {
@@ -157,31 +159,30 @@ func (s *State) applyEnded(e TurnEnded) error {
 	return nil
 }
 
-func (s *State) applyRequestOpened(e RequestOpened) error {
+func (s *State) applyRequestOpened(e protocol.RequestOpened) error {
 	if s.turn.ID == "" || s.turn.Suspended {
 		return illegal("request %s opened with no running turn", e.RequestID)
 	}
-	if e.RequestID == "" || e.ItemID == "" || s.openRequest(e.RequestID) >= 0 {
+	if e.RequestID == "" || e.ItemID == "" || s.isOpen(e.RequestID) {
 		return illegal("request %q on item %q is already open or unnamed", e.RequestID, e.ItemID)
 	}
 	if !slices.ContainsFunc(s.calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID && c.ItemID == e.ItemID }) {
 		return illegal("no open tool call %s on item %s", e.RequestID, e.ItemID)
 	}
-	s.requests = append(s.requests, pendingRequest{e, s.turn.ID})
+	s.requests[e.RequestID] = pendingRequest{e, s.turn.ID}
 	return nil
 }
 
-func (s *State) applyRequestResolved(e RequestResolved, seq uint64, at time.Time) error {
-	i := s.openRequest(e.RequestID)
-	if i < 0 {
+func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at time.Time) error {
+	if !s.isOpen(e.RequestID) {
 		return illegal("request %s is not open", e.RequestID)
 	}
-	if e.Resolution != ResolutionAnswered && e.Resolution != ResolutionDismissed {
+	if e.Resolution != protocol.ResolutionAnswered && e.Resolution != protocol.ResolutionDismissed {
 		return illegal("request %s has resolution %q", e.RequestID, e.Resolution)
 	}
 	calls := slices.Clone(s.calls)
 	if k := slices.IndexFunc(calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID }); k >= 0 {
-		if e.Resolution == ResolutionAnswered {
+		if e.Resolution == protocol.ResolutionAnswered {
 			calls[k].answered = true
 		} else {
 			s.say(seq, at, "msg_resolved_"+calls[k].CallID, dismissal(calls[k]))
@@ -189,15 +190,16 @@ func (s *State) applyRequestResolved(e RequestResolved, seq uint64, at time.Time
 		}
 	}
 	s.calls = calls
-	s.requests = slices.Delete(s.requests, i, i+1)
+	delete(s.requests, e.RequestID)
 	s.resolved = maps.Clone(s.resolved)
 	if s.resolved == nil {
-		s.resolved = map[string]RequestResolved{}
+		s.resolved = map[string]protocol.RequestResolved{}
 	}
 	s.resolved[e.RequestID] = e
 	return nil
 }
 
-func (s *State) openRequest(id string) int {
-	return slices.IndexFunc(s.requests, func(r pendingRequest) bool { return r.RequestID == id })
+func (s *State) isOpen(id string) bool {
+	_, ok := s.requests[id]
+	return ok
 }

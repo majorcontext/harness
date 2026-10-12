@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/provider"
@@ -31,7 +33,7 @@ var (
 
 // Submit admits in and returns the seq of its input.admitted record. A
 // repeated input ID returns the original seq and repeat set.
-func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedTurn string) (seq uint64, repeat bool, err error) {
+func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedTurn string) (seq uint64, repeat bool, err error) {
 	type receipt struct {
 		seq    uint64
 		repeat bool
@@ -56,8 +58,8 @@ func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedT
 }
 
 // admit appends before, then admits in.
-func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...eventlog.Event) (uint64, error) {
-	if in.Delivery == eventlog.DeliverySteer && expectedTurn != "" && (a.run == nil || a.run.id != expectedTurn) {
+func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...protocol.Payload) (uint64, error) {
+	if in.Delivery == protocol.DeliverySteer && expectedTurn != "" && (a.run == nil || a.run.id != expectedTurn) {
 		return 0, ErrTurnMismatch
 	}
 	events := append(append(before, a.dismissRequests()...), in)
@@ -66,7 +68,7 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...
 	if r == nil && !a.compactDue() {
 		ids := a.startInputs(append(a.state.Queue(), in))
 		id := newID("turn")
-		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
+		if err := a.append(append(events, protocol.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
 			return 0, err
 		}
 		a.start(id, ids)
@@ -78,7 +80,7 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...
 	if r == nil {
 		return seq, a.next(true)
 	}
-	if in.Delivery == eventlog.DeliverySteer && r.steering {
+	if in.Delivery == protocol.DeliverySteer && r.steering {
 		select {
 		case r.steered <- struct{}{}:
 		default:
@@ -114,7 +116,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 	req.Banner, req.Pins = a.cfg.Banner, a.pins.Pinned()
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
-		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
+		req.Input = append(req.Input, protocol.LogMessage{Role: protocol.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
 	src := a.source(r)
@@ -128,7 +130,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 // item records m under itemID, or under a new ID when itemID is empty. After
 // a stop or a handoff starts, it admits no new tool call, except from a
 // backend that owns the loop: that backend has already run the call.
-func (a *Actor) item(r *running, itemID string, m eventlog.Message) error {
+func (a *Actor) item(r *running, itemID string, m protocol.LogMessage) error {
 	if a.run != r {
 		return ErrTurnMismatch
 	}
@@ -138,7 +140,7 @@ func (a *Actor) item(r *running, itemID string, m eventlog.Message) error {
 	if itemID == "" {
 		itemID = newID("item")
 	}
-	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: r.id, Message: m})
+	return a.append(protocol.ItemCompleted{ItemID: itemID, TurnID: r.id, Message: m})
 }
 
 // telemetry records what a model call of r measured. A call that measured
@@ -157,7 +159,7 @@ func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
 		stamped.CapturedAt = time.Now().Unix()
 		m.SubscriptionUsage = &stamped
 	}
-	if m == (eventlog.ContextMeasured{}) {
+	if m == (protocol.ContextMeasured{}) {
 		return nil
 	}
 	return a.append(m)
@@ -165,20 +167,20 @@ func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
 
 // steer promotes the queued steer inputs into r and returns them. A turn
 // that is stopping, or that takes no steer input, gets none.
-func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
+func (a *Actor) steer(r *running) ([]protocol.LogMessage, error) {
 	if a.run != r {
 		return nil, ErrTurnMismatch
 	}
 	if !r.steering || r.step.Err() != nil {
 		return nil, nil
 	}
-	var ops, reports []eventlog.Event
-	var steered [][]eventlog.Part
+	var ops, reports []protocol.Payload
+	var steered [][]protocol.LogPart
 	for _, in := range a.state.Queue() {
-		if in.Delivery != eventlog.DeliverySteer {
+		if in.Delivery != protocol.DeliverySteer {
 			continue
 		}
-		e := eventlog.InputPromoted{InputID: in.InputID, TurnID: r.id}
+		e := protocol.InputPromoted{InputID: in.InputID, TurnID: r.id}
 		if eventlog.IsReport(in.Parts) {
 			reports = append(reports, e)
 		} else {
@@ -196,7 +198,7 @@ func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
 	return eventlog.SteerMessages(steered), nil
 }
 
-func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }
+func isCall(p protocol.LogPart) bool { return p.Type == protocol.LogPartToolCall }
 
 // ended ends r by the cause of its stop, then starts the next queued input
 // after a normal end or a user interrupt.
@@ -212,21 +214,21 @@ func (a *Actor) ended(r *running, runErr error) {
 	next := false
 	switch {
 	case runErr == nil:
-		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopCompleted}, cutOff)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopCompleted}, cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
-		err = a.append(append(a.closeOpen(turnID, cutOff, false), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
+		err = a.append(append(a.closeOpen(turnID, cutOff, false), protocol.TurnSuspended{TurnID: turnID, Cause: protocol.CauseHandoff})...)
 	case errors.Is(cause, errTaskTurn):
-		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseStopped, TaskCancel: true}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped, TaskCancel: true}, interrupted)
 		next = true
 	case errors.Is(cause, errStopTurn):
-		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseStopped}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped}, interrupted)
 		next = true
 	case errors.Is(cause, errEndTurn):
-		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseEnded}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseEnded}, interrupted)
 		next = true
 	case errors.Is(cause, errGoalCleared):
-		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseGoalCleared}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseGoalCleared}, interrupted)
 		next = true
 	default:
 		err = a.endTurn(a.cfg.Base, failedEnd(turnID, runErr), cutOff, a.goalStop(runErr)...)
@@ -247,7 +249,7 @@ func (a *Actor) next(check bool) error {
 		return nil
 	}
 	id, ids := newID("turn"), a.startInputs(q)
-	if err := a.append(append(a.dismissRequests(), eventlog.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
+	if err := a.append(append(a.dismissRequests(), protocol.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
 		return err
 	}
 	a.start(id, ids)
@@ -257,7 +259,7 @@ func (a *Actor) next(check bool) error {
 // startInputs returns the inputs of the turn that starts from q, which is not
 // empty: the first input, and, on a backend that owns the loop, every report
 // of a child, because that backend reads no report in a turn that it runs.
-func (a *Actor) startInputs(q []eventlog.InputAdmitted) []string {
+func (a *Actor) startInputs(q []protocol.InputAdmitted) []string {
 	ids := []string{q[0].InputID}
 	if !a.ownsLoop() {
 		return ids
@@ -281,15 +283,15 @@ func (a *Actor) ownsLoop() bool {
 	return a.cfg.Backend.Capabilities(a.state.Model()).OwnsLoop
 }
 
-func (a *Actor) endTurn(ctx context.Context, ended eventlog.TurnEnded, text string, after ...eventlog.Event) error {
-	awaiting := ended.StopReason == eventlog.StopCompleted && len(a.state.Requests()) > 0
+func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text string, after ...protocol.Payload) error {
+	awaiting := ended.StopReason == protocol.StopCompleted && len(a.state.Requests()) > 0
 	events := a.closeOpen(ended.TurnID, text, awaiting)
 	if awaiting {
-		ended.StopReason = eventlog.StopAwaitingInput
+		ended.StopReason = protocol.StopAwaitingInput
 	}
-	if ended.Cause == eventlog.CauseCrashed {
-		marker := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: lostToRestart}}}
-		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: ended.TurnID, Message: marker})
+	if ended.Cause == protocol.CauseCrashed {
+		marker := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: lostToRestart}}}
+		events = append(events, protocol.ItemCompleted{ItemID: newID("item"), TurnID: ended.TurnID, Message: marker})
 	}
 	events = append(events, ended)
 	return a.appendCtx(ctx, append(events, after...)...)
@@ -298,10 +300,10 @@ func (a *Actor) endTurn(ctx context.Context, ended eventlog.TurnEnded, text stri
 // failedEnd is the end of a turn that err failed. A usage limit of the
 // provider is a cause of its own, and its message keeps no sentinel. Any other
 // failure holds its class and message, so a reader never parses the text.
-func failedEnd(turnID string, err error) eventlog.TurnEnded {
-	ended := eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopFailed}
+func failedEnd(turnID string, err error) protocol.TurnEnded {
+	ended := protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopFailed}
 	if errors.Is(err, turn.ErrExhausted) {
-		ended.Cause = eventlog.CauseProviderExhausted
+		ended.Cause = protocol.CauseProviderExhausted
 		ended = withError(ended, strings.TrimPrefix(err.Error(), turn.ErrExhausted.Error()+": "))
 		if pe, ok := provider.AsProviderExhausted(err); ok {
 			ended.RecoverHint = boundedText(pe.RecoverHint, hintCap)
@@ -315,7 +317,7 @@ func failedEnd(turnID string, err error) eventlog.TurnEnded {
 
 // withError gives e the message of a failure at the bound of the log, and at
 // the longer bound of a report to a parent when that differs.
-func withError(e eventlog.TurnEnded, msg string) eventlog.TurnEnded {
+func withError(e protocol.TurnEnded, msg string) protocol.TurnEnded {
 	e.Error = plugin.SanitizeSessionError(msg)
 	if detail := boundedText(msg, reasonCap); detail != e.Error {
 		e.ErrorDetail = detail
@@ -327,26 +329,26 @@ func withError(e eventlog.TurnEnded, msg string) eventlog.TurnEnded {
 // runtime classifies it: a rate limit that outlasted the retries counts as a
 // wall of the account, any other retryable class keeps its name, and an error
 // that a retry cannot resolve is permanent.
-func errorClass(err error) eventlog.ErrorClass {
+func errorClass(err error) protocol.ErrorClass {
 	class, retryable := provider.AsRetryable(err)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return eventlog.ErrorTimedOut
+		return protocol.ErrorTimedOut
 	case retryable && class == provider.RetryableRateLimited:
-		return eventlog.ErrorRateLimited
+		return protocol.ErrorRateLimited
 	case retryable:
-		return eventlog.ErrorClass(class)
+		return protocol.ErrorClass(class)
 	case provider.AsPermanent(err):
-		return eventlog.ErrorPermanent
+		return protocol.ErrorPermanent
 	}
-	return eventlog.ErrorUnrecovered
+	return protocol.ErrorUnrecovered
 }
 
 // closeOpen dismisses every open request unless keep is set, which closes its
 // tool call, and gives every other open tool call a result with text. A kept
 // request holds only its own call open.
-func (a *Actor) closeOpen(turnID, text string, keep bool) []eventlog.Event {
-	var events []eventlog.Event
+func (a *Actor) closeOpen(turnID, text string, keep bool) []protocol.Payload {
+	var events []protocol.Payload
 	if !keep {
 		events = a.dismissRequests()
 	}
@@ -358,17 +360,17 @@ func (a *Actor) closeOpen(turnID, text string, keep bool) []eventlog.Event {
 		if asked[c.CallID] {
 			continue
 		}
-		part := eventlog.Part{Type: eventlog.PartToolResult, CallID: c.CallID, Name: c.Name, Text: text, IsError: true}
-		msg := eventlog.Message{Role: eventlog.RoleTool, Parts: []eventlog.Part{part}}
-		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: msg})
+		part := protocol.LogPart{Type: protocol.LogPartToolResult, CallID: c.CallID, Name: c.Name, Text: text, IsError: true}
+		msg := protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{part}}
+		events = append(events, protocol.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: msg})
 	}
 	return events
 }
 
-func (a *Actor) dismissRequests() []eventlog.Event {
-	var events []eventlog.Event
+func (a *Actor) dismissRequests() []protocol.Payload {
+	var events []protocol.Payload
 	for _, r := range a.state.Requests() {
-		events = append(events, eventlog.RequestResolved{RequestID: r.RequestID, Resolution: eventlog.ResolutionDismissed})
+		events = append(events, protocol.RequestResolved{RequestID: r.RequestID, Resolution: protocol.ResolutionDismissed})
 	}
 	return events
 }
@@ -396,9 +398,9 @@ func (a *Actor) CancelForTask(ctx context.Context) error { return a.cancel(ctx, 
 
 func (a *Actor) cancel(ctx context.Context, why error) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		var events []eventlog.Event
+		var events []protocol.Payload
 		for _, in := range a.state.Queue() {
-			events = append(events, eventlog.InputWithdrawn{InputID: in.InputID})
+			events = append(events, protocol.InputWithdrawn{InputID: in.InputID})
 		}
 		if len(events) > 0 {
 			if err := a.append(events...); err != nil {
@@ -434,7 +436,7 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 // goalStopped reports whether a stop for why ends an active goal.
 func (a *Actor) goalStopped(why error) bool {
 	g, _ := a.state.Goal()
-	return errors.Is(why, errStopTurn) && g.State == eventlog.GoalActive
+	return errors.Is(why, errStopTurn) && g.State == protocol.GoalActive
 }
 
 // endGoal clears an active goal when a user stop ends the run of the actor,
@@ -443,7 +445,7 @@ func (a *Actor) endGoal(why error) error {
 	if !a.goalStopped(why) {
 		return nil
 	}
-	return a.append(append(a.withdrawGoal(), eventlog.GoalChanged{State: eventlog.GoalCleared, Reason: goalInterrupted})...)
+	return a.append(append(a.withdrawGoal(), protocol.GoalChanged{State: protocol.GoalCleared, Reason: goalInterrupted})...)
 }
 
 // Release hands the session off: it suspends the running turn at an item

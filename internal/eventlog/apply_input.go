@@ -3,6 +3,8 @@ package eventlog
 import (
 	"maps"
 	"slices"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 func (s *State) inputIs(id string, want inputState) error {
@@ -16,7 +18,7 @@ func (s *State) inputIs(id string, want inputState) error {
 	return illegal("input %s is %s", id, got)
 }
 
-func (s *State) applyAdmitted(e InputAdmitted, seq uint64) error {
+func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 	if got, ok := s.inputs[e.InputID]; ok {
 		return illegal("input %s is %s", e.InputID, got.state)
 	}
@@ -26,33 +28,31 @@ func (s *State) applyAdmitted(e InputAdmitted, seq uint64) error {
 	if _, ok := s.commands[e.InputID]; ok {
 		return illegal("input %s is a command", e.InputID)
 	}
-	if e.Delivery != DeliveryQueue && e.Delivery != DeliverySteer {
+	if e.Delivery != protocol.DeliveryQueue && e.Delivery != protocol.DeliverySteer {
 		return illegal("input %s has delivery %q", e.InputID, e.Delivery)
 	}
-	if len(s.requests) > 0 {
-		return illegal("request %s is open", s.requests[0].RequestID)
+	if len(s.prog.Requests) > 0 {
+		return illegal("request %s is open", s.prog.Requests[0])
 	}
 	s.inputs[e.InputID] = input{inputAdmitted, seq, e}
-	s.queue = append(s.queue, e)
 	return nil
 }
 
-func (s *State) applyPromoted(e InputPromoted) error {
+func (s *State) applyPromoted(e protocol.InputPromoted) error {
 	if err := s.inputIs(e.InputID, inputAdmitted); err != nil {
 		return err
 	}
 	if err := s.runningTurn(e.TurnID); err != nil {
 		return err
 	}
-	i := slices.IndexFunc(s.queue, func(in InputAdmitted) bool { return in.InputID == e.InputID })
-	if s.queue[i].Delivery != DeliverySteer {
+	if s.inputs[e.InputID].event.Delivery != protocol.DeliverySteer {
 		return illegal("input %s waits for the next turn", e.InputID)
 	}
 	s.takeInput(e.InputID, inputPromoted)
 	return nil
 }
 
-func (s *State) applyWithdrawn(e InputWithdrawn) error {
+func (s *State) applyWithdrawn(e protocol.InputWithdrawn) error {
 	if err := s.inputIs(e.InputID, inputAdmitted); err != nil {
 		return err
 	}
@@ -64,10 +64,9 @@ func (s *State) takeInput(id string, to inputState) {
 	in := s.inputs[id]
 	in.state = to
 	s.inputs[id] = in
-	s.queue = slices.DeleteFunc(s.queue, func(in InputAdmitted) bool { return in.InputID == id })
 }
 
-func (s *State) applyCommand(e CommandRecorded, seq uint64) error {
+func (s *State) applyCommand(e protocol.CommandRecorded, seq uint64) error {
 	if e.InputID == "" || e.Status == "" {
 		return illegal("command.recorded has an empty input_id or status")
 	}
@@ -89,7 +88,7 @@ func (s *State) applyCommand(e CommandRecorded, seq uint64) error {
 }
 
 type command struct {
-	rec CommandRecorded
+	rec protocol.CommandRecorded
 	seq uint64
 	// after is the ID of the newest message when the first record was appended.
 	after string
@@ -99,14 +98,14 @@ const commandAccepted = "accepted"
 
 // Command returns the newest record of the command of input id, and the
 // seq of its first record.
-func (s *State) Command(id string) (CommandRecorded, uint64, bool) {
+func (s *State) Command(id string) (protocol.CommandRecorded, uint64, bool) {
 	c, ok := s.commands[id]
 	return c.rec, c.seq, ok
 }
 
 // Unfinished returns each command whose newest status is accepted, by input ID.
-func (s *State) Unfinished() []CommandRecorded {
-	var out []CommandRecorded
+func (s *State) Unfinished() []protocol.CommandRecorded {
+	var out []protocol.CommandRecorded
 	for _, id := range slices.Sorted(maps.Keys(s.commands)) {
 		if c := s.commands[id]; c.rec.Status == commandAccepted {
 			out = append(out, c.rec)

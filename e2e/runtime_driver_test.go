@@ -329,7 +329,7 @@ func (d *runtimeDriver) Enqueue(t *testing.T, id, text string) {
 
 func (d *runtimeDriver) EnqueueNext(t *testing.T, id, text string) {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliveryQueue, "")
+	path, body := d.input(id, text, string(protocol.DeliveryQueue), "")
 	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
 }
 
@@ -341,7 +341,7 @@ func (d *runtimeDriver) Send(t *testing.T, id, text string) callResult {
 
 func (d *runtimeDriver) Command(t *testing.T, id, text string, _ bool) callResult {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliveryQueue, protocol.SourceTyped)
+	path, body := d.input(id, text, string(protocol.DeliveryQueue), protocol.SourceTyped)
 	return d.call(t, http.MethodPost, path, body)
 }
 
@@ -363,7 +363,7 @@ func (d *runtimeDriver) Repeat(t *testing.T, id, text string, typed bool) callRe
 	t.Helper()
 	delivery, source, inputID := "", "", d.lastInput[id]
 	if typed {
-		delivery, source, inputID = protocol.DeliveryQueue, protocol.SourceTyped, d.lastTyped[id]
+		delivery, source, inputID = string(protocol.DeliveryQueue), protocol.SourceTyped, d.lastTyped[id]
 	}
 	path, body := d.inputAs(id, inputID, text, delivery, source)
 	return d.call(t, http.MethodPost, path, body)
@@ -372,7 +372,7 @@ func (d *runtimeDriver) Repeat(t *testing.T, id, text string, typed bool) callRe
 func (d *runtimeDriver) SteerOtherTurn(t *testing.T, id, text string) callResult {
 	t.Helper()
 	d.inputs++
-	path, body := d.inputAs(id, fmt.Sprintf("in%d", d.inputs), text, protocol.DeliverySteer, "")
+	path, body := d.inputAs(id, fmt.Sprintf("in%d", d.inputs), text, string(protocol.DeliverySteer), "")
 	body["expected_turn_id"] = "turn_other"
 	return d.call(t, http.MethodPost, path, body)
 }

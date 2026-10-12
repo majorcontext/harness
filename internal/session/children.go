@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 )
 
@@ -16,19 +18,19 @@ const sourceChild = "child"
 // child: this session as its parent, with the model, settings, and allowed
 // tools of this session. It appends nothing once ctx ends, so a stopped
 // turn spawns no child, and nothing for a child that has not settled.
-func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.SessionCreated, error) {
-	return call(ctx, a, func(reply func(eventlog.SessionCreated, error)) {
+func (a *Actor) Spawn(ctx context.Context, child, agent string) (protocol.SessionCreated, error) {
+	return call(ctx, a, func(reply func(protocol.SessionCreated, error)) {
 		if err := ctx.Err(); err != nil {
-			reply(eventlog.SessionCreated{}, err)
+			reply(protocol.SessionCreated{}, err)
 			return
 		}
-		c := eventlog.SessionCreated{ParentID: a.cfg.ID, Agent: agent, Model: a.state.Model(),
+		c := protocol.SessionCreated{ParentID: a.cfg.ID, Agent: agent, Model: a.state.Model(),
 			Settings: a.state.Settings(), AllowedTools: a.state.AllowedTools()}
 		if slices.Contains(a.state.Unsettled(), child) {
 			reply(c, nil)
 			return
 		}
-		reply(c, a.append(eventlog.ChildSpawned{ChildID: child, Agent: agent}))
+		reply(c, a.append(protocol.ChildSpawned{ChildID: child, Agent: agent}))
 	})
 }
 
@@ -38,7 +40,7 @@ func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.Sessio
 // report waits in the queue and reaches the model when the next turn starts.
 // A child that is not unsettled changes nothing, so a repeated report is
 // safe.
-func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, rep *Report) error {
+func (a *Actor) Settle(ctx context.Context, s protocol.ChildSettled, rep *Report) error {
 	var big bigResult
 	if rep != nil {
 		big = a.stage(ctx, s.ChildID, rep)
@@ -79,21 +81,21 @@ func (a *Actor) Relay(ctx context.Context, rep *Report) error {
 	return err
 }
 
-func (a *Actor) reportInput(rep *Report, text string) eventlog.InputAdmitted {
-	delivery := eventlog.DeliverySteer
+func (a *Actor) reportInput(rep *Report, text string) protocol.InputAdmitted {
+	delivery := protocol.DeliverySteer
 	if a.ownsLoop() {
-		delivery = eventlog.DeliveryQueue
+		delivery = protocol.DeliveryQueue
 	}
-	return eventlog.InputAdmitted{InputID: newID("input"), Delivery: delivery, Source: sourceChild, Parts: rep.Parts(text)}
+	return protocol.InputAdmitted{InputID: newID("input"), Delivery: delivery, Source: sourceChild, Parts: rep.Parts(text)}
 }
 
 // Report is the outcome of a child as its parent reads it.
 type Report struct {
 	child, agent, turn string
-	outcome            eventlog.Outcome
+	outcome            protocol.Outcome
 	reason, guidance   string
 	result             string
-	usage              eventlog.Usage
+	usage              protocol.Usage
 }
 
 // Reason returns why the child failed, as the report gives it.
@@ -104,21 +106,21 @@ func (r *Report) Reason() string { return r.reason }
 // gives no report. ok is false while a turn runs, is suspended, or waits for
 // an answer, and after a completed turn while an input waits: the next turn
 // reports.
-func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, bool) {
+func Settlement(id string, s *eventlog.State) (protocol.ChildSettled, *Report, bool) {
 	last := s.LastEnded()
 	_, busy := s.Turn()
-	if busy || last.TurnID == "" || last.StopReason == eventlog.StopAwaitingInput || last.StopReason == eventlog.StopCompleted && len(s.Queue()) > 0 {
-		return eventlog.ChildSettled{}, nil, false
+	if busy || last.TurnID == "" || last.StopReason == protocol.StopAwaitingInput || last.StopReason == protocol.StopCompleted && len(s.Queue()) > 0 {
+		return protocol.ChildSettled{}, nil, false
 	}
-	out := eventlog.OutcomeDone
+	out := protocol.OutcomeDone
 	switch {
-	case last.StopReason == eventlog.StopFailed, last.Cause == eventlog.CauseCrashed:
-		out = eventlog.OutcomeFailed
-	case last.StopReason == eventlog.StopInterrupted:
-		out = eventlog.OutcomeCanceled
+	case last.StopReason == protocol.StopFailed, last.Cause == protocol.CauseCrashed:
+		out = protocol.OutcomeFailed
+	case last.StopReason == protocol.StopInterrupted:
+		out = protocol.OutcomeCanceled
 	}
-	settled := eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}
-	if last.Cause == eventlog.CauseEnded {
+	settled := protocol.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}
+	if last.Cause == protocol.CauseEnded {
 		return settled, nil, true
 	}
 	r := &Report{child: id, agent: s.Agent(), turn: last.TurnID, outcome: out, reason: failReason(last), guidance: failGuidance(id, last),
@@ -131,8 +133,8 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, b
 // task line, which holds the result as the Task tool of Claude Code returns
 // the last assistant text. result is the text of the child as the parent
 // reads it.
-func (r *Report) Parts(result string) []eventlog.Part {
-	return []eventlog.Part{{Type: eventlog.PartText, Text: eventlog.ReportTrigger}, {Type: eventlog.PartTaskReport, Text: r.line(result)}}
+func (r *Report) Parts(result string) []protocol.LogPart {
+	return []protocol.LogPart{{Type: protocol.LogPartText, Text: eventlog.ReportTrigger}, {Type: protocol.LogPartTaskReport, Text: r.line(result)}}
 }
 
 // The reasons that a report gives for a failed turn, by the class of its error.
@@ -151,8 +153,8 @@ const (
 // its last turn: the error behind a prefix that names its class, so a parent
 // knows which response fits. A turn with no error reads its cause. An error
 // with no class reads as it is.
-func failReason(last eventlog.TurnEnded) string {
-	if last.Error == "" && last.Cause == eventlog.CauseCrashed {
+func failReason(last protocol.TurnEnded) string {
+	if last.Error == "" && last.Cause == protocol.CauseCrashed {
 		return reasonLostToRestart
 	}
 	if last.Error == "" {
@@ -160,17 +162,17 @@ func failReason(last eventlog.TurnEnded) string {
 	}
 	detail := last.ReportError()
 	switch {
-	case last.ErrorClass == eventlog.ErrorRateLimited:
+	case last.ErrorClass == protocol.ErrorRateLimited:
 		return reasonRateLimited + ": " + detail
-	case last.Cause == eventlog.CauseProviderExhausted:
+	case last.Cause == protocol.CauseProviderExhausted:
 		return reasonExhausted + ": " + detail
 	case last.ErrorClass == "":
 		return detail
-	case last.ErrorClass == eventlog.ErrorTimedOut:
+	case last.ErrorClass == protocol.ErrorTimedOut:
 		return "timed out"
-	case last.ErrorClass == eventlog.ErrorPermanent:
+	case last.ErrorClass == protocol.ErrorPermanent:
 		return reasonPermanent + ": " + detail
-	case last.ErrorClass == eventlog.ErrorUnrecovered:
+	case last.ErrorClass == protocol.ErrorUnrecovered:
 		return reasonUnrecovered + ": " + detail
 	}
 	return fmt.Sprintf("provider %s errors exhausted the retry budget: %s", last.ErrorClass, detail)
@@ -179,8 +181,8 @@ func failReason(last eventlog.TurnEnded) string {
 // failGuidance is what the parent of a child that a wall of the provider
 // account stopped should do: the child is kept, a replacement would meet the
 // same wall, and a send of the task tool runs this same child again.
-func failGuidance(id string, last eventlog.TurnEnded) string {
-	if last.Cause != eventlog.CauseProviderExhausted && last.ErrorClass != eventlog.ErrorRateLimited {
+func failGuidance(id string, last protocol.TurnEnded) string {
+	if last.Cause != protocol.CauseProviderExhausted && last.ErrorClass != protocol.ErrorRateLimited {
 		return ""
 	}
 	when := ""
@@ -197,9 +199,9 @@ func failGuidance(id string, last eventlog.TurnEnded) string {
 func (r *Report) line(result string) string {
 	word, body, guidance := "done", result, r.guidance
 	switch r.outcome {
-	case eventlog.OutcomeFailed:
+	case protocol.OutcomeFailed:
 		word, body = "failed", r.reason
-	case eventlog.OutcomeCanceled:
+	case protocol.OutcomeCanceled:
 		word, body, guidance = "failed", "canceled", ""
 	}
 	oneLine := strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace
@@ -225,11 +227,11 @@ func CapRunes(s string, n int) (string, bool) {
 }
 
 // LastText returns the text of the newest assistant message with text in h.
-func LastText(h []eventlog.Message) string {
+func LastText(h []protocol.LogMessage) string {
 	for _, m := range slices.Backward(h) {
 		var parts []string
 		for _, p := range m.Parts {
-			if m.Role == eventlog.RoleAssistant && p.Type == eventlog.PartText {
+			if m.Role == protocol.RoleAssistant && p.Type == protocol.LogPartText {
 				parts = append(parts, p.Text)
 			}
 		}

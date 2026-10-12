@@ -5,9 +5,10 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/eventlog"
 )
 
 // onChild returns the arguments of action on the child, with more as key, value pairs.
@@ -21,7 +22,7 @@ func onChild(action string, more ...any) map[string]any {
 
 var taskActionRows = []struct {
 	name  string
-	child func() []eventlog.Message
+	child func() []protocol.LogMessage
 	cfg   config.Config
 	args  map[string]any
 	want  string
@@ -35,11 +36,11 @@ func TestTaskActions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				kid := ""
-				f := &family{usage: eventlog.Usage{InputTokens: 5, OutputTokens: 1}}
+				f := &family{usage: protocol.Usage{InputTokens: 5, OutputTokens: 1}}
 				spawn := delegation("general-purpose", 1, tc.child)
-				f.answer = func(p eventlog.Part) []eventlog.Message {
+				f.answer = func(p protocol.LogPart) []protocol.LogMessage {
 					if p.Text == "act" {
-						return []eventlog.Message{calls("task", tc.args)}
+						return []protocol.LogMessage{calls("task", tc.args)}
 					}
 					return spawn(p)
 				}
@@ -60,17 +61,17 @@ func TestTaskActions(t *testing.T) {
 	}
 }
 
-func block() []eventlog.Message { return nil }
+func block() []protocol.LogMessage { return nil }
 
 // generations answers as a root that spawns a child, which spawns a
 // grandchild that answers with grand. act is the answer of the root to "act".
-func generations(grand func() []eventlog.Message, act func() eventlog.Message) func(eventlog.Part) []eventlog.Message {
-	return func(p eventlog.Part) []eventlog.Message {
+func generations(grand func() []protocol.LogMessage, act func() protocol.LogMessage) func(protocol.LogPart) []protocol.LogMessage {
+	return func(p protocol.LogPart) []protocol.LogMessage {
 		switch p.Text {
 		case "act":
-			return []eventlog.Message{act()}
+			return []protocol.LogMessage{act()}
 		case "child work":
-			return []eventlog.Message{calls("task", map[string]any{"prompt": "grand work"})}
+			return []protocol.LogMessage{calls("task", map[string]any{"prompt": "grand work"})}
 		case "grand work":
 			return grand()
 		}
@@ -81,7 +82,7 @@ func generations(grand func() []eventlog.Message, act func() eventlog.Message) f
 func TestCancelOfAChildStopsTheGrandchildAndTheChildStartsNoTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var kid string
-		f := &family{answer: generations(block, func() eventlog.Message {
+		f := &family{answer: generations(block, func() protocol.LogMessage {
 			return calls("task", onChild("cancel", "session_id", kid))
 		})}
 		st := harness.NewMemStore()
@@ -91,7 +92,7 @@ func TestCancelOfAChildStopsTheGrandchildAndTheChildStartsNoTurn(t *testing.T) {
 		kid = children(t, r)[0].ID
 		submit(t, s, text("b", "act"))
 		synctest.Wait()
-		if got := settled(t, st, kid); got != eventlog.OutcomeCanceled {
+		if got := settled(t, st, kid); got != protocol.OutcomeCanceled {
 			t.Errorf("child.settled of the grandchild %q, want canceled", got)
 		}
 		if _, got := f.last(kid, report); got != "" {
@@ -104,12 +105,12 @@ func TestCancelOfAChildStopsTheGrandchildAndTheChildStartsNoTurn(t *testing.T) {
 func TestTaskStatusReachesADescendantBelowALoweredMaxTaskDepth(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var great string
-		answer := func(p eventlog.Part) []eventlog.Message {
+		answer := func(p protocol.LogPart) []protocol.LogMessage {
 			switch p.Text {
 			case "act":
-				return []eventlog.Message{calls("task", map[string]any{"action": "status", "session_id": great})}
+				return []protocol.LogMessage{calls("task", map[string]any{"action": "status", "session_id": great})}
 			case "grand work":
-				return []eventlog.Message{calls("task", map[string]any{"prompt": "great work"})}
+				return []protocol.LogMessage{calls("task", map[string]any{"prompt": "great work"})}
 			case "great work":
 				return done()
 			}

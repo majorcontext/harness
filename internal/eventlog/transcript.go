@@ -48,7 +48,7 @@ func (s *State) Transcript() []protocol.Message {
 
 // summaryMessage is the divider message of the newest compaction.
 func (s *State) summaryMessage() protocol.Message {
-	return protocol.Message{ID: summaryID(s.compactedAt), Role: RoleUser, CreatedAt: s.compactedTime,
+	return protocol.Message{ID: summaryID(s.compactedAt), Role: protocol.RoleUser, CreatedAt: s.compactedTime,
 		Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: s.compaction.Summary}}}
 }
 
@@ -67,7 +67,7 @@ func readerMessage(e entry) protocol.Message {
 }
 
 // operatorBatch returns one entry for each input that a steer message joined.
-func operatorBatch(inputs []InputAdmitted) []protocol.OperatorBatchEntry {
+func operatorBatch(inputs []protocol.InputAdmitted) []protocol.OperatorBatchEntry {
 	var out []protocol.OperatorBatchEntry
 	for _, in := range inputs {
 		out = append(out, protocol.OperatorBatchEntry{ID: in.InputID, Text: textOf(in.Parts), Source: in.Source, SourceID: in.SourceID, SourceLabel: in.SourceLabel})
@@ -75,15 +75,15 @@ func operatorBatch(inputs []InputAdmitted) []protocol.OperatorBatchEntry {
 	return out
 }
 
-func messageParts(parts []Part) []protocol.MessagePart {
+func messageParts(parts []protocol.LogPart) []protocol.MessagePart {
 	out := make([]protocol.MessagePart, 0, len(parts))
 	for _, p := range parts {
 		mp := protocol.MessagePart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, Arguments: slices.Clone(p.Arguments),
 			IsError: p.IsError, MediaType: p.MediaType, Bytes: p.Bytes}
-		if p.Type == PartBlob {
+		if p.Type == protocol.LogPartBlob {
 			mp.Key = p.BlobKey
 		}
-		if p.Type == PartToolResult {
+		if p.Type == protocol.LogPartToolResult {
 			mp.Text, mp.Name, mp.Content = "", "", cmp.Or(p.Text, noToolOutput)
 		}
 		out = append(out, mp)
@@ -143,9 +143,10 @@ func (s *State) commandsIn(window []protocol.Message, fromFirst bool) []protocol
 
 // QueuedInputs returns the queued inputs as a reader sees them, oldest first.
 func (s *State) QueuedInputs() []protocol.QueuedInput {
-	out := make([]protocol.QueuedInput, len(s.queue))
-	for i, in := range s.queue {
-		out[i] = protocol.QueuedInput{ID: in.InputID, Parts: messageParts(in.Parts), Delivery: string(in.Delivery),
+	out := make([]protocol.QueuedInput, len(s.prog.Queued))
+	for i, id := range s.prog.Queued {
+		in := s.inputs[id].event
+		out[i] = protocol.QueuedInput{ID: in.InputID, Parts: messageParts(in.Parts), Delivery: in.Delivery,
 			Source: in.Source, SourceID: in.SourceID, SourceLabel: in.SourceLabel}
 	}
 	return out
@@ -156,7 +157,7 @@ func (s *State) QueuedInputs() []protocol.QueuedInput {
 func (s *State) Attachment(key string) (mediaType string, size int, ok bool) {
 	for _, in := range s.inputs {
 		for _, p := range in.event.Parts {
-			if p.Type == PartBlob && p.BlobKey == key {
+			if p.Type == protocol.LogPartBlob && p.BlobKey == key {
 				return p.MediaType, p.Bytes, true
 			}
 		}

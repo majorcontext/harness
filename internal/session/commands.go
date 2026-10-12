@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
 )
 
 const commandAccepted = "accepted"
@@ -15,9 +15,9 @@ const commandAccepted = "accepted"
 // status, appends nothing and returns that status with repeat true. While
 // a run is on, a non-nil busy replaces c. Record returns the newest record
 // and the seq of the first record of the command.
-func (a *Actor) Record(ctx context.Context, c eventlog.CommandRecorded, busy *eventlog.CommandRecorded) (eventlog.CommandRecorded, uint64, bool, error) {
+func (a *Actor) Record(ctx context.Context, c protocol.CommandRecorded, busy *protocol.CommandRecorded) (protocol.CommandRecorded, uint64, bool, error) {
 	type recorded struct {
-		rec    eventlog.CommandRecorded
+		rec    protocol.CommandRecorded
 		seq    uint64
 		repeat bool
 	}
@@ -49,7 +49,7 @@ func (a *Actor) Record(ctx context.Context, c eventlog.CommandRecorded, busy *ev
 // endCommands records each command that an earlier owner accepted and
 // never finished as interrupted. It never runs one again.
 func (a *Actor) endCommands(ctx context.Context) error {
-	var events []eventlog.Event
+	var events []protocol.Payload
 	for _, c := range a.state.Unfinished() {
 		c.Status, c.Text, c.Result, c.ResultTruncated = "interrupted", "harness restarted before /"+Typed(c.Line)+" finished; it will not run again", nil, false
 		events = append(events, c)

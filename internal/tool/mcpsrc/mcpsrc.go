@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -210,7 +209,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec) (*server, error) {
 // Toolset returns the mcp tool, the resource tools when a server serves
 // resources, and the tools of each connected server. A tool that defers is
 // in Deferred, and the prompt lists it, until history selects or calls it.
-func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, _ string) turn.Toolset {
+func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
 	if !s.wait(ctx) {
 		return turn.Toolset{}
 	}
@@ -260,13 +259,13 @@ func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowe
 
 // selected returns the tool names that history selects with the mcp tool
 // or calls. The log holds them, so a replay loads the same tools.
-func selected(history []eventlog.Message) map[string]bool {
+func selected(history []protocol.LogMessage) map[string]bool {
 	out := map[string]bool{}
 	for _, m := range history {
 		for _, p := range m.Parts {
 			var in args
 			switch {
-			case p.Type != eventlog.PartToolCall:
+			case p.Type != protocol.LogPartToolCall:
 			case strings.HasPrefix(p.Name, prefix):
 				out[p.Name] = true
 			case p.Name == controlName && json.Unmarshal(p.Arguments, &in) == nil && in.Action == "select":

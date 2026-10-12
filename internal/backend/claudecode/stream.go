@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/backend/external"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -44,7 +43,7 @@ type run struct {
 
 	// limits is the newest subscription snapshot of the run; the result
 	// reports it with the usage of its call.
-	limits  *eventlog.SubscriptionUsage
+	limits  *protocol.SubscriptionUsage
 	started bool
 	// early holds the mirror frames that arrive before the init frame names
 	// the session that they belong to.
@@ -54,7 +53,7 @@ type run struct {
 	result  *envelope
 	// pending is the assistant item that later frames of the same API
 	// response join, until it holds a tool call.
-	pending   *eventlog.Message
+	pending   *protocol.LogMessage
 	pendingID string
 	// spoke reports that the run recorded an assistant item.
 	spoke bool
@@ -364,7 +363,7 @@ func (r *run) compacted(env envelope) (isSummary bool, err error) {
 
 // settleCompaction ends the compaction that the CLI started with one status
 // frame, or sends none when the CLI started none.
-func (r *run) settleCompaction(status string) {
+func (r *run) settleCompaction(status protocol.Status) {
 	if r.compacting {
 		r.compacting = false
 		r.out.Status(protocol.StatusFrame{Status: status})
@@ -384,15 +383,15 @@ func (r *run) assistant(env envelope) error {
 		if err := r.flush(); err != nil {
 			return err
 		}
-		r.pending, r.pendingID = &eventlog.Message{Role: eventlog.RoleAssistant, ParentCallID: env.ParentToolUseID}, m.ID
+		r.pending, r.pendingID = &protocol.LogMessage{Role: protocol.RoleAssistant, ParentCallID: env.ParentToolUseID}, m.ID
 	}
 	for i, p := range parts {
 		switch p.Type {
-		case eventlog.PartText, eventlog.PartReasoning:
+		case protocol.LogPartText, protocol.LogPartReasoning:
 			if text := r.unstreamed(env.ParentToolUseID, m.ID, p); text != "" {
 				r.thread(env.ParentToolUseID).Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
 			}
-		case eventlog.PartToolCall:
+		case protocol.LogPartToolCall:
 			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
 				parts[i].Name = name
 			}
@@ -403,7 +402,7 @@ func (r *run) assistant(env envelope) error {
 		}
 	}
 	r.pending.Parts = append(r.pending.Parts, parts...)
-	if m.ID == "" || slices.ContainsFunc(parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }) {
+	if m.ID == "" || slices.ContainsFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartToolCall }) {
 		return r.flush()
 	}
 	return nil
@@ -414,7 +413,7 @@ func (r *run) toolResults(env envelope) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	msg := eventlog.Message{Role: eventlog.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID}
+	msg := protocol.LogMessage{Role: protocol.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID}
 	if err := r.flush(); err != nil {
 		return err
 	}
@@ -478,7 +477,7 @@ func (r *run) telemetry(env envelope) {
 	if last == nil {
 		last = env.Usage
 	}
-	t.Context = eventlog.ContextMeasured{Tokens: last.prompt(), Window: env.ModelUsage[r.mainModel].ContextWindow, Source: stateKey}
+	t.Context = protocol.ContextMeasured{Tokens: last.prompt(), Window: env.ModelUsage[r.mainModel].ContextWindow, Source: stateKey}
 	r.out.Telemetry(t)
 }
 

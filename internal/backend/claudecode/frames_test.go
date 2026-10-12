@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestUserLineSendsAnEngineContextPartAsRawText(t *testing.T) {
-	m := eventlog.Message{Parts: []eventlog.Part{
-		{Type: eventlog.PartText, Text: "OPERATOR MESSAGES (address these, then continue the task):\n1. go on\n"},
-		{Type: eventlog.PartEngineContext, Text: "[tasks:\n- kid (agent=explore) done: found it (usage: 1 in / 2 out)\n]"},
+	m := protocol.LogMessage{Parts: []protocol.LogPart{
+		{Type: protocol.LogPartText, Text: "OPERATOR MESSAGES (address these, then continue the task):\n1. go on\n"},
+		{Type: protocol.LogPartEngineContext, Text: "[tasks:\n- kid (agent=explore) done: found it (usage: 1 in / 2 out)\n]"},
 	}}
 	line, err := userLine(m, nil)
 	if err != nil {

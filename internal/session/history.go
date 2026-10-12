@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -49,7 +48,7 @@ func (h historyTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.Too
 			return protocol.ToolResult{}, fmt.Errorf("%s: invalid arguments: %w", turn.HistoryTool, err)
 		}
 	}
-	msgs, err := call(ctx, h.a, func(reply func([]eventlog.Message, error)) { reply(h.a.state.History(), nil) })
+	msgs, err := call(ctx, h.a, func(reply func([]protocol.LogMessage, error)) { reply(h.a.state.History(), nil) })
 	if err != nil {
 		return protocol.ToolResult{}, err
 	}
@@ -57,7 +56,7 @@ func (h historyTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.Too
 }
 
 // historyText renders a page of msgs, oldest first.
-func historyText(msgs []eventlog.Message, offset, limit int) string {
+func historyText(msgs []protocol.LogMessage, offset, limit int) string {
 	total := len(msgs)
 	if total == 0 {
 		return "No prior conversation history for this session."
@@ -88,36 +87,36 @@ func historyText(msgs []eventlog.Message, offset, limit int) string {
 	return b.String()
 }
 
-func callNames(m eventlog.Message, names map[string]string) {
+func callNames(m protocol.LogMessage, names map[string]string) {
 	for _, p := range m.Parts {
-		if p.Type == eventlog.PartToolCall {
+		if p.Type == protocol.LogPartToolCall {
 			names[p.CallID] = p.Name
 		}
 	}
 }
 
-func flatten(b *strings.Builder, m eventlog.Message, names map[string]string) {
+func flatten(b *strings.Builder, m protocol.LogMessage, names map[string]string) {
 	switch m.Role {
-	case eventlog.RoleUser:
+	case protocol.RoleUser:
 		text := textOf(m)
 		if text == "" {
 			text = "(no text)"
 		}
 		fmt.Fprintf(b, "User: %s\n", text)
-	case eventlog.RoleAssistant:
+	case protocol.RoleAssistant:
 		for _, p := range m.Parts {
 			switch {
-			case p.Type == eventlog.PartText && p.Text != "":
+			case p.Type == protocol.LogPartText && p.Text != "":
 				fmt.Fprintf(b, "Assistant: %s\n", p.Text)
-			case p.Type == eventlog.PartReasoning:
+			case p.Type == protocol.LogPartReasoning:
 				b.WriteString("Assistant: [thinking]\n")
-			case p.Type == eventlog.PartToolCall:
+			case p.Type == protocol.LogPartToolCall:
 				fmt.Fprintf(b, "Assistant called tool %s(%s)\n", p.Name, clip(string(p.Arguments)))
 			}
 		}
-	case eventlog.RoleTool:
+	case protocol.RoleTool:
 		for _, p := range m.Parts {
-			if p.Type != eventlog.PartToolResult {
+			if p.Type != protocol.LogPartToolResult {
 				continue
 			}
 			name, status := names[p.CallID], "ok"
@@ -133,10 +132,10 @@ func flatten(b *strings.Builder, m eventlog.Message, names map[string]string) {
 }
 
 // textOf joins the text parts of m with newlines.
-func textOf(m eventlog.Message) string {
+func textOf(m protocol.LogMessage) string {
 	var b strings.Builder
 	for _, p := range m.Parts {
-		if p.Type == eventlog.PartText || p.Type == eventlog.PartEngineContext {
+		if p.Type == protocol.LogPartText || p.Type == protocol.LogPartEngineContext {
 			if b.Len() > 0 {
 				b.WriteByte('\n')
 			}

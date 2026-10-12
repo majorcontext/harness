@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -32,7 +31,7 @@ type actorTools struct {
 	r *running
 }
 
-func (s actorTools) Toolset(_ context.Context, _ []eventlog.Message, allowed []string, model string) turn.Toolset {
+func (s actorTools) Toolset(_ context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	if s.a.cfg.Backend.Capabilities(model).OwnsLoop {
 		return turn.Toolset{Tools: []turn.Tool{historyTool{s.a}}}
 	}
@@ -133,7 +132,7 @@ func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) proto
 		if handleNumber(m.Handle) <= last {
 			m = new(toolresult.NewMeta(toolresult.Handle(last+1), tool, m.Key, masked))
 		}
-		return a.append(eventlog.ToolResultRetained{Handle: m.Handle, Tool: m.Tool, BlobKey: m.Key, Bytes: m.Bytes, Lines: m.Lines, Head: m.Head})
+		return a.append(protocol.ToolResultRetained{Handle: m.Handle, Tool: m.Tool, BlobKey: m.Key, Bytes: m.Bytes, Lines: m.Lines, Head: m.Head})
 	})
 	switch {
 	case err != nil:

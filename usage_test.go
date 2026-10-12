@@ -5,7 +5,6 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -17,9 +16,9 @@ func TestViewsShareNoSubscriptionUsageOrLastTurnWithTheirCaller(t *testing.T) {
 		s := create(t, r)
 		submit(t, s, text("a", "hi"))
 		run := <-f.runs
-		sub := &eventlog.SubscriptionUsage{Provider: "claude", CapturedAt: 7,
-			Windows: []eventlog.SubscriptionUsageWindow{{Key: "five_hour", Label: "5-hour", UsedPercent: 40}},
-			Overage: &eventlog.SubscriptionOverage{Status: "allowed"}}
+		sub := &protocol.SubscriptionUsage{Provider: "claude", CapturedAt: 7,
+			Windows: []protocol.SubscriptionUsageWindow{{Key: "five_hour", Label: "5-hour", UsedPercent: 40}},
+			Overage: &protocol.SubscriptionOverage{Status: "allowed"}}
 		run.tele <- turn.Telemetry{SubscriptionUsage: sub}
 		synctest.Wait()
 		run.end()
