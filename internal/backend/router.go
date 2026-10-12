@@ -44,6 +44,8 @@ func NewRouter(backends map[string]turn.Backend) *Router {
 type Env struct {
 	// Getenv reads an API-key variable. nil: no variable is read.
 	Getenv func(key string) string
+	// NoGetenv says why Getenv is nil, in the error of an unread key. Empty: "no Getenv is set".
+	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
 }
@@ -85,29 +87,29 @@ func client(name string, p config.Provider, transport func(provider string) http
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
-		key, source := env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
-		return &responses.Client{Family: name, APIKey: key, KeySource: source, BaseURL: p.BaseURL, Log: env.Log,
+		key, reason := env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
-		key, source := env.key(p.APIKeyEnv)
-		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, KeySource: source, BaseURL: p.BaseURL,
+		key, reason := env.key(p.APIKeyEnv)
+		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
-		key, source := env.key(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY"))
-		return &anthropic.Client{APIKey: key, KeySource: source, BaseURL: p.BaseURL,
+		key, reason := env.key(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY"))
+		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
 }
 
-// key returns the API key in variable name, and where it was read for the error of an empty key.
-func (e Env) key(name string) (key, source string) {
+// key returns the API key in variable name, and why it is empty for the error of an empty key.
+func (e Env) key(name string) (key, reason string) {
 	switch {
 	case name == "":
 		return "", "the providers entry sets no api_key_env"
 	case e.Getenv == nil:
-		return "", "Options.Getenv is nil, so " + name + " is unread"
+		return "", cmp.Or(e.NoGetenv, "no Getenv is set") + ", so " + name + " is unread"
 	}
 	return e.Getenv(name), name + " is empty"
 }

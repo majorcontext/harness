@@ -4,7 +4,6 @@ package anthropic
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,10 +36,10 @@ const (
 // Client is a provider.Provider for the Anthropic Messages API. The zero
 // value plus APIKey, or an HTTPClient that sets the credentials, is usable.
 type Client struct {
-	APIKey     string
-	KeySource  string       // where APIKey was read; the error of an empty APIKey names it
-	BaseURL    string       // defaults to https://api.anthropic.com
-	HTTPClient *http.Client // defaults to http.DefaultClient
+	APIKey      string
+	NoKeyReason string       // why APIKey is empty; the error of an empty APIKey names it
+	BaseURL     string       // defaults to https://api.anthropic.com
+	HTTPClient  *http.Client // defaults to http.DefaultClient
 	// CacheTTL is the prompt-cache breakpoint lifetime: CacheTTL5m (the
 	// API default) or CacheTTL1h (the extended TTL). Empty resolves to
 	// DefaultCacheTTL — see that constant for why the default is 1h. Any
@@ -64,7 +63,7 @@ func (c *Client) Name() string { return Family }
 
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
 	if c.APIKey == "" && c.HTTPClient == nil {
-		return nil, fmt.Errorf("anthropic: no API key: %s", cmp.Or(c.KeySource, "APIKey is empty"))
+		return nil, provider.NoKeyError("anthropic", c.NoKeyReason)
 	}
 	ttl, err := resolveCacheTTL(c.CacheTTL)
 	if err != nil {

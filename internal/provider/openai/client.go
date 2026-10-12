@@ -4,7 +4,6 @@ package openai
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,9 +28,9 @@ const defaultResponsesPath = "/v1/responses"
 type Client struct {
 	// APIKey may be empty when HTTPClient sets the Authorization header.
 	APIKey string
-	// KeySource says where APIKey was read. The error of an empty APIKey names it.
-	KeySource string
-	BaseURL   string // defaults to https://api.openai.com
+	// NoKeyReason says why APIKey is empty. The error of an empty APIKey names it.
+	NoKeyReason string
+	BaseURL     string // defaults to https://api.openai.com
 	// ExtraHeaders are sent verbatim on every request, first, so the fixed
 	// Authorization, Content-Type and Accept headers overwrite them.
 	ExtraHeaders map[string]string
@@ -108,7 +107,7 @@ type preparedRequest struct {
 
 func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
 	if c.APIKey == "" && c.HTTPClient == nil {
-		return nil, fmt.Errorf("openai: no API key: %s", cmp.Or(c.KeySource, "APIKey is empty"))
+		return nil, provider.NoKeyError("openai", c.NoKeyReason)
 	}
 	wire, err := transcodeRequestFamilyWithOptions(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas, transcodeRequestOptions{
 		allowEmptyInput: allowEmptyInput,
