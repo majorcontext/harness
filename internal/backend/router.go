@@ -42,8 +42,10 @@ func NewRouter(backends map[string]turn.Backend) *Router {
 
 // Env is what the backends read from their process: the variables that hold API keys, and the log.
 type Env struct {
-	// Getenv reads an API-key variable. nil: no variable is set.
+	// Getenv reads an API-key variable. nil: no variable is read.
 	Getenv func(key string) string
+	// NoGetenv says why Getenv is nil, in the error of an unread key. Empty: "no Getenv is set".
+	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
 }
@@ -53,9 +55,6 @@ type Env struct {
 // The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper, env Env) *Router {
 	env.Log = cmp.Or(env.Log, slog.Default())
-	if env.Getenv == nil {
-		env.Getenv = func(string) string { return "" }
-	}
 	backends := map[string]turn.Backend{}
 	cfg.Providers = maps.Clone(cfg.Providers)
 	if cfg.Providers == nil {
@@ -88,17 +87,31 @@ func client(name string, p config.Provider, transport func(provider string) http
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
-		return &responses.Client{Family: name, APIKey: env.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")), BaseURL: p.BaseURL, Log: env.Log,
+		key, reason := env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
-		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: env.Getenv(p.APIKeyEnv), BaseURL: p.BaseURL,
+		key, reason := env.key(p.APIKeyEnv)
+		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
-		return &anthropic.Client{APIKey: env.Getenv(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY")), BaseURL: p.BaseURL,
+		key, reason := env.key(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY"))
+		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
+}
+
+// key returns the API key in variable name, and why it is empty for the error of an empty key.
+func (e Env) key(name string) (key, reason string) {
+	switch {
+	case name == "":
+		return "", "the providers entry sets no api_key_env"
+	case e.Getenv == nil:
+		return "", cmp.Or(e.NoGetenv, "no Getenv is set") + ", so " + name + " is unread"
+	}
+	return e.Getenv(name), name + " is empty"
 }
 
 // Check returns the backend of the provider of ref, or reports that no

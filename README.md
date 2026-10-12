@@ -4,72 +4,137 @@ A fast, extensible, composable agent harness in Go.
 
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-- **Fast** — millisecond startup, CI-enforced budgets
-- **Extensible** — language-agnostic process plugins (TypeScript SDK published)
-- **Composable** — headless runtime, event streams, client/server, MCP both directions
-- **Model-fluid** — swap providers/models mid-session or per-subagent with no migration
+- **Fast** — millisecond startup
+- **Extensible** — language-agnostic process plugins (TypeScript SDK included)
+- **Composable** — headless runtime, event streams, client/server, MCP servers
 
-## Install
+## Quickstart
+
+Install the CLI:
 
 ```bash
 go install github.com/majorcontext/harness/cmd/harness@latest
 ```
 
-## Get started
+### Run a prompt
 
-The default model is Anthropic's. Set its key:
+The default model is Anthropic's. Set its key, then run a prompt in your project:
 
 ```bash
 export ANTHROPIC_API_KEY=...
-```
-
-Run a prompt in your project:
-
-```bash
 harness run -p "Find the TODOs in this repo and fix the easy ones"
 ```
 
-Continue the most recent session:
+Harness reads files, edits them, and runs commands in the current directory.
+It saves each session.
+
+### Continue the session
+
+`-c` continues the most recent session, so the model knows what it did:
 
 ```bash
 harness run -c -p "Now write a test for each fix"
 ```
 
-Use another provider's model. Set that provider's key first, for example `OPENAI_API_KEY`:
+### Go back to an older session
 
-```bash
-harness run -model openai/gpt-5 -p "Review the diff"
+`harness sessions` lists the saved sessions, oldest first. Each line has the ID,
+the creation time, and the message count:
+
+```console
+$ harness sessions
+ses_ctqgq5qegmlzj2xub2rq5qewqj	2026-10-12T19:11:50Z	10
+ses_fplt2uzhgiwsj6celuziopq7nl	2026-10-12T19:12:09Z	2
 ```
 
-Pursue a goal until an independent evaluator judges it met. This needs `goal_evaluator_model` in your config:
+`-r` resumes a session by its ID:
+
+```bash
+harness run -r ses_ctqgq5qegmlzj2xub2rq5qewqj -p "What did we change?"
+```
+
+Sessions are in `~/.harness/sessions`. `harness sessions --json` prints the
+same list as JSON.
+
+### Give the model more tools
+
+Add an MCP server to `.harness.json` in your project. This one lets the model
+fetch web pages. It needs [uv](https://docs.astral.sh/uv/).
+
+```json
+{
+  "mcp_servers": {
+    "fetch": {"command": ["uvx", "mcp-server-fetch"]}
+  }
+}
+```
+
+```bash
+harness run -p "Fetch https://go.dev/VERSION?m=text and tell me the latest Go release"
+```
+
+For a remote server, set `url` and `headers` in place of `command`.
+
+### Work toward a goal
+
+`-goal` runs turns until an independent evaluator model judges the condition
+met. Name the evaluator in `.harness.json`:
+
+```json
+{
+  "goal_evaluator_model": "anthropic/claude-fable-5",
+  "mcp_servers": {
+    "fetch": {"command": ["uvx", "mcp-server-fetch"]}
+  }
+}
+```
 
 ```bash
 harness run -goal "go test ./... passes"
 ```
 
-Serve the HTTP+SSE session API on `localhost:4096`:
+The command exits 0 when the goal is met, 3 when it is not, and 1 when a turn
+fails.
+
+### Serve it over HTTP
 
 ```bash
 harness serve
 ```
 
-Run `harness --help` for all commands and flags. `harness sessions` lists saved sessions, and `harness plugin probe` probes the configured plugins and prints their hooks.
+In another terminal, create a session, send it a prompt, and stream its events:
 
-## Use the library
+```bash
+curl -X POST localhost:4096/sessions -d '{"id": "demo"}'
+curl -X POST localhost:4096/sessions/demo/inputs \
+  -d '{"id": "1", "parts": [{"type": "text", "text": "Say hello"}]}'
+curl -N -H 'Accept: text/event-stream' localhost:4096/sessions/demo/events
+```
 
-The runtime is a Go package. The CLI and the HTTP server are clients of it. Add it to your module:
+With no `HARNESS_RUN_TOKEN` set, the server needs no token on `localhost`.
+Run `harness --help` for the commands and the `run` flags, and
+`harness serve -h` for the `serve` flags.
+
+## Embed Harness in Go
+
+The runtime is a Go package. The CLI and the HTTP server are clients of it.
+Add it to your module:
 
 ```bash
 go get github.com/majorcontext/harness@latest
 ```
 
-Then create a runtime and a session, send the session a prompt, and read the events of its turn:
+### Run a prompt
+
+Create a runtime and a session, send the session a prompt, and read the events
+of its turn:
 
 ```go
 ctx := context.Background()
 rt, err := harness.New(harness.Options{
 	Store:   store.NewMemStore(),
 	WorkDir: ".",
+	Getenv:  os.Getenv,
 })
 if err != nil {
 	log.Fatal(err)
@@ -98,14 +163,119 @@ for e, err := range turn.Events(ctx) {
 		}
 	}
 }
+res, err := turn.Wait(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+if res.StopReason == protocol.StopFailed {
+	log.Fatal(res.Error)
+}
 ```
 
-`WorkDir` gives each session the built-in tools, bash among them. Leave it empty for a session with no file access.
-`httpapi.Handler(rt)` serves the same sessions over HTTP, and `store.NewDiskStore` keeps them on disk. `turn.Wait` returns the stop reason and usage of the turn.
+`Getenv` lets the runtime read the API-key variables of the model providers.
+Without it, a provider has no key unless `ModelTransport` supplies the
+credentials. `WorkDir` gives each session the built-in tools, bash among them.
+Leave it empty for a session with no file access. A failed turn does not end
+`Events` with an error, so check `turn.Wait`.
 
-See [examples/](examples) for programs that run, and the
-[API reference](https://pkg.go.dev/github.com/majorcontext/harness) for
+### Continue the session
+
+Prompt the same session again with a new input ID:
+
+```go
+turn, err = s.Prompt(ctx, protocol.Input{
+	ID:    "prompt-2",
+	Parts: []protocol.Part{{Type: protocol.PartText, Text: "Which of those files is the largest?"}},
+})
+```
+
+Then read its events and call `turn.Wait` as before. The input ID makes a retry
+safe: the same ID and text returns the earlier turn, and the same ID with other
+text fails with `harness.ErrInputConflict`.
+
+### Keep sessions across restarts
+
+`store.NewMemStore` loses its sessions when the process exits. Use a disk store,
+and open the session by its ID. Create it on the first run:
+
+```go
+rt, err := harness.New(harness.Options{
+	Store:   store.NewDiskStore("sessions"),
+	WorkDir: ".",
+	Getenv:  os.Getenv,
+})
+if err != nil {
+	log.Fatal(err)
+}
+s, err := rt.Open(ctx, "my-session")
+if errors.Is(err, harness.ErrSessionNotFound) {
+	s, err = rt.Create(ctx, protocol.CreateSession{ID: "my-session"})
+}
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+### Give the model your own tools
+
+A `harness.Tool` is a spec for the model and a Go function to run:
+
+```go
+type rollDice struct{}
+
+func (rollDice) Spec() protocol.ToolSpec {
+	return protocol.ToolSpec{
+		Name:        "roll_dice",
+		Description: "Roll a die with the given number of sides.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {"sides": {"type": "integer", "minimum": 2}}, "required": ["sides"]}`),
+	}
+}
+
+func (rollDice) Run(ctx context.Context, call harness.Call) (protocol.ToolResult, error) {
+	var in struct{ Sides int }
+	if err := json.Unmarshal(call.Arguments, &in); err != nil {
+		return protocol.ToolResult{}, err
+	}
+	if in.Sides < 2 {
+		return protocol.ToolResult{}, fmt.Errorf("sides must be at least 2, got %d", in.Sides)
+	}
+	return protocol.ToolResult{Text: strconv.Itoa(rand.IntN(in.Sides) + 1)}, nil
+}
+```
+
+Give it to the runtime:
+
+```go
+rt, err := harness.New(harness.Options{
+	Store:   store.NewDiskStore("sessions"),
+	WorkDir: ".",
+	Getenv:  os.Getenv,
+	Tools:   []harness.Tool{rollDice{}},
+})
+```
+
+### Serve over HTTP
+
+`httpapi.Handler` serves the sessions of the runtime with the same API as
+`harness serve`:
+
+```go
+log.Fatal(http.ListenAndServe("localhost:4096", httpapi.Handler(rt)))
+```
+
+The handler has no authentication. Add your own before you expose it.
+
+See the [API reference](https://pkg.go.dev/github.com/majorcontext/harness) for
 everything else.
+
+## Examples
+
+[examples/](examples) holds small programs that run:
+
+- [`prompt`](examples/prompt): send one prompt and stream the reply.
+- [`custom-tool`](examples/custom-tool): give the model a Go function to call.
+- [`switch-model`](examples/switch-model): continue one conversation on a
+  different model or provider.
 
 ## Configuration
 
@@ -115,16 +285,6 @@ field.
 
 Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
 `openai`, `openrouter`) or a key from `providers`.
-
-Automatic compaction needs the context window of the model. A model that is
-missing from the built-in context-window catalog, such as an OpenRouter or
-local model, runs with a window of 128000 tokens. Harness logs one warning for
-the model, and the session gauge sets `window_estimated`. When the provider
-rejects a request as too long, Harness compacts and tries again; it does not
-learn the window from the error. To name the window yourself, set
-`context_window_tokens`, which applies to every session and always wins.
-`claude-code` models are the exception: the Claude Code CLI reports its own
-window after each turn, so do not set one for them.
 
 ### OpenAI-compatible endpoints
 
@@ -141,6 +301,8 @@ Start Ollama with the context window Harness will assume:
 ```bash
 OLLAMA_CONTEXT_LENGTH=131072 ollama serve
 ```
+
+Quit the Ollama app first. It serves port 11434 without this setting.
 
 Then add the entry:
 
@@ -168,19 +330,10 @@ Optional fields: `family` (the wire-quirk tag, defaults to the key) and
 ### OpenRouter
 
 Harness registers an `openrouter` provider when `providers` has no
-`openrouter` entry, so you only need a key and a context window:
+`openrouter` entry, so you only need a key:
 
 ```bash
 export OPENROUTER_API_KEY=...
-```
-
-```json
-{
-  "context_window_tokens": 200000
-}
-```
-
-```bash
 harness run -model openrouter/anthropic/claude-sonnet-5 -p "Review the diff"
 ```
 
@@ -190,7 +343,6 @@ defaults when you leave them out. To send attribution headers, set only
 
 ```json
 {
-  "context_window_tokens": 200000,
   "providers": {
     "openrouter": {
       "extra_headers": {"HTTP-Referer": "https://example.com", "X-Title": "my-app"}
@@ -223,6 +375,19 @@ The model ref `vendor/some-model` sends `some-model` as the model ID. Set
 `context_window_tokens` to your model's context window.
 `responses_path` is also valid on the built-in `openai` entry, and nowhere
 else.
+
+### Context windows
+
+Automatic compaction needs the context window of the model. A model that is
+missing from the built-in context-window catalog, such as an OpenRouter or
+local model, runs with a window of 128000 tokens. Harness logs one warning for
+the model, and the session gauge sets `window_estimated`. When the provider
+rejects a request as too long, Harness compacts and tries again; it does not
+learn the window from the error. To name the window yourself, set
+`context_window_tokens`. It applies to every session of a model API provider
+and overrides the catalog.
+
+### Config errors
 
 These fail config loading with an error that names the entry: an unknown
 `type`, an `openai-compat` or `openai` entry with no `base_url` (except

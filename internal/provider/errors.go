@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 )
@@ -51,6 +52,11 @@ func (e *Error) Error() string {
 
 // Unwrap returns nil because Error is a leaf error.
 func (e *Error) Unwrap() error { return nil }
+
+// NoKeyError reports a request with no API key. reason says why the key is empty.
+func NoKeyError(name, reason string) *Error {
+	return &Error{Raw: fmt.Sprintf("%s: no API key: %s", name, cmp.Or(reason, "APIKey is empty"))}
+}
 
 // IsContextOverflow reports whether err wraps an ErrKindContextOverflow.
 func IsContextOverflow(err error) bool {
