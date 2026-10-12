@@ -57,8 +57,13 @@ func (e *Error) Is(target error) bool {
 	if !ok || t.Code != e.Code {
 		return false
 	}
-	cause, ok := t.Details[CauseKey]
-	return !ok || cause == e.Details[CauseKey]
+	want, ok := t.Details[CauseKey]
+	if !ok {
+		return true
+	}
+	w, wok := want.(string)
+	got, gok := e.Details[CauseKey].(string)
+	return wok && gok && w == got
 }
 
 // CodeOf returns the Code of the first *Error in the chain of err, or CodeInternal.
