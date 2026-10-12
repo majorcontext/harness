@@ -23,7 +23,7 @@ type probe struct {
 	name    string
 	err     error
 	hold    bool
-	started chan protocol.ToolCall
+	started chan harness.Call
 	release chan struct{}
 
 	mu    sync.Mutex
@@ -31,14 +31,14 @@ type probe struct {
 }
 
 func newProbe(name string, hold bool) *probe {
-	return &probe{name: name, hold: hold, started: make(chan protocol.ToolCall, 1), release: make(chan struct{})}
+	return &probe{name: name, hold: hold, started: make(chan harness.Call, 1), release: make(chan struct{})}
 }
 
 func (p *probe) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: p.name, Description: "probe", InputSchema: json.RawMessage(`{"type":"object"}`)}
 }
 
-func (p *probe) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
+func (p *probe) Run(ctx context.Context, call harness.Call) (protocol.ToolResult, error) {
 	p.mu.Lock()
 	p.calls = append(p.calls, call.ID+" "+call.Name)
 	p.mu.Unlock()

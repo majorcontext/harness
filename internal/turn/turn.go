@@ -241,6 +241,7 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context.
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
+	ctx, step = context.WithValue(ctx, turnIDKey{}, req.TurnID), context.WithValue(step, turnIDKey{}, req.TurnID)
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
@@ -489,4 +490,12 @@ func adopt(b Backend, caps Capabilities, to Turn, req *Request) error {
 		req.Model, req.Settings = m, set
 	}
 	return nil
+}
+
+type turnIDKey struct{}
+
+// ID returns the ID of the turn whose model call or tool call runs under ctx, or "".
+func ID(ctx context.Context) string {
+	id, _ := ctx.Value(turnIDKey{}).(string)
+	return id
 }

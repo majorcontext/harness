@@ -32,7 +32,7 @@ func (rollDice) Spec() protocol.ToolSpec {
 	}
 }
 
-func (rollDice) Run(_ context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
+func (rollDice) Run(_ context.Context, call harness.Call) (protocol.ToolResult, error) {
 	var in struct {
 		Sides int `json:"sides"`
 	}

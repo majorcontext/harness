@@ -45,7 +45,7 @@ func (r *Runtime) builtin(name string) bool {
 // them. A session tool binds to the session or drops out. Each session has
 // its own file tools, because the write_file guard belongs to one session,
 // and its own session_info tool, which reads what sp recorded of the session.
-func (r *Runtime) source(id string, child bool, depth int, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
+func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
 	var static, loopOnly []turn.Tool
 	var model *modelTool
 	for _, t := range r.tools {
@@ -64,7 +64,7 @@ func (r *Runtime) source(id string, child bool, depth int, plug *pluginsrc.Sessi
 		}
 		static = append(static, t)
 	}
-	srcs := turn.Sources{turn.Fixed(static)}
+	srcs := turn.Sources{boundTools{tools: static, session: id, root: root}}
 	if len(loopOnly) > 0 {
 		goal := turn.Fixed(loopOnly)
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {

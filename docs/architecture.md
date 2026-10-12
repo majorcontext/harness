@@ -84,7 +84,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `Call`, `AloneTool`, `KeyedTool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
 | `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`; imports only the standard library | boot code that writes a config |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated `openapi.json` and `protocol.ts` | servers, web clients, CLIs |
 | `harness/storetest` | Conformance suite for a `Store` | store implementations |
@@ -220,15 +220,26 @@ type Sync interface {
 // ApplySync appends b to st by the receiver rules of a Sync (see Events).
 func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error)
 
-// The calls of one model response run at the same time, so Run allows concurrent
-// calls. A Tool may also have `Alone()` (the call runs with no other call in
-// flight) or `Key(protocol.ToolCall) string` (calls with the same non-empty key
-// run one at a time, in call order).
+// Tool is an embedder tool. The runtime reads Spec once, at New. The calls of one
+// model response run at the same time, so Run allows concurrent calls, and it
+// must return when ctx ends. An error becomes an error result.
 type Tool interface {
 	Spec() protocol.ToolSpec
-	// Run receives call.ID, stable across a resumed turn, for idempotent effects.
-	Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error)
+	Run(ctx context.Context, call Call) (protocol.ToolResult, error)
 }
+
+// Call is one tool call and the session that made it.
+type Call struct {
+	ID        string // the call ID of the model, stable across a resumed turn, for idempotent effects
+	Name      string
+	Arguments json.RawMessage
+	Session   string // the calling session
+	Root      string // the root of the session tree
+	TurnID    string
+}
+
+type AloneTool interface { Tool; Alone() }            // the call runs with no other call in flight
+type KeyedTool interface { Tool; Key(c Call) string } // calls with the same non-empty key run one at a time, in call order
 ```
 
 The HTTP handler is a thin mapping of the exported methods of these types, and it calls no other method; `Runtime.Read` serves every read route. A read of a session that the runtime does not run names the plugins of that runtime. An embedder and a remote client see the same types and the same errors.
@@ -903,7 +914,7 @@ type Notice struct {
 - The tools of a model call keep one order from call to call, because the tools come first in the cached prefix of every provider and a changed byte invalidates the whole prefix. A `Source` returns its tools in a fixed order and never ranges over a map: `mcpsrc` orders the servers by name and the tools of a server by name.
 - `turn.Sources` chains the `turn.Hooks` of its `Source`s in order: `Before` runs in order and a deny ends the chain, and `After` runs in order.
 - The loop runs the tool calls of a response at the same time, up to 8 at once. Results reach the log in call order: a result is recorded as soon as it and every call before it have ended. A tool that is `Alone` waits for every call before it and holds back every call after it. The calls of a `Keyed` tool with one key run one at a time in call order: `read_file`, `write_file`, and `edit_file` key on the resolved path with symlinks resolved, `process` on the process name, and `task` on the target session. `goal`, `model`, and `mcp` are `Alone`. `Before` and `After` run around each call, and calls that run together run their hooks together, so a hook keeps no state across calls that it does not guard. A panic in a tool is an error result of that call. An interrupt cancels every running call and starts none; every call that ran has its own result recorded in call order, including a call that the interrupt cut short, and a call that did not start gets the result of an interrupted call. When only the step ends, as in a handoff, running calls finish and no call starts. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
-- No tool receives a session. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts.
+- An embedder tool receives its session, the root of the session tree, and the turn in `harness.Call`. The runtime binds them for each model call, also for `AloneTool.Alone` and `KeyedTool.Key`. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts. `turn.Tool` takes a `protocol.ToolCall` and no session.
 
 Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored.
 

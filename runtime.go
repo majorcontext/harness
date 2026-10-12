@@ -210,8 +210,11 @@ func New(opts Options) (*Runtime, error) {
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },
 		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix, Log: r.log})
-	tools := opts.Tools
-	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t Tool) bool { return t.Spec().Name == modelToolName }) {
+	tools := make([]turn.Tool, len(opts.Tools))
+	for i, t := range opts.Tools {
+		tools[i] = embedded{t}
+	}
+	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == modelToolName }) {
 		return nil, fmt.Errorf("harness: tool name %q is reserved", modelToolName)
 	}
 	if r.evaluator != "" {
@@ -359,7 +362,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Source:          r.source(id, c.ParentID != "", depth, plug, sp),
+		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp),
 		Retain:          r.workDir != "",
 		Prompt:          sp.system,
 		Appended:        r.appended(id, plug),

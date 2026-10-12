@@ -28,7 +28,7 @@ func (stubborn) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "stuck", Description: "stuck", InputSchema: json.RawMessage(`{"type":"object"}`)}
 }
 
-func (s stubborn) Run(ctx context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
+func (s stubborn) Run(ctx context.Context, _ harness.Call) (protocol.ToolResult, error) {
 	s.started <- struct{}{}
 	go func() {
 		select {
