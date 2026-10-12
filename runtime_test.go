@@ -36,14 +36,14 @@ type fake struct {
 	save     string
 	steering bool
 	deaf     bool
-	late     []eventlog.Message
+	late     []protocol.LogMessage
 	stuck    chan struct{}
 	runs     chan fakeRun
 }
 
 type fakeRun struct {
 	req   turn.Request
-	items chan<- eventlog.Message
+	items chan<- protocol.LogMessage
 	tele  chan<- turn.Telemetry
 	state string
 }
@@ -55,7 +55,7 @@ func (f *fake) Capabilities(string) turn.Capabilities {
 }
 
 func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
-	items, tele, run := make(chan eventlog.Message), make(chan turn.Telemetry), fakeRun{req: req}
+	items, tele, run := make(chan protocol.LogMessage), make(chan turn.Telemetry), fakeRun{req: req}
 	run.items, run.tele = items, tele
 	if f.save != "" {
 		run.state = f.loadAndSave(out)
@@ -99,7 +99,7 @@ func (f *fake) loadAndSave(out turn.Sink) string {
 }
 
 // report reports m, then an answer to each steer input that it takes.
-func (f *fake) report(out turn.Sink, m eventlog.Message) error {
+func (f *fake) report(out turn.Sink, m protocol.LogMessage) error {
 	if err := out.Item(m); err != nil || !f.steering || f.deaf {
 		return err
 	}
@@ -124,13 +124,13 @@ func (f *fake) stop(ctx context.Context, out turn.Sink) error {
 	return context.Cause(ctx)
 }
 
-func (r fakeRun) emit(m eventlog.Message) {
+func (r fakeRun) emit(m protocol.LogMessage) {
 	r.items <- m
 	synctest.Wait()
 }
 
 // measure reports the usage of one model call.
-func (r fakeRun) measure(u eventlog.Usage) {
+func (r fakeRun) measure(u protocol.Usage) {
 	r.tele <- turn.Telemetry{Usage: u}
 	synctest.Wait()
 }
@@ -140,13 +140,13 @@ func (r fakeRun) end() {
 	synctest.Wait()
 }
 
-func say(text string) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+func say(text string) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }
 
-func callTool(id string) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{
-		{Type: eventlog.PartToolCall, CallID: id, Name: "bash", Arguments: json.RawMessage(`{}`)}}}
+func callTool(id string) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{
+		{Type: protocol.LogPartToolCall, CallID: id, Name: "bash", Arguments: json.RawMessage(`{}`)}}}
 }
 
 func text(id, s string) protocol.Input {
@@ -239,7 +239,7 @@ func line(kind string, d json.RawMessage) string {
 		Error      string
 		Cause      string
 		Count      int
-		Message    eventlog.Message
+		Message    protocol.LogMessage
 	}
 	_ = json.Unmarshal(d, &p)
 	f := []string{kind}
@@ -396,7 +396,7 @@ func (s *parkingStore) Append(ctx context.Context, id string, expectedSeq uint64
 	if ender, _ := s.targets(); id == ender {
 		for _, r := range records {
 			if env, err := eventlog.Decode(r); err == nil {
-				if _, ok := env.Event.(eventlog.TurnEnded); ok {
+				if _, ok := env.Event.(protocol.TurnEnded); ok {
 					close(s.armed)
 				}
 			}
@@ -425,7 +425,7 @@ func (s *parkingStore) Head(ctx context.Context, id string) (uint64, error) {
 func TestCancelOfAGrandchildWhoseParentStoppedReportsOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var grand string
-		f := &family{answer: generations(block, func() eventlog.Message {
+		f := &family{answer: generations(block, func() protocol.LogMessage {
 			return calls("task", onChild("cancel", "session_id", grand))
 		})}
 		y := &stoppingSync{release: make(chan struct{})}
@@ -447,7 +447,7 @@ func TestCancelOfAGrandchildWhoseParentStoppedReportsOnce(t *testing.T) {
 		reportInputs := func() (n int) {
 			for _, id := range []string{"s1", kid, grand} {
 				for _, e := range events(t, ps, id) {
-					if in, ok := e.(eventlog.InputAdmitted); ok && in.Source == "child" {
+					if in, ok := e.(protocol.InputAdmitted); ok && in.Source == "child" {
 						n++
 					}
 				}
@@ -476,7 +476,7 @@ func TestCancelOfAGrandchildWhoseParentStoppedReportsOnce(t *testing.T) {
 // has appended, as a process that dies after that write.
 type dyingStore struct {
 	harness.Store
-	die  func(id string, e eventlog.Event) bool
+	die  func(id string, e protocol.Payload) bool
 	dead atomic.Bool
 }
 
@@ -499,7 +499,7 @@ func (s *dyingStore) Append(ctx context.Context, id string, expectedSeq uint64, 
 func reportsOf(t *testing.T, st harness.Store, id, child string) (n int) {
 	t.Helper()
 	for _, e := range events(t, st, id) {
-		if in, ok := e.(eventlog.InputAdmitted); ok && in.Source == "child" && strings.Contains(fmt.Sprint(in.Parts), child) {
+		if in, ok := e.(protocol.InputAdmitted); ok && in.Source == "child" && strings.Contains(fmt.Sprint(in.Parts), child) {
 			n++
 		}
 	}
@@ -509,17 +509,17 @@ func reportsOf(t *testing.T, st harness.Store, id, child string) (n int) {
 func TestACanceledGrandchildReportsOnceAcrossARestart(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		die  func(armed *atomic.Bool, id string, e eventlog.Event, grand string) bool
+		die  func(armed *atomic.Bool, id string, e protocol.Payload, grand string) bool
 	}{
-		{"the process dies after the turn of the target ends and before the relay", func(_ *atomic.Bool, id string, e eventlog.Event, grand string) bool {
-			_, ok := e.(eventlog.TurnEnded)
+		{"the process dies after the turn of the target ends and before the relay", func(_ *atomic.Bool, id string, e protocol.Payload, grand string) bool {
+			_, ok := e.(protocol.TurnEnded)
 			return ok && id == grand
 		}},
-		{"the process dies after the relay and before the settle", func(armed *atomic.Bool, id string, e eventlog.Event, grand string) bool {
-			if _, ok := e.(eventlog.TurnEnded); ok && id == grand {
+		{"the process dies after the relay and before the settle", func(armed *atomic.Bool, id string, e protocol.Payload, grand string) bool {
+			if _, ok := e.(protocol.TurnEnded); ok && id == grand {
 				armed.Store(true)
 			}
-			in, ok := e.(eventlog.InputAdmitted)
+			in, ok := e.(protocol.InputAdmitted)
 			return ok && id == "s1" && in.Source == "child" && armed.Load()
 		}},
 	} {
@@ -528,10 +528,10 @@ func TestACanceledGrandchildReportsOnceAcrossARestart(t *testing.T) {
 				eachStore(t, func(t *testing.T, open func() harness.Store) {
 					var grand string
 					var armed atomic.Bool
-					f := &family{answer: generations(block, func() eventlog.Message {
+					f := &family{answer: generations(block, func() protocol.LogMessage {
 						return calls("task", onChild("cancel", "session_id", grand))
 					})}
-					ds := &dyingStore{Store: open(), die: func(id string, e eventlog.Event) bool { return tc.die(&armed, id, e, grand) }}
+					ds := &dyingStore{Store: open(), die: func(id string, e protocol.Payload) bool { return tc.die(&armed, id, e, grand) }}
 					r1 := familyRuntime(t, ds, f, nil, config.Config{}, t.TempDir())
 					s := create(t, r1)
 					submit(t, s, text("a", "delegate"))
@@ -551,7 +551,7 @@ func TestACanceledGrandchildReportsOnceAcrossARestart(t *testing.T) {
 					}
 					synctest.Wait()
 					st := open()
-					if got := settled(t, st, kid); got != eventlog.OutcomeCanceled {
+					if got := settled(t, st, kid); got != protocol.OutcomeCanceled {
 						t.Errorf("child.settled of the grandchild %q, want canceled", got)
 					}
 					if got := reportsOf(t, st, kid, grand); got != 0 {

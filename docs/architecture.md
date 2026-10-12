@@ -251,7 +251,7 @@ Free to change.
 | Package | Owns |
 | --- | --- |
 | `internal/server` | HTTP mapping of the Go API |
-| `internal/eventlog` | Event schema, record codec, `Apply`, and `Check` |
+| `internal/eventlog` | The record codec, `Apply`, and `Check`. The event schema is in `protocol` |
 | `internal/session` | Session actor, mailbox, state machines, views, replication, and the child commands |
 | `internal/tree` | The child tree: limits, spawn, report, recovery, the tree interrupt, and the `task` tool. It reads the runtime through its own `Sessions` interface |
 | `internal/turn` | One agent loop; declares `Backend`, `Tool`, and `Source`; `Restrict` |
@@ -336,35 +336,37 @@ The runtime reads no other on-disk format.
 {"v":1,"seq":42,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{}}
 ```
 
-`Event` is a Go interface with `Kind() string`. One registry maps a kind to its type for decode. An unknown kind fails the load loudly.
+`protocol.Payload` is a Go interface with `Kind() string`, and `protocol` holds one struct for each durable kind. `protocol.Event.Payload` decodes the data of an event into a pointer to the struct of its kind, such as `*protocol.TurnEnded`. `eventlog` encodes and decodes the envelope with the same registry. An unknown kind fails the load loudly.
 
 ### Event kinds
 
-| Kind | Payload |
+The Go types of `protocol` own the payload of each kind: the field names, the JSON tags, and the typed enums (`Status`, `Delivery`, `StopReason`, `Cause`, `ErrorClass`, `ResolutionKind`, `GoalState`, `Verdict`, and `Outcome`). `protocol/openapi.json` and `protocol/protocol.ts` generate from them. `protocol.Kind*` names each kind. A golden test in `internal/eventlog` pins the JSON bytes of every kind.
+
+| Kind | Payload type |
 | --- | --- |
-| `session.created` | `parent_id?`, `agent?`, `model`, `settings`, `origin`, `allowed_tools?` |
-| `owner.acquired` | `epoch`, `owner` |
-| `settings.changed` | `model?`, `effort?`, `service_tier?` |
-| `input.admitted` | `input_id`, `delivery` (`queue` or `steer`), `source`, `source_id?`, `source_label?`, `parts` |
-| `input.promoted` | `input_id`, `turn_id` |
-| `input.withdrawn` | `input_id` |
-| `turn.started` | `turn_id`, `input_ids` |
-| `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |
-| `turn.suspended` | `turn_id`, `cause` |
-| `turn.resumed` | `turn_id`, `count` |
-| `turn.ended` | `turn_id`, `stop_reason`, `cause?`, `task_cancel?`, `error?`, `error_class?`, `recover_hint?`, `error_detail?` |
-| `request.opened` | `request_id`, `item_id`, `kind`, `payload?` |
-| `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
-| `goal.set` | `condition`, `max_turns`, `turns?` |
-| `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
-| `goal.changed` | `state`, `reason?`, `retry_at?` |
-| `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend`, `usage?` |
-| `child.spawned` | `child_id`, `agent?` |
-| `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
-| `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
-| `context.measured` | `tokens`, `window`, `source`, `window_estimated?`, `usage?`, `subscription_usage?`, `cost_usd?` |
-| `backend.state` | `backend`, `blob_key?`, `head?`, `chunk?`, `restart?`, `entries?`, `sum?` |
-| `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
+| `session.created` | `protocol.SessionCreated` |
+| `owner.acquired` | `protocol.OwnerAcquired` |
+| `settings.changed` | `protocol.SettingsChanged` |
+| `input.admitted` | `protocol.InputAdmitted` |
+| `input.promoted` | `protocol.InputPromoted` |
+| `input.withdrawn` | `protocol.InputWithdrawn` |
+| `turn.started` | `protocol.TurnStarted` |
+| `item.completed` | `protocol.ItemCompleted`: its `message` has the role `user`, `assistant`, or `tool` |
+| `turn.suspended` | `protocol.TurnSuspended` |
+| `turn.resumed` | `protocol.TurnResumed` |
+| `turn.ended` | `protocol.TurnEnded` |
+| `request.opened` | `protocol.RequestOpened` |
+| `request.resolved` | `protocol.RequestResolved` |
+| `goal.set` | `protocol.GoalSet` |
+| `goal.evaluated` | `protocol.GoalEvaluated` |
+| `goal.changed` | `protocol.GoalChanged` |
+| `compaction.applied` | `protocol.CompactionApplied` |
+| `child.spawned` | `protocol.ChildSpawned` |
+| `child.settled` | `protocol.ChildSettled` |
+| `command.recorded` | `protocol.CommandRecorded` |
+| `context.measured` | `protocol.ContextMeasured` |
+| `backend.state` | `protocol.BackendState` |
+| `tool_result.retained` | `protocol.ToolResultRetained` |
 
 Ephemeral frames go to subscribers and never to the store: `item.started`, `item.delta`, `item.discarded`, `status`. Each has `ephemeral: true` and the last durable seq, and an item frame carries its `item_id`, so a client can place it.
 
@@ -774,17 +776,17 @@ type Snapshot struct {
 }
 
 type Sink interface {
-	Item(m eventlog.Message) error
+	Item(m protocol.LogMessage) error
 	Delta(itemID string, d Delta)
 	Alive()
 	Telemetry(t Telemetry)
-	Steer() ([]eventlog.Message, error)
+	Steer() ([]protocol.LogMessage, error)
 	State(backend string) (Snapshot, error)  // the saved state, or the zero Snapshot
 	SaveState(backend string, s Snapshot) error // stores only the entries that the saved ones lack
 	Compacted(summary string) error
 	Status(f protocol.StatusFrame) // ephemeral frame
 	Ask(callID, kind string, payload json.RawMessage) error // open a request on an open tool call
-	Resolution(id string) (eventlog.RequestResolved, bool)  // the record that closed it
+	Resolution(id string) (protocol.RequestResolved, bool)  // the record that closed it
 }
 ```
 
@@ -795,11 +797,11 @@ type Turn interface {
 	Sink
 	Started() string               // announces an item and returns its ID; the next Item records under it
 	Announce() string              // Started for a keyed thread; Item does not use the ID
-	ItemAs(id string, m eventlog.Message) error // records m under the ID that Announce returned
-	Attach(mediaType string, data []byte) (eventlog.Part, error) // stores a tool-result blob and returns its part
-	Settings() (string, eventlog.Settings) // the model and settings that the session holds now; "" after the turn stops
+	ItemAs(id string, m protocol.LogMessage) error // records m under the ID that Announce returned
+	Attach(mediaType string, data []byte) (protocol.LogPart, error) // stores a tool-result blob and returns its part
+	Settings() (string, protocol.Settings) // the model and settings that the session holds now; "" after the turn stops
 	Pin(ns []Notice, at int) []Pin // pins the notices that changed, on the actor goroutine, and returns every pin
-	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
+	CompactTurn(ctx context.Context) (history []protocol.LogMessage, ok bool, err error)
 	Ended(err error)
 }
 
@@ -893,7 +895,7 @@ type Keyed interface{ Key(c protocol.ToolCall) string }
 func Restrict(tools []Tool, names []string) []Tool
 
 type Source interface {
-	Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset
+	Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) Toolset
 }
 
 type Toolset struct {

@@ -8,17 +8,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 const goldenPath = "testdata/envelopes.golden"
 
-func goldenEvents() []Event {
-	return []Event{
-		SessionCreated{}, OwnerAcquired{}, SettingsChanged{}, InputAdmitted{}, InputPromoted{}, InputWithdrawn{},
-		TurnStarted{}, ItemCompleted{}, TurnSuspended{}, TurnResumed{}, TurnEnded{}, RequestOpened{}, RequestResolved{},
-		GoalSet{}, GoalEvaluated{}, GoalChanged{}, CompactionApplied{}, ChildSpawned{}, ChildSettled{}, CommandRecorded{},
-		ContextMeasured{}, BackendState{}, ToolResultRetained{},
+func goldenEvents() []protocol.Payload {
+	return []protocol.Payload{
+		protocol.SessionCreated{}, protocol.OwnerAcquired{}, protocol.SettingsChanged{}, protocol.InputAdmitted{}, protocol.InputPromoted{}, protocol.InputWithdrawn{},
+		protocol.TurnStarted{}, protocol.ItemCompleted{}, protocol.TurnSuspended{}, protocol.TurnResumed{}, protocol.TurnEnded{}, protocol.RequestOpened{}, protocol.RequestResolved{},
+		protocol.GoalSet{}, protocol.GoalEvaluated{}, protocol.GoalChanged{}, protocol.CompactionApplied{}, protocol.ChildSpawned{}, protocol.ChildSettled{}, protocol.CommandRecorded{},
+		protocol.ContextMeasured{}, protocol.BackendState{}, protocol.ToolResultRetained{},
 	}
+}
+
+func goldenKinds() map[string]bool {
+	out := map[string]bool{}
+	for _, e := range goldenEvents() {
+		out[e.Kind()] = true
+	}
+	return out
 }
 
 // fill sets every field of v to a deterministic non-zero value named after the field.
@@ -72,12 +82,36 @@ func fillDepth(v reflect.Value, name string, depth int) {
 	}
 }
 
+// fillEmpty sets every slice and map of v to an empty value that is not nil, and allocates every pointer.
+func fillEmpty(v reflect.Value, depth int) {
+	if depth > 6 {
+		return
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		fillEmpty(v.Elem(), depth+1)
+	case reflect.Slice:
+		v.Set(reflect.MakeSlice(v.Type(), 0, 0))
+	case reflect.Map:
+		v.Set(reflect.MakeMap(v.Type()))
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() && v.Type() != reflect.TypeFor[time.Time]() {
+				fillEmpty(v.Field(i), depth+1)
+			}
+		}
+	}
+}
+
 func goldenLines(t *testing.T) []string {
 	var out []string
 	for i, zero := range goldenEvents() {
 		full := reflect.New(reflect.TypeOf(zero)).Elem()
 		fill(full, "x")
-		for _, ev := range []Event{zero, full.Interface().(Event)} {
+		empty := reflect.New(reflect.TypeOf(zero)).Elem()
+		fillEmpty(empty, 0)
+		for _, ev := range []protocol.Payload{zero, full.Interface().(protocol.Payload), empty.Interface().(protocol.Payload)} {
 			line, err := Envelope{Seq: uint64(i + 1), Time: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC), Event: ev}.Encode()
 			if err != nil {
 				t.Fatalf("%s: %v", zero.Kind(), err)

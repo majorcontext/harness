@@ -10,7 +10,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -61,7 +62,7 @@ func (b *goalBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 	if fail != nil {
 		return fail
 	}
-	return out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
+	return out.Item(protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}})
 }
 
 func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool, live *atomic.Int32) *Actor {
@@ -72,7 +73,7 @@ func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool, live *ato
 	cfg := Config{ID: "s1", Store: log, Evaluator: "m/eval", Ownership: owned{}, Backend: b, Base: ctx, Go: func(f func()) { wg.Go(func() { live.Add(1); defer live.Add(-1); f() }) }, Done: func(closeDone func()) { closeDone() }, Prompt: func() string { return "" }}
 	open := func() (*Actor, error) { return Open(ctx, cfg) }
 	if create {
-		open = func() (*Actor, error) { return Create(ctx, cfg, eventlog.SessionCreated{Model: "m/m"}, nil) }
+		open = func() (*Actor, error) { return Create(ctx, cfg, protocol.SessionCreated{Model: "m/m"}, nil) }
 	}
 	a, err := open()
 	if err != nil {
@@ -96,7 +97,7 @@ func settled(a *Actor) {
 
 func submitHi(t *testing.T, a *Actor) {
 	t.Helper()
-	in := eventlog.InputAdmitted{InputID: "hi", Delivery: eventlog.DeliveryQueue, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "hi"}}}
+	in := protocol.InputAdmitted{InputID: "hi", Delivery: protocol.DeliveryQueue, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "hi"}}}
 	if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -197,14 +198,14 @@ func TestOpenRunsAPausedGoalAtItsRetryTime(t *testing.T) {
 func TestParseVerdict(t *testing.T) {
 	for _, tc := range []struct {
 		answer, why string
-		want        eventlog.Verdict
+		want        protocol.Verdict
 	}{
-		{"MET: done", "done", eventlog.VerdictMet},
-		{"not met: more", "more", eventlog.VerdictNotMet},
-		{"**MET**: done", "done", eventlog.VerdictMet},
-		{"`IMPOSSIBLE: no way`", "no way", eventlog.VerdictImpossible},
-		{"## NOT MET: more", "more", eventlog.VerdictNotMet},
-		{"I think so", "I think so", eventlog.VerdictNotMet},
+		{"MET: done", "done", protocol.VerdictMet},
+		{"not met: more", "more", protocol.VerdictNotMet},
+		{"**MET**: done", "done", protocol.VerdictMet},
+		{"`IMPOSSIBLE: no way`", "no way", protocol.VerdictImpossible},
+		{"## NOT MET: more", "more", protocol.VerdictNotMet},
+		{"I think so", "I think so", protocol.VerdictNotMet},
 	} {
 		if v, why := parseVerdict(tc.answer); v != tc.want || why != tc.why {
 			t.Errorf("parseVerdict(%q) = %s, %q, want %s, %q", tc.answer, v, why, tc.want, tc.why)
@@ -213,11 +214,11 @@ func TestParseVerdict(t *testing.T) {
 }
 
 func TestTranscriptKeepsTheNewestMessageOverBudget(t *testing.T) {
-	big := eventlog.Message{Role: eventlog.RoleAssistant}
+	big := protocol.LogMessage{Role: protocol.RoleAssistant}
 	for range 9 {
-		big.Parts = append(big.Parts, eventlog.Part{Type: eventlog.PartText, Text: strings.Repeat("x", partBytes)})
+		big.Parts = append(big.Parts, protocol.LogPart{Type: protocol.LogPartText, Text: strings.Repeat("x", partBytes)})
 	}
-	got := transcript([]eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "old"}}}, big}, 8*partBytes)
+	got := transcript([]protocol.LogMessage{{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "old"}}}, big}, 8*partBytes)
 	if !strings.HasPrefix(got, transcriptCut+"\nASSISTANT:\n") || strings.Contains(got, "old") {
 		t.Errorf("transcript starts %q, want the omitted marker, then the newest message", got[:min(len(got), 80)])
 	}

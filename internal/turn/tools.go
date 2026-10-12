@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -61,14 +60,14 @@ type Joiner interface {
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
 	// conversation so far; allowed restricts the tools as AllowedTools does.
-	Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset
+	Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) Toolset
 }
 
 // Fixed is a Source of tools that never change.
 type Fixed []Tool
 
 // Toolset implements Source: the tools that allowed keeps.
-func (f Fixed) Toolset(_ context.Context, _ []eventlog.Message, allowed []string, _ string) Toolset {
+func (f Fixed) Toolset(_ context.Context, _ []protocol.LogMessage, allowed []string, _ string) Toolset {
 	return Toolset{Tools: Restrict(f, allowed)}
 }
 
@@ -77,7 +76,7 @@ func (f Fixed) Toolset(_ context.Context, _ []eventlog.Message, allowed []string
 type Sources []Source
 
 // Toolset implements Source.
-func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset {
+func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) Toolset {
 	var out Toolset
 	var prompts []string
 	var hooks chain
@@ -221,11 +220,11 @@ func Restrict(tools []Tool, names []string) []Tool {
 	return slices.DeleteFunc(slices.Clone(tools), func(t Tool) bool { return !slices.Contains(names, t.Spec().Name) })
 }
 
-func toolCalls(items []eventlog.Message) []protocol.ToolCall {
+func toolCalls(items []protocol.LogMessage) []protocol.ToolCall {
 	var out []protocol.ToolCall
 	for _, m := range items {
 		for _, p := range m.Parts {
-			if p.Type == eventlog.PartToolCall {
+			if p.Type == protocol.LogPartToolCall {
 				out = append(out, protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: p.Arguments})
 			}
 		}
@@ -260,17 +259,17 @@ func invoke(ctx context.Context, tools []Tool, c protocol.ToolCall) protocol.Too
 }
 
 // result builds the tool message of c. A blob with no bytes is dropped.
-func result(to Turn, c protocol.ToolCall, r protocol.ToolResult) (eventlog.Message, error) {
-	p := eventlog.Part{Type: eventlog.PartToolResult, CallID: c.ID, Name: c.Name, Text: r.Text, IsError: r.IsError}
+func result(to Turn, c protocol.ToolCall, r protocol.ToolResult) (protocol.LogMessage, error) {
+	p := protocol.LogPart{Type: protocol.LogPartToolResult, CallID: c.ID, Name: c.Name, Text: r.Text, IsError: r.IsError}
 	for _, b := range r.Blobs {
 		if len(b.Data) == 0 {
 			continue
 		}
 		bp, err := to.Attach(b.MediaType, b.Data)
 		if err != nil {
-			return eventlog.Message{}, err
+			return protocol.LogMessage{}, err
 		}
 		p.Blobs = append(p.Blobs, bp)
 	}
-	return eventlog.Message{Role: eventlog.RoleTool, Parts: []eventlog.Part{p}}, nil
+	return protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{p}}, nil
 }

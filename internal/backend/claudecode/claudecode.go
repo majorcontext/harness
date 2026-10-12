@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -340,7 +342,7 @@ func effortArg(e modelref.Effort) (string, bool) {
 // prompt is the stdin line that starts the run. A run that continues the
 // turn sends continuation: the resumed session already holds the input.
 func (r *run) prompt(req turn.Request) (input, error) {
-	m := eventlog.Message{Parts: []eventlog.Part{{Type: eventlog.PartText, Text: continuation}}}
+	m := protocol.LogMessage{Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: continuation}}}
 	if !r.continues {
 		m.Parts = startParts(req.Input)
 	}
@@ -353,16 +355,16 @@ func (r *run) prompt(req turn.Request) (input, error) {
 // the text of a report is left out, because its task line holds the result.
 // When only reports start the turn, the segment follows the trigger sentence
 // of the runtime.
-func startParts(inputs []eventlog.Message) []eventlog.Part {
-	report := func(m eventlog.Message) bool {
-		return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartTaskReport })
+func startParts(inputs []protocol.LogMessage) []protocol.LogPart {
+	report := func(m protocol.LogMessage) bool {
+		return slices.ContainsFunc(m.Parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartTaskReport })
 	}
-	var parts []eventlog.Part
+	var parts []protocol.LogPart
 	var tasks []string
 	for _, in := range inputs {
 		for _, p := range in.Parts {
 			switch {
-			case p.Type == eventlog.PartTaskReport:
+			case p.Type == protocol.LogPartTaskReport:
 				tasks = append(tasks, p.Text)
 			case !report(in):
 				parts = append(parts, p)
@@ -370,10 +372,10 @@ func startParts(inputs []eventlog.Message) []eventlog.Part {
 		}
 	}
 	if len(parts) == 0 && len(tasks) > 0 {
-		parts = append(parts, eventlog.Part{Type: eventlog.PartText, Text: eventlog.ReportTrigger})
+		parts = append(parts, protocol.LogPart{Type: protocol.LogPartText, Text: eventlog.ReportTrigger})
 	}
 	if len(tasks) > 0 {
-		parts = append(parts, eventlog.Part{Type: eventlog.PartEngineContext, Text: eventlog.TaskSegment(tasks)})
+		parts = append(parts, protocol.LogPart{Type: protocol.LogPartEngineContext, Text: eventlog.TaskSegment(tasks)})
 	}
 	return parts
 }

@@ -10,6 +10,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -40,7 +42,7 @@ func (b *heldBackend) Run(ctx context.Context, _ turn.Request, out turn.Sink) er
 	case <-done:
 		return context.Cause(ctx)
 	}
-	return out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "ok"}}})
+	return out.Item(protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "ok"}}})
 }
 
 // lease is an Ownership that the test revokes by closing lost.
@@ -65,12 +67,12 @@ func actorConfig(t *testing.T, log Storage, own Ownership, b turn.Backend) Confi
 		Prompt: func() string { return "" }}
 }
 
-func firstInput() *eventlog.InputAdmitted {
-	return &eventlog.InputAdmitted{InputID: "in1", Delivery: eventlog.DeliveryQueue, Source: "user",
-		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "hi"}}}
+func firstInput() *protocol.InputAdmitted {
+	return &protocol.InputAdmitted{InputID: "in1", Delivery: protocol.DeliveryQueue, Source: "user",
+		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "hi"}}}
 }
 
-func encode(t *testing.T, events ...eventlog.Event) *memLog {
+func encode(t *testing.T, events ...protocol.Payload) *memLog {
 	t.Helper()
 	l := &memLog{}
 	for i, e := range events {
@@ -90,11 +92,11 @@ func TestNoTurnRunsBeforeRun(t *testing.T) {
 	}{
 		{"Create with a first input", func(t *testing.T, b turn.Backend) (*Actor, error) {
 			cfg := actorConfig(t, &memLog{}, owned{}, b)
-			return Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, firstInput())
+			return Create(context.Background(), cfg, protocol.SessionCreated{Model: "m/m"}, firstInput())
 		}},
 		{"Open of a suspended turn", func(t *testing.T, b turn.Backend) (*Actor, error) {
-			log := encode(t, eventlog.SessionCreated{Model: "m/m"}, eventlog.OwnerAcquired{Epoch: 1}, *firstInput(),
-				eventlog.TurnStarted{TurnID: "turn_1", InputIDs: []string{"in1"}}, eventlog.TurnSuspended{TurnID: "turn_1", Cause: eventlog.CauseHandoff})
+			log := encode(t, protocol.SessionCreated{Model: "m/m"}, protocol.OwnerAcquired{Epoch: 1}, *firstInput(),
+				protocol.TurnStarted{TurnID: "turn_1", InputIDs: []string{"in1"}}, protocol.TurnSuspended{TurnID: "turn_1", Cause: protocol.CauseHandoff})
 			return Open(context.Background(), actorConfig(t, log, owned{}, b))
 		}},
 	} {
@@ -122,7 +124,7 @@ func TestNoTurnRunsBeforeRun(t *testing.T) {
 func TestAStoppedActorReleasesAfterItsTurnExits(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, own := newHeldBackend(true), &lease{lost: make(chan struct{})}
-		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, firstInput())
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), protocol.SessionCreated{Model: "m/m"}, firstInput())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -149,8 +151,8 @@ func TestAStoppedActorReleasesAfterItsTurnExits(t *testing.T) {
 func TestAppendedSeesTheStateThatTheAppendProduced(t *testing.T) {
 	cfg := actorConfig(t, &memLog{}, owned{}, newHeldBackend(false))
 	var heads []uint64
-	cfg.Appended = func(_ []eventlog.Event, st *eventlog.State) { heads = append(heads, st.Head()) }
-	if _, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, nil); err != nil {
+	cfg.Appended = func(_ []protocol.Payload, st *eventlog.State) { heads = append(heads, st.Head()) }
+	if _, err := Create(context.Background(), cfg, protocol.SessionCreated{Model: "m/m"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if want := []uint64{2}; !slices.Equal(heads, want) {
@@ -161,7 +163,7 @@ func TestAppendedSeesTheStateThatTheAppendProduced(t *testing.T) {
 func TestReadGivesTheLiveStateToTheCallerAndStopsWithTheActor(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, own := newHeldBackend(false), &lease{lost: make(chan struct{})}
-		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, firstInput())
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), protocol.SessionCreated{Model: "m/m"}, firstInput())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +186,7 @@ func TestReadGivesTheLiveStateToTheCallerAndStopsWithTheActor(t *testing.T) {
 func TestReadReturnsAfterItsFunctionHasFinishedWhenTheCallerLeaves(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, own := newHeldBackend(false), &lease{lost: make(chan struct{})}
-		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, nil)
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), protocol.SessionCreated{Model: "m/m"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

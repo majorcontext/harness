@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/majorcontext/harness/internal/eventlog"
-
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -99,7 +97,7 @@ type boundTools struct {
 	session, root string
 }
 
-func (s boundTools) Toolset(ctx context.Context, _ []eventlog.Message, allowed []string, _ string) turn.Toolset {
+func (s boundTools) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
 	id := turn.ID(ctx)
 	out := make([]turn.Tool, len(s.tools))
 	for i, t := range s.tools {

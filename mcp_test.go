@@ -12,7 +12,6 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -50,14 +49,14 @@ func mcpDocsSpec() harnesstest.MCPSpec {
 }
 
 func mcpActions() *family {
-	return &family{answer: func(p eventlog.Part) []eventlog.Message {
+	return &family{answer: func(p protocol.LogPart) []protocol.LogMessage {
 		switch p.Text {
 		case mcpStatusCall:
-			return []eventlog.Message{calls("mcp", map[string]any{"action": "status"})}
+			return []protocol.LogMessage{calls("mcp", map[string]any{"action": "status"})}
 		case "connect":
-			return []eventlog.Message{calls("mcp", map[string]any{"action": "connect", "server": "weather"})}
+			return []protocol.LogMessage{calls("mcp", map[string]any{"action": "connect", "server": "weather"})}
 		}
-		return []eventlog.Message{say("ok")}
+		return []protocol.LogMessage{say("ok")}
 	}}
 }
 

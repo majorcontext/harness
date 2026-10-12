@@ -4,7 +4,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -59,9 +60,9 @@ func (r *run) streamEvent(env envelope) error {
 		typ := ""
 		switch ev.ContentBlock.Type {
 		case "text":
-			typ = eventlog.PartText
+			typ = protocol.LogPartText
 		case "thinking":
-			typ = eventlog.PartReasoning
+			typ = protocol.LogPartReasoning
 		default:
 			return nil
 		}
@@ -79,9 +80,9 @@ func (r *run) streamEvent(env envelope) error {
 		}
 		text := ""
 		switch {
-		case b.typ == eventlog.PartText && ev.Delta.Type == "text_delta":
+		case b.typ == protocol.LogPartText && ev.Delta.Type == "text_delta":
 			text = ev.Delta.Text
-		case b.typ == eventlog.PartReasoning && ev.Delta.Type == "thinking_delta":
+		case b.typ == protocol.LogPartReasoning && ev.Delta.Type == "thinking_delta":
 			text = ev.Delta.Thinking
 		}
 		if text == "" {
@@ -97,7 +98,7 @@ func (r *run) streamEvent(env envelope) error {
 // send, which is all of it when the CLI runs without partial messages. The
 // assistant frame of a block follows its deltas, so a block that streamed
 // completely sends nothing again.
-func (r *run) unstreamed(parent, id string, p eventlog.Part) string {
+func (r *run) unstreamed(parent, id string, p protocol.LogPart) string {
 	lm := r.live[parent]
 	if lm == nil || lm.id != id {
 		return p.Text

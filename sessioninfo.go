@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/toolresult"
@@ -96,7 +95,7 @@ type recorded struct {
 	src turn.Source
 }
 
-func (c recorded) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
+func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	ts := c.src.Toolset(ctx, history, allowed, model)
 	call := modelCall{allowed: slices.Clone(allowed), prompt: ts.Prompt}
 	for _, t := range ts.Tools {

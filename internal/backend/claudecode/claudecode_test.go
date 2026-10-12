@@ -15,7 +15,6 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -188,7 +187,7 @@ func wantLog(t *testing.T, st harness.Store, after uint64, want ...string) {
 				StopReason string   `json:"stop_reason"`
 				Error      string
 				Cause      string
-				Message    eventlog.Message
+				Message    protocol.LogMessage
 			}
 		}
 		if err := json.Unmarshal(r.Data, &env); err != nil {

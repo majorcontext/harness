@@ -8,6 +8,8 @@ import (
 	"io"
 	"slices"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -89,7 +91,7 @@ func (t *turnRun) Compacted(summary string) error {
 		if c, ok := a.state.Compaction(); ok {
 			from = c.ToSeq + 1
 		}
-		return a.append(eventlog.CompactionApplied{FromSeq: from, ToSeq: a.state.Head(), Summary: summary, ByBackend: true})
+		return a.append(protocol.CompactionApplied{FromSeq: from, ToSeq: a.state.Head(), Summary: summary, ByBackend: true})
 	})
 }
 
@@ -113,14 +115,14 @@ func (t *turnRun) Ask(callID, kind string, payload json.RawMessage) error {
 		if i < 0 {
 			return fmt.Errorf("session: tool call %s is not open", callID)
 		}
-		return a.append(eventlog.RequestOpened{RequestID: callID, ItemID: a.state.OpenToolCalls()[i].ItemID, RequestKind: kind, Payload: payload})
+		return a.append(protocol.RequestOpened{RequestID: callID, ItemID: a.state.OpenToolCalls()[i].ItemID, RequestKind: kind, Payload: payload})
 	})
 }
 
 // Resolution returns the record that closed request id, if one did.
-func (t *turnRun) Resolution(id string) (eventlog.RequestResolved, bool) {
+func (t *turnRun) Resolution(id string) (protocol.RequestResolved, bool) {
 	type found struct {
-		r  eventlog.RequestResolved
+		r  protocol.RequestResolved
 		ok bool
 	}
 	f, _ := call(context.Background(), t.a, func(reply func(found, error)) {

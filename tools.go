@@ -4,7 +4,8 @@ import (
 	"context"
 	"slices"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
@@ -124,7 +125,7 @@ type perModel struct {
 	pick    func(caps turn.Capabilities, allowed []string) turn.Source
 }
 
-func (p perModel) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
+func (p perModel) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	src := p.pick(p.backend.Capabilities(model), allowed)
 	if src == nil {
 		return turn.Toolset{}

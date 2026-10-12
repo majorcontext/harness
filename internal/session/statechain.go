@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -26,7 +28,7 @@ type stateBlob struct {
 // name them.
 type statePlan struct {
 	blobs  []stateBlob
-	events []eventlog.Event
+	events []protocol.Payload
 }
 
 // planSave plans the save of s over the chain that the log holds, or over
@@ -64,7 +66,7 @@ func planSave(backend string, fenced uint64, next int, chain eventlog.BackendCha
 		h.Write(all[offs[i]:offs[j]])
 		key := fmt.Sprintf("%s-%d-%d", backend, fenced, next+len(plan.blobs))
 		plan.blobs = append(plan.blobs, stateBlob{key, all[offs[i]:offs[j]]})
-		plan.events = append(plan.events, eventlog.BackendState{Backend: backend, Head: head.Bytes(), Chunk: key, Restart: restart && i == n,
+		plan.events = append(plan.events, protocol.BackendState{Backend: backend, Head: head.Bytes(), Chunk: key, Restart: restart && i == n,
 			Entries: j, Sum: hex.EncodeToString(h.Sum(nil))})
 		i = j
 	}
@@ -74,11 +76,11 @@ func planSave(backend string, fenced uint64, next int, chain eventlog.BackendCha
 	if keep && bytes.Equal(chain.Head, head.Bytes()) {
 		return statePlan{}, nil
 	}
-	rec := eventlog.BackendState{Backend: backend, Head: head.Bytes(), Restart: restart}
+	rec := protocol.BackendState{Backend: backend, Head: head.Bytes(), Restart: restart}
 	if keep {
 		rec.Entries, rec.Sum = chain.Entries, chain.Sum
 	}
-	plan.events = []eventlog.Event{rec}
+	plan.events = []protocol.Payload{rec}
 	return plan, nil
 }
 

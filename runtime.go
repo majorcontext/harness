@@ -276,8 +276,8 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	if err := CheckName(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
-		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
+	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin,
+		Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
 	return r.create(ctx, id, launch{created: &created})
 }
 
@@ -303,8 +303,8 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 type launch struct {
 	// created and first start a new session. A nil created opens the session
 	// from its log.
-	created *eventlog.SessionCreated
-	first   *eventlog.InputAdmitted
+	created *protocol.SessionCreated
+	first   *protocol.InputAdmitted
 	// profile is the agent profile of the session, when the caller has read
 	// it.
 	profile *prompt.Profile
@@ -330,7 +330,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	default:
 		return nil, fmt.Errorf("%w: %w", ErrSessionNotOwned, err)
 	}
-	var c eventlog.SessionCreated
+	var c protocol.SessionCreated
 	if l.created != nil {
 		c = *l.created
 	} else if c, err = r.created(ctx, id); err != nil {
@@ -406,13 +406,13 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 
 // appended gives the events of session id to its plugins, and reports the
 // end of a turn of a child to its parent.
-func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]eventlog.Event, *eventlog.State) {
-	return func(events []eventlog.Event, st *eventlog.State) {
+func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]protocol.Payload, *eventlog.State) {
+	return func(events []protocol.Payload, st *eventlog.State) {
 		if plug != nil {
 			plug.Appended(events)
 		}
 		parent := st.Summary().ParentID
-		if parent == "" || !slices.ContainsFunc(events, func(e eventlog.Event) bool { _, ok := e.(eventlog.TurnEnded); return ok }) {
+		if parent == "" || !slices.ContainsFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.TurnEnded); return ok }) {
 			return
 		}
 		if s, report, ok := session.Settlement(id, st); ok {
@@ -625,19 +625,19 @@ func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error) {
 
 // created returns the session.created record of session id, which is its
 // first record.
-func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreated, error) {
+func (r *Runtime) created(ctx context.Context, id string) (protocol.SessionCreated, error) {
 	recs, err := r.store.Read(ctx, id, 0, 1)
 	if err == nil && len(recs) == 0 {
 		err = fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	}
 	if err != nil {
-		return eventlog.SessionCreated{}, err
+		return protocol.SessionCreated{}, err
 	}
 	env, err := eventlog.Decode(recs[0].Data)
 	if err != nil {
-		return eventlog.SessionCreated{}, fmt.Errorf("%w: session %s: %w", ErrUnreplayable, id, err)
+		return protocol.SessionCreated{}, fmt.Errorf("%w: session %s: %w", ErrUnreplayable, id, err)
 	}
-	c, ok := env.Event.(eventlog.SessionCreated)
+	c, ok := env.Event.(protocol.SessionCreated)
 	if !ok {
 		return c, fmt.Errorf("%w: session %s starts with %s, not session.created", ErrUnreplayable, id, env.Event.Kind())
 	}
@@ -662,8 +662,8 @@ func (r *Runtime) read(ctx context.Context, id string, f func(*eventlog.State)) 
 }
 
 // history returns the conversation of session id.
-func (r *Runtime) history(ctx context.Context, id string) ([]eventlog.Message, error) {
-	var h []eventlog.Message
+func (r *Runtime) history(ctx context.Context, id string) ([]protocol.LogMessage, error) {
+	var h []protocol.LogMessage
 	err := r.read(ctx, id, func(st *eventlog.State) { h = st.History() })
 	return h, err
 }

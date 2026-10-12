@@ -11,6 +11,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
@@ -26,7 +28,7 @@ func runOn(t *testing.T, p provider.Provider, lim turn.Limits) (*Actor, *memLog)
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	log, b := &memLog{}, modelapi.New(p, 0, nil)
 	a, err := Create(ctx, Config{ID: "s1", Store: log, Ownership: owned{}, Backend: b, Limits: lim, Threshold: 0.8, KeepTurns: 1,
-		Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() }, Prompt: func() string { return "" }}, eventlog.SessionCreated{Model: "anthropic/claude-opus-5"}, nil)
+		Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() }, Prompt: func() string { return "" }}, protocol.SessionCreated{Model: "anthropic/claude-opus-5"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,8 +40,8 @@ func runOn(t *testing.T, p provider.Provider, lim turn.Limits) (*Actor, *memLog)
 func converse(t *testing.T, a *Actor, texts ...string) {
 	t.Helper()
 	for _, txt := range texts {
-		in := eventlog.InputAdmitted{InputID: txt, Delivery: eventlog.DeliveryQueue, Source: "user",
-			Parts: []eventlog.Part{{Type: eventlog.PartText, Text: txt}}}
+		in := protocol.InputAdmitted{InputID: txt, Delivery: protocol.DeliveryQueue, Source: "user",
+			Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: txt}}}
 		if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -63,16 +65,16 @@ func lines(t *testing.T, l *memLog, after uint64) []string {
 		}
 		f := []string{env.Event.Kind()}
 		switch e := env.Event.(type) {
-		case eventlog.ItemCompleted:
+		case protocol.ItemCompleted:
 			f = append(f, e.Message.Role)
 			for _, p := range e.Message.Parts {
 				f = append(f, strings.TrimSpace(p.CallID+" "+p.Text))
 			}
-		case eventlog.TurnEnded:
+		case protocol.TurnEnded:
 			f = append(f, string(e.StopReason), string(e.Cause), e.Error)
-		case eventlog.GoalEvaluated:
+		case protocol.GoalEvaluated:
 			f = append(f, string(e.Verdict))
-		case eventlog.GoalChanged:
+		case protocol.GoalChanged:
 			f = append(f, string(e.State))
 		}
 		out = append(out, strings.Join(slices.DeleteFunc(f, func(s string) bool { return s == "" }), " "))

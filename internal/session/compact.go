@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -25,9 +24,9 @@ const compactCommand = "/compact"
 // compaction that it appended, or one with only ByBackend for a backend
 // that owns its context. When too few turns exist, it appends nothing and
 // ran is false.
-func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApplied, ran bool, err error) {
+func (a *Actor) Compact(ctx context.Context, keep int) (c protocol.CompactionApplied, ran bool, err error) {
 	type result struct {
-		c   eventlog.CompactionApplied
+		c   protocol.CompactionApplied
 		ran bool
 	}
 	r, err := call(ctx, a, func(reply func(result, error)) {
@@ -42,14 +41,14 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 		case owns && keep != 0:
 			reply(result{}, ErrKeepTurns)
 		case owns:
-			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliveryQueue, Source: "harness",
-				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: compactCommand}}}
+			in := protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliveryQueue, Source: "harness",
+				Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: compactCommand}}}
 			if _, err := a.admit(in, ""); err != nil {
 				reply(result{}, err)
 				return
 			}
 			a.run.waiters = append(a.run.waiters, func(runErr, appendErr error) {
-				reply(result{eventlog.CompactionApplied{ByBackend: true}, true}, errors.Join(runErr, appendErr))
+				reply(result{protocol.CompactionApplied{ByBackend: true}, true}, errors.Join(runErr, appendErr))
 			})
 		case !a.compact(cmp.Or(keep, a.cfg.KeepTurns), done):
 			reply(result{}, nil)
@@ -118,12 +117,12 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 
 // fold returns the summary request of the turns before the newest keep,
 // and the compaction that records the summary.
-func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionApplied, bool) {
+func (a *Actor) fold(id string, keep int) (turn.Request, protocol.CompactionApplied, bool) {
 	folded, to, ok := a.state.Fold(keep)
 	if !ok {
-		return turn.Request{}, eventlog.CompactionApplied{}, false
+		return turn.Request{}, protocol.CompactionApplied{}, false
 	}
-	c := eventlog.CompactionApplied{FromSeq: 1, ToSeq: to}
+	c := protocol.CompactionApplied{FromSeq: 1, ToSeq: to}
 	if prev, ok := a.state.Compaction(); ok {
 		c.FromSeq = prev.ToSeq + 1
 	}
@@ -133,16 +132,16 @@ func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionAppl
 
 // recordUsage records the usage of a model call that produced no other
 // record. A call with no usage records nothing.
-func (a *Actor) recordUsage(u eventlog.Usage) error {
-	if u == (eventlog.Usage{}) {
+func (a *Actor) recordUsage(u protocol.Usage) error {
+	if u == (protocol.Usage{}) {
 		return nil
 	}
-	return a.append(eventlog.ContextMeasured{Usage: u})
+	return a.append(protocol.ContextMeasured{Usage: u})
 }
 
 // compacted appends the summary of run r, then starts the next queued
 // input with no new compaction. A failed summary appends only its usage.
-func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error) {
+func (a *Actor) compacted(r *running, c protocol.CompactionApplied, runErr error) {
 	if a.run != r {
 		return
 	}

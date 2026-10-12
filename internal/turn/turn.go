@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/backoff"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -66,13 +65,13 @@ type Request struct {
 	SessionID string
 	TurnID    string
 	Model     string
-	Settings  eventlog.Settings
+	Settings  protocol.Settings
 	// Instructions is the system prompt of the call.
 	Instructions string
 	// Input holds the inputs that started the turn, as user messages.
-	Input []eventlog.Message
+	Input []protocol.LogMessage
 	// History is the conversation that the model sees, Input included.
-	History []eventlog.Message
+	History []protocol.LogMessage
 	// Tools describes the tools that the model may call.
 	Tools []protocol.ToolSpec
 	// Call runs a call to one of Tools. A backend that owns the loop calls it.
@@ -117,18 +116,18 @@ type CallParams struct {
 
 // Delta is a piece of an item that is not complete yet.
 type Delta struct {
-	// Type is eventlog.PartText or eventlog.PartReasoning.
+	// Type is protocol.LogPartText or protocol.LogPartReasoning.
 	Type string
 	Text string
 }
 
 // Telemetry is what a backend measured during one model call.
 type Telemetry struct {
-	Usage eventlog.Usage
+	Usage protocol.Usage
 	// Context is a context reading; an empty Source is none.
-	Context eventlog.ContextMeasured
+	Context protocol.ContextMeasured
 	// SubscriptionUsage is the subscription limit snapshot of the call, or nil.
-	SubscriptionUsage *eventlog.SubscriptionUsage
+	SubscriptionUsage *protocol.SubscriptionUsage
 	CostUSD           *float64
 	// Call is the transport timing and shape of the call; nil: none measured.
 	Call *CallMetrics
@@ -144,7 +143,7 @@ type Snapshot struct {
 // Sink receives the items of a running turn.
 type Sink interface {
 	// Item records one completed message. An error stops the turn.
-	Item(m eventlog.Message) error
+	Item(m protocol.LogMessage) error
 	// Delta streams a piece of the item that the backend calls itemID.
 	Delta(itemID string, d Delta)
 	// Discard tells subscribers to remove the live item itemID.
@@ -156,7 +155,7 @@ type Sink interface {
 	Telemetry(t Telemetry)
 	// Steer takes the queued steer inputs into the turn. A backend with
 	// Steering calls it at each item boundary and must use each message.
-	Steer() ([]eventlog.Message, error)
+	Steer() ([]protocol.LogMessage, error)
 	// State returns the saved state of backend, or a zero Snapshot.
 	State(backend string) (Snapshot, error)
 	// SaveState records s, and stores only the entries that it adds.
@@ -167,7 +166,7 @@ type Sink interface {
 	Status(f protocol.StatusFrame)
 	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.
 	Ask(callID, kind string, payload json.RawMessage) error
-	Resolution(id string) (eventlog.RequestResolved, bool)
+	Resolution(id string) (protocol.RequestResolved, bool)
 }
 
 // Threaded is a Sink that gives each key a live item of its own. A backend
@@ -211,14 +210,14 @@ type Turn interface {
 	// its ID, and Item does not use it.
 	Announce() string
 	// ItemAs records m under the ID that Announce returned.
-	ItemAs(id string, m eventlog.Message) error
+	ItemAs(id string, m protocol.LogMessage) error
 	// Attach stores a blob of a tool result and returns the blob part that names it.
-	Attach(mediaType string, data []byte) (eventlog.Part, error)
+	Attach(mediaType string, data []byte) (protocol.LogPart, error)
 	// Settings returns the model and settings of the session now, or "".
-	Settings() (string, eventlog.Settings)
+	Settings() (string, protocol.Settings)
 	// Pin pins the changed notices after at messages and returns every pin.
 	Pin(ns []Notice, at int) []Pin
-	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
+	CompactTurn(ctx context.Context) (history []protocol.LogMessage, ok bool, err error)
 	Ended(err error)
 }
 
@@ -328,7 +327,7 @@ type watched struct {
 	alive func()
 }
 
-func (w watched) Item(m eventlog.Message) error {
+func (w watched) Item(m protocol.LogMessage) error {
 	w.alive()
 	return w.Sink.Item(m)
 }
@@ -360,7 +359,7 @@ type watchedThread struct {
 	alive func()
 }
 
-func (w watchedThread) Item(m eventlog.Message) error {
+func (w watchedThread) Item(m protocol.LogMessage) error {
 	w.alive()
 	return w.liveThread.Item(m)
 }
@@ -425,7 +424,7 @@ func sleep(ctx context.Context, d time.Duration) error {
 // sink collects the items of one model call and reports the rest to its Turn.
 type sink struct {
 	Turn
-	items []eventlog.Message
+	items []protocol.LogMessage
 	// item is the item that the deltas since the last Item build, or "".
 	item string
 	// threads holds the live item of each keyed thread.
@@ -464,7 +463,7 @@ func (t thread) Delta(_ string, d Delta) {
 	t.Turn.Delta(id, d)
 }
 
-func (t thread) Item(m eventlog.Message) error {
+func (t thread) Item(m protocol.LogMessage) error {
 	id := t.threads[t.key]
 	delete(t.threads, t.key)
 	if err := t.ItemAs(id, m); err != nil {
@@ -481,7 +480,7 @@ func (t thread) Drop() {
 	}
 }
 
-func (s *sink) Item(m eventlog.Message) error {
+func (s *sink) Item(m protocol.LogMessage) error {
 	s.item = ""
 	if err := s.Turn.Item(m); err != nil {
 		return err
@@ -490,7 +489,7 @@ func (s *sink) Item(m eventlog.Message) error {
 	return nil
 }
 
-func (s *sink) Steer() ([]eventlog.Message, error) {
+func (s *sink) Steer() ([]protocol.LogMessage, error) {
 	in, err := s.Turn.Steer()
 	s.items = append(s.items, in...)
 	return in, err

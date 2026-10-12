@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/internal/eventlog"
 )
@@ -112,9 +114,9 @@ func (s *observedStore) observe(session string, elapsed time.Duration, records [
 			continue
 		}
 		switch e := env.Event.(type) {
-		case eventlog.SessionCreated:
+		case protocol.SessionCreated:
 			s.log.Info("session created", "session", session, "persist_ms", elapsed.Milliseconds())
-		case eventlog.ChildSpawned:
+		case protocol.ChildSpawned:
 			s.mu.Lock()
 			s.spawned++
 			n := s.spawned

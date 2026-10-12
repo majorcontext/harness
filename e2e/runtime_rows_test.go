@@ -10,7 +10,7 @@ const (
 	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
 	specReceipt       = "| New id | `201 {input_id, seq}` |"
 	specDiscard       = "the backend sends an `item.discarded` frame with the `item_id` of the dropped item before the first delta of the new one"
-	specItems         = "| `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |"
+	specItems         = "| `item.completed` | `protocol.ItemCompleted`: its `message` has the role `user`, `assistant`, or `tool` |"
 	specOneResult     = "Every tool call item gets exactly one result item, or an open request, before its turn ends."
 	specExternal      = "external-items-complete"
 	specTaskInputs    = "task-notice-is-input"

@@ -7,7 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -20,8 +21,8 @@ func TestRequestMapsABlobPartToItsBytes(t *testing.T) {
 		}
 		return nil, errors.New("no blob " + key)
 	}
-	history := []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{
-		{Type: eventlog.PartText, Text: "look"}, {Type: eventlog.PartBlob, MediaType: "image/png", BlobKey: "k", Bytes: 3}}}}
+	history := []protocol.LogMessage{{Role: protocol.RoleUser, Parts: []protocol.LogPart{
+		{Type: protocol.LogPartText, Text: "look"}, {Type: protocol.LogPartBlob, MediaType: "image/png", BlobKey: "k", Bytes: 3}}}}
 	got, err := (&Backend{log: slog.Default()}).request(context.Background(), turn.Request{Model: "codex/gpt-5", History: history, Blob: read})
 	if err != nil {
 		t.Fatal(err)

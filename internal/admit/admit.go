@@ -19,7 +19,6 @@ import (
 
 	_ "golang.org/x/image/webp" // register the WebP decoder for image.DecodeConfig
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -53,10 +52,10 @@ var attachmentTypes = map[string]func(mediaType string, data []byte) error{
 
 // Input returns the record of in and the blobs of its attachments. Its error
 // names the part that is not valid.
-func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
-	ev := eventlog.InputAdmitted{InputID: in.ID, Delivery: eventlog.Delivery(in.Delivery), Source: in.Source, SourceID: in.SourceID}
+func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
+	ev := protocol.InputAdmitted{InputID: in.ID, Delivery: protocol.Delivery(in.Delivery), Source: in.Source, SourceID: in.SourceID}
 	if ev.Delivery == "" {
-		ev.Delivery = eventlog.DeliverySteer
+		ev.Delivery = protocol.DeliverySteer
 	}
 	if ev.Source == "" {
 		ev.Source = "user"
@@ -66,7 +65,7 @@ func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
 		return ev, nil, fmt.Errorf("input id is empty")
 	case len(in.Parts) == 0:
 		return ev, nil, fmt.Errorf("input %s has no parts", in.ID)
-	case ev.Delivery != eventlog.DeliveryQueue && ev.Delivery != eventlog.DeliverySteer:
+	case ev.Delivery != protocol.DeliveryQueue && ev.Delivery != protocol.DeliverySteer:
 		return ev, nil, fmt.Errorf("input %s has delivery %q", in.ID, in.Delivery)
 	}
 	label, err := Provenance(in.SourceID, in.SourceLabel)
@@ -78,7 +77,7 @@ func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
 	for _, p := range in.Parts {
 		switch p.Type {
 		case protocol.PartText:
-			ev.Parts = append(ev.Parts, eventlog.Part{Type: eventlog.PartText, Text: p.Text})
+			ev.Parts = append(ev.Parts, protocol.LogPart{Type: protocol.LogPartText, Text: p.Text})
 		case protocol.PartBlob:
 			part, err := attachment(p)
 			if err != nil {
@@ -144,7 +143,7 @@ func cleanSourceLabel(label string) (string, error) {
 
 // attachment checks one blob part and returns the part that the log holds.
 // The key is the hash of the bytes, so one attachment sent twice is one blob.
-func attachment(p protocol.Part) (eventlog.Part, error) {
+func attachment(p protocol.Part) (protocol.LogPart, error) {
 	verify, ok := attachmentTypes[p.MediaType]
 	switch {
 	case !ok:
@@ -153,17 +152,17 @@ func attachment(p protocol.Part) (eventlog.Part, error) {
 			types = append(types, t)
 		}
 		slices.Sort(types)
-		return eventlog.Part{}, fmt.Errorf("unsupported attachment media type %q: use one of %s", p.MediaType, strings.Join(types, ", "))
+		return protocol.LogPart{}, fmt.Errorf("unsupported attachment media type %q: use one of %s", p.MediaType, strings.Join(types, ", "))
 	case len(p.Data) == 0:
-		return eventlog.Part{}, fmt.Errorf("attachment %s has no data", p.MediaType)
+		return protocol.LogPart{}, fmt.Errorf("attachment %s has no data", p.MediaType)
 	case len(p.Data) > MaxAttachmentBytes:
-		return eventlog.Part{}, fmt.Errorf("attachment is %d bytes, which exceeds the %d-byte limit", len(p.Data), MaxAttachmentBytes)
+		return protocol.LogPart{}, fmt.Errorf("attachment is %d bytes, which exceeds the %d-byte limit", len(p.Data), MaxAttachmentBytes)
 	}
 	if err := verify(p.MediaType, p.Data); err != nil {
-		return eventlog.Part{}, fmt.Errorf("attachment %w", err)
+		return protocol.LogPart{}, fmt.Errorf("attachment %w", err)
 	}
 	sum := sha256.Sum256(p.Data)
-	return eventlog.Part{Type: eventlog.PartBlob, MediaType: p.MediaType, BlobKey: "attachment-" + hex.EncodeToString(sum[:]), Bytes: len(p.Data)}, nil
+	return protocol.LogPart{Type: protocol.LogPartBlob, MediaType: p.MediaType, BlobKey: "attachment-" + hex.EncodeToString(sum[:]), Bytes: len(p.Data)}, nil
 }
 
 // verifyImage proves that data decodes as the image type that it claims. It

@@ -6,6 +6,16 @@ export interface Admitted {
   command?: string;
 }
 
+export interface BackendState {
+  backend: string;
+  blob_key?: string;
+  head?: unknown;
+  chunk?: string;
+  restart?: boolean;
+  entries?: number;
+  sum?: string;
+}
+
 export interface BaseRef {
   ref: string;
   sha: string;
@@ -19,6 +29,17 @@ export interface ChangedFile {
   deletions: number;
   binary: boolean;
   large: boolean;
+}
+
+export interface ChildSettled {
+  child_id: string;
+  outcome: "done" | "failed" | "canceled";
+  result_ref: string;
+}
+
+export interface ChildSpawned {
+  child_id: string;
+  agent?: string;
 }
 
 export interface CommandArg {
@@ -40,6 +61,17 @@ export interface CommandEntry {
   destructive?: boolean;
   method?: string;
   path?: string;
+}
+
+export interface CommandRecorded {
+  input_id: string;
+  line: string;
+  name: string;
+  args?: Record<string, unknown>;
+  status: string;
+  text?: string;
+  result?: unknown;
+  result_truncated?: boolean;
 }
 
 export interface CommandSupport {
@@ -64,10 +96,28 @@ export interface Compacted {
   folded: boolean;
 }
 
+export interface CompactionApplied {
+  from_seq: number;
+  to_seq: number;
+  summary: string;
+  by_backend: boolean;
+  usage?: Usage;
+}
+
 export interface Context {
   tokens: number;
   window: number;
   window_estimated?: boolean;
+}
+
+export interface ContextMeasured {
+  tokens: number;
+  window: number;
+  window_estimated?: boolean;
+  source: string;
+  usage?: Usage;
+  subscription_usage?: SubscriptionUsage;
+  cost_usd?: number;
 }
 
 export interface CreateSession {
@@ -107,10 +157,28 @@ export interface Goal {
   max_turns?: number;
 }
 
+export interface GoalChanged {
+  state: "active" | "paused" | "achieved" | "failed" | "exhausted" | "cleared";
+  reason?: string;
+  retry_at?: string;
+}
+
+export interface GoalEvaluated {
+  turn_id: string;
+  verdict: "met" | "not_met" | "impossible";
+  guidance?: string;
+}
+
+export interface GoalSet {
+  condition: string;
+  max_turns: number;
+  turns?: number;
+}
+
 export interface GoalView {
   condition: string;
   max_turns?: number;
-  state: string;
+  state: "active" | "paused" | "achieved" | "failed" | "exhausted" | "cleared";
   turns: number;
   pauses?: number;
   reason?: string;
@@ -129,16 +197,40 @@ export interface Health {
 export interface Input {
   id: string;
   parts: Part[];
-  delivery?: string;
+  delivery?: "queue" | "steer";
   source?: string;
   source_id?: string;
   source_label?: string;
   expected_turn_id?: string;
 }
 
+export interface InputAdmitted {
+  input_id: string;
+  delivery: "queue" | "steer";
+  source: string;
+  source_id?: string;
+  source_label?: string;
+  parts: LogPart[];
+}
+
+export interface InputPromoted {
+  input_id: string;
+  turn_id: string;
+}
+
+export interface InputWithdrawn {
+  input_id: string;
+}
+
 export interface Interrupt {
   turn_id?: string;
   tree?: boolean;
+}
+
+export interface ItemCompleted {
+  item_id: string;
+  turn_id: string;
+  message: LogMessage;
 }
 
 export interface ItemFrame {
@@ -150,9 +242,29 @@ export interface ItemFrame {
 
 export interface LastTurn {
   turn_id: string;
-  stop_reason: string;
-  cause?: string;
+  stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input";
+  cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
   error?: string;
+}
+
+export interface LogMessage {
+  role: string;
+  parts: LogPart[];
+  parent_call_id?: string;
+}
+
+export interface LogPart {
+  type: string;
+  text?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: unknown;
+  is_error?: boolean;
+  media_type?: string;
+  blob_key?: string;
+  bytes?: number;
+  blobs?: LogPart[];
+  provider_data?: Record<string, unknown>;
 }
 
 export interface Message {
@@ -216,6 +328,11 @@ export interface OperatorBatchEntry {
   source_label?: string;
 }
 
+export interface OwnerAcquired {
+  epoch: number;
+  owner: string;
+}
+
 export interface Part {
   type: string;
   text?: string;
@@ -262,13 +379,36 @@ export interface ProcessStatus {
   ports?: number[];
 }
 
+export interface Progress {
+  seq: number;
+  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
+  turn_id?: string;
+  queued?: string[];
+  requests?: string[];
+  goal?: GoalView;
+  last_turn?: LastTurn;
+}
+
 export interface QueuedInput {
   id: string;
   parts: MessagePart[];
-  delivery: string;
+  delivery: "queue" | "steer";
   source: string;
   source_id?: string;
   source_label?: string;
+}
+
+export interface RequestOpened {
+  request_id: string;
+  item_id: string;
+  kind: string;
+  payload?: unknown;
+}
+
+export interface RequestResolved {
+  request_id: string;
+  resolution: "answered" | "dismissed";
+  answer?: unknown;
 }
 
 export interface Resolution {
@@ -289,7 +429,7 @@ export interface Session {
   model: string;
   effort?: string;
   service_tier?: string;
-  status: string;
+  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
   turn_id?: string;
   queued?: string[];
   goal?: GoalView;
@@ -305,9 +445,29 @@ export interface Session {
   updated_at: string;
 }
 
+export interface SessionCreated {
+  parent_id?: string;
+  agent?: string;
+  model: string;
+  settings: Settings;
+  origin: string;
+  allowed_tools?: string[];
+}
+
 export interface SessionPage {
   sessions: Session[];
   next?: string;
+}
+
+export interface Settings {
+  effort?: string;
+  service_tier?: string;
+}
+
+export interface SettingsChanged {
+  model?: string;
+  effort?: string;
+  service_tier?: string;
 }
 
 export interface SettingsPatch {
@@ -317,7 +477,7 @@ export interface SettingsPatch {
 }
 
 export interface StatusFrame {
-  status: string;
+  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
   turn_id: string;
   attempt?: number;
   next_at?: string;
@@ -355,6 +515,41 @@ export interface SyncBatch {
   from_seq: number;
   records: string[];
   blobs?: Record<string, string>;
+}
+
+export interface ToolResultRetained {
+  handle: string;
+  tool: string;
+  blob_key: string;
+  bytes: number;
+  lines: number;
+  head: string;
+}
+
+export interface TurnEnded {
+  turn_id: string;
+  stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input";
+  cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
+  task_cancel?: boolean;
+  error?: string;
+  error_class?: string;
+  recover_hint?: string;
+  error_detail?: string;
+}
+
+export interface TurnResumed {
+  turn_id: string;
+  count: number;
+}
+
+export interface TurnStarted {
+  turn_id: string;
+  input_ids: string[];
+}
+
+export interface TurnSuspended {
+  turn_id: string;
+  cause: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
 }
 
 export interface Usage {

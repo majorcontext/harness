@@ -6,7 +6,8 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -34,7 +35,7 @@ func (b *kindBackend) Run(_ context.Context, req turn.Request, out turn.Sink) er
 	}
 	b.reqs[kind] = req
 	b.mu.Unlock()
-	return out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
+	return out.Item(protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}})
 }
 
 func TestSideCallsKeepTheParametersOfTheEngine(t *testing.T) {
@@ -42,7 +43,7 @@ func TestSideCallsKeepTheParametersOfTheEngine(t *testing.T) {
 		b := &kindBackend{}
 		cfg := actorConfig(t, &memLog{}, owned{}, b)
 		cfg.Evaluator, cfg.KeepTurns, cfg.Threshold = "m/eval", 1, 0.8
-		a, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m", Settings: eventlog.Settings{Effort: "high"}}, nil)
+		a, err := Create(context.Background(), cfg, protocol.SessionCreated{Model: "m/m", Settings: protocol.Settings{Effort: "high"}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

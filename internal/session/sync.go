@@ -187,21 +187,21 @@ func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][
 	}
 	var keys []string
 	switch e := env.Event.(type) {
-	case eventlog.BackendState:
+	case protocol.BackendState:
 		if key := cmp.Or(e.Chunk, e.BlobKey); key != "" {
 			keys = []string{key}
 		}
-	case eventlog.ToolResultRetained:
+	case protocol.ToolResultRetained:
 		keys = []string{e.BlobKey}
-	case eventlog.ItemCompleted:
+	case protocol.ItemCompleted:
 		for _, p := range e.Message.Parts {
 			for _, b := range p.Blobs {
 				keys = append(keys, b.BlobKey)
 			}
 		}
-	case eventlog.InputAdmitted:
+	case protocol.InputAdmitted:
 		for _, p := range e.Parts {
-			if p.Type == eventlog.PartBlob {
+			if p.Type == protocol.LogPartBlob {
 				keys = append(keys, p.BlobKey)
 			}
 		}

@@ -9,23 +9,6 @@ import (
 	"time"
 )
 
-// Session statuses.
-const (
-	StatusIdle    = "idle"
-	StatusRunning = "running"
-	StatusWaiting = "waiting"
-	// StatusRetrying, StatusCompacting, and StatusCompactionFailed appear only in status frames.
-	StatusRetrying         = "retrying"
-	StatusCompacting       = "compacting"
-	StatusCompactionFailed = "compaction_failed"
-)
-
-// Input deliveries. An input with no delivery is steer.
-const (
-	DeliveryQueue = "queue"
-	DeliverySteer = "steer"
-)
-
 // Input part types.
 const (
 	PartText = "text"
@@ -97,10 +80,10 @@ type Context struct {
 // LastTurn is the outcome of the newest turn that ended: the stop reason, typed
 // cause, and masked error message of its turn.ended record.
 type LastTurn struct {
-	TurnID     string `json:"turn_id"`
-	StopReason string `json:"stop_reason"`
-	Cause      string `json:"cause,omitempty"`
-	Error      string `json:"error,omitempty"`
+	TurnID     string     `json:"turn_id"`
+	StopReason StopReason `json:"stop_reason"`
+	Cause      Cause      `json:"cause,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 // SubscriptionUsage is the subscription limit snapshot that a provider
@@ -143,7 +126,7 @@ type Session struct {
 	Model             string             `json:"model"`
 	Effort            string             `json:"effort,omitempty"`
 	ServiceTier       string             `json:"service_tier,omitempty"`
-	Status            string             `json:"status"`
+	Status            Status             `json:"status"`
 	TurnID            string             `json:"turn_id,omitempty"`
 	Queued            []string           `json:"queued,omitempty"`
 	Goal              *GoalView          `json:"goal,omitempty"`
@@ -180,7 +163,7 @@ type Goal struct {
 // pauses since the last verdict. A paused goal runs again at RetryAt or at an input.
 type GoalView struct {
 	Goal
-	State   string    `json:"state"`
+	State   GoalState `json:"state"`
 	Turns   int       `json:"turns"`
 	Pauses  int       `json:"pauses,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
@@ -197,10 +180,10 @@ type Part struct {
 
 // Input is a client input. The client mints ID; a repeat of the same ID is idempotent.
 type Input struct {
-	ID       string `json:"id"`
-	Parts    []Part `json:"parts"`
-	Delivery string `json:"delivery,omitempty"`
-	Source   string `json:"source,omitempty"`
+	ID       string   `json:"id"`
+	Parts    []Part   `json:"parts"`
+	Delivery Delivery `json:"delivery,omitempty"`
+	Source   string   `json:"source,omitempty"`
 	// SourceID names the instance of Source, at most 128 printable ASCII bytes. SourceLabel is a name for a reader, valid UTF-8, cut at 256 bytes.
 	SourceID    string `json:"source_id,omitempty"`
 	SourceLabel string `json:"source_label,omitempty"`
@@ -212,7 +195,7 @@ type Input struct {
 type QueuedInput struct {
 	ID          string        `json:"id"`
 	Parts       []MessagePart `json:"parts"`
-	Delivery    string        `json:"delivery"`
+	Delivery    Delivery      `json:"delivery"`
 	Source      string        `json:"source"`
 	SourceID    string        `json:"source_id,omitempty"`
 	SourceLabel string        `json:"source_label,omitempty"`
@@ -337,7 +320,7 @@ type ItemFrame struct {
 // NextAt before its attempt number Attempt; an item that the failed attempt started never completes.
 // A compacting frame, and the frame that ends it, carry the ID of the compaction in TurnID.
 type StatusFrame struct {
-	Status  string    `json:"status"`
+	Status  Status    `json:"status"`
 	TurnID  string    `json:"turn_id"`
 	Attempt int       `json:"attempt,omitempty"`
 	NextAt  time.Time `json:"next_at,omitzero"`
@@ -376,4 +359,26 @@ type SettingsPatch struct {
 type EventPage struct {
 	Events []Event `json:"events"`
 	Next   uint64  `json:"next,omitempty"`
+}
+
+// Progress is the status that a log folds to at Seq. It is plain JSON, so a
+// reader can store it with a cursor and resume with harness.Advance. The zero
+// Progress is the fold of an empty log. Queued holds the IDs of the inputs
+// that no turn has taken, oldest first. Requests holds the IDs of the open
+// requests. TurnID is the running turn, and empty while a turn is suspended.
+// Goal and LastTurn are nil until a goal is set or a turn ends.
+type Progress struct {
+	Seq      uint64    `json:"seq"`
+	Status   Status    `json:"status"`
+	TurnID   string    `json:"turn_id,omitempty"`
+	Queued   []string  `json:"queued,omitempty"`
+	Requests []string  `json:"requests,omitempty"`
+	Goal     *GoalView `json:"goal,omitempty"`
+	LastTurn *LastTurn `json:"last_turn,omitempty"`
+}
+
+// Add returns the sum of u and v.
+func (u Usage) Add(v Usage) Usage {
+	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
+		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
 }

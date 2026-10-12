@@ -15,7 +15,7 @@ import (
 // contextWindow is the window of the session model, or the window of the
 // reading c when the model reports none. A model switch thus replaces the
 // window of an older reading.
-func contextWindow(model int, c eventlog.ContextMeasured) int64 {
+func contextWindow(model int, c protocol.ContextMeasured) int64 {
 	return cmp.Or(int64(model), c.Window)
 }
 
@@ -27,7 +27,7 @@ func Describe(id string, s *eventlog.State, window int, estimated bool) protocol
 	sum, set, u := s.Summary(), s.Settings(), s.Usage()
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, Model: sum.Model,
-		Effort: set.Effort, ServiceTier: set.ServiceTier, Status: string(sum.Status),
+		Effort: set.Effort, ServiceTier: set.ServiceTier, Status: sum.Status,
 		Usage:   protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens},
 		HeadSeq: sum.HeadSeq, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
@@ -39,14 +39,14 @@ func Describe(id string, s *eventlog.State, window int, estimated bool) protocol
 	}
 	c := s.Context()
 	if c.Tokens == 0 && c.Source == "" {
-		c = eventlog.ContextMeasured{}
+		c = protocol.ContextMeasured{}
 	}
 	if window == 0 {
 		estimated = c.WindowEstimated
 	}
 	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c), WindowEstimated: estimated && contextWindow(window, c) > 0}
 	if last := s.LastEnded(); last.TurnID != "" {
-		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: string(last.StopReason), Cause: string(last.Cause), Error: last.Error}
+		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: last.StopReason, Cause: last.Cause, Error: last.Error}
 	}
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
@@ -57,12 +57,12 @@ func Describe(id string, s *eventlog.State, window int, estimated bool) protocol
 	}
 	if g, ok := s.Goal(); ok {
 		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},
-			State: string(g.State), Turns: g.Turns, Pauses: g.Pauses, Reason: g.Reason, RetryAt: g.RetryAt}
+			State: g.State, Turns: g.Turns, Pauses: g.Pauses, Reason: g.Reason, RetryAt: g.RetryAt}
 	}
 	return v
 }
 
-func subscriptionView(u *eventlog.SubscriptionUsage) *protocol.SubscriptionUsage {
+func subscriptionView(u *protocol.SubscriptionUsage) *protocol.SubscriptionUsage {
 	v := &protocol.SubscriptionUsage{Provider: u.Provider, Plan: u.Plan, CapturedAt: u.CapturedAt, SessionCostUSD: u.SessionCostUSD,
 		Windows: make([]protocol.SubscriptionUsageWindow, len(u.Windows))}
 	for i, w := range u.Windows {

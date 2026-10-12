@@ -3,12 +3,14 @@ package session
 import (
 	"context"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 )
 
 // Update appends the settings in ch that differ from the session settings.
 // Config.Check validates a new model first.
-func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
+func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		set, prev := a.state.Settings(), a.state.Model()
 		ch.Model = changed(ch.Model, prev)
@@ -18,8 +20,8 @@ func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
 		if ch.Model != nil && a.cfg.Check != nil {
 			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
-		if err == nil && ch != (eventlog.SettingsChanged{}) {
-			var events []eventlog.Event
+		if err == nil && ch != (protocol.SettingsChanged{}) {
+			var events []protocol.Payload
 			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
 				events = a.dismissRequests()
 			}

@@ -124,7 +124,7 @@ type Config struct {
 	// Appended receives the events of each append, and the state after it,
 	// on the actor goroutine. It must not block, wait for the actor, or keep
 	// the state. nil: none.
-	Appended func([]eventlog.Event, *eventlog.State)
+	Appended func([]protocol.Payload, *eventlog.State)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Log receives the log lines of the actor and of its turns. nil: slog.Default().
@@ -213,13 +213,13 @@ func newActor(cfg Config, s *eventlog.State) *Actor {
 
 // Create appends session.created and owner.acquired to an empty log. A
 // first input starts the first turn in the same append. Run runs the session.
-func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Actor, error) {
+func Create(ctx context.Context, cfg Config, c protocol.SessionCreated, first *protocol.InputAdmitted) (*Actor, error) {
 	a := newActor(cfg, &eventlog.State{})
-	events := []eventlog.Event{c, eventlog.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}}
+	events := []protocol.Payload{c, protocol.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}}
 	a.fenced = uint64(len(events))
 	turnID := newID("turn")
 	if first != nil {
-		events = append(events, *first, eventlog.TurnStarted{TurnID: turnID, InputIDs: []string{first.InputID}})
+		events = append(events, *first, protocol.TurnStarted{TurnID: turnID, InputIDs: []string{first.InputID}})
 	}
 	if err := a.appendCtx(ctx, events...); err != nil {
 		Discard(cfg.Ownership, cfg.ID, cfg.Log)
@@ -284,12 +284,12 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	t, ok := s.Turn()
 	switch {
 	case ok && t.Suspended:
-		err = a.appendCtx(ctx, eventlog.TurnResumed{TurnID: t.ID, Count: t.Resumes + 1})
+		err = a.appendCtx(ctx, protocol.TurnResumed{TurnID: t.ID, Count: t.Resumes + 1})
 		if err == nil {
 			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
-		err = a.endTurn(ctx, eventlog.TurnEnded{TurnID: t.ID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseCrashed}, cutOff)
+		err = a.endTurn(ctx, protocol.TurnEnded{TurnID: t.ID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseCrashed}, cutOff)
 		if err == nil {
 			err = a.settle(true)
 		}
@@ -304,7 +304,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 // after a restart.
 func (a *Actor) waitsForInput() bool {
 	last := a.state.LastEnded()
-	return last.Cause == eventlog.CauseProviderExhausted
+	return last.Cause == protocol.CauseProviderExhausted
 }
 
 // fence appends owner.acquired at the head. An append of an earlier owner
@@ -318,7 +318,7 @@ func fence(ctx context.Context, cfg Config) (uint64, error) {
 		if head == 0 {
 			return 0, fmt.Errorf("%w: %s", ErrNotFound, cfg.ID)
 		}
-		ev := eventlog.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}
+		ev := protocol.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}
 		data, err := eventlog.Envelope{Seq: head + 1, Time: time.Now(), Event: ev}.Encode()
 		if err != nil {
 			return 0, err
@@ -555,14 +555,14 @@ func call[T any](ctx context.Context, a *Actor, f func(func(T, error))) (T, erro
 	}
 }
 
-func (a *Actor) append(events ...eventlog.Event) error {
+func (a *Actor) append(events ...protocol.Payload) error {
 	return a.appendCtx(a.cfg.Base, events...)
 }
 
 // appendCtx checks, appends, and applies events. Any store error stops the
 // actor: the next Open fences and replays from the store. Only a conflict
 // means that another owner holds the session.
-func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
+func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error {
 	if err := eventlog.Check(a.state, events); err != nil {
 		return err
 	}
@@ -592,10 +592,10 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 			return err
 		}
 	}
-	if slices.ContainsFunc(events, func(e eventlog.Event) bool { _, ok := e.(eventlog.CompactionApplied); return ok }) {
+	if slices.ContainsFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.CompactionApplied); return ok }) {
 		a.pins.Move(len(a.state.ModelHistory()))
 	}
-	if g, _ := a.state.Goal(); g.State != eventlog.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
+	if g, _ := a.state.Goal(); g.State != protocol.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
 		a.stopRetry()
 	}
 	if a.cfg.Appended != nil {

@@ -1,4 +1,4 @@
-package eventlog
+package protocol
 
 import (
 	"cmp"
@@ -6,10 +6,141 @@ import (
 	"time"
 )
 
-// Event is the payload of one record. Kind names its registered type.
-type Event interface {
-	Kind() string
-}
+// EnvelopeVersion is the v of each stored record {v, seq, t, k, d}.
+const EnvelopeVersion = 1
+
+// Status is the status of a session.
+type Status string
+
+// Session statuses. StatusRetrying, StatusCompacting, and StatusCompactionFailed appear only in status frames.
+const (
+	StatusIdle             Status = "idle"
+	StatusRunning          Status = "running"
+	StatusWaiting          Status = "waiting"
+	StatusRetrying         Status = "retrying"
+	StatusCompacting       Status = "compacting"
+	StatusCompactionFailed Status = "compaction_failed"
+)
+
+// Delivery says when an admitted input joins a turn. An input with no delivery is steer.
+type Delivery string
+
+// Deliveries.
+const (
+	DeliveryQueue Delivery = "queue"
+	DeliverySteer Delivery = "steer"
+)
+
+// Payload is the typed data of a durable event.
+type Payload interface{ Kind() string }
+
+// StopReason says how a turn ended.
+type StopReason string
+
+// Stop reasons.
+const (
+	StopCompleted     StopReason = "completed"
+	StopInterrupted   StopReason = "interrupted"
+	StopFailed        StopReason = "failed"
+	StopAwaitingInput StopReason = "awaiting_input"
+)
+
+// Cause says why a turn stopped early.
+type Cause string
+
+// Causes. Only CauseHandoff suspends a turn and only CauseProviderExhausted
+// fails it; the others interrupt it. CauseEnded marks a turn that the end of
+// a session stopped in one of its descendants.
+const (
+	CauseStopped           Cause = "stopped"
+	CauseEnded             Cause = "ended"
+	CauseGoalCleared       Cause = "goal_cleared"
+	CauseHandoff           Cause = "handoff"
+	CauseCrashed           Cause = "crashed"
+	CauseProviderExhausted Cause = "provider_exhausted"
+)
+
+// ErrorClass types the error of a failed turn, so a reader never parses the
+// text of the error. A retryable failure holds the class name of the
+// provider, such as overloaded or server_error.
+type ErrorClass string
+
+// Error classes that do not name a retryable class of the provider.
+const (
+	ErrorPermanent   ErrorClass = "permanent"
+	ErrorTimedOut    ErrorClass = "timed_out"
+	ErrorRateLimited ErrorClass = "rate_limited"
+	ErrorUnrecovered ErrorClass = "unrecovered"
+)
+
+// ResolutionKind says how a request closed.
+type ResolutionKind string
+
+// Resolution kinds.
+const (
+	ResolutionAnswered  ResolutionKind = "answered"
+	ResolutionDismissed ResolutionKind = "dismissed"
+)
+
+// GoalState is the state of the session goal.
+type GoalState string
+
+// Goal states.
+const (
+	GoalActive    GoalState = "active"
+	GoalPaused    GoalState = "paused"
+	GoalAchieved  GoalState = "achieved"
+	GoalFailed    GoalState = "failed"
+	GoalExhausted GoalState = "exhausted"
+	GoalCleared   GoalState = "cleared"
+)
+
+// Verdict is the evaluator result for one goal turn.
+type Verdict string
+
+// Verdicts.
+const (
+	VerdictMet        Verdict = "met"
+	VerdictNotMet     Verdict = "not_met"
+	VerdictImpossible Verdict = "impossible"
+)
+
+// Outcome is how a child session settled.
+type Outcome string
+
+// Outcomes.
+const (
+	OutcomeDone     Outcome = "done"
+	OutcomeFailed   Outcome = "failed"
+	OutcomeCanceled Outcome = "canceled"
+)
+
+// Durable event kinds.
+const (
+	KindSessionCreated     = "session.created"
+	KindOwnerAcquired      = "owner.acquired"
+	KindSettingsChanged    = "settings.changed"
+	KindInputAdmitted      = "input.admitted"
+	KindInputPromoted      = "input.promoted"
+	KindInputWithdrawn     = "input.withdrawn"
+	KindTurnStarted        = "turn.started"
+	KindItemCompleted      = "item.completed"
+	KindTurnSuspended      = "turn.suspended"
+	KindTurnResumed        = "turn.resumed"
+	KindTurnEnded          = "turn.ended"
+	KindRequestOpened      = "request.opened"
+	KindRequestResolved    = "request.resolved"
+	KindGoalSet            = "goal.set"
+	KindGoalEvaluated      = "goal.evaluated"
+	KindGoalChanged        = "goal.changed"
+	KindCompactionApplied  = "compaction.applied"
+	KindChildSpawned       = "child.spawned"
+	KindChildSettled       = "child.settled"
+	KindCommandRecorded    = "command.recorded"
+	KindContextMeasured    = "context.measured"
+	KindBackendState       = "backend.state"
+	KindToolResultRetained = "tool_result.retained"
+)
 
 // Settings are the session settings other than the model.
 type Settings struct {
@@ -17,19 +148,19 @@ type Settings struct {
 	ServiceTier string `json:"service_tier,omitempty"`
 }
 
-// Part types.
+// Log part types.
 const (
-	PartText          = "text"
-	PartReasoning     = "reasoning"
-	PartToolCall      = "tool_call"
-	PartToolResult    = "tool_result"
-	PartBlob          = "blob"
-	PartTaskReport    = "task_report"
-	PartEngineContext = "engine_context"
+	LogPartText          = "text"
+	LogPartReasoning     = "reasoning"
+	LogPartToolCall      = "tool_call"
+	LogPartToolResult    = "tool_result"
+	LogPartBlob          = "blob"
+	LogPartTaskReport    = "task_report"
+	LogPartEngineContext = "engine_context"
 )
 
-// Part is one piece of message or input content.
-type Part struct {
+// LogPart is one piece of message or input content in the log.
+type LogPart struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	CallID    string          `json:"call_id,omitempty"`
@@ -38,10 +169,10 @@ type Part struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	// MediaType, BlobKey, and Bytes describe a blob part, whose bytes the
 	// Store holds under BlobKey. Blobs are the blob parts of a tool_result.
-	MediaType string `json:"media_type,omitempty"`
-	BlobKey   string `json:"blob_key,omitempty"`
-	Bytes     int    `json:"bytes,omitempty"`
-	Blobs     []Part `json:"blobs,omitempty"`
+	MediaType string    `json:"media_type,omitempty"`
+	BlobKey   string    `json:"blob_key,omitempty"`
+	Bytes     int       `json:"bytes,omitempty"`
+	Blobs     []LogPart `json:"blobs,omitempty"`
 	// ProviderData holds the opaque, provider-tagged payload of a reasoning
 	// part, which the provider replays on the next request.
 	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`
@@ -54,25 +185,11 @@ const (
 	RoleTool      = "tool"
 )
 
-// Message is one completed conversation item. ParentCallID names its subagent call.
-type Message struct {
-	Role         string `json:"role"`
-	Parts        []Part `json:"parts"`
-	ParentCallID string `json:"parent_call_id,omitempty"`
-}
-
-// Usage counts the tokens of one turn.
-type Usage struct {
-	InputTokens      int64 `json:"input_tokens"`
-	OutputTokens     int64 `json:"output_tokens"`
-	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
-}
-
-// Add returns the sum of u and v.
-func (u Usage) Add(v Usage) Usage {
-	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
-		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
+// LogMessage is one completed conversation item. ParentCallID names its subagent call.
+type LogMessage struct {
+	Role         string    `json:"role"`
+	Parts        []LogPart `json:"parts"`
+	ParentCallID string    `json:"parent_call_id,omitempty"`
 }
 
 // SessionCreated is the first record of every session.
@@ -103,12 +220,12 @@ type SettingsChanged struct {
 
 // InputAdmitted queues an input.
 type InputAdmitted struct {
-	InputID     string   `json:"input_id"`
-	Delivery    Delivery `json:"delivery"`
-	Source      string   `json:"source"`
-	SourceID    string   `json:"source_id,omitempty"`
-	SourceLabel string   `json:"source_label,omitempty"`
-	Parts       []Part   `json:"parts"`
+	InputID     string    `json:"input_id"`
+	Delivery    Delivery  `json:"delivery"`
+	Source      string    `json:"source"`
+	SourceID    string    `json:"source_id,omitempty"`
+	SourceLabel string    `json:"source_label,omitempty"`
+	Parts       []LogPart `json:"parts"`
 }
 
 // InputPromoted moves a queued steer input into the running turn.
@@ -130,9 +247,9 @@ type TurnStarted struct {
 
 // ItemCompleted records one finished message of a running turn.
 type ItemCompleted struct {
-	ItemID  string  `json:"item_id"`
-	TurnID  string  `json:"turn_id"`
-	Message Message `json:"message"`
+	ItemID  string     `json:"item_id"`
+	TurnID  string     `json:"turn_id"`
+	Message LogMessage `json:"message"`
 }
 
 // TurnSuspended pauses a turn at an item boundary for the next owner.
@@ -179,7 +296,7 @@ type RequestOpened struct {
 // RequestResolved closes an open request; an answer leaves its tool call open.
 type RequestResolved struct {
 	RequestID  string          `json:"request_id"`
-	Resolution Resolution      `json:"resolution"`
+	Resolution ResolutionKind  `json:"resolution"`
 	Answer     json.RawMessage `json:"answer,omitempty"`
 }
 
@@ -255,32 +372,6 @@ type ContextMeasured struct {
 	CostUSD           *float64           `json:"cost_usd,omitempty"`
 }
 
-// SubscriptionUsage is the subscription limit snapshot of a provider. Provider
-// is claude or codex, and CapturedAt is in Unix seconds.
-type SubscriptionUsage struct {
-	Provider       string                    `json:"provider"`
-	Plan           string                    `json:"plan"`
-	Windows        []SubscriptionUsageWindow `json:"windows"`
-	Overage        *SubscriptionOverage      `json:"overage,omitempty"`
-	CapturedAt     int64                     `json:"captured_at"`
-	SessionCostUSD *float64                  `json:"session_cost_usd,omitempty"`
-}
-
-// SubscriptionUsageWindow is one rate-limit window of a snapshot.
-type SubscriptionUsageWindow struct {
-	Key         string  `json:"key"`
-	Label       string  `json:"label"`
-	UsedPercent float64 `json:"used_percent"`
-	ResetsAt    int64   `json:"resets_at"`
-}
-
-// SubscriptionOverage is the pay-as-you-go state of a subscription.
-type SubscriptionOverage struct {
-	InUse    bool   `json:"in_use"`
-	Status   string `json:"status"`
-	ResetsAt int64  `json:"resets_at"`
-}
-
 // BackendState records the private state of a backend: Head, which each
 // record replaces, and a chain of immutable Chunk blobs of its entries. Restart
 // starts a new chain. Entries and Sum describe the chain after the record.
@@ -306,71 +397,71 @@ type ToolResultRetained struct {
 	Head    string `json:"head"`
 }
 
-// Kind returns "session.created".
-func (SessionCreated) Kind() string { return "session.created" }
+// Kind returns KindSessionCreated.
+func (SessionCreated) Kind() string { return KindSessionCreated }
 
-// Kind returns "owner.acquired".
-func (OwnerAcquired) Kind() string { return "owner.acquired" }
+// Kind returns KindOwnerAcquired.
+func (OwnerAcquired) Kind() string { return KindOwnerAcquired }
 
-// Kind returns "settings.changed".
-func (SettingsChanged) Kind() string { return "settings.changed" }
+// Kind returns KindSettingsChanged.
+func (SettingsChanged) Kind() string { return KindSettingsChanged }
 
-// Kind returns "input.admitted".
-func (InputAdmitted) Kind() string { return "input.admitted" }
+// Kind returns KindInputAdmitted.
+func (InputAdmitted) Kind() string { return KindInputAdmitted }
 
-// Kind returns "input.promoted".
-func (InputPromoted) Kind() string { return "input.promoted" }
+// Kind returns KindInputPromoted.
+func (InputPromoted) Kind() string { return KindInputPromoted }
 
-// Kind returns "input.withdrawn".
-func (InputWithdrawn) Kind() string { return "input.withdrawn" }
+// Kind returns KindInputWithdrawn.
+func (InputWithdrawn) Kind() string { return KindInputWithdrawn }
 
-// Kind returns "turn.started".
-func (TurnStarted) Kind() string { return "turn.started" }
+// Kind returns KindTurnStarted.
+func (TurnStarted) Kind() string { return KindTurnStarted }
 
-// Kind returns "item.completed".
-func (ItemCompleted) Kind() string { return "item.completed" }
+// Kind returns KindItemCompleted.
+func (ItemCompleted) Kind() string { return KindItemCompleted }
 
-// Kind returns "turn.suspended".
-func (TurnSuspended) Kind() string { return "turn.suspended" }
+// Kind returns KindTurnSuspended.
+func (TurnSuspended) Kind() string { return KindTurnSuspended }
 
-// Kind returns "turn.resumed".
-func (TurnResumed) Kind() string { return "turn.resumed" }
+// Kind returns KindTurnResumed.
+func (TurnResumed) Kind() string { return KindTurnResumed }
 
-// Kind returns "turn.ended".
-func (TurnEnded) Kind() string { return "turn.ended" }
+// Kind returns KindTurnEnded.
+func (TurnEnded) Kind() string { return KindTurnEnded }
 
-// Kind returns "request.opened".
-func (RequestOpened) Kind() string { return "request.opened" }
+// Kind returns KindRequestOpened.
+func (RequestOpened) Kind() string { return KindRequestOpened }
 
-// Kind returns "request.resolved".
-func (RequestResolved) Kind() string { return "request.resolved" }
+// Kind returns KindRequestResolved.
+func (RequestResolved) Kind() string { return KindRequestResolved }
 
-// Kind returns "goal.set".
-func (GoalSet) Kind() string { return "goal.set" }
+// Kind returns KindGoalSet.
+func (GoalSet) Kind() string { return KindGoalSet }
 
-// Kind returns "goal.evaluated".
-func (GoalEvaluated) Kind() string { return "goal.evaluated" }
+// Kind returns KindGoalEvaluated.
+func (GoalEvaluated) Kind() string { return KindGoalEvaluated }
 
-// Kind returns "goal.changed".
-func (GoalChanged) Kind() string { return "goal.changed" }
+// Kind returns KindGoalChanged.
+func (GoalChanged) Kind() string { return KindGoalChanged }
 
-// Kind returns "compaction.applied".
-func (CompactionApplied) Kind() string { return "compaction.applied" }
+// Kind returns KindCompactionApplied.
+func (CompactionApplied) Kind() string { return KindCompactionApplied }
 
-// Kind returns "child.spawned".
-func (ChildSpawned) Kind() string { return "child.spawned" }
+// Kind returns KindChildSpawned.
+func (ChildSpawned) Kind() string { return KindChildSpawned }
 
-// Kind returns "child.settled".
-func (ChildSettled) Kind() string { return "child.settled" }
+// Kind returns KindChildSettled.
+func (ChildSettled) Kind() string { return KindChildSettled }
 
-// Kind returns "command.recorded".
-func (CommandRecorded) Kind() string { return "command.recorded" }
+// Kind returns KindCommandRecorded.
+func (CommandRecorded) Kind() string { return KindCommandRecorded }
 
-// Kind returns "context.measured".
-func (ContextMeasured) Kind() string { return "context.measured" }
+// Kind returns KindContextMeasured.
+func (ContextMeasured) Kind() string { return KindContextMeasured }
 
-// Kind returns "backend.state".
-func (BackendState) Kind() string { return "backend.state" }
+// Kind returns KindBackendState.
+func (BackendState) Kind() string { return KindBackendState }
 
-// Kind returns "tool_result.retained".
-func (ToolResultRetained) Kind() string { return "tool_result.retained" }
+// Kind returns KindToolResultRetained.
+func (ToolResultRetained) Kind() string { return KindToolResultRetained }

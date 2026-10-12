@@ -6,7 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -41,7 +42,7 @@ type bigResult struct{ masked, key string }
 // can read the rest back and the child is still unsettled. It returns no key
 // when the parent cannot, and no text for a result that stays whole as it is.
 func (a *Actor) stage(ctx context.Context, id string, rep *Report) bigResult {
-	if rep.outcome != eventlog.OutcomeDone || !a.cfg.Retain || len(rep.result) <= reportInline {
+	if rep.outcome != protocol.OutcomeDone || !a.cfg.Retain || len(rep.result) <= reportInline {
 		return bigResult{}
 	}
 	big := bigResult{masked: toolresult.Mask(rep.result)}
@@ -67,9 +68,9 @@ func (a *Actor) stage(ctx context.Context, id string, rep *Report) bigResult {
 // ResultCap runes. With it, a result of at most reportInline bytes stays
 // whole, and a larger one shows a preview of the masked text that names the
 // handle of the rest, or says that the rest is unavailable.
-func (a *Actor) shown(rep *Report, big bigResult) (string, []eventlog.Event) {
+func (a *Actor) shown(rep *Report, big bigResult) (string, []protocol.Payload) {
 	switch {
-	case rep.outcome != eventlog.OutcomeDone || !a.cfg.Retain:
+	case rep.outcome != protocol.OutcomeDone || !a.cfg.Retain:
 		text, _ := CapRunes(rep.result, ResultCap)
 		return text, nil
 	case big.masked == "":
@@ -84,7 +85,7 @@ func (a *Actor) shown(rep *Report, big bigResult) (string, []eventlog.Event) {
 	_, last := a.retainedTotals()
 	m := toolresult.NewMeta(toolresult.Handle(last+1), reportTool, big.key, big.masked)
 	return preview + fmt.Sprintf(" … [full result retained — read the rest with read_tool_result(handle=%q)]", m.Handle),
-		[]eventlog.Event{eventlog.ToolResultRetained{Handle: m.Handle, Tool: m.Tool, BlobKey: m.Key, Bytes: m.Bytes, Lines: m.Lines, Head: m.Head}}
+		[]protocol.Payload{protocol.ToolResultRetained{Handle: m.Handle, Tool: m.Tool, BlobKey: m.Key, Bytes: m.Bytes, Lines: m.Lines, Head: m.Head}}
 }
 
 // canRetain reports whether the parent can read back a retained result of n

@@ -9,7 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -17,32 +16,32 @@ import (
 // recorder is the turn.Turn of one turn: it needs no turn ID, because it is
 // bound to its turn.
 type recorder struct {
-	items    []eventlog.Message
+	items    []protocol.LogMessage
 	statuses []string
 	waits    []time.Duration
 	ended    []error
-	steer    [][]eventlog.Message
+	steer    [][]protocol.LogMessage
 	started  int
 	deltas   []string
 	// folded is the history that CompactTurn returns. nil: nothing folds.
-	folded []eventlog.Message
+	folded []protocol.LogMessage
 }
 
-func (r *recorder) Item(m eventlog.Message) error             { r.items = append(r.items, m); return nil }
-func (r *recorder) Delta(id string, _ turn.Delta)             { r.deltas = append(r.deltas, id) }
-func (r *recorder) Announce() string                          { return r.Started() }
-func (r *recorder) ItemAs(_ string, m eventlog.Message) error { return r.Item(m) }
+func (r *recorder) Item(m protocol.LogMessage) error             { r.items = append(r.items, m); return nil }
+func (r *recorder) Delta(id string, _ turn.Delta)                { r.deltas = append(r.deltas, id) }
+func (r *recorder) Announce() string                             { return r.Started() }
+func (r *recorder) ItemAs(_ string, m protocol.LogMessage) error { return r.Item(m) }
 func (r *recorder) Started() string {
 	r.started++
 	return fmt.Sprintf("item_%d", r.started)
 }
-func (*recorder) Attach(string, []byte) (eventlog.Part, error) {
-	return eventlog.Part{}, nil
+func (*recorder) Attach(string, []byte) (protocol.LogPart, error) {
+	return protocol.LogPart{}, nil
 }
 func (*recorder) Alive()                   {}
 func (*recorder) Discard(string)           {}
 func (*recorder) Telemetry(turn.Telemetry) {}
-func (r *recorder) Steer() ([]eventlog.Message, error) {
+func (r *recorder) Steer() ([]protocol.LogMessage, error) {
 	if len(r.steer) == 0 {
 		return nil, nil
 	}
@@ -50,11 +49,11 @@ func (r *recorder) Steer() ([]eventlog.Message, error) {
 	r.steer = r.steer[1:]
 	return in, nil
 }
-func (*recorder) Settings() (string, eventlog.Settings)     { return "", eventlog.Settings{} }
+func (*recorder) Settings() (string, protocol.Settings)     { return "", protocol.Settings{} }
 func (*recorder) Pin([]turn.Notice, int) []turn.Pin         { return nil }
 func (*recorder) Ask(string, string, json.RawMessage) error { return nil }
-func (*recorder) Resolution(string) (eventlog.RequestResolved, bool) {
-	return eventlog.RequestResolved{}, false
+func (*recorder) Resolution(string) (protocol.RequestResolved, bool) {
+	return protocol.RequestResolved{}, false
 }
 func (*recorder) State(string) (turn.Snapshot, error)   { return turn.Snapshot{}, nil }
 func (*recorder) SaveState(string, turn.Snapshot) error { return nil }
@@ -65,14 +64,14 @@ func (r *recorder) Status(f protocol.StatusFrame) {
 		r.waits = append(r.waits, time.Until(f.NextAt))
 	}
 }
-func (r *recorder) CompactTurn(context.Context) ([]eventlog.Message, bool, error) {
+func (r *recorder) CompactTurn(context.Context) ([]protocol.LogMessage, bool, error) {
 	return r.folded, r.folded != nil, nil
 }
 func (r *recorder) Ended(err error) { r.ended = append(r.ended, err) }
 
 // model is a native backend: one scripted reply for each model call.
 type model struct {
-	replies  []eventlog.Message
+	replies  []protocol.LogMessage
 	errs     []error
 	requests []turn.Request
 	// streams makes each call stream one delta before it fails or answers.
@@ -85,7 +84,7 @@ func (m *model) Run(_ context.Context, req turn.Request, out turn.Sink) error {
 	m.requests = append(m.requests, req)
 	i := len(m.requests) - 1
 	if m.streams {
-		out.Delta("backend", turn.Delta{Type: eventlog.PartText, Text: "t"})
+		out.Delta("backend", turn.Delta{Type: protocol.LogPartText, Text: "t"})
 	}
 	if i < len(m.errs) && m.errs[i] != nil {
 		return m.errs[i]
@@ -93,22 +92,22 @@ func (m *model) Run(_ context.Context, req turn.Request, out turn.Sink) error {
 	return out.Item(m.replies[i])
 }
 
-func say(text string) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+func say(text string) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }
 
-func callTool(id string) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartToolCall, CallID: id, Name: "x"}}}
+func callTool(id string) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartToolCall, CallID: id, Name: "x"}}}
 }
 
-func steerInput(text string) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+func steerInput(text string) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }
 
 func TestRetryBackoffDoublesFromTwoHundredMilliseconds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const calls = 6
-		m := &model{replies: make([]eventlog.Message, calls+1), errs: make([]error, calls)}
+		m := &model{replies: make([]protocol.LogMessage, calls+1), errs: make([]error, calls)}
 		for i := range m.errs {
 			m.errs[i] = turn.ErrRetryable
 		}
@@ -136,11 +135,11 @@ func TestRunStartsOneItemForEachCallThatStreams(t *testing.T) {
 		r    *recorder
 	}{
 		{"a retried call", turn.ErrRetryable, turn.Limits{Retries: 1}, &recorder{}},
-		{"a call that overflows the context", turn.ErrContextOverflow, turn.Limits{}, &recorder{folded: []eventlog.Message{steerInput("summary")}}},
+		{"a call that overflows the context", turn.ErrContextOverflow, turn.Limits{}, &recorder{folded: []protocol.LogMessage{steerInput("summary")}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				m := &model{replies: []eventlog.Message{{}, say("ok")}, errs: []error{tc.err}, streams: true}
+				m := &model{replies: []protocol.LogMessage{{}, say("ok")}, errs: []error{tc.err}, streams: true}
 				ctx := context.Background()
 				turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, tc.r, tc.lim)
 				if len(tc.r.ended) != 1 || tc.r.ended[0] != nil {

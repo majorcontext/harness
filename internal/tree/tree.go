@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/majorcontext/harness/protocol"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/prompt"
@@ -43,12 +45,12 @@ type Sessions interface {
 	Open(ctx context.Context, id string) (Node, error)
 	// Create starts session id with its first input. profile is the agent
 	// profile that the caller has read for it.
-	Create(ctx context.Context, id string, created eventlog.SessionCreated, first eventlog.InputAdmitted, profile prompt.Profile) error
+	Create(ctx context.Context, id string, created protocol.SessionCreated, first protocol.InputAdmitted, profile prompt.Profile) error
 	// Read runs f with the state of session id, which f must not keep. It
 	// fails with session.ErrNotFound for a session with no log, or no valid ID.
 	Read(ctx context.Context, id string, f func(*eventlog.State)) error
 	// Created returns the session.created record of session id.
-	Created(ctx context.Context, id string) (eventlog.SessionCreated, error)
+	Created(ctx context.Context, id string) (protocol.SessionCreated, error)
 	// Members returns the sessions of the tree of root that the runtime runs.
 	Members(root string) []Node
 	// Known reports whether a session at model can have a tool named name.
@@ -149,11 +151,11 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	}
 	c.Settings.Effort = string(effort)
 	c.Origin, c.AllowedTools = "task", t.available(c.Model, narrow(p.Tools, c.AllowedTools))
-	first := eventlog.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: eventlog.DeliveryQueue, Source: "parent",
-		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: task}}}
+	first := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliveryQueue, Source: "parent",
+		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: task}}}
 	ctx = context.WithoutCancel(ctx)
 	if err := t.s.Create(ctx, id, c, first, p); err != nil {
-		return "", errors.Join(err, ps.Actor.Settle(ctx, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil))
+		return "", errors.Join(err, ps.Actor.Settle(ctx, protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil))
 	}
 	return id, nil
 }
@@ -163,17 +165,17 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 // One lock for each tree makes the count of the unsettled children and the
 // append one step. A child that ps already counts needs no new slot, so a
 // second spawn of it, as two senders to one settled child make, passes.
-func (t *Tree) SpawnChild(ctx context.Context, ps Node, child, agent string) (eventlog.SessionCreated, error) {
+func (t *Tree) SpawnChild(ctx context.Context, ps Node, child, agent string) (protocol.SessionCreated, error) {
 	if !t.allowsTask(ps.Depth) {
-		return eventlog.SessionCreated{}, errDepth
+		return protocol.SessionCreated{}, errDepth
 	}
 	defer t.lock(ps.Root)()
 	if !slices.Contains(ps.Actor.View().Unsettled, child) {
 		if n := t.unsettled(ps.Root); n >= t.cfg.MaxRunning {
-			return eventlog.SessionCreated{}, errRunning
+			return protocol.SessionCreated{}, errRunning
 		}
 		if err := t.withinBudget(ctx, ps.Root); err != nil {
-			return eventlog.SessionCreated{}, err
+			return protocol.SessionCreated{}, err
 		}
 	}
 	return ps.Actor.Spawn(ctx, child, agent)
@@ -309,7 +311,7 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // settles in its own parent with no report input when that ancestor is not
 // the parent. It holds that child until it has settled, so Recover never
 // settles the child with the report that the ancestor gets.
-func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Report) {
+func (t *Tree) Report(parent string, s protocol.ChildSettled, report *session.Report) {
 	quiet, ending, rt := t.hushed(s.ChildID)
 	relay := report
 	if quiet {
@@ -357,7 +359,7 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 // child reports its outcome, a canceled one included.
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
-		var s eventlog.ChildSettled
+		var s protocol.ChildSettled
 		var report *session.Report
 		var ended, canceled bool
 		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) {
@@ -366,7 +368,7 @@ func (t *Tree) Recover(a *session.Actor) {
 		})
 		switch {
 		case errors.Is(err, session.ErrNotFound):
-			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil)
+			_ = a.Settle(t.cfg.Base, protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
 			if t.holding(id) {
