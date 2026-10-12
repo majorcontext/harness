@@ -5,9 +5,8 @@ A fast, extensible, composable agent harness in Go.
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 - **Fast** — millisecond startup, CI-enforced budgets
-- **Extensible** — language-agnostic process plugins (TypeScript SDK published)
-- **Composable** — headless runtime, event streams, client/server, MCP both directions
-- **Model-fluid** — swap providers/models mid-session or per-subagent with no migration
+- **Extensible** — language-agnostic process plugins (TypeScript SDK included)
+- **Composable** — headless runtime, event streams, client/server, MCP servers
 
 ## Install
 
@@ -70,6 +69,7 @@ ctx := context.Background()
 rt, err := harness.New(harness.Options{
 	Store:   store.NewMemStore(),
 	WorkDir: ".",
+	Getenv:  os.Getenv,
 })
 if err != nil {
 	log.Fatal(err)
@@ -98,10 +98,19 @@ for e, err := range turn.Events(ctx) {
 		}
 	}
 }
+res, err := turn.Wait(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+if res.StopReason == protocol.StopFailed {
+	log.Fatal(res.Error)
+}
 ```
 
+`Getenv` lets the runtime read provider API keys. Without it, no provider has a key.
 `WorkDir` gives each session the built-in tools, bash among them. Leave it empty for a session with no file access.
-`httpapi.Handler(rt)` serves the same sessions over HTTP, and `store.NewDiskStore` keeps them on disk. `turn.Wait` returns the stop reason and usage of the turn.
+A failed turn does not end `Events` with an error. `turn.Wait` returns its stop reason, error, and usage.
+`httpapi.Handler(rt)` serves the same sessions over HTTP, and `store.NewDiskStore` keeps them on disk.
 
 See [examples/](examples) for programs that run, and the
 [API reference](https://pkg.go.dev/github.com/majorcontext/harness) for
@@ -115,16 +124,6 @@ field.
 
 Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
 `openai`, `openrouter`) or a key from `providers`.
-
-Automatic compaction needs the context window of the model. A model that is
-missing from the built-in context-window catalog, such as an OpenRouter or
-local model, runs with a window of 128000 tokens. Harness logs one warning for
-the model, and the session gauge sets `window_estimated`. When the provider
-rejects a request as too long, Harness compacts and tries again; it does not
-learn the window from the error. To name the window yourself, set
-`context_window_tokens`, which applies to every session and always wins.
-`claude-code` models are the exception: the Claude Code CLI reports its own
-window after each turn, so do not set one for them.
 
 ### OpenAI-compatible endpoints
 
@@ -141,6 +140,8 @@ Start Ollama with the context window Harness will assume:
 ```bash
 OLLAMA_CONTEXT_LENGTH=131072 ollama serve
 ```
+
+Quit the Ollama app first. It serves port 11434 without this setting.
 
 Then add the entry:
 
@@ -168,19 +169,10 @@ Optional fields: `family` (the wire-quirk tag, defaults to the key) and
 ### OpenRouter
 
 Harness registers an `openrouter` provider when `providers` has no
-`openrouter` entry, so you only need a key and a context window:
+`openrouter` entry, so you only need a key:
 
 ```bash
 export OPENROUTER_API_KEY=...
-```
-
-```json
-{
-  "context_window_tokens": 200000
-}
-```
-
-```bash
 harness run -model openrouter/anthropic/claude-sonnet-5 -p "Review the diff"
 ```
 
@@ -190,7 +182,6 @@ defaults when you leave them out. To send attribution headers, set only
 
 ```json
 {
-  "context_window_tokens": 200000,
   "providers": {
     "openrouter": {
       "extra_headers": {"HTTP-Referer": "https://example.com", "X-Title": "my-app"}
@@ -223,6 +214,18 @@ The model ref `vendor/some-model` sends `some-model` as the model ID. Set
 `context_window_tokens` to your model's context window.
 `responses_path` is also valid on the built-in `openai` entry, and nowhere
 else.
+
+### Context windows
+
+Automatic compaction needs the context window of the model. A model that is
+missing from the built-in context-window catalog, such as an OpenRouter or
+local model, runs with a window of 128000 tokens. Harness logs one warning for
+the model, and the session gauge sets `window_estimated`. When the provider
+rejects a request as too long, Harness compacts and tries again; it does not
+learn the window from the error. To name the window yourself, set
+`context_window_tokens`. It applies to every session and overrides the catalog.
+
+### Config errors
 
 These fail config loading with an error that names the entry: an unknown
 `type`, an `openai-compat` or `openai` entry with no `base_url` (except
