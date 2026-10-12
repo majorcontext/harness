@@ -119,8 +119,11 @@ func steerFinalText(f *fake) {
 func steerUntaken(f *fake) {
 	f.emit(assistant(toolUse("toolu_r", "Bash", obj{"command": "sleep 1"})))
 	text, queued := awaitQueued(f)
-	f.emit(say("tool done"), success("tool done", 5, 5))
-	answerQueued(f, text, queued)
+	f.emit(say("tool done"), success("tool done", 5, 5).set("total_cost_usd", 0.01))
+	if queued {
+		answer := "answered: " + text
+		f.emit(say(answer), success(answer, 5, 5).set("total_cost_usd", 0.03))
+	}
 }
 
 // steerTextThenTool waits for the child gate between its text and its tool.

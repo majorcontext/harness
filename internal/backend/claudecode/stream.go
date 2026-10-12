@@ -70,10 +70,13 @@ type run struct {
 	// owed reports a steer input on stdin that no tool result has taken, and
 	// waiting a run that reads on for the second result that the CLI owes.
 	owed, waiting bool
-	mainModel     string
-	lastCall      *usage
-	compact       string
-	sawCompact    bool
+	// cost is the total_cost_usd of the previous result of the run, which the
+	// CLI reports as a running total.
+	cost       float64
+	mainModel  string
+	lastCall   *usage
+	compact    string
+	sawCompact bool
 	// live is the API response that the stream events of each thread are
 	// streaming, by parent tool call ID.
 	live map[string]*liveMessage
@@ -115,7 +118,7 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		case line, ok := <-r.proc.Lines():
 			if !ok {
 				if r.waiting {
-					return nil
+					return errSteerUnanswered
 				}
 				return errExited
 			}
@@ -145,6 +148,8 @@ func (r *run) awaitSecond() bool {
 	r.owed, r.waiting = false, true
 	return true
 }
+
+var errSteerUnanswered = errors.New("claudecode: the CLI exited before it answered a steer input")
 
 var errExited = errors.New("claudecode: the CLI exited before its result")
 
@@ -504,7 +509,9 @@ func (r *run) settle(env envelope) error {
 }
 
 func (r *run) telemetry(env envelope) {
-	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &env.TotalCostUSD, Call: callMetrics(env)}
+	cost := max(0, env.TotalCostUSD-r.cost)
+	r.cost = env.TotalCostUSD
+	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &cost, Call: callMetrics(env)}
 	last := r.lastCall
 	if last == nil {
 		last = env.Usage
