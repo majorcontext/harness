@@ -32,6 +32,7 @@ linters:
           list-mode: strict
           allow:
             - $gostd
+            - github.com/majorcontext/harness/internal/backoff
             - github.com/majorcontext/harness/internal/eventlog
             - github.com/majorcontext/harness/internal/turn
             - github.com/majorcontext/harness/protocol

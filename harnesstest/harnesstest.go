@@ -38,7 +38,9 @@ type Reply struct {
 	ErrorMessage string
 	// RetryAfter is the Retry-After header value of an HTTPStatus reply.
 	RetryAfter string
-	Block      bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
+	// Hangup closes the connection with no response. It sets no status. The websocket transport of the Responses server ignores it.
+	Hangup bool
+	Block  bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
 	// Reasoning is streamed before Text as reasoning_content deltas. Only the
 	// chat-completions server (NewChat) sends it.
 	Reasoning string
@@ -407,6 +409,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case matched < 0:
 		s.wire().writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
+	case step.Reply.Hangup:
+		panic(http.ErrAbortHandler)
 	case step.Reply.HTTPStatus != 0:
 		s.wire().replyError(w, step.Reply)
 	default:

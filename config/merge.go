@@ -50,8 +50,11 @@ func mergeScalars(out, over *Config) {
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
 	}
-	if over.PromptRetries != nil {
-		out.PromptRetries = over.PromptRetries
+	if over.RequestMaxRetries != nil {
+		out.RequestMaxRetries = over.RequestMaxRetries
+	}
+	if over.StreamMaxRetries != nil {
+		out.StreamMaxRetries = over.StreamMaxRetries
 	}
 	if over.MaxTokens != 0 {
 		out.MaxTokens = over.MaxTokens

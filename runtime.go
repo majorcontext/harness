@@ -195,7 +195,7 @@ func New(opts Options) (*Runtime, error) {
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
-	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(),
+	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log}
 	if opts.Config.GoalEvaluatorModel != "" {
 		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)

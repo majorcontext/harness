@@ -224,7 +224,7 @@ func TestContractSessionContextOverflow(t *testing.T) {
 		},
 		{
 			name:   "a_stalled_summary_fails_the_overflowed_turn",
-			config: map[string]any{"compaction_keep_turns": 1, "stream_idle_timeout_s": 1},
+			config: map[string]any{"compaction_keep_turns": 1, "stream_idle_timeout_s": 1, "stream_max_retries": 0},
 			model: []harnesstest.Step{
 				answer("alpha"), answer("bravo"), overflow("overflow", false),
 				{Name: "stall", Match: summaryRequest, Reply: harnesstest.Reply{Text: "partial", Block: true}, Repeat: true},

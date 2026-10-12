@@ -65,7 +65,10 @@ const (
 	StopToolUse   StopReason = "tool_use"
 	StopMaxTokens StopReason = "max_tokens"
 	StopRefusal   StopReason = "refusal"
-	StopOther     StopReason = "other"
+	// StopIncomplete marks a Responses response.incomplete whose reason is neither
+	// "interrupted", "max_output_tokens", nor "content_filter". Event.IncompleteReason holds the reason.
+	StopIncomplete StopReason = "incomplete"
+	StopOther      StopReason = "other"
 )
 
 // Usage is token accounting for one request.
@@ -210,7 +213,9 @@ type Event struct {
 	ToolCall   *message.ToolCall
 	Message    *message.Message
 	StopReason StopReason
-	Usage      Usage
+	// IncompleteReason is the raw reason of a StopIncomplete event, or "unknown" when the wire gave none.
+	IncompleteReason string
+	Usage            Usage
 	// RequestMetadata is set only on EventDone when an adapter reports how
 	// it projected the complete logical request onto its transport.
 	RequestMetadata *RequestMetadata

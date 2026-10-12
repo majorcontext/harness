@@ -29,6 +29,7 @@ func (c *Config) validateFile() error {
 		validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold),
 		c.validateTaskLimits(),
 		validateMaxTokens(c.MaxTokens),
+		validateRetries(c.RequestMaxRetries, c.StreamMaxRetries),
 	)
 }
 
@@ -103,6 +104,16 @@ func (c *Config) validateTaskLimits() error {
 func validateMaxTokens(n int) error {
 	if n < 0 {
 		return fmt.Errorf("max_tokens must not be negative, got %d", n)
+	}
+	return nil
+}
+
+func validateRetries(request, stream *int) error {
+	if request != nil && *request < 0 {
+		return fmt.Errorf("request_max_retries must not be negative, got %d", *request)
+	}
+	if stream != nil && *stream < 0 {
+		return fmt.Errorf("stream_max_retries must not be negative, got %d", *stream)
 	}
 	return nil
 }

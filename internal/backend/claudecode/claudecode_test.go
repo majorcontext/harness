@@ -65,7 +65,7 @@ func claudeRuntime(t *testing.T, st harness.Store, tools ...harness.Tool) *harne
 		t.Fatal(err)
 	}
 	retries := 0
-	r, err := harness.New(harness.Options{Store: st, Tools: tools, Config: config.Config{PromptRetries: &retries,
+	r, err := harness.New(harness.Options{Store: st, Tools: tools, Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}}}})
 	if err != nil {
 		t.Fatal(err)

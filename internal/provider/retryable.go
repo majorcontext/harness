@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 )
 
 // RetryableClass identifies a transient provider error.
@@ -18,13 +20,26 @@ const (
 	RetryableServerError RetryableClass = "server_error"
 	// RetryableStreamTruncated marks a stream that ends before its terminal event.
 	RetryableStreamTruncated RetryableClass = "stream_truncated"
+	// RetryableContentFilter marks a response that the provider filtered or refused.
+	RetryableContentFilter RetryableClass = "content_filter"
+	// RetryableConnectionFailed marks a request that got no HTTP response.
+	RetryableConnectionFailed RetryableClass = "connection_failed"
 )
 
 // RetryableError wraps a transient provider error and its class.
 type RetryableError struct {
-	Err   error
-	Class RetryableClass
+	Err      error
+	Class    RetryableClass
+	After    time.Duration
+	HasAfter bool // After is set; 0 differs from none
+	NoAdvice bool // an HTTP 429 with no Retry-After
 }
+
+// RetryAfter returns the wait that the provider advised, if it advised one.
+func (e *RetryableError) RetryAfter() (time.Duration, bool) { return e.After, e.HasAfter }
+
+// AdviceOnly reports an HTTP 429 with no Retry-After, which a turn does not retry.
+func (e *RetryableError) AdviceOnly() bool { return e.NoAdvice }
 
 // Error prefixes the wrapped error message with its class.
 func (e *RetryableError) Error() string {
@@ -40,6 +55,17 @@ func MarkRetryable(err error, class RetryableClass) error {
 		return nil
 	}
 	return &RetryableError{Err: err, Class: class}
+}
+
+// MarkRetryableHTTP is MarkRetryable for the error of an HTTP response, with its Retry-After.
+func MarkRetryableHTTP(err error, class RetryableClass, resp *http.Response) error {
+	if err == nil {
+		return nil
+	}
+	re := &RetryableError{Err: err, Class: class}
+	re.After, re.HasAfter = ParseRetryAfter(resp.Header, time.Now())
+	re.NoAdvice = resp.StatusCode == http.StatusTooManyRequests && !re.HasAfter
+	return re
 }
 
 // MarkStreamTruncated wraps a stream error that occurs before completion.

@@ -105,7 +105,7 @@ func steerInput(text string) eventlog.Message {
 	return eventlog.Message{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
 }
 
-func TestRetryBackoffDoublesFromOneSecondToAnEightSecondCap(t *testing.T) {
+func TestRetryBackoffDoublesFromTwoHundredMilliseconds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const calls = 6
 		m := &model{replies: make([]eventlog.Message, calls+1), errs: make([]error, calls)}
@@ -116,7 +116,7 @@ func TestRetryBackoffDoublesFromOneSecondToAnEightSecondCap(t *testing.T) {
 		r := &recorder{}
 		ctx := context.Background()
 		turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{Retries: calls})
-		want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second}
+		want := []time.Duration{200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 1600 * time.Millisecond, 3200 * time.Millisecond, 6400 * time.Millisecond}
 		if len(r.waits) != len(want) {
 			t.Fatalf("waits = %v, want %v", r.waits, want)
 		}

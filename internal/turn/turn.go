@@ -8,9 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"time"
 
+	"github.com/majorcontext/harness/internal/backoff"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -222,12 +222,6 @@ type Turn interface {
 	Ended(err error)
 }
 
-// A wait before a new attempt starts at retryBackoff and doubles up to retryBackoffMax.
-const (
-	retryBackoff    = time.Second
-	retryBackoffMax = 8 * time.Second
-)
-
 // Run runs req on b and reports its items and its end to to. Only the tools
 // that src gives each model call reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
@@ -296,13 +290,14 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 }
 
 // callModel runs one model call. It calls b again, at most lim.Retries
-// times, after an ErrRetryable error that came before any item.
+// times, after an ErrRetryable error that came before any item. The wait is
+// the advice of the provider, else backoff.Delay.
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) error {
 	s.call = callOf(req, 0, ownsLoop)
 	err := watch(ctx, b, req, s, lim.Idle)
-	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
+	for n := 0; n < lim.Retries && len(s.items) == 0 && retryable(err); n++ {
 		s.item, s.threads = "", nil
-		if err = s.wait(ctx, n); err == nil {
+		if err = s.wait(ctx, n, err); err == nil {
 			s.call = callOf(req, n+1, ownsLoop)
 			err = watch(ctx, b, req, s, lim.Idle)
 		}
@@ -375,15 +370,52 @@ func (w watchedThread) Delta(itemID string, d Delta) {
 	w.liveThread.Delta(itemID, d)
 }
 
-func (s *sink) wait(ctx context.Context, attempt int) error {
-	d := min(retryBackoff<<min(attempt, 3), retryBackoffMax)
-	d += rand.N(d/5) - d/10
+func (s *sink) wait(ctx context.Context, attempt int, cause error) error {
+	d := retryDelay(attempt+1, cause)
 	s.Status(protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
+	if err := sleep(ctx, d); err != nil {
+		return err
+	}
+	s.Status(protocol.StatusFrame{Status: protocol.StatusRunning})
+	return nil
+}
+
+// advice is what a provider error says about its retry.
+type advice interface {
+	RetryAfter() (time.Duration, bool)
+	AdviceOnly() bool
+}
+
+// retryable reports whether a model call runs again after err. An error that
+// the provider retries only on advice is not retryable without it.
+func retryable(err error) bool {
+	if !errors.Is(err, ErrRetryable) {
+		return false
+	}
+	var a advice
+	if errors.As(err, &a) {
+		_, advised := a.RetryAfter()
+		return advised || !a.AdviceOnly()
+	}
+	return true
+}
+
+// retryDelay is the wait before retry number n: the advice of the provider, else backoff.Delay.
+func retryDelay(n int, cause error) time.Duration {
+	var a advice
+	if errors.As(cause, &a) {
+		if after, ok := a.RetryAfter(); ok {
+			return after
+		}
+	}
+	return backoff.Delay(n)
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-t.C:
-		s.Status(protocol.StatusFrame{Status: protocol.StatusRunning})
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)

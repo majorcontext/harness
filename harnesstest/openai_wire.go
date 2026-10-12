@@ -222,9 +222,17 @@ func (o *OpenAI) nextResponseID(prefix string) string {
 }
 
 func completedFrame(id string, u Usage) frame {
-	return newFrame("response.completed", obj{"response": obj{
-		"id": id, "usage": obj{"input_tokens": u.Input, "output_tokens": u.Output, "input_tokens_details": obj{"cached_tokens": 0}},
-	}})
+	return newFrame("response.completed", obj{"response": responseBody(id, u)})
+}
+
+func incompleteFrame(id string, u Usage, reason string) frame {
+	body := responseBody(id, u)
+	body["incomplete_details"] = obj{"reason": reason}
+	return newFrame("response.incomplete", obj{"response": body})
+}
+
+func responseBody(id string, u Usage) obj {
+	return obj{"id": id, "usage": obj{"input_tokens": u.Input, "output_tokens": u.Output, "input_tokens_details": obj{"cached_tokens": 0}}}
 }
 
 func (o *OpenAI) prewarmFrames() (string, []frame) {
@@ -283,6 +291,9 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 			newFrame("response.output_item.done", obj{"output_index": idx, "item": item}),
 		)
 		idx++
+	}
+	if reason := o.opts.Replies[step.Name].Incomplete; reason != "" {
+		return id, append(frames, incompleteFrame(id, usage, reason))
 	}
 	return id, append(frames, completedFrame(id, usage))
 }

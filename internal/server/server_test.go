@@ -32,7 +32,7 @@ func serve(t *testing.T, steps ...harnesstest.Step) (*harness.Runtime, string) {
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: o.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
 	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(),
-		Config: config.Config{PromptRetries: &retries, GoalEvaluatorModel: "codex/gpt-5", Providers: map[string]config.Provider{"codex": p, "openai": p}}})
+		Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries, GoalEvaluatorModel: "codex/gpt-5", Providers: map[string]config.Provider{"codex": p, "openai": p}}})
 	if err != nil {
 		t.Fatal(err)
 	}

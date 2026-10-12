@@ -194,7 +194,8 @@ func TestStreamIncomplete(t *testing.T) {
 	}{
 		{"max_output_tokens", "max_output_tokens", provider.StopMaxTokens},
 		{"content_filter", "content_filter", provider.StopRefusal},
-		{"unknown reason", "mystery", provider.StopOther},
+		{"unknown reason", "mystery", provider.StopIncomplete},
+		{"interrupted", "interrupted", provider.StopOther},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

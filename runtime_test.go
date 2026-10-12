@@ -293,7 +293,7 @@ func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {
 		errFlaky := fmt.Errorf("%w: flaky", turn.ErrRetryable)
 		st, retries := harness.NewMemStore(), 3
 		b := &scripted{steps: []func(turn.Sink) error{func(out turn.Sink) error { _ = out.Item(callTool("c1")); return errFlaky }}}
-		r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{PromptRetries: &retries}}, b)
+		r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{StreamMaxRetries: &retries}}, b)
 		if err != nil {
 			t.Fatal(err)
 		}

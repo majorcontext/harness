@@ -148,7 +148,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 	if err != nil || !f.ok {
 		return nil, false, err
 	}
-	summary, usage, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
+	summary, usage, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits)
 	if err != nil {
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			if a.run == r {

@@ -97,7 +97,7 @@ const (
 	specSameBody       = "| Same id, same body | `200` with the original receipt |"
 	specOtherBody      = "| Same id, other body | `409 input_conflict` |"
 	specTurnMismatch   = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
-	specRetryable      = "`ErrRetryable` (a 429, a 5xx, a truncated stream) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times"
+	specRetryable      = "`ErrRetryable` (a 429 with `Retry-After`, a 5xx that outlasted the request retries, a transport error, a truncated stream, a content filter) calls the model again"
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
 	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
@@ -449,10 +449,26 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_sees_the_model_of_each_call":                                 reGolden(specUpdate),
 	"restart_lets_a_running_tool_finish_and_cuts_the_next_alone_call":    reGolden(specView, specHandoff),
 	"bifrost_max_tokens_cut_response_is_retried":                         sameAsServe(),
-	"max_tokens_cut_response_fails_the_turn_after_prompt_retries":        sameAsServe(),
+	"max_tokens_cut_response_fails_the_turn_after_stream_max_retries":    sameAsServe(),
 	"max_tokens_cut_tool_call_is_retried_without_running":                sameAsServe(),
+	"provider_5xx_is_retried_by_the_request_before_the_turn_retries":     sameAsServe(),
+	"request_and_stream_retries_multiply":                                sameAsServe(),
+	"provider_429_is_not_retried_by_the_request":                         sameAsServe(),
+	"stream_retries_default_to_five":                                     sameAsServe(),
+	"stream_retries_stop_after_the_default_of_five":                      sameAsServe(),
+	"provider_connection_failure_is_retried":                             sameAsServe(),
+	"provider_refusal_is_retried_as_a_content_filter":                    sameAsServe(),
+	"provider_refusal_fails_the_turn_after_stream_max_retries":           sameAsServe(),
+	"bifrost_content_filter_response_is_retried":                         sameAsServe(),
+	"bifrost_5xx_is_retried_by_the_request":                              sameAsServe(),
+	"codex_http_incomplete_content_filter_is_retried":                    sameAsServe(),
+	"codex_http_incomplete_with_another_reason_is_retried":               sameAsServe(),
+	"codex_http_incomplete_fails_the_turn_after_stream_max_retries":      sameAsServe(),
+	"provider_429_without_retry_after_is_not_retried":                    sameAsServe(),
+	"codex_http_5xx_is_retried_by_the_request":                           sameAsServe(),
+	"compact_summary_is_retried_after_a_refusal":                         sameAsServe(),
 	"max_tokens_cut_response_is_retried":                                 sameAsServe(),
-	"retries_stop_after_prompt_retries":                                  reGolden(specView, specRetryable),
+	"stream_retries_stop_after_stream_max_retries":                       reGolden(specView, specRetryable),
 	"settings_change_to_claude_code_mid_turn_fails_the_turn":             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
 	"typed_commands_record_their_outcome":                                reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
 	"typed_compact_keeps_keep_turns_and_returns_the_range":               reGolden(specTypedReceipt, specCmdResult, specReceipt),

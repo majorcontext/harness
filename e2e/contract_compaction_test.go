@@ -136,5 +136,16 @@ func TestContractCompactionSummaryCut(t *testing.T) {
 			getSession{as: "a"},
 			messagesPage{as: "a"},
 		),
+	}, {
+		name:   "compact_summary_is_retried_after_a_refusal",
+		config: map[string]any{"compaction_keep_turns": 1},
+		model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"),
+			{Name: "refused", Reply: harnesstest.Reply{Text: "I cannot", StopReason: "refusal"}},
+			{Name: "summary", Reply: harnesstest.Reply{Text: "gist"}}},
+		actions: append(append([]action{}, twoTurns...),
+			compact{as: "a"},
+			getSession{as: "a"},
+			messagesPage{as: "a"},
+		),
 	}})
 }

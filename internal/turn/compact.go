@@ -6,7 +6,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
@@ -38,13 +37,12 @@ var ErrEmptySummary = errors.New("turn: the compaction summary is empty")
 
 // Summarize makes one model call, with no tools, that summarizes
 // req.History, and returns the summary after SummaryBanner and the usage of
-// the call. A positive idle bounds the silence of the call, as Limits.Idle
-// does.
-func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
+// the calls. lim bounds the silence and the retries of a call, as it does for a turn.
+func Summarize(ctx context.Context, b Backend, req Request, lim Limits) (string, eventlog.Usage, error) {
 	req.Instructions, req.MaxTokens = summaryPrompt, summaryMaxTokens
 	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
-	text, usage, err := ask(ctx, b, req, idle)
+	text, usage, err := ask(ctx, b, req, lim)
 	if err != nil {
 		return "", usage, err
 	}
@@ -54,17 +52,26 @@ func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) 
 	return SummaryBanner + text, usage, nil
 }
 
-// Ask makes one model call of req with no tools and returns its text.
-func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
-	text, _, err := ask(ctx, b, req, idle)
+// Ask makes a model call of req with no tools, as Summarize does, and returns its text.
+func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, error) {
+	text, _, err := ask(ctx, b, req, lim)
 	return text, err
 }
 
-func ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
+func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, eventlog.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
 	req.AcceptCut = true
+	if b.Capabilities(req.Model).OwnsLoop {
+		lim.Retries = 0
+	}
 	var a answer
-	if err := watch(ctx, b, req, &a, idle); err != nil {
+	err := watch(ctx, b, req, &a, lim.Idle)
+	for n := 1; n <= lim.Retries && a.text.Len() == 0 && retryable(err); n++ {
+		if err = sleep(ctx, retryDelay(n, err)); err == nil {
+			err = watch(ctx, b, req, &a, lim.Idle)
+		}
+	}
+	if err != nil {
 		return "", a.usage, err
 	}
 	return a.text.String(), a.usage, nil

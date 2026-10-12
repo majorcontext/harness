@@ -205,7 +205,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 		Settings: eventlog.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
 	a.spawn(func() {
-		answer, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
+		answer, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.judged(r, turnID, answer, err)
 			reply(struct{}{}, nil)

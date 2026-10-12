@@ -115,15 +115,18 @@ type Config struct {
 	// a default of 128000 tokens, and its gauge marks the window as an
 	// estimate. A context overflow error never changes the window.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
-	// PromptRetries sets how many ADDITIONAL
-	// attempts a turn makes when a model call fails
-	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a
-	// truncated stream). A nil value (the field omitted) leaves the product
-	// default of 2 in place; an explicit 0 disables the retry entirely. A
-	// *int distinguishes "unset" (2) from "0" (off) across the project-config
-	// merge, exactly like ModelTool above. Resolve it with
-	// PromptRetriesValue. It is deliberately small and short.
-	PromptRetries *int `json:"prompt_retries,omitempty"`
+	// RequestMaxRetries sets how many times one model API request is sent
+	// again after a 5xx status or a transport error, before any response
+	// byte streams. A 429 is not sent again by the request. A nil value
+	// leaves the default of 4; an explicit 0 turns the retry off. Resolve it
+	// with RequestMaxRetriesValue.
+	RequestMaxRetries *int `json:"request_max_retries,omitempty"`
+	// StreamMaxRetries sets how many times a turn calls the model again after a
+	// retryable error of a call that recorded no item: a request that failed
+	// after its own retries, a 429, a stream that ended early, a content
+	// filter. A nil value leaves the default of 5; an explicit 0 turns the
+	// retry off. Resolve it with StreamMaxRetriesValue.
+	StreamMaxRetries *int `json:"stream_max_retries,omitempty"`
 	// MaxTokens caps the output tokens of each model call of a turn. Zero is the backend default.
 	// A negative value fails Validate.
 	MaxTokens int `json:"max_tokens,omitempty"`

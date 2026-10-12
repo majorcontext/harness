@@ -65,7 +65,7 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 	r, err := harness.New(harness.Options{Getenv: os.Getenv,
 		Store:          st,
 		WorkDir:        workDir,
-		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p, "claude-code": {Type: config.TypeClaudeCodeCLI}}},
+		Config:         config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p, "claude-code": {Type: config.TypeClaudeCodeCLI}}},
 		ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, key} },
 		Tools:          tools,
 	})
