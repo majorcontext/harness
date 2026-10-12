@@ -143,8 +143,9 @@ func (s *State) commandsIn(window []protocol.Message, fromFirst bool) []protocol
 
 // QueuedInputs returns the queued inputs as a reader sees them, oldest first.
 func (s *State) QueuedInputs() []protocol.QueuedInput {
-	out := make([]protocol.QueuedInput, len(s.queue))
-	for i, in := range s.queue {
+	out := make([]protocol.QueuedInput, len(s.prog.Queued))
+	for i, id := range s.prog.Queued {
+		in := s.inputs[id].event
 		out[i] = protocol.QueuedInput{ID: in.InputID, Parts: messageParts(in.Parts), Delivery: in.Delivery,
 			Source: in.Source, SourceID: in.SourceID, SourceLabel: in.SourceLabel}
 	}

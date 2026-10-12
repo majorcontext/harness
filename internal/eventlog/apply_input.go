@@ -31,11 +31,10 @@ func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 	if e.Delivery != protocol.DeliveryQueue && e.Delivery != protocol.DeliverySteer {
 		return illegal("input %s has delivery %q", e.InputID, e.Delivery)
 	}
-	if len(s.requests) > 0 {
-		return illegal("request %s is open", s.requests[0].RequestID)
+	if len(s.prog.Requests) > 0 {
+		return illegal("request %s is open", s.prog.Requests[0])
 	}
 	s.inputs[e.InputID] = input{inputAdmitted, seq, e}
-	s.queue = append(s.queue, e)
 	return nil
 }
 
@@ -46,8 +45,7 @@ func (s *State) applyPromoted(e protocol.InputPromoted) error {
 	if err := s.runningTurn(e.TurnID); err != nil {
 		return err
 	}
-	i := slices.IndexFunc(s.queue, func(in protocol.InputAdmitted) bool { return in.InputID == e.InputID })
-	if s.queue[i].Delivery != protocol.DeliverySteer {
+	if s.inputs[e.InputID].event.Delivery != protocol.DeliverySteer {
 		return illegal("input %s waits for the next turn", e.InputID)
 	}
 	s.takeInput(e.InputID, inputPromoted)
@@ -66,7 +64,6 @@ func (s *State) takeInput(id string, to inputState) {
 	in := s.inputs[id]
 	in.state = to
 	s.inputs[id] = in
-	s.queue = slices.DeleteFunc(s.queue, func(in protocol.InputAdmitted) bool { return in.InputID == id })
 }
 
 func (s *State) applyCommand(e protocol.CommandRecorded, seq uint64) error {

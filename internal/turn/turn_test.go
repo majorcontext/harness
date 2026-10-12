@@ -96,10 +96,6 @@ func say(text string) protocol.LogMessage {
 	return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }
 
-func callTool(id string) protocol.LogMessage {
-	return protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartToolCall, CallID: id, Name: "x"}}}
-}
-
 func steerInput(text string) protocol.LogMessage {
 	return protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }

@@ -90,18 +90,18 @@ type State struct {
 	model     string
 	settings  protocol.Settings
 	allowed   []string
-	head      uint64
 	createdAt time.Time
 	updatedAt time.Time
 	inputs    map[string]input
-	queue     []protocol.InputAdmitted
+	prog      protocol.Progress
 	turn      Turn
 	turnIDs   map[string]bool
 	lastEnded protocol.TurnEnded
 	calls     []OpenToolCall
-	requests  []pendingRequest
+	requests  map[string]pendingRequest
 	resolved  map[string]protocol.RequestResolved
-	goal      Goal
+	// evaluated is the last turn that the goal judged, or the last turn that ended before goal.set.
+	evaluated string
 	usage     protocol.Usage
 	context   protocol.ContextMeasured
 	// measuredTurn is the turn count when the newest reading was recorded.
@@ -141,10 +141,9 @@ type State struct {
 func (s *State) clone() *State {
 	c := *s
 	c.inputs = maps.Clone(s.inputs)
-	c.queue = slices.Clone(s.queue)
 	c.turnIDs = maps.Clone(s.turnIDs)
 	c.calls = slices.Clone(s.calls)
-	c.requests = slices.Clone(s.requests)
+	c.requests = maps.Clone(s.requests)
 	c.children = maps.Clone(s.children)
 	c.backends = maps.Clone(s.backends)
 	c.commands = maps.Clone(s.commands)
@@ -158,18 +157,10 @@ func (s *State) clone() *State {
 }
 
 // Head returns the seq of the last applied record, or 0.
-func (s *State) Head() uint64 { return s.head }
+func (s *State) Head() uint64 { return s.prog.Seq }
 
 // Status returns the session status.
-func (s *State) Status() protocol.Status {
-	switch {
-	case s.turn.ID != "" && !s.turn.Suspended:
-		return protocol.StatusRunning
-	case s.lastEnded.StopReason == protocol.StopAwaitingInput && len(s.requests) > 0:
-		return protocol.StatusWaiting
-	}
-	return protocol.StatusIdle
-}
+func (s *State) Status() protocol.Status { return s.prog.Status }
 
 // Turn returns the current turn, if any.
 func (s *State) Turn() (Turn, bool) {
@@ -180,9 +171,9 @@ func (s *State) Turn() (Turn, bool) {
 
 // Queue returns the admitted inputs that no turn has taken, oldest first.
 func (s *State) Queue() []protocol.InputAdmitted {
-	out := make([]protocol.InputAdmitted, len(s.queue))
-	for i, in := range s.queue {
-		out[i] = cloneInput(in)
+	out := make([]protocol.InputAdmitted, len(s.prog.Queued))
+	for i, id := range s.prog.Queued {
+		out[i] = cloneInput(s.inputs[id].event)
 	}
 	return out
 }
@@ -200,10 +191,10 @@ func (s *State) Input(id string) (protocol.InputAdmitted, uint64, bool) {
 
 // Requests returns the open requests, oldest first.
 func (s *State) Requests() []protocol.RequestOpened {
-	out := make([]protocol.RequestOpened, len(s.requests))
-	for i, r := range s.requests {
-		out[i] = r.RequestOpened
-		out[i].Payload = slices.Clone(r.Payload)
+	out := make([]protocol.RequestOpened, len(s.prog.Requests))
+	for i, id := range s.prog.Requests {
+		out[i] = s.requests[id].RequestOpened
+		out[i].Payload = slices.Clone(out[i].Payload)
 	}
 	return out
 }
@@ -219,7 +210,21 @@ func (s *State) Resolution(id string) (protocol.RequestResolved, bool) {
 func (s *State) OpenToolCalls() []OpenToolCall { return slices.Clone(s.calls) }
 
 // Goal returns the session goal, if one was set.
-func (s *State) Goal() (Goal, bool) { return s.goal, s.goal.State != "" }
+func (s *State) Goal() (Goal, bool) {
+	g := s.prog.Goal
+	if g == nil {
+		return Goal{}, false
+	}
+	return Goal{Condition: g.Condition, MaxTurns: g.MaxTurns, State: g.State, Reason: g.Reason, Turns: g.Turns,
+		Evaluated: s.evaluated, Pauses: g.Pauses, RetryAt: g.RetryAt}, true
+}
+
+func (s *State) goalState() protocol.GoalState {
+	if s.prog.Goal == nil {
+		return ""
+	}
+	return s.prog.Goal.State
+}
 
 // LastEnded returns the turn.ended record of the newest ended turn.
 func (s *State) LastEnded() protocol.TurnEnded { return s.lastEnded }
@@ -255,7 +260,7 @@ func (s *State) Unsettled() []string {
 // that no owner finished, or a child that has not settled.
 func (s *State) Resumable() bool {
 	held := s.lastEnded.Cause == protocol.CauseProviderExhausted
-	return s.turn.ID != "" || (len(s.queue) > 0 && !held) || s.goal.State == protocol.GoalActive || s.goal.State == protocol.GoalPaused ||
+	return s.turn.ID != "" || (len(s.prog.Queued) > 0 && !held) || s.goalState() == protocol.GoalActive || s.goalState() == protocol.GoalPaused ||
 		len(s.Unfinished()) > 0 || len(s.Unsettled()) > 0
 }
 
@@ -328,8 +333,8 @@ func (s *State) Summary() Summary {
 		Origin:    s.origin,
 		Model:     s.model,
 		Status:    s.Status(),
-		Goal:      s.goal.State,
-		HeadSeq:   s.head,
+		Goal:      s.goalState(),
+		HeadSeq:   s.prog.Seq,
 		CreatedAt: s.createdAt,
 		UpdatedAt: s.updatedAt,
 	}
@@ -348,14 +353,18 @@ func (s *State) Apply(r Record) error {
 }
 
 func (s *State) apply(env Envelope) error {
-	if env.Seq != s.head+1 {
-		return fmt.Errorf("%w: got %d, want %d", ErrSeq, env.Seq, s.head+1)
+	if env.Seq != s.prog.Seq+1 {
+		return fmt.Errorf("%w: got %d, want %d", ErrSeq, env.Seq, s.prog.Seq+1)
+	}
+	next, err := advance(s.prog, env.Seq, env.Event)
+	if err != nil {
+		return err
 	}
 	if err := s.step(env); err != nil {
 		return err
 	}
 	s.remember(env)
-	s.head = env.Seq
+	s.prog = next
 	s.updatedAt = env.Time
 	return nil
 }

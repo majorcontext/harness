@@ -360,25 +360,3 @@ type EventPage struct {
 	Events []Event `json:"events"`
 	Next   uint64  `json:"next,omitempty"`
 }
-
-// Progress is the status that a log folds to at Seq. It is plain JSON, so a
-// reader can store it with a cursor and resume with harness.Advance. The zero
-// Progress is the fold of an empty log. Queued holds the IDs of the inputs
-// that no turn has taken, oldest first. Requests holds the IDs of the open
-// requests. TurnID is the running turn, and empty while a turn is suspended.
-// Goal and LastTurn are nil until a goal is set or a turn ends.
-type Progress struct {
-	Seq      uint64    `json:"seq"`
-	Status   Status    `json:"status"`
-	TurnID   string    `json:"turn_id,omitempty"`
-	Queued   []string  `json:"queued,omitempty"`
-	Requests []string  `json:"requests,omitempty"`
-	Goal     *GoalView `json:"goal,omitempty"`
-	LastTurn *LastTurn `json:"last_turn,omitempty"`
-}
-
-// Add returns the sum of u and v.
-func (u Usage) Add(v Usage) Usage {
-	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
-		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
-}

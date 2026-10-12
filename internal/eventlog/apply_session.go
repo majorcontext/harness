@@ -18,6 +18,7 @@ func (s *State) applyCreated(e protocol.SessionCreated, t time.Time) error {
 	s.parentID, s.agent, s.origin, s.model, s.settings, s.allowed = e.ParentID, e.Agent, e.Origin, e.Model, e.Settings, e.AllowedTools
 	s.createdAt = t
 	s.inputs = map[string]input{}
+	s.requests = map[string]pendingRequest{}
 	s.turnIDs = map[string]bool{}
 	s.children = map[string]protocol.Outcome{}
 	s.backends = map[string]BackendChain{}

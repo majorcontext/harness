@@ -465,3 +465,9 @@ func (BackendState) Kind() string { return KindBackendState }
 
 // Kind returns KindToolResultRetained.
 func (ToolResultRetained) Kind() string { return KindToolResultRetained }
+
+// Add returns the sum of u and v.
+func (u Usage) Add(v Usage) Usage {
+	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
+		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
+}

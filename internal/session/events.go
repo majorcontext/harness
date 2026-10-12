@@ -24,18 +24,12 @@ func contextWindow(model int, c protocol.ContextMeasured) int64 {
 // window is the default for a model that nothing states. With no window, the
 // newest reading supplies the window and its estimated flag.
 func Describe(id string, s *eventlog.State, window int, estimated bool) protocol.Session {
-	sum, set, u := s.Summary(), s.Settings(), s.Usage()
+	sum, set, p := s.Summary(), s.Settings(), s.Progress()
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, Model: sum.Model,
-		Effort: set.Effort, ServiceTier: set.ServiceTier, Status: sum.Status,
-		Usage:   protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens},
+		Effort: set.Effort, ServiceTier: set.ServiceTier, Status: p.Status, TurnID: p.TurnID, Queued: p.Queued,
+		Goal: p.Goal, LastTurn: p.LastTurn, Usage: s.Usage(),
 		HeadSeq: sum.HeadSeq, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
-	}
-	if t, ok := s.Turn(); ok && !t.Suspended {
-		v.TurnID = t.ID
-	}
-	for _, in := range s.Queue() {
-		v.Queued = append(v.Queued, in.InputID)
 	}
 	c := s.Context()
 	if c.Tokens == 0 && c.Source == "" {
@@ -45,19 +39,12 @@ func Describe(id string, s *eventlog.State, window int, estimated bool) protocol
 		estimated = c.WindowEstimated
 	}
 	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c), WindowEstimated: estimated && contextWindow(window, c) > 0}
-	if last := s.LastEnded(); last.TurnID != "" {
-		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: last.StopReason, Cause: last.Cause, Error: last.Error}
-	}
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
 		v.SubscriptionUsage = subscriptionView(sub)
 		if v.SubscriptionUsage.CapturedAt == 0 {
 			v.SubscriptionUsage.CapturedAt = time.Now().Unix()
 		}
-	}
-	if g, ok := s.Goal(); ok {
-		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},
-			State: g.State, Turns: g.Turns, Pauses: g.Pauses, Reason: g.Reason, RetryAt: g.RetryAt}
 	}
 	return v
 }

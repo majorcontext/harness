@@ -81,7 +81,7 @@ func (s *State) applyItem(e protocol.ItemCompleted) error {
 
 func (s *State) unanswered() error {
 	for _, c := range s.calls {
-		if s.openRequest(c.CallID) < 0 {
+		if !s.isOpen(c.CallID) {
 			return illegal("tool call %s has no result", c.CallID)
 		}
 	}
@@ -138,7 +138,7 @@ func (s *State) applyEnded(e protocol.TurnEnded) error {
 		if e.Cause != "" {
 			return illegal("turn %s awaits input with cause %q", e.TurnID, e.Cause)
 		}
-		if !slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.turnID == e.TurnID }) {
+		if !slices.ContainsFunc(s.prog.Requests, func(id string) bool { return s.requests[id].turnID == e.TurnID }) {
 			return illegal("turn %s awaits input with no open request from this turn", e.TurnID)
 		}
 	default:
@@ -163,19 +163,18 @@ func (s *State) applyRequestOpened(e protocol.RequestOpened) error {
 	if s.turn.ID == "" || s.turn.Suspended {
 		return illegal("request %s opened with no running turn", e.RequestID)
 	}
-	if e.RequestID == "" || e.ItemID == "" || s.openRequest(e.RequestID) >= 0 {
+	if e.RequestID == "" || e.ItemID == "" || s.isOpen(e.RequestID) {
 		return illegal("request %q on item %q is already open or unnamed", e.RequestID, e.ItemID)
 	}
 	if !slices.ContainsFunc(s.calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID && c.ItemID == e.ItemID }) {
 		return illegal("no open tool call %s on item %s", e.RequestID, e.ItemID)
 	}
-	s.requests = append(s.requests, pendingRequest{e, s.turn.ID})
+	s.requests[e.RequestID] = pendingRequest{e, s.turn.ID}
 	return nil
 }
 
 func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at time.Time) error {
-	i := s.openRequest(e.RequestID)
-	if i < 0 {
+	if !s.isOpen(e.RequestID) {
 		return illegal("request %s is not open", e.RequestID)
 	}
 	if e.Resolution != protocol.ResolutionAnswered && e.Resolution != protocol.ResolutionDismissed {
@@ -191,7 +190,7 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 		}
 	}
 	s.calls = calls
-	s.requests = slices.Delete(s.requests, i, i+1)
+	delete(s.requests, e.RequestID)
 	s.resolved = maps.Clone(s.resolved)
 	if s.resolved == nil {
 		s.resolved = map[string]protocol.RequestResolved{}
@@ -200,6 +199,7 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 	return nil
 }
 
-func (s *State) openRequest(id string) int {
-	return slices.IndexFunc(s.requests, func(r pendingRequest) bool { return r.RequestID == id })
+func (s *State) isOpen(id string) bool {
+	_, ok := s.requests[id]
+	return ok
 }

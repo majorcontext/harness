@@ -133,7 +133,7 @@ func TestEveryKindKeepsItsWireBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var want []string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(nil, 1<<20)

@@ -7,7 +7,7 @@ import "github.com/majorcontext/harness/protocol"
 func Check(s *State, events []protocol.Payload) error {
 	c := s.clone()
 	for _, e := range events {
-		data, err := Envelope{Seq: c.head + 1, Event: e}.Encode()
+		data, err := Envelope{Seq: c.prog.Seq + 1, Event: e}.Encode()
 		if err != nil {
 			return err
 		}

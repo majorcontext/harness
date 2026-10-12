@@ -84,7 +84,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `Call`, `AloneTool`, `KeyedTool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Advance`, `Tool`, `Call`, `AloneTool`, `KeyedTool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
 | `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`; imports only the standard library | boot code that writes a config |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated `openapi.json` and `protocol.ts` | servers, web clients, CLIs |
 | `harness/storetest` | Conformance suite for a `Store` | store implementations |
@@ -376,7 +376,14 @@ Ephemeral frames go to subscribers and never to the store: `item.started`, `item
 func (s *State) Apply(r Record) error
 ```
 
-`Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the whole log from seq 1. There is no other fold.
+`Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the whole log from seq 1. There is no other fold: `Advance` runs the same fold of status, queue, goal, and last turn one event at a time.
+
+```go
+// Advance applies one durable event to p. It is the code that State.Apply uses for these fields.
+func Advance(p protocol.Progress, e protocol.Event) (protocol.Progress, error)
+```
+
+`protocol.Progress` is the status, running turn, queued input IDs, open request IDs, goal, and last turn that a log folds to at `Seq`. It is plain JSON, so a reader stores it with a cursor and resumes with `harness.Advance` in place of a replay. `State.Apply` computes these fields with `Advance`, so a stored `Progress` and a replay reach the same value. `Advance` assumes a legal log: `Check` has enforced the transitions, and `Advance` only needs the event to follow `p.Seq`. An ephemeral frame, an unknown kind, and an event out of order fail, and `p` stays as it was.
 
 - `State.History` holds the summary of the newest compaction and the messages after it. `State.ModelHistory` is `State.History` with each pinned segment (see Settle) at its place, and the model reads it.
 - `State.Transcript` is what a reader sees. It keeps the messages that each compaction folded, with the summary of each compaction in its place as a divider between the messages it folded and the messages kept. The model never reads the folded messages again.

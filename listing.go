@@ -129,3 +129,10 @@ func sessionsByCreation(ctx context.Context, st Store, b *births, log *slog.Logg
 	}
 	return out, nil
 }
+
+// Advance applies the durable event e, which follows p.Seq, to p and returns the new Progress; p is unchanged.
+// It is the one incremental fold of status, queue, goal, and last turn, and the session state uses it.
+// An ephemeral frame, an unknown kind, and an event out of order fail. Advance assumes a legal log.
+func Advance(p protocol.Progress, e protocol.Event) (protocol.Progress, error) {
+	return eventlog.Advance(p, e)
+}

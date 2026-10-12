@@ -149,3 +149,48 @@ func backendBlob(s State) string {
 	c, _ := s.BackendState("codex")
 	return c.Legacy
 }
+
+func TestAdvanceFoldsWhatStateFolds(t *testing.T) {
+	waiting := with(asking, end("t1", protocol.StopAwaitingInput, ""))
+	paused := with(evaluated, goal(protocol.GoalPaused), goal(protocol.GoalActive), goal(protocol.GoalPaused))
+	for name, log := range map[string][]protocol.Payload{
+		"every kind":         everyKind(),
+		"a waiting session":  with(waiting, resolve("c1"), admit("b"), start("t2", "b"), result("t2", "i2", "c1")),
+		"a dismissed answer": with(waiting, dismiss("c1"), admit("b")),
+		"a suspended turn":   with(suspended, resume("t1", 1), end("t1", protocol.StopCompleted, "")),
+		"a paused goal":      with(paused, goal(protocol.GoalCleared), setGoal),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var s State
+			var p protocol.Progress
+			for i, e := range log {
+				rec := record(t, uint64(i+1), e)
+				var ev protocol.Event
+				if err := json.Unmarshal(rec.Data, &ev); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := json.Marshal(p)
+				next, err := Advance(p, ev)
+				if err != nil {
+					t.Fatalf("Advance %s: %v", e.Kind(), err)
+				}
+				if after, _ := json.Marshal(p); string(before) != string(after) {
+					t.Fatalf("Advance %s changed its input:\n%s\n%s", e.Kind(), before, after)
+				}
+				if err := s.Apply(rec); err != nil {
+					t.Fatal(err)
+				}
+				if p = next; !reflect.DeepEqual(p, s.Progress()) {
+					t.Fatalf("after %s, Advance = %+v, State = %+v", e.Kind(), p, s.Progress())
+				}
+			}
+			ev := protocol.Event{Seq: uint64(len(log)) + 2, Kind: protocol.KindOwnerAcquired, Data: json.RawMessage(`{}`)}
+			if _, err := Advance(p, ev); !errors.Is(err, ErrSeq) {
+				t.Fatalf("Advance out of order = %v, want ErrSeq", err)
+			}
+			if _, err := Advance(p, protocol.Event{Seq: p.Seq + 1, Kind: protocol.KindStatus, Ephemeral: true}); !errors.Is(err, protocol.ErrUnknownKind) {
+				t.Fatalf("Advance of an ephemeral frame = %v, want ErrUnknownKind", err)
+			}
+		})
+	}
+}

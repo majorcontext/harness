@@ -129,12 +129,6 @@ func (r fakeRun) emit(m protocol.LogMessage) {
 	synctest.Wait()
 }
 
-// measure reports the usage of one model call.
-func (r fakeRun) measure(u protocol.Usage) {
-	r.tele <- turn.Telemetry{Usage: u}
-	synctest.Wait()
-}
-
 func (r fakeRun) end() {
 	close(r.items)
 	synctest.Wait()
