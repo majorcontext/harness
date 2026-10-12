@@ -141,6 +141,7 @@ func (r *Runtime) Commands(ctx context.Context) (protocol.Commands, error) // th
 // The box: health, the work directory, the logger, and the processes of the box.
 func (r *Runtime) Health() protocol.Health
 func (r *Runtime) WorkDir() string // "" without a WorkDir
+func (r *Runtime) WorkspaceChanges(ctx context.Context, dir, scope string) (protocol.WorkspaceChanges, error) // the git diff of the work tree; invalid_request without a WorkDir
 func (r *Runtime) Logger() *slog.Logger
 func (r *Runtime) Processes() []protocol.ProcessInfo // none without a WorkDir
 func (r *Runtime) ProcessLogs(name string, tail int) (protocol.ProcessLogs, error) // ErrProcessNotFound for an unknown name

@@ -16,7 +16,11 @@ import (
 // through r.Open. A route that only reads a session reads it through r.Read,
 // without an owner. It has no authentication; the embedder wraps it.
 func Handler(r *harness.Runtime) http.Handler {
-	return server.New[served](serving{r}, server.Options{WorkDir: r.WorkDir(), Processes: processes{r}, Health: r.Health(), Logger: r.Logger()})
+	opts := server.Options{Processes: processes{r}, Health: r.Health(), Logger: r.Logger()}
+	if r.WorkDir() != "" {
+		opts.Workspace = r.WorkspaceChanges
+	}
+	return server.New[served](serving{r}, opts)
 }
 
 // serving is the Runtime as the server runs it.

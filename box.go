@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/majorcontext/harness/internal/process"
+	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -18,6 +19,17 @@ func (r *Runtime) Logger() *slog.Logger { return r.log }
 
 // WorkDir returns the directory of the coding agent, or "" without one.
 func (r *Runtime) WorkDir() string { return r.workDir }
+
+// WorkspaceChanges diffs the git work tree of the WorkDir, or of dir under it,
+// by scope: "branch" (the default) against the merge base with the default
+// branch, or "uncommitted" against HEAD. Without a WorkDir it fails with
+// ErrInvalidRequest.
+func (r *Runtime) WorkspaceChanges(ctx context.Context, dir, scope string) (protocol.WorkspaceChanges, error) {
+	if r.workDir == "" {
+		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: the runtime has no WorkDir", ErrInvalidRequest)
+	}
+	return workspace.Changes(ctx, r.workDir, dir, scope)
+}
 
 // Processes lists every process of the box with its definition and status. It
 // lists none without a WorkDir.
