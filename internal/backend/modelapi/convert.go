@@ -74,7 +74,7 @@ func fromMessage(m *message.Message) eventlog.Message {
 			}
 		case *message.ToolCall:
 			args := p.Arguments
-			// The output cap can cut the arguments mid-value. The wire sends nil as {}.
+			// A model can send arguments that are not valid JSON. The wire sends nil as {}.
 			if !json.Valid(args) {
 				args = nil
 			}

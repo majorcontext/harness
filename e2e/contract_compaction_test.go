@@ -121,3 +121,20 @@ func TestContractCompaction(t *testing.T) {
 		},
 	})
 }
+
+func TestContractCompactionSummaryCut(t *testing.T) {
+	text := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
+	}
+	cut := harnesstest.Step{Name: "summary", Reply: harnesstest.Reply{Text: "partial gist", StopReason: "max_tokens"}}
+	runScenarios(t, []scenario{{
+		name:   "compact_summary_cut_at_max_tokens_is_kept",
+		config: map[string]any{"compaction_keep_turns": 1},
+		model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), cut},
+		actions: append(append([]action{}, twoTurns...),
+			compact{as: "a"},
+			getSession{as: "a"},
+			messagesPage{as: "a"},
+		),
+	}})
+}
