@@ -102,11 +102,12 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
 			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
-			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
-			out.Telemetry(tel)
 			if ev.StopReason == provider.StopMaxTokens && !req.AcceptCut {
+				out.Telemetry(tel)
 				return classify(provider.MarkStreamTruncated(errIncomplete))
 			}
+			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
+			out.Telemetry(tel)
 			m := fromMessage(ev.Message)
 			if len(m.Parts) == 0 {
 				continue
