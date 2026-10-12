@@ -3,6 +3,7 @@ package modelapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestRequestMapsABlobPartToItsBytes(t *testing.T) {
 	}
 	history := []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{
 		{Type: eventlog.PartText, Text: "look"}, {Type: eventlog.PartBlob, MediaType: "image/png", BlobKey: "k", Bytes: 3}}}}
-	got, err := request(context.Background(), turn.Request{Model: "codex/gpt-5", History: history, Blob: read})
+	got, err := (&Backend{log: slog.Default()}).request(context.Background(), turn.Request{Model: "codex/gpt-5", History: history, Blob: read})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +31,7 @@ func TestRequestMapsABlobPartToItsBytes(t *testing.T) {
 		t.Errorf("parts = %+v, want %+v", got.Messages[0].Parts, want)
 	}
 	history[0].Parts[1].BlobKey = "gone"
-	if _, err := request(context.Background(), turn.Request{Model: "codex/gpt-5", History: history, Blob: read}); err == nil {
+	if _, err := (&Backend{log: slog.Default()}).request(context.Background(), turn.Request{Model: "codex/gpt-5", History: history, Blob: read}); err == nil {
 		t.Error("request with a missing blob = nil, want the read error")
 	}
 }

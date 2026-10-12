@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"net/http"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -61,7 +62,7 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 		BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses",
 		OmitResponseParams: []string{"max_output_tokens"}, UseWebSocketTransport: websocket,
 	}
-	r, err := harness.New(harness.Options{
+	r, err := harness.New(harness.Options{Getenv: os.Getenv,
 		Store:          st,
 		WorkDir:        workDir,
 		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p, "claude-code": {Type: config.TypeClaudeCodeCLI}}},
@@ -149,7 +150,7 @@ func TestEachWireRunsATurn(t *testing.T) {
 			tc.p.BaseURL = s.URL() + tc.path
 			name, model, _ := strings.Cut(tc.model, "/")
 			st, rec := harness.NewMemStore(), &transport{}
-			r, err := harness.New(harness.Options{Store: st, Config: config.Config{Providers: map[string]config.Provider{name: tc.p}},
+			r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: config.Config{Providers: map[string]config.Provider{name: tc.p}},
 				ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, "k"} }})
 			if err != nil {
 				t.Fatal(err)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync/atomic"
 
 	"github.com/majorcontext/harness/internal/session"
@@ -143,7 +142,7 @@ func (r *Runtime) catchUp(ctx context.Context, id string) (again bool, err error
 	case err != nil:
 		return false, fmt.Errorf("session %s: %w", id, err)
 	}
-	defer session.Discard(own, id)
+	defer session.Discard(own, id, r.log)
 	err = session.CatchUp(sctx, storeLog{r.store, id}, r.sync, own.Epoch(), id)
 	switch {
 	case err == nil:
@@ -155,7 +154,7 @@ func (r *Runtime) catchUp(ctx context.Context, id string) (again bool, err error
 	}
 	err = fmt.Errorf("session %s: %w", id, err)
 	if errors.Is(err, ErrConflict) || errors.Is(err, ErrSyncRejected) {
-		slog.Error("harness: catch-up stopped for a session", "session", id, "err", err)
+		r.log.Error("harness: catch-up stopped for a session", "session", id, "err", err)
 	}
 	return false, err
 }

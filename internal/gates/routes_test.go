@@ -92,12 +92,12 @@ func TestMountedRoutesAreTheRoutesOfTheSpec(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = rt.Close(t.Context()) })
 	checkMounted(t, "Runtime.Handler", rt.Handler(), want)
-	checkMounted(t, "ReadHandler", harness.ReadHandler(harness.NewMemStore(), nil), read)
+	checkMounted(t, "ReadHandler", harness.ReadHandler(harness.NewMemStore(), harness.ReadOptions{}), read)
 }
 
 func TestSpecListsParse(t *testing.T) {
 	const spec = "### Routes\n\n```\nGET /a/{id}  note\nGET /p · POST /p/{name}/{action}\n```\n\n" +
-		"`harness.ReadHandler(store, queue)` is the HTTP form of reads. It serves `GET /a/{id}` through the code of x.\n\n" +
+		"`harness.ReadHandler(store, opts)` is the HTTP form of reads. It serves `GET /a/{id}` through the code of x.\n\n" +
 		"`start`, `stop`, and `restart` reply with the status.\n\n### Public packages\n\n| Package | Owns |\n| --- | --- |\n| `harness` | x |\n| `harness/config` | y |\n\n### Next\n| `harness/other` | z |\n"
 	routes, err := SpecRoutes(spec)
 	if err != nil || strings.Join(routes, ",") != "GET /a/{id},GET /p,POST /p/{name}/restart,POST /p/{name}/start,POST /p/{name}/stop" {

@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
 	"github.com/majorcontext/harness/internal/turn"
@@ -107,5 +106,5 @@ func (a *Actor) resolveWarm(c *turn.CallMetrics) {
 // logWarm writes one startup_prewarm line. duration is the time to ready or
 // to the end of the warm-up; age is the time since it started.
 func (a *Actor) logWarm(status string, duration, age time.Duration) {
-	slog.Info("startup_prewarm", "session_id", a.cfg.ID, "status", status, "duration_ms", duration.Milliseconds(), "age_ms", age.Milliseconds())
+	a.log().Info("startup_prewarm", "session_id", a.cfg.ID, "status", status, "duration_ms", duration.Milliseconds(), "age_ms", age.Milliseconds())
 }

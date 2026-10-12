@@ -29,7 +29,7 @@ func TestContractReadHandler(t *testing.T) {
 			d.WaitIdle(t, id)
 			key := blobKeyOf(t, d, id)
 			queue := waitingInputs{"waiting": {{ID: "q1", Delivery: protocol.DeliveryQueue, Source: "user", Parts: []protocol.MessagePart{{Type: "text", Text: "later"}}}}}
-			srv := httptest.NewServer(harness.ReadHandler(harness.NewDiskStore(d.store), queue))
+			srv := httptest.NewServer(harness.ReadHandler(harness.NewDiskStore(d.store), harness.ReadOptions{Queue: queue}))
 			t.Cleanup(srv.Close)
 			client := wireClientReadOnly(t, srv.Client())
 			session := "/sessions/" + id

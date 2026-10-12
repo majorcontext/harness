@@ -62,7 +62,7 @@ func source(t *testing.T, edit func(*config.Config, map[string]*harnesstest.MCPS
 	if edit != nil {
 		edit(&cfg, srv)
 	}
-	s := mcpsrc.New(cfg)
+	s := mcpsrc.New(cfg, nil)
 	t.Cleanup(s.Close)
 	return s, srv
 }
@@ -135,7 +135,7 @@ func run(ts turn.Toolset, c protocol.ToolCall) (string, bool) {
 func TestSearchScoresEachField(t *testing.T) {
 	srv := harnesstest.NewMCPServer(t, harnesstest.MCPSpec{Name: "weather", Tools: []harnesstest.MCPTool{
 		{Name: "other", Description: "weather forecast"}, {Name: "weather", Description: "x"}}})
-	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"})
+	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"}, nil)
 	t.Cleanup(s.Close)
 	got, _ := run(s.Toolset(bg, nil, nil, ""), call("mcp", `{"action":"search","query":"weather forecast"}`))
 	if first := `{"matches":[{"name":"mcp__weather__weather"`; !strings.HasPrefix(got, first) {

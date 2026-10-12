@@ -119,13 +119,13 @@ func runCmd(args []string) error {
 		return err
 	}
 	owner, replica := replication(cfg)
-	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version})
+	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv, Logger: logger})
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	line, err := checkLine(cfg, rt, opts, modelSet)
+	line, err := checkLine(ctx, cfg, rt, opts, modelSet)
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}

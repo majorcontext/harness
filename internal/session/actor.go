@@ -3,6 +3,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -84,11 +85,11 @@ const releaseBound = 10 * time.Second
 
 // Discard releases own on a path with no caller to return the error to. It
 // bounds the call and logs a failure.
-func Discard(own Ownership, id string) {
+func Discard(own Ownership, id string, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseBound)
 	defer cancel()
 	if err := own.Release(ctx); err != nil {
-		slog.Warn("harness: release ownership", "session", id, "err", err)
+		cmp.Or(log, slog.Default()).Warn("harness: release ownership", "session", id, "err", err)
 	}
 }
 
@@ -126,6 +127,8 @@ type Config struct {
 	Appended func([]eventlog.Event, *eventlog.State)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
+	// Log receives the log lines of the actor and of its turns. nil: slog.Default().
+	Log *slog.Logger
 	// Limits bounds how each turn recovers from a failed model call.
 	Limits turn.Limits
 	// MaxTokens caps the response of each model call of a turn. Zero: the backend default.
@@ -219,7 +222,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 		events = append(events, *first, eventlog.TurnStarted{TurnID: turnID, InputIDs: []string{first.InputID}})
 	}
 	if err := a.appendCtx(ctx, events...); err != nil {
-		Discard(cfg.Ownership, cfg.ID)
+		Discard(cfg.Ownership, cfg.ID, cfg.Log)
 		if errors.Is(err, ErrConflict) {
 			return nil, fmt.Errorf("%w: %s", ErrExists, cfg.ID)
 		}
@@ -237,7 +240,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 func Open(ctx context.Context, cfg Config) (*Actor, error) {
 	a, err := open(ctx, cfg)
 	if err != nil {
-		Discard(cfg.Ownership, cfg.ID)
+		Discard(cfg.Ownership, cfg.ID, cfg.Log)
 		return nil, err
 	}
 	return a, nil
@@ -449,7 +452,7 @@ func (a *Actor) finish() {
 	a.releaseErr = a.cfg.Ownership.Release(ctx)
 	cancel()
 	if a.releaseErr != nil {
-		slog.Warn("harness: release ownership", "session", a.cfg.ID, "err", a.releaseErr)
+		a.log().Warn("harness: release ownership", "session", a.cfg.ID, "err", a.releaseErr)
 	}
 	a.settleCause()
 	a.cfg.Done(func() { close(a.done) })
@@ -603,3 +606,5 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 }
 
 func newID(prefix string) string { return prefix + "_" + strings.ToLower(rand.Text()) }
+
+func (a *Actor) log() *slog.Logger { return cmp.Or(a.cfg.Log, slog.Default()) }

@@ -43,7 +43,7 @@ type fileStat struct {
 
 // loadCache reads path. A missing file is an empty cache, and so is a file
 // that does not decode: every plugin probes again and the next save replaces it.
-func loadCache(path string) (*cache, error) {
+func loadCache(path string, log *slog.Logger) (*cache, error) {
 	c := &cache{Entries: map[string]cacheEntry{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -53,7 +53,7 @@ func loadCache(path string) (*cache, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(data, c); err != nil {
-		slog.Warn("pluginsrc: plugin cache ignored, probing again", "path", path, "err", err)
+		log.Warn("pluginsrc: plugin cache ignored, probing again", "path", path, "err", err)
 		return &cache{Entries: map[string]cacheEntry{}}, nil
 	}
 	if c.Entries == nil {

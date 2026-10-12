@@ -31,8 +31,7 @@ var errIncomplete = errors.New("incomplete response returned, reason: max_tokens
 // configured window and no entry in the modelmeta table.
 const defaultContextWindow = 128000
 
-// warned holds the models that ran on the default window and have logged it,
-// once per process.
+// warned holds the models that ran on the default window and have logged it, once per process.
 var warned sync.Map
 
 // Backend is a turn.Backend over one provider client.
@@ -40,12 +39,13 @@ type Backend struct {
 	client provider.Provider
 	// window overrides the modelmeta context window when positive.
 	window int
+	log    *slog.Logger
 }
 
 // New returns the Backend of client p. A positive window replaces the
-// modelmeta context window of every model.
-func New(p provider.Provider, window int) *Backend {
-	return &Backend{client: p, window: window}
+// modelmeta context window of every model. A nil log is slog.Default().
+func New(p provider.Provider, window int, log *slog.Logger) *Backend {
+	return &Backend{client: p, window: window, log: cmp.Or(log, slog.Default())}
 }
 
 // Capabilities reports the context window of model: the configured window,
@@ -64,7 +64,7 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 		return turn.Capabilities{ContextWindow: window}
 	}
 	if _, seen := warned.LoadOrStore(model, true); !seen {
-		slog.Warn("harness: the model has no known context window, so it runs on the default", "model", model, "window", defaultContextWindow)
+		b.log.Warn("harness: the model has no known context window, so it runs on the default", "model", model, "window", defaultContextWindow)
 	}
 	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true}
 }
@@ -72,7 +72,7 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 // Run makes one model call on the history of req and reports its assistant item.
 // A response that the output cap cut off records no item and fails as a retryable error.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
-	preq, err := request(ctx, req)
+	preq, err := b.request(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func (b *Backend) Warm(ctx context.Context, req turn.Request) error {
 	if !b.CanWarm(req.Model) {
 		return nil
 	}
-	preq, err := request(ctx, req)
+	preq, err := b.request(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -191,7 +191,7 @@ func (b *Backend) Close() {
 	}
 }
 
-func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
+func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 	ref, err := modelref.ParseModelRef(req.Model)
 	if err != nil {
 		return nil, err
@@ -202,7 +202,7 @@ func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 	}
 	msgs := make([]message.Message, len(req.History))
 	for i, m := range req.History {
-		msgs[i], err = toMessage(ctx, req, m)
+		msgs[i], err = b.toMessage(ctx, req, m)
 		if err != nil {
 			return nil, err
 		}

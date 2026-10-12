@@ -51,7 +51,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{rollDice{}}})
+	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}

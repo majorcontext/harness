@@ -37,7 +37,7 @@ func sessionsCmd(args []string) error {
 		return err
 	}
 	store := harness.NewDiskStore(dir)
-	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, Version: version})
+	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, Version: version, Getenv: os.Getenv})
 	if err != nil {
 		return err
 	}

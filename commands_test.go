@@ -69,7 +69,7 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeRuntime(t, r) })
-	menu, err := r.Commands()
+	menu, err := r.Commands(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,7 +27,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: "."})
+	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: ".", Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}

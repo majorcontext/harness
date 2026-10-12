@@ -101,7 +101,7 @@ func serveCmd(args []string) error {
 	}
 	store := newObservedStore(harness.NewDiskStore(dir), logger)
 	owner, replica := replication(cfg)
-	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask,
+	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask, Getenv: os.Getenv, Logger: logger,
 		ServeURL: serveURLForAddr(bound), RunToken: token})
 	if err != nil {
 		return err

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -106,9 +105,13 @@ func resolveDirs(workDir string, dirs []string, def string) []string {
 }
 
 // Commands returns the slash-command menu: every built-in command and the
-// prompt commands of the WorkDir, which it reads on each call.
-func (r *Runtime) Commands() (protocol.Commands, error) {
-	prompts, invalid, err := command.DiscoverWithErrors(r.commandDirs)
+// prompt commands of the WorkDir, which it reads on each call. It returns the
+// cause of ctx when ctx has ended.
+func (r *Runtime) Commands(ctx context.Context) (protocol.Commands, error) {
+	if err := ctx.Err(); err != nil {
+		return protocol.Commands{}, context.Cause(ctx)
+	}
+	prompts, invalid, err := command.DiscoverWithErrors(r.commandDirs, r.log)
 	if err != nil {
 		return protocol.Commands{}, err
 	}
@@ -253,7 +256,7 @@ func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, erro
 func (s *Session) dispatch(rec eventlog.CommandRecorded, res command.Resolution) {
 	defer func() {
 		if p := recover(); p != nil {
-			slog.Error("harness: command panicked", "input_id", rec.InputID, "command", rec.Name, "panic", p)
+			s.r.log.Error("harness: command panicked", "input_id", rec.InputID, "command", rec.Name, "panic", p)
 			rec.Status, rec.Text, rec.Result, rec.ResultTruncated = protocol.CommandFailed, "/"+session.Typed(rec.Line)+" failed: internal error", nil, false
 			_, _, _, _ = s.a.Record(s.r.base, rec, nil)
 		}

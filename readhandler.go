@@ -1,14 +1,25 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
+
+// ReadOptions configures ReadHandler.
+type ReadOptions struct {
+	// Queue lists inputs that wait outside the log. nil: the log only.
+	Queue Queue
+	// Logger receives the cause of each error that the handler masks as
+	// internal. nil: slog.Default().
+	Logger *slog.Logger
+}
 
 // Queue lists inputs that wait outside the log of a session, such as the
 // undelivered inputs of a box that is not running.
@@ -18,11 +29,12 @@ type Queue interface {
 }
 
 // ReadHandler returns the HTTP API of the read routes of Runtime.Handler over st, with no Runtime and no owner.
-// The inputs of queue follow the queued inputs of the log in GET /sessions/{id}/inputs and in Session.queued. A
+// The inputs of opts.Queue follow the queued inputs of the log in GET /sessions/{id}/inputs and in Session.queued. A
 // session with no log but with waiting inputs answers GET /sessions/{id}/inputs from the queue alone; its other
-// routes answer session_not_found. A nil queue lists the log only.
-func ReadHandler(st Store, queue Queue) http.Handler {
-	return server.NewReads(storeReads{st: st, births: &births{}, queue: queue}, server.Options{})
+// routes answer session_not_found. A nil opts.Queue lists the log only.
+func ReadHandler(st Store, opts ReadOptions) http.Handler {
+	log := cmp.Or(opts.Logger, slog.Default())
+	return server.NewReads(storeReads{st: st, births: &births{}, queue: opts.Queue, log: log}, server.Options{Logger: log})
 }
 
 // storeReads is a Store and its Queue as the reads of the server.
@@ -30,6 +42,7 @@ type storeReads struct {
 	st     Store
 	births *births
 	queue  Queue
+	log    *slog.Logger
 }
 
 func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) {
@@ -95,7 +108,7 @@ func (s storeReads) Inputs(ctx context.Context, id string) ([]protocol.QueuedInp
 }
 
 func (s storeReads) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	return listSessions(ctx, s.st, s.births, q, func(ctx context.Context, id string) (protocol.Session, error) {
+	return listSessions(ctx, s.st, s.births, s.log, q, func(ctx context.Context, id string) (protocol.Session, error) {
 		rd, err := s.open(ctx, id)
 		if err != nil {
 			return protocol.Session{}, err

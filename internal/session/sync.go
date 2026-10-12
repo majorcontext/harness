@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -72,7 +71,7 @@ func (a *Actor) replicate() error {
 		}
 		if final(err) {
 			close(a.rejected)
-			slog.Error("harness: sync stopped for a session", "session", a.cfg.ID, "from_seq", b.FromSeq, "err", err)
+			a.log().Error("harness: sync stopped for a session", "session", a.cfg.ID, "from_seq", b.FromSeq, "err", err)
 			return fmt.Errorf("harness: the Sync receiver rejected seq %d of session %s: %w", b.FromSeq, a.cfg.ID, err)
 		}
 		if err != nil {

@@ -65,7 +65,7 @@ func pluginProbeCmd(args []string) error {
 		return err
 	}
 	defaultPluginCache(cfg)
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: *cfg, WorkDir: workDir, Version: version})
+	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv})
 	if err != nil {
 		return err
 	}

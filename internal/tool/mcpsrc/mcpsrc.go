@@ -45,6 +45,7 @@ func Reserved(name string) bool {
 // down. After maxRetries failed retries it stays down until the model asks
 // the mcp tool to connect it.
 type Source struct {
+	log   *slog.Logger
 	specs map[string]config.MCPServerSpec
 	names []string
 	// defers is set when a server can defer its tools, which gives the mcp
@@ -78,12 +79,12 @@ func (s *server) up() bool { return s != nil && s.client != nil }
 
 func (s *server) resources() bool { return s.up() && s.client.ServerCapabilities().Resources != nil }
 
-// New returns the Source of cfg.MCPServers, or nil when it is empty. It does no I/O.
-func New(cfg config.Config) *Source {
+// New returns the Source of cfg.MCPServers, or nil when it is empty. It does no I/O. A nil log is slog.Default().
+func New(cfg config.Config, log *slog.Logger) *Source {
 	if len(cfg.MCPServers) == 0 {
 		return nil
 	}
-	s := &Source{specs: cfg.MCPServers, names: slices.Sorted(maps.Keys(cfg.MCPServers)), mode: cfg.MCPToolLoading,
+	s := &Source{log: cmp.Or(log, slog.Default()), specs: cfg.MCPServers, names: slices.Sorted(maps.Keys(cfg.MCPServers)), mode: cfg.MCPToolLoading,
 		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold), dialing: map[string]*sync.Mutex{},
 		ready: make(chan struct{}), servers: map[string]*server{}, health: map[string]*health{}}
 	for _, name := range s.names {
@@ -127,7 +128,7 @@ func (s *Source) wait(ctx context.Context) bool {
 			for _, name := range s.names {
 				wg.Go(func() {
 					if err := s.connect(s.ctx, name); err != nil {
-						slog.Warn("mcp: server did not connect", "server", name, "err", hide(name, err))
+						s.log.Warn("mcp: server did not connect", "server", name, "err", hide(name, err))
 						s.group.Go(func() { s.retry(name) })
 						return
 					}

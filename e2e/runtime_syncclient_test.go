@@ -207,7 +207,7 @@ func equalLogs(t *testing.T, want, got harness.Store, id string) {
 // and returns the head of each.
 func seedSessions(t *testing.T, st harness.Store, ids ...string) map[string]uint64 {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: st, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

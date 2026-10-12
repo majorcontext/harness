@@ -201,7 +201,7 @@ func TestTheReadHandlerAnswersAsRuntimeHandlerAnswersForTheSameLog(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeRuntime(t, r2) })
-	ro := harness.ReadHandler(st, nil)
+	ro := harness.ReadHandler(st, harness.ReadOptions{})
 	for _, path := range []string{
 		"/sessions", "/sessions?limit=1", "/sessions?limit=1&after=s1", "/sessions?after=nope", "/sessions/s1", "/sessions/s2", "/sessions/nope",
 		"/sessions/s1/messages", "/sessions/s1/messages?limit=1", "/sessions/s1/messages?limit=1&before=3", "/sessions/s1/messages?limit=2000",
@@ -239,7 +239,7 @@ func TestTheReadHandlerAnswersAsRuntimeHandlerAnswersForTheSameLog(t *testing.T)
 func TestTheReadHandlerAnswersAWriteWith405AndAppendsNothing(t *testing.T) {
 	st := harness.NewMemStore()
 	head := storedLog(t, st)
-	ro := harness.ReadHandler(st, nil)
+	ro := harness.ReadHandler(st, harness.ReadOptions{})
 	for _, c := range []struct{ method, path string }{
 		{"POST", "/sessions"}, {"PATCH", "/sessions/s1"}, {"DELETE", "/sessions/s1"}, {"POST", "/sessions/s1/inputs"},
 		{"DELETE", "/sessions/s1/inputs/a"}, {"POST", "/sessions/s1/interrupt"}, {"PUT", "/sessions/s1/goal"}, {"POST", "/sessions/s1/blobs/k"},
@@ -317,7 +317,7 @@ func TestQueuedInputsListWithTheirPartsAndProvenanceOnBothHandlers(t *testing.T)
 	r2 := runtime(t, st, newFake())
 	t.Cleanup(func() { closeRuntime(t, r2) })
 	wantQueued(t, r2.Handler(), "runtime handler of a session that it does not run")
-	wantQueued(t, harness.ReadHandler(st, nil), "read handler")
+	wantQueued(t, harness.ReadHandler(st, harness.ReadOptions{}), "read handler")
 }
 
 func attachmentLog(t *testing.T, st harness.Store) {
@@ -396,7 +396,7 @@ func TestAHistoryAttachmentReadsBackByItsKeyOnBothHandlers(t *testing.T) {
 	r2 := runtime(t, st, newFake())
 	t.Cleanup(func() { closeRuntime(t, r2) })
 	wantBlobs(t, r2.Handler(), "runtime handler")
-	wantBlobs(t, harness.ReadHandler(st, nil), "read handler")
+	wantBlobs(t, harness.ReadHandler(st, harness.ReadOptions{}), "read handler")
 }
 
 type failingQueue struct{}
@@ -408,7 +408,7 @@ func (failingQueue) Queued(context.Context, string) ([]protocol.QueuedInput, err
 func TestAFailingQueueLeavesTheStoredHistoryReadable(t *testing.T) {
 	st := harness.NewMemStore()
 	attachmentLog(t, st)
-	ro := harness.ReadHandler(st, failingQueue{})
+	ro := harness.ReadHandler(st, harness.ReadOptions{Queue: failingQueue{}})
 	key := "attachment-" + hex.EncodeToString(sha256Sum(pngBytes(t)))
 	for _, path := range []string{"/sessions/s1/messages", "/sessions/s1/events", "/sessions/s1/blobs/" + key} {
 		if rec := get(t, ro, path); rec.Code != http.StatusOK {
@@ -446,11 +446,11 @@ func inputsOf(t *testing.T, h http.Handler, path string) []protocol.QueuedInput 
 func TestTheReadHandlerListsTheQueueAfterTheQueuedInputsOfTheLog(t *testing.T) {
 	st := harness.NewMemStore()
 	queuedLog(t, st, func(*testing.T, http.Handler) {})
-	logged := inputsOf(t, harness.ReadHandler(st, nil), "/sessions/s1/inputs")
+	logged := inputsOf(t, harness.ReadHandler(st, harness.ReadOptions{}), "/sessions/s1/inputs")
 	if len(logged) != 2 {
 		t.Fatalf("the log queues %d inputs, want 2", len(logged))
 	}
-	ro := harness.ReadHandler(st, fakeQueue{"s1": {queueRow("r1", "row one"), queueRow("r2", "row two")}, "s9": {queueRow("r3", "first prompt")}})
+	ro := harness.ReadHandler(st, harness.ReadOptions{Queue: fakeQueue{"s1": {queueRow("r1", "row one"), queueRow("r2", "row two")}, "s9": {queueRow("r3", "first prompt")}}})
 	t.Run("inputs_follow_the_log", func(t *testing.T) {
 		got, want := inputsOf(t, ro, "/sessions/s1/inputs"), append(slices.Clone(logged), queueRow("r1", "row one"), queueRow("r2", "row two"))
 		if !reflect.DeepEqual(got, want) {
@@ -480,7 +480,7 @@ func TestTheReadHandlerListsTheQueueAfterTheQueuedInputsOfTheLog(t *testing.T) {
 		}
 	})
 	t.Run("a_nil_queue_lists_the_log_only", func(t *testing.T) {
-		nilQueue := harness.ReadHandler(st, nil)
+		nilQueue := harness.ReadHandler(st, harness.ReadOptions{})
 		if got := inputsOf(t, nilQueue, "/sessions/s1/inputs"); !reflect.DeepEqual(got, logged) {
 			t.Errorf("GET inputs = %+v, want the log's %+v", got, logged)
 		}

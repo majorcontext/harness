@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -81,6 +82,15 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
+	// Getenv reads the variables that hold provider API keys, by the
+	// api_key_env of the provider or its default name. nil: New and the
+	// runtime read no variable, so a provider has no key unless
+	// ModelTransport supplies the credentials. A backend child process, such
+	// as the claude CLI, a plugin, an MCP stdio server, a process, or a bash
+	// call, still inherits the environment of this process.
+	Getenv func(key string) string
+	// Logger receives every log line of the runtime. nil: slog.Default().
+	Logger *slog.Logger
 	// Tools are the embedder tools. Each name must be unique. With a
 	// WorkDir, no name may be process, task, model, or a built-in tool name. With a
 	// goal evaluator, no name may be goal. With Config.MCPServers, no name
@@ -115,6 +125,7 @@ type Runtime struct {
 	store Store
 	owner Owner
 	sync  Sync
+	log   *slog.Logger
 	tools []turn.Tool
 	// models routes each turn to the backend of its model.
 	models    *backend.Router
@@ -180,16 +191,16 @@ func New(opts Options) (*Runtime, error) {
 		return nil, errors.New("harness: Options.RunToken needs Options.ServeURL")
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, opts.Config, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(),
-		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
+		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log}
 	if opts.Config.GoalEvaluatorModel != "" {
 		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
 	}
-	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir) }
+	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
@@ -197,8 +208,8 @@ func New(opts Options) (*Runtime, error) {
 	r.closing, r.closeStart = context.WithCancel(r.base)
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
-		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs) },
-		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix})
+		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },
+		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix, Log: r.log})
 	tools := opts.Tools
 	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t Tool) bool { return t.Spec().Name == modelToolName }) {
 		return nil, fmt.Errorf("harness: tool name %q is reserved", modelToolName)
@@ -213,9 +224,9 @@ func New(opts Options) (*Runtime, error) {
 			tools = append(tools, modelTool{r: r})
 		}
 	}
-	r.mcp = mcpsrc.New(opts.Config)
-	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob, opts.ServeURL, opts.RunToken)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport)
+	r.mcp = mcpsrc.New(opts.Config, r.log)
+	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob, opts.ServeURL, opts.RunToken, r.log)
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, Log: r.log})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
@@ -324,12 +335,12 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if l.created != nil {
 		c = *l.created
 	} else if c, err = r.created(ctx, id); err != nil {
-		session.Discard(own, id)
+		session.Discard(own, id, r.log)
 		return nil, err
 	}
 	root, depth, err := r.tree.Lineage(ctx, id, c.ParentID)
 	if err != nil {
-		session.Discard(own, id)
+		session.Discard(own, id, r.log)
 		return nil, err
 	}
 	profile := r.profile(c.Agent, l.profile)
@@ -354,6 +365,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Appended:        r.appended(id, plug),
 		Params:          chatParams(plug),
 		Sync:            r.sync,
+		Log:             r.log,
 		Limits:          r.limits,
 		MaxTokens:       r.maxTokens,
 		Threshold:       r.threshold,
@@ -389,7 +401,7 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 	case agent == "":
 		return prompt.Profile{}
 	}
-	profiles, _ := prompt.Profiles(r.agentDirs)
+	profiles, _ := prompt.Profiles(r.agentDirs, r.log)
 	return profiles[agent]
 }
 
@@ -469,7 +481,7 @@ func (r *Runtime) End(ctx context.Context, id string) error {
 // List returns a page of sessions in creation order. The After of a page is
 // the ID of the last session of the page before it.
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	return listSessions(ctx, r.store, &r.births, q, r.describe)
+	return listSessions(ctx, r.store, &r.births, r.log, q, r.describe)
 }
 
 // pluginInfo returns the state of each plugin, or nil without plugins.

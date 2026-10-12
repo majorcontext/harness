@@ -2,12 +2,14 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"maps"
 	"net/http"
 	"strconv"
@@ -55,7 +57,7 @@ type Runtime[S Session] interface {
 	Open(ctx context.Context, id string) (S, error)
 	End(ctx context.Context, id string) error
 	Models() []protocol.Model
-	Commands() (protocol.Commands, error)
+	Commands(ctx context.Context) (protocol.Commands, error)
 }
 
 // Processes runs the processes of the box.
@@ -75,6 +77,9 @@ type Options struct {
 	Processes Processes
 	// Health is the body of GET /health.
 	Health protocol.Health
+	// Logger receives the cause of each error that the handler masks as
+	// internal. nil: slog.Default().
+	Logger *slog.Logger
 }
 
 const (
@@ -142,8 +147,8 @@ func (h *handler[S]) readHandlers() map[string]http.HandlerFunc {
 	}))
 }
 
-func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
-	c, err := h.rt.Commands()
+func (h *handler[S]) commands(w http.ResponseWriter, r *http.Request) error {
+	c, err := h.rt.Commands(r.Context())
 	if err != nil {
 		return err
 	}
@@ -157,7 +162,7 @@ func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{readHandler: readHandler{reads: rt}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
+	h := &handler[S]{readHandler: readHandler{reads: rt, log: cmp.Or(opts.Logger, slog.Default())}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
 	mux := http.NewServeMux()
 	bind(mux, h.handlers(), func(r Route) bool { return !r.WorkDir || h.workDir != "" }, func(r Route) {
 		for _, op := range r.Ops {

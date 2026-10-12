@@ -51,7 +51,7 @@ func TestClaudeCodeGetsTheImageOfAnMCPTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: dir, Config: *cfg})
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), WorkDir: dir, Config: *cfg})
 	if err != nil {
 		t.Fatal(err)
 	}

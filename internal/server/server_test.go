@@ -9,6 +9,7 @@ import (
 	"iter"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ func serve(t *testing.T, steps ...harnesstest.Step) (*harness.Runtime, string) {
 	retries := 0
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: o.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(),
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(),
 		Config: config.Config{PromptRetries: &retries, GoalEvaluatorModel: "codex/gpt-5", Providers: map[string]config.Provider{"codex": p, "openai": p}}})
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +223,7 @@ func (s stub) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, er
 	return rd.Inputs(ctx)
 }
 func (stub) Models() []protocol.Model                            { return nil }
-func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
+func (stub) Commands(context.Context) (protocol.Commands, error) { return protocol.Commands{}, nil }
 func (s stub) Withdraw(context.Context, string) error            { return nil }
 func (stub) View() protocol.Session                              { return protocol.Session{} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }

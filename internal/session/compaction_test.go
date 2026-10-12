@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -56,7 +57,7 @@ func openCompacting(t *testing.T, s *harnesstest.OpenAI, st harness.Store, keep 
 	retries := 0
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: s.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
-	r, err := harness.New(harness.Options{Store: st, ModelTransport: func(string) http.RoundTripper { return rt },
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, ModelTransport: func(string) http.RoundTripper { return rt },
 		Config: config.Config{PromptRetries: &retries, CompactionKeepTurns: keep,
 			Providers: map[string]config.Provider{"codex": p}}})
 	if err != nil {

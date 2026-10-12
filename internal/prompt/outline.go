@@ -125,10 +125,10 @@ func headingTitle(line string) string {
 // outline of the rest, each line naming the read_file range that reads it. A
 // first section over limit is cut and gets the truncation marker. A file with
 // fewer than two sections has nothing to outline and gets the marker.
-func outlined(path string, data []byte, limit int) string {
+func outlined(path string, data []byte, limit int, log *slog.Logger) string {
 	secs := scanSections(data)
 	if len(secs) < 2 {
-		return truncated(path, data, limit, len(data))
+		return truncated(path, data, limit, len(data), log)
 	}
 	keep := 0
 	for keep < len(secs) && secs[keep].endByte <= limit {
@@ -136,13 +136,13 @@ func outlined(path string, data []byte, limit int) string {
 	}
 	var head string
 	if keep == 0 {
-		head = truncated(path, data[:secs[1].startByte], limit, len(data))
+		head = truncated(path, data[:secs[1].startByte], limit, len(data), log)
 		keep = 1
 	} else {
 		head = string(data[:secs[keep-1].endByte])
 	}
 	rest := secs[keep:]
-	slog.Warn("prompt: instructions outlined", "path", path, "bytes", len(data), "head", len(head),
+	log.Warn("prompt: instructions outlined", "path", path, "bytes", len(data), "head", len(head),
 		"sections", len(secs), "outlined", len(rest), "limit", limit)
 	block := outlineBlock(path, data, len(secs), rest, true)
 	if len(block) > outlineMaxBytes {

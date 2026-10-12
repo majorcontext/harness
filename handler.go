@@ -22,7 +22,7 @@ func (r *Runtime) Handler() http.Handler {
 	if r.procs != nil {
 		procs = processRoutes{r}
 	}
-	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health})
+	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health, Logger: r.log})
 }
 
 // reads is the Runtime with the read route of the server.

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -39,6 +40,8 @@ type Client struct {
 	// encrypted reasoning items are never replayed across endpoints.
 	Family     string
 	HTTPClient *http.Client // defaults to http.DefaultClient
+	// Log receives the debug lines of the client. nil: slog.Default().
+	Log *slog.Logger
 	// OmitResponseParams names optional request params that are never sent,
 	// for endpoints that reject params the OpenAI API accepts. Wire-only.
 	OmitResponseParams []string
@@ -162,7 +165,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	httpBody := body
 	zstdEncoded := c.family() == CodexFamily
 	if zstdEncoded {
-		httpBody, err = compressCodexHTTPRequest(ctx, body)
+		httpBody, err = compressCodexHTTPRequest(ctx, body, c.Log)
 		if err != nil {
 			return nil, err
 		}

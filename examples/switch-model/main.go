@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
@@ -25,7 +26,7 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore()})
+	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
