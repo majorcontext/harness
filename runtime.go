@@ -552,7 +552,9 @@ func (r *Runtime) shutdown(ctx context.Context) error {
 			}
 			if e.s != nil {
 				err := e.s.Release(ctx)
-				if !errors.Is(err, ErrSessionNotOwned) && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrSyncRejected) {
+				if rerr := e.s.a.ReleaseErr(); rerr != nil {
+					errs[i] = rerr
+				} else if !errors.Is(err, ErrSessionNotOwned) && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrSyncRejected) {
 					errs[i] = err
 				}
 			}

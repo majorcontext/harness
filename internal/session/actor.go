@@ -86,11 +86,17 @@ const releaseBound = 10 * time.Second
 // Discard releases own on a path with no caller to return the error to. It
 // bounds the call and logs a failure.
 func Discard(own Ownership, id string, log *slog.Logger) {
-	ctx, cancel := context.WithTimeout(context.Background(), releaseBound)
-	defer cancel()
-	if err := own.Release(ctx); err != nil {
+	if err := ReleaseBounded(own); err != nil {
 		cmp.Or(log, slog.Default()).Warn("harness: release ownership", "session", id, "err", err)
 	}
+}
+
+// ReleaseBounded releases own with a bound of releaseBound and returns the
+// error, for a path with a caller to report it to.
+func ReleaseBounded(own Ownership) error {
+	ctx, cancel := context.WithTimeout(context.Background(), releaseBound)
+	defer cancel()
+	return own.Release(ctx)
 }
 
 // Config is what an actor needs. The actor releases Ownership when it stops,
