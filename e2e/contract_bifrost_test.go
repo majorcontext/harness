@@ -151,11 +151,11 @@ func TestContractBifrostProviderErrors(t *testing.T) {
 			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
 		},
 		{
-			name: "bifrost_max_tokens_continuation",
+			name: "bifrost_max_tokens_cut_response_is_retried",
 			chat: true,
 			model: []harnesstest.Step{
 				{Name: "cut", Reply: harnesstest.Reply{Text: "first half ", StopReason: "max_tokens"}},
-				{Name: "rest", Reply: harnesstest.Reply{Text: "second half"}},
+				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
 			},
 			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
 		},

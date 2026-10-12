@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"slices"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -33,7 +32,7 @@ var ErrHandoff = errors.New("harness: turn handed off")
 // Backend runs turns against one kind of model or agent harness.
 type Backend interface {
 	Capabilities(model string) Capabilities
-	Run(ctx context.Context, req Request, out Sink) (Result, error)
+	Run(ctx context.Context, req Request, out Sink) error
 }
 
 // Capabilities says what a backend does for a model.
@@ -78,6 +77,9 @@ type Request struct {
 	Call func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult
 	// MaxTokens caps the response of a call. Zero: the backend default.
 	MaxTokens int
+	// AcceptCut makes a response that MaxTokens cut off the answer. Otherwise
+	// the backend records no item for it and fails with a retryable error.
+	AcceptCut bool
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
@@ -185,18 +187,10 @@ type Thread interface {
 	Drop()
 }
 
-// Result is the outcome of a Run that returned.
-type Result struct {
-	// MaxTokens reports a response that the output cap cut off.
-	MaxTokens bool
-}
-
-// Limits bounds how a turn recovers from a failed or cut-off model call.
+// Limits bounds how a turn recovers from a failed model call.
 type Limits struct {
 	// Retries bounds the new attempts of a model call after an ErrRetryable error.
 	Retries int
-	// Continuations bounds the model calls that continue a response cut off at max_tokens.
-	Continuations int
 	// Idle stops a model call that reports nothing to its Sink for this
 	// long. Zero or less: no limit.
 	Idle time.Duration
@@ -230,12 +224,6 @@ const (
 	retryBackoffMax = 8 * time.Second
 )
 
-const (
-	// notRun is the result of each tool call of a response that max_tokens cut off.
-	notRun       = "not run: the response was cut off at its output limit"
-	continuation = "[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue %d of %d). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]"
-)
-
 // Run runs req on b and reports its items and its end to to. Only the tools
 // that src gives each model call reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
@@ -247,16 +235,12 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 }
 
 // run compacts and calls the model again after a context overflow, when b
-// does not own its context. A response that max_tokens cut off runs
-// none of its tool calls, and the next call asks the model to continue, at
-// most lim.Continuations times.
+// does not own its context.
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
 	}
-	continued := 0
-	var nudge []eventlog.Message
 	for {
 		if step.Err() != nil {
 			return context.Cause(step)
@@ -269,8 +253,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return err
 		}
 		t := describe(step, &call, src, to, caps.OwnsLoop)
-		call.History = append(slices.Clip(req.History), nudge...)
-		res, err := callModel(step, b, call, s, lim, caps.OwnsLoop)
+		err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
 				req.History = h
@@ -281,7 +264,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return err
 		}
 		calls := toolCalls(s.items)
-		if caps.OwnsLoop || len(calls) == 0 && !res.MaxTokens {
+		if caps.OwnsLoop || len(calls) == 0 {
 			return nil
 		}
 		req.History = append(req.History, s.items...)
@@ -296,24 +279,8 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			req.History = append(req.History, m)
 			return nil
 		}
-		if res.MaxTokens {
-			if err := skipCalls(ctx, step, calls, record); err != nil {
-				return err
-			}
-		} else if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
+		if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
 			return err
-		}
-		switch {
-		case !res.MaxTokens:
-			nudge = nil
-		case continued < lim.Continuations:
-			continued++
-			nudge = []eventlog.Message{{Role: eventlog.RoleUser,
-				Parts: []eventlog.Part{{Type: eventlog.PartEngineContext, Text: fmt.Sprintf(continuation, continued, lim.Continuations)}}}}
-		case lim.Continuations <= 0:
-			return nil
-		default:
-			return fmt.Errorf("turn: the response reached max_tokens after %d continuations", continued)
 		}
 		in, err := to.Steer()
 		if err != nil {
@@ -323,40 +290,24 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	}
 }
 
-// skipCalls records the notRun result of each call of a response that max_tokens cut off.
-func skipCalls(ctx, step context.Context, calls []protocol.ToolCall, record func(protocol.ToolCall, protocol.ToolResult) error) error {
-	for _, c := range calls {
-		if step.Err() != nil {
-			return context.Cause(step)
-		}
-		if ctx.Err() != nil {
-			return context.Cause(ctx)
-		}
-		if err := record(c, protocol.ToolResult{Text: notRun, IsError: true}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // callModel runs one model call. It calls b again, at most lim.Retries
 // times, after an ErrRetryable error that came before any item.
-func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) (Result, error) {
+func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) error {
 	s.call = callOf(req, 0, ownsLoop)
-	res, err := watch(ctx, b, req, s, lim.Idle)
+	err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
 		s.item, s.threads = "", nil
 		if err = s.wait(ctx, n); err == nil {
 			s.call = callOf(req, n+1, ownsLoop)
-			res, err = watch(ctx, b, req, s, lim.Idle)
+			err = watch(ctx, b, req, s, lim.Idle)
 		}
 	}
-	return res, err
+	return err
 }
 
 // watch calls b once. With a positive idle, a call that reports nothing to
 // s for idle ends with errStalled.
-func watch(ctx context.Context, b Backend, req Request, s Sink, idle time.Duration) (Result, error) {
+func watch(ctx context.Context, b Backend, req Request, s Sink, idle time.Duration) error {
 	if idle <= 0 {
 		return b.Run(ctx, req, s)
 	}
@@ -364,11 +315,11 @@ func watch(ctx context.Context, b Backend, req Request, s Sink, idle time.Durati
 	defer cancel(nil)
 	t := time.AfterFunc(idle, func() { cancel(errStalled) })
 	defer t.Stop()
-	res, err := b.Run(ctx, req, watched{s, func() { t.Reset(idle) }})
+	err := b.Run(ctx, req, watched{s, func() { t.Reset(idle) }})
 	if err != nil && errors.Is(context.Cause(ctx), errStalled) {
 		err = errStalled
 	}
-	return res, err
+	return err
 }
 
 // watched is a Sink that calls alive on each delta, item, and Alive.

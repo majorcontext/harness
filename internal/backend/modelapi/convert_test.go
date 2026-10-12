@@ -34,3 +34,11 @@ func TestRequestMapsABlobPartToItsBytes(t *testing.T) {
 		t.Error("request with a missing blob = nil, want the read error")
 	}
 }
+
+func TestFromMessageDropsToolArgumentsThatAreNotJSON(t *testing.T) {
+	m := fromMessage(&message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+		&message.ToolCall{CallID: "c1", Name: "x", Arguments: []byte(`{"a":"b`)}}})
+	if got := m.Parts[0].Arguments; got != nil {
+		t.Errorf("arguments = %s, want none", got)
+	}
+}

@@ -127,17 +127,6 @@ type Config struct {
 	// MaxTokens caps the output tokens of each model call of a turn. Zero is the backend default.
 	// A negative value fails Validate.
 	MaxTokens int `json:"max_tokens,omitempty"`
-	// MaxTokensContinuations sets how many CONSECUTIVE times a
-	// turn auto-continues
-	// a turn that stopped with provider reason "max_tokens" (the provider
-	// cut the model off mid-emission) instead of settling the turn. A nil
-	// value (the field omitted) leaves the
-	// product default of 3 in place; an explicit 0 disables auto-continue
-	// entirely. A *int distinguishes
-	// "unset" (3) from "0" (off) across the project-config merge, exactly
-	// like PromptRetries above. Resolve it with
-	// MaxTokensContinuationsValue.
-	MaxTokensContinuations *int `json:"max_tokens_continuations,omitempty"`
 	// StreamIdleTimeoutS sets the stream idle timeout (in seconds)
 	// of every session this process creates: how long a streamed response
 	// may go without a delta before the idle-stream watchdog

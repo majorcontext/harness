@@ -62,8 +62,9 @@ func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (strin
 
 func ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
+	req.AcceptCut = true
 	var a answer
-	if _, err := watch(ctx, b, req, &a, idle); err != nil {
+	if err := watch(ctx, b, req, &a, idle); err != nil {
 		return "", a.usage, err
 	}
 	return a.text.String(), a.usage, nil

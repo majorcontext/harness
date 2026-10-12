@@ -2,9 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
-      "model": "fireworks/accounts/fireworks/routers/firerouter",
-      "user": "ses:a",
-      "prompt_cache_key": "ses:a",
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -27,12 +25,7 @@
             {
               "kind": "text",
               "text": "go"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
+            },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
@@ -43,9 +36,7 @@
     },
     {
       "system_has_goal_evaluator": false,
-      "model": "fireworks/accounts/fireworks/routers/firerouter",
-      "user": "ses:a",
-      "prompt_cache_key": "ses:a",
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -68,33 +59,10 @@
             {
               "kind": "text",
               "text": "go"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
+            },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "first half "
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue 1 of 3). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -119,17 +87,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "first half "
-          }
-        ]
-      },
-      {
-        "id": "msg#3",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "second half"
+            "text": "whole answer"
           }
         ]
       }
@@ -144,13 +102,13 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
           "turn_id": "turn#1"
         },
-        "model": "bifrost/fireworks/accounts/fireworks/routers/firerouter",
+        "model": "anthropic/claude-fable-5",
         "origin": "",
         "status": "idle",
         "subscription_usage": null,

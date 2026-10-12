@@ -65,24 +65,6 @@
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "first half "
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue 1 of 3). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
         }
       ]
     }
@@ -98,26 +80,6 @@
             "text": "go"
           }
         ]
-      },
-      {
-        "id": "msg#2",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "first half "
-          }
-        ]
-      },
-      {
-        "id": "msg#3",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "second half"
-          }
-        ]
       }
     ]
   },
@@ -126,33 +88,27 @@
       "status": 200,
       "body": {
         "context": {
-          "used_tokens": 5,
-          "window_tokens": 1000000
+          "tokens": 5,
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
+        "head_seq": 7,
         "id": "ses:a",
-        "last_activity_at": "\u003ctime\u003e",
         "last_turn": {
-          "outcome": "completed"
+          "error": "[retryable:stream_truncated] provider stream ended before completion: incomplete response returned, reason: max_tokens",
+          "stop_reason": "failed",
+          "turn_id": "turn#1"
         },
-        "lineage": {
-          "children": [],
-          "status": "idle"
-        },
-        "messages": 3,
         "model": "anthropic/claude-fable-5",
-        "plugins": [],
-        "queued": 0,
-        "state": "idle",
+        "origin": "",
         "status": "idle",
         "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 10,
-          "last_input_tokens": 5,
-          "messages": 3,
           "output_tokens": 6
-        },
-        "workdir": "\u003cworkdir\u003e"
+        }
       }
     }
   }

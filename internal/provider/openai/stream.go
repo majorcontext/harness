@@ -495,8 +495,8 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 
 	case "response.completed", "response.incomplete":
-		// Both are terminal: response.incomplete is a truncated-but-usable
-		// response whose incomplete_details.reason maps to the stop reason.
+		// Both are terminal. incomplete_details.reason of response.incomplete
+		// maps to the stop reason.
 		var ev struct {
 			Response struct {
 				ID                string `json:"id"`

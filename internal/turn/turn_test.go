@@ -73,7 +73,6 @@ func (r *recorder) Ended(err error) { r.ended = append(r.ended, err) }
 // model is a native backend: one scripted reply for each model call.
 type model struct {
 	replies  []eventlog.Message
-	results  []turn.Result
 	errs     []error
 	requests []turn.Request
 	// streams makes each call stream one delta before it fails or answers.
@@ -82,20 +81,16 @@ type model struct {
 
 func (m *model) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (m *model) Run(_ context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (m *model) Run(_ context.Context, req turn.Request, out turn.Sink) error {
 	m.requests = append(m.requests, req)
 	i := len(m.requests) - 1
 	if m.streams {
 		out.Delta("backend", turn.Delta{Type: eventlog.PartText, Text: "t"})
 	}
 	if i < len(m.errs) && m.errs[i] != nil {
-		return turn.Result{}, m.errs[i]
+		return m.errs[i]
 	}
-	var res turn.Result
-	if i < len(m.results) {
-		res = m.results[i]
-	}
-	return res, out.Item(m.replies[i])
+	return out.Item(m.replies[i])
 }
 
 func say(text string) eventlog.Message {
@@ -108,35 +103,6 @@ func callTool(id string) eventlog.Message {
 
 func steerInput(text string) eventlog.Message {
 	return eventlog.Message{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
-}
-
-func TestRunTakesNoSteerInputWhenAMaxTokensStopEndsTheTurn(t *testing.T) {
-	m := &model{replies: []eventlog.Message{callTool("c1")}, results: []turn.Result{{MaxTokens: true}}}
-	r := &recorder{steer: [][]eventlog.Message{{steerInput("later")}}}
-	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{})
-	if len(m.requests) != 1 || len(r.ended) != 1 || r.ended[0] != nil {
-		t.Fatalf("calls = %d, ended = %v, want one call and a clean end", len(m.requests), r.ended)
-	}
-	if len(r.steer) != 1 {
-		t.Fatalf("a steer input was taken by a turn that makes no further model call")
-	}
-}
-
-func TestRunTakesNoSteerInputWhenTheContinuationLimitFailsTheTurn(t *testing.T) {
-	m := &model{
-		replies: []eventlog.Message{callTool("c1"), callTool("c2")},
-		results: []turn.Result{{MaxTokens: true}, {MaxTokens: true}},
-	}
-	r := &recorder{steer: [][]eventlog.Message{nil, {steerInput("later")}}}
-	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{Continuations: 1})
-	if len(m.requests) != 2 || len(r.ended) != 1 || r.ended[0] == nil {
-		t.Fatalf("calls = %d, ended = %v, want two calls and a failed turn", len(m.requests), r.ended)
-	}
-	if len(r.steer) != 1 {
-		t.Fatalf("a steer input was taken by a turn that makes no further model call")
-	}
 }
 
 func TestRetryBackoffDoublesFromOneSecondToAnEightSecondCap(t *testing.T) {

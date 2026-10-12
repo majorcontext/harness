@@ -41,7 +41,7 @@ func next[T any](mu *sync.Mutex, list *[]T) T {
 
 func (*goalBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (b *goalBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
+func (b *goalBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	text, judge := "", req.Instructions == evaluatorPrompt
 	var fail error
 	if judge {
@@ -55,13 +55,13 @@ func (b *goalBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 		select {
 		case <-b.gate:
 		case <-ctx.Done():
-			return turn.Result{}, context.Cause(ctx)
+			return context.Cause(ctx)
 		}
 	}
 	if fail != nil {
-		return turn.Result{}, fail
+		return fail
 	}
-	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
+	return out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
 }
 
 func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool, live *atomic.Int32) *Actor {

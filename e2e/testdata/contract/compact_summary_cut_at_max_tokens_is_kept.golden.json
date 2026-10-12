@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             },
             {
               "kind": "text",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             },
             {
               "kind": "text",
@@ -71,7 +71,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first half "
+              "text": "1"
             }
           ]
         },
@@ -80,7 +80,41 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue 1 of 3). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]\n\u003c/harness-engine-context\u003e"
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
             }
           ]
         }
@@ -95,7 +129,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "go"
+            "text": "one"
           }
         ]
       },
@@ -105,32 +139,61 @@
         "parts": [
           {
             "type": "text",
-            "text": "first half "
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[compacted summary of earlier conversation]\n\npartial gist"
           }
         ]
       },
       {
         "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "second half"
+            "text": "2"
           }
         ]
       }
     ]
   },
   "calls": {
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "folded": true,
+        "from_seq": 1,
+        "to_seq": 8
+      }
+    },
     "get_session.a": {
       "status": 200,
       "body": {
+        "compaction_count": 1,
         "context": {
           "tokens": 5,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 13,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -143,10 +206,72 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 15,
+          "output_tokens": 9
         }
       }
+    },
+    "messages_page.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 5,
+        "total": 5
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "id": "cmpsum#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "[compacted summary of earlier conversation]\n\npartial gist"
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "2"
+            }
+          ]
+        }
+      ]
     }
   }
 }
