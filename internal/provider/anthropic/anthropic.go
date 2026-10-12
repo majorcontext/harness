@@ -4,6 +4,7 @@ package anthropic
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ const (
 // value plus APIKey, or an HTTPClient that sets the credentials, is usable.
 type Client struct {
 	APIKey     string
+	KeySource  string       // where APIKey was read; the error of an empty APIKey names it
 	BaseURL    string       // defaults to https://api.anthropic.com
 	HTTPClient *http.Client // defaults to http.DefaultClient
 	// CacheTTL is the prompt-cache breakpoint lifetime: CacheTTL5m (the
@@ -62,7 +64,7 @@ func (c *Client) Name() string { return Family }
 
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
 	if c.APIKey == "" && c.HTTPClient == nil {
-		return nil, fmt.Errorf("anthropic: no API key configured (set ANTHROPIC_API_KEY)")
+		return nil, fmt.Errorf("anthropic: no API key: %s", cmp.Or(c.KeySource, "APIKey is empty"))
 	}
 	ttl, err := resolveCacheTTL(c.CacheTTL)
 	if err != nil {

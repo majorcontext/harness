@@ -11,6 +11,7 @@ package openaicompat
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,8 @@ type Client struct {
 	Family string
 	// APIKey may be empty when HTTPClient sets the credentials.
 	APIKey string
+	// KeySource says where APIKey was read. The error of an empty APIKey names it.
+	KeySource string
 	// BaseURL is the API root; the client POSTs to BaseURL+"/chat/completions".
 	BaseURL string
 	// HTTPClient defaults to http.DefaultClient.
@@ -68,7 +71,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, fmt.Errorf("openaicompat: no Family configured")
 	}
 	if c.APIKey == "" && c.HTTPClient == nil {
-		return nil, fmt.Errorf("openaicompat(%s): no API key configured", c.Family)
+		return nil, fmt.Errorf("openaicompat(%s): no API key: %s", c.Family, cmp.Or(c.KeySource, "APIKey is empty"))
 	}
 	wire, err := transcodeRequestOpts(req, c.Family, c.transcodeOptions())
 	if err != nil {

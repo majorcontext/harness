@@ -27,6 +27,7 @@ func TestContractRuntimeOptions(t *testing.T) {
 	}{
 		{"a_runtime_with_no_getenv_reads_no_api_key_variable", rowARuntimeWithNoGetenvReadsNoAPIKeyVariable},
 		{"a_runtime_with_a_getenv_sends_the_key_that_it_returns", rowARuntimeWithAGetenvSendsTheKeyThatItReturns},
+		{"a_turn_with_no_api_key_says_where_the_key_was_read", rowATurnWithNoAPIKeySaysWhereTheKeyWasRead},
 		{"the_logger_option_receives_the_log_lines_of_the_runtime", rowTheLoggerOptionReceivesTheLogLinesOfTheRuntime},
 		{"the_read_handler_logs_the_cause_of_an_error_that_it_masks", rowTheReadHandlerLogsTheCauseOfAnErrorThatItMasks},
 		{"commands_returns_the_cause_of_an_ended_context", rowCommandsReturnsTheCauseOfAnEndedContext},
@@ -91,6 +92,64 @@ func rowARuntimeWithAGetenvSendsTheKeyThatItReturns(t *testing.T) {
 	}, reply)
 	if got != "Bearer from-the-embedder" {
 		t.Errorf("Authorization = %q, want the key of the embedder", got)
+	}
+}
+
+func errorOfOneTurn(t *testing.T, getenv func(string) string, providers map[string]config.Provider, model string) string {
+	t.Helper()
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: getenv, Config: config.Config{ContextWindowTokens: 100000, Providers: providers}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := turn.Wait(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StopReason != protocol.StopFailed {
+		t.Fatalf("StopReason = %q, want failed", res.StopReason)
+	}
+	return res.Error
+}
+
+func rowATurnWithNoAPIKeySaysWhereTheKeyWasRead(t *testing.T) {
+	t.Setenv("HARNESS_E2E_OPTIONS_KEY", "from-the-process")
+	t.Setenv("ANTHROPIC_API_KEY", "from-the-process")
+	compat := func(env string) map[string]config.Provider {
+		return map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: env}}
+	}
+	empty := func(string) string { return "" }
+	for _, c := range []struct {
+		name      string
+		getenv    func(string) string
+		providers map[string]config.Provider
+		model     string
+		want      string
+	}{
+		{"compat_nil_getenv", nil, compat("HARNESS_E2E_OPTIONS_KEY"), "bifrost/gpt-test",
+			"openaicompat(bifrost): no API key: Options.Getenv is nil, so HARNESS_E2E_OPTIONS_KEY is unread"},
+		{"compat_empty_variable", empty, compat("HARNESS_E2E_OPTIONS_KEY"), "bifrost/gpt-test",
+			"openaicompat(bifrost): no API key: HARNESS_E2E_OPTIONS_KEY is empty"},
+		{"compat_no_api_key_env", os.Getenv, compat(""), "bifrost/gpt-test",
+			"openaicompat(bifrost): no API key: the providers entry sets no api_key_env"},
+		{"anthropic_nil_getenv", nil, nil, "anthropic/claude-fable-5",
+			"anthropic: no API key: Options.Getenv is nil, so ANTHROPIC_API_KEY is unread"},
+		{"openai_empty_variable", empty, nil, "openai/gpt-5",
+			"openai: no API key: OPENAI_API_KEY is empty"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := errorOfOneTurn(t, c.getenv, c.providers, c.model); got != c.want {
+				t.Errorf("turn error = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
