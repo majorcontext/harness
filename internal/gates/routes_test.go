@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 var probeMethods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
@@ -86,18 +88,18 @@ func TestMountedRoutesAreTheRoutesOfTheSpec(t *testing.T) {
 			}
 		}
 	}
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: t.TempDir()})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = rt.Close(t.Context()) })
-	checkMounted(t, "Runtime.Handler", rt.Handler(), want)
-	checkMounted(t, "ReadHandler", harness.ReadHandler(harness.NewMemStore(), harness.ReadOptions{}), read)
+	checkMounted(t, "Runtime.Handler", httpapi.Handler(rt), want)
+	checkMounted(t, "ReadHandler", httpapi.ReadHandler(store.NewMemStore(), httpapi.ReadOptions{}), read)
 }
 
 func TestSpecListsParse(t *testing.T) {
 	const spec = "### Routes\n\n```\nGET /a/{id}  note\nGET /p · POST /p/{name}/{action}\n```\n\n" +
-		"`harness.ReadHandler(store, opts)` is the HTTP form of reads. It serves `GET /a/{id}` through the code of x.\n\n" +
+		"`httpapi.ReadHandler(store, opts)` is the HTTP form of reads. It serves `GET /a/{id}` through the code of x.\n\n" +
 		"`start`, `stop`, and `restart` reply with the status.\n\n### Public packages\n\n| Package | Owns |\n| --- | --- |\n| `harness` | x |\n| `harness/config` | y |\n\n### Next\n| `harness/other` | z |\n"
 	routes, err := SpecRoutes(spec)
 	if err != nil || strings.Join(routes, ",") != "GET /a/{id},GET /p,POST /p/{name}/restart,POST /p/{name}/start,POST /p/{name}/stop" {

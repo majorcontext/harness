@@ -13,6 +13,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // pluginFixture builds the wire-level plugin of the contract suite.
@@ -29,7 +30,7 @@ func pluginRuntime(t *testing.T, dir string, plugins []config.PluginSpec, tools 
 	t.Helper()
 	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
 	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Tools: tools, WorkDir: dir, Config: config.Config{
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Tools: tools, WorkDir: dir, Config: config.Config{
 		Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
 			BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}},
 			"claude-code": {Type: config.TypeClaudeCodeCLI}},

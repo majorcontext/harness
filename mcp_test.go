@@ -14,10 +14,11 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestAllowedMCPToolsOfAnOwnedLoopBackend(t *testing.T) {
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: config.Config{
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: config.Config{
 		Providers:  map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI}},
 		MCPServers: map[string]config.MCPServerSpec{"weather": {URL: "http://127.0.0.1:1"}}}})
 	if err != nil {
@@ -66,7 +67,7 @@ func mcpRuntime(t *testing.T, f *family, servers map[string]*harnesstest.MCPServ
 	for name, s := range servers {
 		cfg.MCPServers[name] = config.MCPServerSpec{URL: s.URL()}
 	}
-	return familyRuntime(t, harness.NewMemStore(), f, nil, cfg, "")
+	return familyRuntime(t, store.NewMemStore(), f, nil, cfg, "")
 }
 
 // elapse waits d on the fake clock of a synctest bubble and lets every goroutine settle.

@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestContractRuntimeTurn(t *testing.T) {
@@ -41,7 +42,7 @@ func TestContractRuntimeTurn(t *testing.T) {
 func turnRuntime(t *testing.T, steps ...harnesstest.Step) (*harness.Runtime, *harness.Session, *harnesstest.Server) {
 	t.Helper()
 	fake := harnesstest.NewChat(t, steps...)
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TURN_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

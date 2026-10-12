@@ -1,4 +1,4 @@
-package harness
+package store
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"slices"
 	"sort"
 	"sync"
+
+	"github.com/majorcontext/harness"
 )
 
 // MemStore is an in-memory Store for tests.
@@ -45,7 +47,7 @@ func (m *MemStore) Append(ctx context.Context, session string, expectedSeq uint6
 		have = uint64(len(s.records))
 	}
 	if have != expectedSeq {
-		return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, have, expectedSeq)
+		return fmt.Errorf("%w: session %q has %d records, append at %d", harness.ErrConflict, session, have, expectedSeq)
 	}
 	s := m.session(session)
 	for _, r := range records {
@@ -64,7 +66,7 @@ func (m *MemStore) session(id string) *memSession {
 }
 
 // Read implements Store.
-func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]Record, error) {
+func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]harness.Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -73,10 +75,10 @@ func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, li
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []Record
+	var out []harness.Record
 	if s := m.sessions[session]; s != nil {
 		for i := afterSeq; i < uint64(len(s.records)) && len(out) < limit; i++ {
-			out = append(out, Record{Seq: i + 1, Data: slices.Clone(s.records[i])})
+			out = append(out, harness.Record{Seq: i + 1, Data: slices.Clone(s.records[i])})
 		}
 	}
 	return out, nil

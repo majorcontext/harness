@@ -12,6 +12,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/store"
 )
 
 // probeBound bounds the probe of each plugin.
@@ -65,7 +66,7 @@ func pluginProbeCmd(args []string) error {
 		return err
 	}
 	defaultPluginCache(cfg)
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv})
 	if err != nil {
 		return err
 	}

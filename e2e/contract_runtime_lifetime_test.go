@@ -10,6 +10,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // leased is an Owner whose one grant ends when the test closes lost.
@@ -22,7 +23,7 @@ func (l leased) Release(context.Context) error                              { re
 
 func lifetimeRuntime(t *testing.T, owner harness.Owner) *harness.Runtime {
 	t.Helper()
-	return lifetimeRuntimeOn(t, harness.NewMemStore(), owner)
+	return lifetimeRuntimeOn(t, store.NewMemStore(), owner)
 }
 
 func lifetimeRuntimeOn(t *testing.T, st harness.Store, owner harness.Owner) *harness.Runtime {
@@ -245,7 +246,7 @@ func submitAfterArming(t *testing.T, st *flaky) *harness.Session {
 }
 
 func rowAnAppendConflictStopsTheSessionWithCauseOwnershipLost(t *testing.T) {
-	st := &flaky{Store: harness.NewMemStore(), err: harness.ErrConflict}
+	st := &flaky{Store: store.NewMemStore(), err: harness.ErrConflict}
 	s := submitAfterArming(t, st)
 	for _, w := range []error{harness.ErrOwnershipLost, harness.ErrSessionNotOwned, harness.ErrConflict} {
 		if !errors.Is(s.Err(), w) {
@@ -256,7 +257,7 @@ func rowAnAppendConflictStopsTheSessionWithCauseOwnershipLost(t *testing.T) {
 
 func rowAStoreFailureStopsTheSessionWithNotOwnedAndTheFailure(t *testing.T) {
 	disk := errors.New("disk full")
-	st := &flaky{Store: harness.NewMemStore(), err: disk}
+	st := &flaky{Store: store.NewMemStore(), err: disk}
 	s := submitAfterArming(t, st)
 	for _, w := range []error{harness.ErrSessionNotOwned, disk} {
 		if !errors.Is(s.Err(), w) {
@@ -279,7 +280,7 @@ func (r rejecting) Deliver(context.Context, protocol.SyncBatch) (protocol.SyncAc
 
 func syncedSession(t *testing.T, sync harness.Sync) *harness.Session {
 	t.Helper()
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Sync: sync, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Sync: sync, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // callTool records each Call that it runs and each Call that it keys.
@@ -48,7 +49,7 @@ func TestContractRuntimeToolCall(t *testing.T) {
 			{ID: "call_1", Name: "probe", Input: map[string]any{"n": 1}}, {ID: "call_2", Name: "probe", Input: map[string]any{"n": 2}}}}},
 		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("probe"), Reply: harnesstest.Reply{Text: "ok"}})
 	tool := &callTool{}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{tool}, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{tool}, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func (d *runtimeDriver) MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult {
@@ -89,7 +90,7 @@ func (d *runtimeDriver) openAll(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
 	defer cancel()
-	st := harness.NewDiskStore(d.store)
+	st := store.NewDiskStore(d.store)
 	for after := ""; ; {
 		ids, err := st.Sessions(ctx, after, 100)
 		if err != nil {

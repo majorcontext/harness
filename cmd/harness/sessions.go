@@ -11,6 +11,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // sessionRow is a session of `harness sessions --json`.
@@ -36,7 +37,7 @@ func sessionsCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	store := harness.NewDiskStore(dir)
+	store := store.NewDiskStore(dir)
 	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, Version: version, Getenv: os.Getenv})
 	if err != nil {
 		return err

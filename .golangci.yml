@@ -76,6 +76,39 @@ linters:
           deny:
             - pkg: github.com/majorcontext/harness/internal/message
               desc: only backends, providers, plugins, the prompt, and the wire helpers imageclamp and pluginsrc use the provider-wire conversation model
+        store-leaf:
+          files:
+            - "**/harness/store/**"
+            - "**/store/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness
+            - github.com/majorcontext/harness/internal/storecheck
+            - github.com/majorcontext/harness/store
+            - github.com/majorcontext/harness/storetest
+        httpsync-leaf:
+          files:
+            - "**/httpsync/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness
+            - github.com/majorcontext/harness/config
+            - github.com/majorcontext/harness/httpsync
+            - github.com/majorcontext/harness/protocol
+            - github.com/majorcontext/harness/store
+        httpapi-leaf:
+          files:
+            - "**/httpapi/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness
+            - github.com/majorcontext/harness/httpapi
+            - github.com/majorcontext/harness/internal/listing
+            - github.com/majorcontext/harness/internal/server
+            - github.com/majorcontext/harness/protocol
         config-leaf:
           files:
             - "**/config/**"

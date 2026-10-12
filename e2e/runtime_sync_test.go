@@ -15,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // recordSync acknowledges each batch and keeps its blobs.
@@ -39,7 +40,7 @@ func TestSyncCarriesTheAttachmentOfAnInput(t *testing.T) {
 	t.Setenv("HARNESS_E2E_KEY", "k")
 	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "seen"}})
 	rec := &recordSync{blobs: map[string][]byte{}}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Sync: rec, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Sync: rec, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +80,7 @@ func TestSyncCarriesTheBlobOfARetainedResult(t *testing.T) {
 		harnesstest.Step{Name: "bash", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: ftArgs("command", seq5000)}}}},
 		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ok"}})
 	rec := &recordSync{blobs: map[string][]byte{}}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Sync: rec, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Sync: rec, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +128,7 @@ func TestSyncCarriesTheImageOfAToolResult(t *testing.T) {
 		harnesstest.Step{Name: "read", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "read_file", Input: ftArgs("path", "a.png")}}}},
 		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("read_file"), Reply: harnesstest.Reply{Text: "ok"}})
 	rec := &recordSync{blobs: map[string][]byte{}}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Sync: rec, WorkDir: dir, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Sync: rec, WorkDir: dir, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

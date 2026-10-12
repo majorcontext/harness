@@ -14,6 +14,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // watch reads the events of s after seq after, submits in at the first
@@ -99,7 +100,7 @@ func TestEventsLiveFrames(t *testing.T) {
 			out.Delta("backend-id", turn.Delta{Type: protocol.LogPartText, Text: "z"})
 			return fmt.Errorf("%w: flaky", turn.ErrRetryable)
 		}
-		r := runtime(t, harness.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
+		r := runtime(t, store.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
 		s := create(t, r)
 		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
 			"~4 item.started i1", "~4 item.delta i1 text z", "~4 status retrying 1", "~4 status running",
@@ -128,7 +129,7 @@ func compactingRuntime(t *testing.T, summary func(turn.Sink) error) *harness.Ses
 	}
 	reply := func(out turn.Sink) error { return out.Item(say("ok")) }
 	b := windowed{&scripted{steps: []func(turn.Sink) error{reply, full, summary, reply}}}
-	r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Config: config.Config{CompactionKeepTurns: 1}}, b)
+	r, err := harness.NewWithBackend(harness.Options{Store: store.NewMemStore(), Config: config.Config{CompactionKeepTurns: 1}}, b)
 	if err != nil {
 		t.Fatal(err)
 	}

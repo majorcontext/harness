@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // A Claude Code turn with an allowed list runs the MCP tools of the runtime
@@ -51,7 +52,7 @@ func TestClaudeCodeGetsTheImageOfAnMCPTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), WorkDir: dir, Config: *cfg})
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), WorkDir: dir, Config: *cfg})
 	if err != nil {
 		t.Fatal(err)
 	}

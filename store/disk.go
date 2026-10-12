@@ -1,4 +1,4 @@
-package harness
+package store
 
 import (
 	"bufio"
@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/majorcontext/harness"
 )
 
 // DiskStore keeps each session under <root>/<session>: records in log.jsonl,
@@ -191,7 +193,7 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 }
 
 func conflict(session string, head, at uint64) error {
-	return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, head, at)
+	return fmt.Errorf("%w: session %q has %d records, append at %d", harness.ErrConflict, session, head, at)
 }
 
 // writeLocked locks the log file exclusively, checks the head, appends, and
@@ -263,7 +265,7 @@ func appendSynced(f *os.File, s *diskSession, records [][]byte) error {
 
 // Read implements Store. It reads from the indexed line at or before
 // afterSeq+1, up to the whole lines of the head it took.
-func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]Record, error) {
+func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]harness.Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -276,7 +278,7 @@ func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, l
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	var out []Record
+	var out []harness.Record
 	r := bufio.NewReader(io.NewSectionReader(f, off, end-off))
 	for seq := first; seq <= head && len(out) < limit; seq++ {
 		line, err := r.ReadBytes('\n')
@@ -284,7 +286,7 @@ func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, l
 			return nil, err
 		}
 		if seq > afterSeq {
-			out = append(out, Record{Seq: seq, Data: line[:len(line)-1]})
+			out = append(out, harness.Record{Seq: seq, Data: line[:len(line)-1]})
 		}
 	}
 	return out, nil

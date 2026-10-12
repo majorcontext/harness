@@ -10,6 +10,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestContractRuntimeSyncReceiverContract(t *testing.T) {
@@ -38,7 +39,7 @@ func TestContractRuntimeSyncReceiverContract(t *testing.T) {
 func finalRejection(t *testing.T, status int, code protocol.Code, want error) {
 	t.Helper()
 	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) { return status, code })
-	r, err := newWired(harness.Options{Store: harness.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(harness.Options{Store: store.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func rowSyncServerErrorIsSentAgain(t *testing.T) {
 		}
 		return 0, ""
 	})
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +110,7 @@ func rowSyncSplitsABatchUnderTheBodyCap(t *testing.T) {
 		}
 		return 0, ""
 	})
-	fake, st := harnesstest.NewChat(t, syncReply, syncReply), harness.NewMemStore()
+	fake, st := harnesstest.NewChat(t, syncReply, syncReply), store.NewMemStore()
 	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, fake.URL(), nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +160,7 @@ func awaitTurns(t *testing.T, s *harness.Session, n int) {
 }
 
 func rowCatchUpConflictSkipsTheSessionAndReportsIt(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	seedSessions(t, st, "s1", "s2")
 	rcv := newSyncReceiver(t, func(_ int, b protocol.SyncBatch) (int, protocol.Code) {
 		if b.Session == "s1" {

@@ -410,7 +410,7 @@ type wireTransport struct {
 	base http.RoundTripper
 	rep  *wireReport
 	// readOnly marks a host that serves only the read routes, such as
-	// harness.ReadHandler.
+	// httpapi.ReadHandler.
 	readOnly bool
 }
 

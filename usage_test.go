@@ -7,11 +7,12 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestViewsShareNoSubscriptionUsageOrLastTurnWithTheirCaller(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st, f := harness.NewMemStore(), newFake()
+		st, f := store.NewMemStore(), newFake()
 		r := runtime(t, st, f)
 		s := create(t, r)
 		submit(t, s, text("a", "hi"))

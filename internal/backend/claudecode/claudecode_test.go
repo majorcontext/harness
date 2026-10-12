@@ -16,6 +16,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 var (
@@ -137,7 +138,7 @@ const toolsInit = "FAKE_CLAUDE_INIT_TOOLS"
 func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 	for _, name := range []string{"bash", "nope"} {
 		t.Run(name, func(t *testing.T) {
-			r := claudeRuntime(t, harness.NewMemStore(), lookup{})
+			r := claudeRuntime(t, store.NewMemStore(), lookup{})
 			defer closeRuntime(t, r)
 			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{"Read", name}})
 			if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -149,7 +150,7 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 
 func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
 	for _, allowed := range [][]string{nil, {"Read"}} {
-		r := claudeRuntime(t, harness.NewMemStore(), newProbe("Read", false))
+		r := claudeRuntime(t, store.NewMemStore(), newProbe("Read", false))
 		defer closeRuntime(t, r)
 		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
 		if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -215,7 +216,7 @@ func wantLog(t *testing.T, st harness.Store, after uint64, want ...string) {
 
 func TestClaudeCodeStreamsDeltas(t *testing.T) {
 	fakeClaude(t, "thinking_reserved_id")
-	r := claudeRuntime(t, harness.NewMemStore())
+	r := claudeRuntime(t, store.NewMemStore())
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	var got []string
@@ -272,7 +273,7 @@ func TestClaudeCodeAppliesTheAllowedToolsOfASession(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			argvLog := fakeClaude(t, tc.mode, tc.env...)
-			st := harness.NewMemStore()
+			st := store.NewMemStore()
 			r := claudeRuntime(t, st)
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))

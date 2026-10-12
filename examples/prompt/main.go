@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: ".", Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: ".", Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}

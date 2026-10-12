@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"sync"
 	"testing"
@@ -12,7 +11,9 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpsync"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func recs(data ...string) [][]byte {
@@ -36,72 +37,11 @@ func rawLog(t *testing.T, st harness.Store) []string {
 	return out
 }
 
-func TestApplySync(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		b       protocol.SyncBatch
-		want    uint64
-		wantErr error
-		log     []string
-	}{
-		{"a batch at head+1 is appended with its blobs",
-			protocol.SyncBatch{Epoch: 2, FromSeq: 3, Records: recs("r3", "r4"), Blobs: map[string][]byte{"k": []byte("v")}},
-			4, nil, []string{"r1", "r2", "r3", "r4"}},
-		{"a newer epoch is accepted", protocol.SyncBatch{Epoch: 3, FromSeq: 3, Records: recs("r3")},
-			3, nil, []string{"r1", "r2", "r3"}},
-		{"a retry with the same bytes is a duplicate", protocol.SyncBatch{Epoch: 2, FromSeq: 1, Records: recs("r1", "r2")},
-			2, nil, []string{"r1", "r2"}},
-		{"a retry with other bytes is rejected", protocol.SyncBatch{Epoch: 2, FromSeq: 2, Records: recs("x2")},
-			0, harness.ErrConflict, []string{"r1", "r2"}},
-		{"a gap is a seq mismatch", protocol.SyncBatch{Epoch: 2, FromSeq: 4, Records: recs("r4")},
-			2, nil, []string{"r1", "r2"}},
-		{"an overlap is a seq mismatch", protocol.SyncBatch{Epoch: 2, FromSeq: 2, Records: recs("r2", "r3")},
-			2, nil, []string{"r1", "r2"}},
-		{"a batch that carries the reserved epoch key is rejected",
-			protocol.SyncBatch{Epoch: 3, FromSeq: 3, Records: recs("r3"), Blobs: map[string][]byte{"sync-epoch": []byte("1")}},
-			0, harness.ErrInvalidRequest, []string{"r1", "r2"}},
-		{"an older epoch is stale", protocol.SyncBatch{Epoch: 1, FromSeq: 3, Records: recs("r3")},
-			0, harness.ErrStaleEpoch, []string{"r1", "r2"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			st := harness.NewMemStore()
-			seed := protocol.SyncBatch{Epoch: 2, Session: "s1", FromSeq: 1, Records: recs("r1", "r2")}
-			if ack, err := harness.ApplySync(bg, st, seed); err != nil || ack.Head != 2 {
-				t.Fatalf("seed ApplySync = %+v, %v", ack, err)
-			}
-			tc.b.Session = "s1"
-			ack, err := harness.ApplySync(bg, st, tc.b)
-			if !errors.Is(err, tc.wantErr) || (err == nil) != (tc.wantErr == nil) {
-				t.Fatalf("ApplySync error = %v, want %v", err, tc.wantErr)
-			}
-			if err == nil && ack.Head != tc.want {
-				t.Fatalf("ApplySync = %+v, want head %d", ack, tc.want)
-			}
-			if got := rawLog(t, st); !slices.Equal(got, tc.log) {
-				t.Fatalf("receiver log = %q, want %q", got, tc.log)
-			}
-			for k, v := range tc.b.Blobs {
-				if err != nil {
-					break
-				}
-				rc, err := st.GetBlob(bg, "s1", k)
-				if err != nil {
-					t.Fatal(err)
-				}
-				got, _ := io.ReadAll(rc)
-				if string(got) != string(v) {
-					t.Fatalf("blob %s = %q, want %q", k, got, v)
-				}
-			}
-		})
-	}
-}
-
 // replica is a Sync that applies each batch to st with ApplySync. The next
 // fault applies to one delivery: "lose" applies the batch and fails, "drop"
 // acknowledges the batch without applying it, and "hold" waits for hold.
 type replica struct {
-	st     *harness.MemStore
+	st     *store.MemStore
 	hold   chan struct{}
 	mu     sync.Mutex
 	faults []string
@@ -124,7 +64,7 @@ func (r *replica) Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.S
 	}
 	ack, err := protocol.SyncAck{Head: b.FromSeq + uint64(len(b.Records)) - 1}, error(nil)
 	if fault != "drop" {
-		ack, err = harness.ApplySync(ctx, r.st, b)
+		ack, err = httpsync.ApplySync(ctx, r.st, b)
 	}
 	if fault == "lose" && err == nil {
 		err = errors.New("lost")
@@ -168,7 +108,7 @@ func TestSyncReplicatesTheLog(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				st, f, rep := harness.NewMemStore(), newFake(), &replica{st: harness.NewMemStore(), faults: tc.faults}
+				st, f, rep := store.NewMemStore(), newFake(), &replica{st: store.NewMemStore(), faults: tc.faults}
 				r := syncRuntime(t, st, rep, f)
 				s := create(t, r)
 				synctest.Wait()
@@ -191,7 +131,7 @@ func TestSyncReplicatesTheLog(t *testing.T) {
 
 func TestAReplicaResumesTheBackendState(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st, f1, rep := harness.NewMemStore(), newFake(), &replica{st: harness.NewMemStore()}
+		st, f1, rep := store.NewMemStore(), newFake(), &replica{st: store.NewMemStore()}
 		f1.save = "v1"
 		r1 := syncRuntime(t, st, rep, f1)
 		submit(t, create(t, r1), text("a", "hi"))
@@ -212,11 +152,11 @@ func TestAReplicaResumesTheBackendState(t *testing.T) {
 
 func TestStaleEpochStopsTheSessionWithoutAnAppend(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		rep := &replica{st: harness.NewMemStore()}
-		if _, err := harness.ApplySync(bg, rep.st, protocol.SyncBatch{Epoch: 2, Session: "s1", FromSeq: 1}); err != nil {
+		rep := &replica{st: store.NewMemStore()}
+		if _, err := httpsync.ApplySync(bg, rep.st, protocol.SyncBatch{Epoch: 2, Session: "s1", FromSeq: 1}); err != nil {
 			t.Fatal(err)
 		}
-		st, f := harness.NewMemStore(), newFake()
+		st, f := store.NewMemStore(), newFake()
 		r := syncRuntime(t, st, rep, f)
 		s := create(t, r)
 		synctest.Wait()
@@ -242,8 +182,8 @@ func TestHandoffWaitsForTheFinalAck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				st, f := harness.NewMemStore(), newFake()
-				rep := &replica{st: harness.NewMemStore(), hold: make(chan struct{}), faults: []string{"", "hold"}}
+				st, f := store.NewMemStore(), newFake()
+				rep := &replica{st: store.NewMemStore(), hold: make(chan struct{}), faults: []string{"", "hold"}}
 				r := syncRuntime(t, st, rep, f)
 				s := create(t, r)
 				synctest.Wait()
@@ -274,8 +214,8 @@ func TestHandoffWaitsForTheFinalAck(t *testing.T) {
 func TestOwnershipLossEndsABlockedDelivery(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		k := killable{lost: make(chan struct{})}
-		rep := &replica{st: harness.NewMemStore(), hold: make(chan struct{}), faults: []string{"hold"}}
-		r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: k, Sync: rep}, newFake())
+		rep := &replica{st: store.NewMemStore(), hold: make(chan struct{}), faults: []string{"hold"}}
+		r, err := harness.NewWithBackend(harness.Options{Store: store.NewMemStore(), Owner: k, Sync: rep}, newFake())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -289,12 +229,12 @@ func TestOwnershipLossEndsABlockedDelivery(t *testing.T) {
 
 func TestADivergedReceiverStopsTheSession(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		rep := &replica{st: harness.NewMemStore()}
+		rep := &replica{st: store.NewMemStore()}
 		other := protocol.SyncBatch{Epoch: 1, Session: "s1", FromSeq: 1, Records: recs("x1", "x2", "x3")}
-		if _, err := harness.ApplySync(bg, rep.st, other); err != nil {
+		if _, err := httpsync.ApplySync(bg, rep.st, other); err != nil {
 			t.Fatal(err)
 		}
-		st, f := harness.NewMemStore(), newFake()
+		st, f := store.NewMemStore(), newFake()
 		r := syncRuntime(t, st, rep, f)
 		s := create(t, r)
 		synctest.Wait()

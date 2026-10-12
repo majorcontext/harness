@@ -11,8 +11,10 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func typed(id, s string) protocol.Input {
@@ -33,7 +35,7 @@ func commandLine(kind string, d json.RawMessage) string {
 
 func TestACommandThatPanicsFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st := harness.NewMemStore()
+		st := store.NewMemStore()
 		r := runtime(t, st, newFake())
 		s := create(t, r)
 		harness.PanicIn(t, command.OpStatus)
@@ -64,7 +66,7 @@ func TestACommandThatPanicsFails(t *testing.T) {
 }
 
 func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
-	r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore()}, newFake())
+	r, err := harness.NewWithBackend(harness.Options{Store: store.NewMemStore()}, newFake())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +81,7 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/commands", nil))
+	httpapi.Handler(r).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/commands", nil))
 	var got protocol.Commands
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("GET /commands = %d %v", rec.Code, err)
@@ -89,7 +91,7 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 			continue
 		}
 		rec := httptest.NewRecorder()
-		r.Handler().ServeHTTP(rec, httptest.NewRequest(c.Method, strings.ReplaceAll(c.Path, "{id}", "nope"), nil))
+		httpapi.Handler(r).ServeHTTP(rec, httptest.NewRequest(c.Method, strings.ReplaceAll(c.Path, "{id}", "nope"), nil))
 		if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound && strings.Contains(rec.Body.String(), string(protocol.CodeInvalidRequest)) {
 			t.Errorf("%s %s has no route: %d %s", c.Method, c.Path, rec.Code, rec.Body)
 		}
@@ -98,7 +100,7 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 
 func TestCloseRefusesATypedCommand(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st, f := &held{Store: harness.NewMemStore(), hold: make(chan struct{})}, newFake()
+		st, f := &held{Store: store.NewMemStore(), hold: make(chan struct{})}, newFake()
 		r := runtime(t, st, f)
 		s := create(t, r)
 		submit(t, s, text("busy", "work"))

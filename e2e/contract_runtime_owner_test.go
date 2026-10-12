@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpsync"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // newWired builds a Runtime as cmd/harness does: the Owner and the Sync come
@@ -22,7 +24,7 @@ func newWired(opts harness.Options) (*harness.Runtime, error) {
 		opts.Owner = harness.NewLocalOwner(uint64(max(opts.Config.OwnerEpoch, 1)))
 	}
 	if opts.Sync == nil && opts.Config.Sync != nil {
-		opts.Sync = harness.NewHTTPSync(*opts.Config.Sync)
+		opts.Sync = httpsync.New(*opts.Config.Sync)
 	}
 	return harness.New(opts)
 }
@@ -70,7 +72,7 @@ func TestContractRuntimeOwner(t *testing.T) {
 }
 
 func rowAHeldSessionFailsOpenWithSessionHeldAndSessionNotOwned(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	seedSessions(t, st, "s1")
 	r := lifetimeRuntimeOn(t, st, heldOwner{held: map[string]bool{"s1": true}})
 	_, err := r.Open(t.Context(), "s1")
@@ -84,10 +86,10 @@ func rowAHeldSessionFailsOpenWithSessionHeldAndSessionNotOwned(t *testing.T) {
 
 func rowCatchUpSkipsASessionThatAnotherOwnerHolds(t *testing.T) {
 	rcv := newSyncReceiver(t, nil)
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	seedSessions(t, st, "s1", "s2")
 	cfg := syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: cfg, Sync: harness.NewHTTPSync(*cfg.Sync), Owner: heldOwner{held: map[string]bool{"s1": true}}})
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: cfg, Sync: httpsync.New(*cfg.Sync), Owner: heldOwner{held: map[string]bool{"s1": true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func rowTheLocalOwnerGrantsASessionOnceAtATime(t *testing.T) {
 
 func rowNewReadsNeitherOwnerEpochNorSyncFromTheConfig(t *testing.T) {
 	rcv := newSyncReceiver(t, nil)
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: syncConfig(t, 7, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +165,7 @@ func rowNewReadsNeitherOwnerEpochNorSyncFromTheConfig(t *testing.T) {
 }
 
 func rowARunTokenWithoutAServeURLIsRefused(t *testing.T) {
-	_, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), RunToken: "tok"})
+	_, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), RunToken: "tok"})
 	if err == nil {
 		t.Error("New = nil, want an error")
 	}

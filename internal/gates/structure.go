@@ -67,7 +67,7 @@ type nodeRule struct {
 var storeWriters = []string{
 	"internal/session/actor.go#appendCtx", "internal/session/actor.go#fence",
 	"runtime.go#Append", "runtime.go#PutBlob",
-	"sync.go#ApplySync", "sync.go#fenceEpoch",
+	"httpsync/apply.go#ApplySync", "httpsync/apply.go#fenceEpoch",
 	"cmd/harness/storelog.go#Append", "cmd/harness/storelog.go#PutBlob",
 	"storetest/",
 }
@@ -113,7 +113,7 @@ var nodeRules = []nodeRule{
 		name:   "single_error_envelope",
 		detail: "only internal/server, the serve token check, and the sentinel errors build the error body (spec: Errors)",
 		match:  literalOf(modulePath+"/protocol", "ErrorBody", "Error"),
-		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer", "runtime.go#", "internal/session/actor.go#", "internal/session/actor.go#notOwned", "internal/session/compact.go#", "internal/session/requests.go#", "internal/session/sync.go#", "internal/backend/router.go#"},
+		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer", "runtime.go#", "box.go#processError", "internal/session/actor.go#", "internal/session/actor.go#notOwned", "internal/session/compact.go#", "internal/session/requests.go#", "internal/session/sync.go#", "internal/backend/router.go#"},
 	},
 	{
 		name:   "single_route_mount",

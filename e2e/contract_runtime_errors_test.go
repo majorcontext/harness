@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestContractRuntimeErrors(t *testing.T) {
@@ -44,8 +46,8 @@ func errorBodyOf(t *testing.T, h http.Handler, method, path string) (int, *proto
 }
 
 func rowAnErrorBodyDecodesToAnErrorThatMatchesTheSentinelOfItsCode(t *testing.T) {
-	r := lifetimeRuntimeOn(t, harness.NewMemStore(), nil)
-	status, remote := errorBodyOf(t, r.Handler(), http.MethodGet, "/sessions/nope")
+	r := lifetimeRuntimeOn(t, store.NewMemStore(), nil)
+	status, remote := errorBodyOf(t, httpapi.Handler(r), http.MethodGet, "/sessions/nope")
 	if status != http.StatusNotFound || !errors.Is(remote, harness.ErrSessionNotFound) {
 		t.Errorf("status = %d, error = %v; want 404 and a match for ErrSessionNotFound", status, remote)
 	}
@@ -78,6 +80,7 @@ func rowEverySentinelHasTheStatusOfItsCode(t *testing.T) {
 		{harness.ErrModelUnavailable, protocol.CodeModelUnavailable, http.StatusConflict},
 		{harness.ErrDraining, protocol.CodeDraining, http.StatusServiceUnavailable},
 		{harness.ErrBlobNotFound, protocol.CodeBlobNotFound, http.StatusNotFound},
+		{harness.ErrProcessNotFound, protocol.CodeProcessNotFound, http.StatusNotFound},
 		{harness.ErrUnreplayable, protocol.CodeSessionUnreplayable, http.StatusInternalServerError},
 		{harness.ErrConflict, protocol.CodeSyncConflict, http.StatusInternalServerError},
 		{harness.ErrStaleEpoch, protocol.CodeStaleEpoch, http.StatusInternalServerError},
@@ -96,7 +99,7 @@ func rowEverySentinelHasTheStatusOfItsCode(t *testing.T) {
 }
 
 func rowALogThatDoesNotReplayFailsWithSessionUnreplayable(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	if err := st.Append(t.Context(), "bad", 0, []byte("not an envelope")); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +107,7 @@ func rowALogThatDoesNotReplayFailsWithSessionUnreplayable(t *testing.T) {
 	if _, err := r.Open(t.Context(), "bad"); !errors.Is(err, harness.ErrUnreplayable) {
 		t.Errorf("Open = %v, want ErrUnreplayable", err)
 	}
-	status, remote := errorBodyOf(t, r.Handler(), http.MethodGet, "/sessions/bad")
+	status, remote := errorBodyOf(t, httpapi.Handler(r), http.MethodGet, "/sessions/bad")
 	if status != http.StatusInternalServerError || !errors.Is(remote, harness.ErrUnreplayable) {
 		t.Errorf("GET /sessions/bad = %d %v, want 500 and a match for ErrUnreplayable", status, remote)
 	}
@@ -113,7 +116,7 @@ func rowALogThatDoesNotReplayFailsWithSessionUnreplayable(t *testing.T) {
 func rowNewRefusesABadOptionWithAPlainError(t *testing.T) {
 	for name, opts := range map[string]harness.Options{
 		"no store":              {},
-		"a token without a url": {Store: harness.NewMemStore(), RunToken: "t"},
+		"a token without a url": {Store: store.NewMemStore(), RunToken: "t"},
 	} {
 		_, err := harness.New(opts)
 		if err == nil || errors.Is(err, harness.ErrInvalidRequest) || protocol.CodeOf(err) != protocol.CodeInternal {
@@ -123,9 +126,9 @@ func rowNewRefusesABadOptionWithAPlainError(t *testing.T) {
 }
 
 func rowAStopCauseReachesAClientInTheErrorFrameOfTheEventStream(t *testing.T) {
-	r := lifetimeRuntimeOn(t, harness.NewMemStore(), nil)
+	r := lifetimeRuntimeOn(t, store.NewMemStore(), nil)
 	s := lifetimeSession(t, r)
-	srv := httptest.NewServer(r.Handler())
+	srv := httptest.NewServer(httpapi.Handler(r))
 	t.Cleanup(srv.Close)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/sessions/s1/events", nil)
 	if err != nil {

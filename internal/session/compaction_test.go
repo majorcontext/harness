@@ -14,6 +14,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 var bg = context.Background()
@@ -133,7 +134,7 @@ func TestHandoffDuringCompaction(t *testing.T) {
 				steps = append(steps, compactSummary("summary again", harnesstest.Reply{Text: "sum"}))
 			}
 			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
-			st := harness.NewMemStore()
+			st := store.NewMemStore()
 			hold := holdNth{n: 4, seen: new(atomic.Int32), held: make(chan struct{}), finish: tc.finish}
 			r1, sess := openCompacting(t, s, st, 1, hold)
 			ask(t, sess, "alpha", "bravo", "charlie")

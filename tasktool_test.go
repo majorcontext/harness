@@ -7,8 +7,8 @@ import (
 
 	"github.com/majorcontext/harness/protocol"
 
-	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/store"
 )
 
 // onChild returns the arguments of action on the child, with more as key, value pairs.
@@ -44,7 +44,7 @@ func TestTaskActions(t *testing.T) {
 					}
 					return spawn(p)
 				}
-				st := harness.NewMemStore()
+				st := store.NewMemStore()
 				r := familyRuntime(t, st, f, nil, tc.cfg, t.TempDir())
 				s := create(t, r)
 				submit(t, s, text("a", "delegate"))
@@ -85,7 +85,7 @@ func TestCancelOfAChildStopsTheGrandchildAndTheChildStartsNoTurn(t *testing.T) {
 		f := &family{answer: generations(block, func() protocol.LogMessage {
 			return calls("task", onChild("cancel", "session_id", kid))
 		})}
-		st := harness.NewMemStore()
+		st := store.NewMemStore()
 		r := familyRuntime(t, st, f, nil, config.Config{}, t.TempDir())
 		s := create(t, r)
 		submit(t, s, text("a", "delegate"))
@@ -116,7 +116,7 @@ func TestTaskStatusReachesADescendantBelowALoweredMaxTaskDepth(t *testing.T) {
 			}
 			return generations(done, nil)(p)
 		}
-		st, dir := harness.NewMemStore(), t.TempDir()
+		st, dir := store.NewMemStore(), t.TempDir()
 		r1 := familyRuntime(t, st, &family{answer: answer}, nil, config.Config{}, dir)
 		submit(t, create(t, r1), text("a", "delegate"))
 		kid := children(t, r1)[0].ID

@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // rollDice is a harness.Tool: a spec for the model and a function to run.
@@ -51,7 +52,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}

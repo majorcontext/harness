@@ -13,7 +13,9 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // killable is an Owner whose one grant ends when the test closes lost.
@@ -117,7 +119,7 @@ func TestLostStopsTheActorBeforeItsNextAppend(t *testing.T) {
 
 func TestCreateReturnsTheStoreError(t *testing.T) {
 	boom := errors.New("disk full")
-	r := runtime(t, &held{Store: harness.NewMemStore(), err: boom}, newFake())
+	r := runtime(t, &held{Store: store.NewMemStore(), err: boom}, newFake())
 	_, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model"})
 	if !errors.Is(err, boom) || errors.Is(err, harness.ErrSessionNotOwned) {
 		t.Fatalf("Create = %v, want the store error only", err)
@@ -128,7 +130,7 @@ func TestCloseWithAnEndedContextDoesNotWaitForAStuckTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFake()
 		f.stuck = make(chan struct{})
-		st := harness.NewMemStore()
+		st := store.NewMemStore()
 		r := runtime(t, st, f)
 		submit(t, create(t, r), text("a", "hi"))
 		<-f.runs
@@ -147,7 +149,7 @@ func TestCloseWithAnEndedContextNeverHandsOff(t *testing.T) {
 	for range 300 {
 		synctest.Test(t, func(t *testing.T) {
 			f := newFake()
-			st := harness.NewMemStore()
+			st := store.NewMemStore()
 			r := runtime(t, st, f)
 			submit(t, create(t, r), text("a", "hi"))
 			<-f.runs
@@ -223,7 +225,7 @@ func TestOpenViewReadsWithoutAppending(t *testing.T) {
 
 func TestViewsReturnACopyOfQueued(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st, f := harness.NewMemStore(), newFake()
+		st, f := store.NewMemStore(), newFake()
 		r := runtime(t, st, f)
 		s := create(t, r)
 		submit(t, s, text("a", "hi"))
@@ -249,7 +251,7 @@ func TestViewsReturnACopyOfQueued(t *testing.T) {
 
 func TestOpenViewEventsEndAtTheHeadItRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st, f := harness.NewMemStore(), newFake()
+		st, f := store.NewMemStore(), newFake()
 		r := runtime(t, st, f)
 		s := create(t, r)
 		v, err := harness.OpenView(bg, st, "s1")
@@ -284,13 +286,13 @@ func (b blocking) Acquire(ctx context.Context, _ string) (harness.Ownership, err
 func TestCloseEndsAnInputThatWaitsForOwnership(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := blocking{entered: make(chan struct{})}
-		r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: b}, newFake())
+		r, err := harness.NewWithBackend(harness.Options{Store: store.NewMemStore(), Owner: b}, newFake())
 		if err != nil {
 			t.Fatal(err)
 		}
 		rec, done := httptest.NewRecorder(), make(chan struct{})
 		go func() {
-			r.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", strings.NewReader(`{"id":"a","parts":[{"type":"text","text":"hi"}]}`)))
+			httpapi.Handler(r).ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", strings.NewReader(`{"id":"a","parts":[{"type":"text","text":"hi"}]}`)))
 			close(done)
 		}()
 		<-b.entered
@@ -313,7 +315,7 @@ func (o deniedOwner) Acquire(context.Context, string) (harness.Ownership, error)
 
 func TestAnOwnerRefusalIsSessionNotOwned(t *testing.T) {
 	boom := errors.New("lease held elsewhere")
-	r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: deniedOwner{boom}}, newFake())
+	r, err := harness.NewWithBackend(harness.Options{Store: store.NewMemStore(), Owner: deniedOwner{boom}}, newFake())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +324,7 @@ func TestAnOwnerRefusalIsSessionNotOwned(t *testing.T) {
 	}
 	body := strings.NewReader(`{"id":"a","parts":[{"type":"text","text":"hi"}]}`)
 	rec := httptest.NewRecorder()
-	r.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", body))
+	httpapi.Handler(r).ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", body))
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), string(protocol.CodeSessionNotOwned)) {
 		t.Fatalf("POST inputs = %d %s, want 409 %s", rec.Code, rec.Body, protocol.CodeSessionNotOwned)
 	}

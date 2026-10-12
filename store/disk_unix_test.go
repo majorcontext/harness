@@ -1,6 +1,6 @@
 //go:build unix
 
-package harness_test
+package store_test
 
 import (
 	"context"
@@ -11,13 +11,14 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/store"
 	"github.com/majorcontext/harness/storetest"
 )
 
 func TestDiskStoreInstances(t *testing.T) {
 	storetest.RunInstances(t, func(t *testing.T) func() harness.Store {
 		root := t.TempDir()
-		return func() harness.Store { return harness.NewDiskStore(root) }
+		return func() harness.Store { return store.NewDiskStore(root) }
 	})
 }
 
@@ -48,7 +49,7 @@ func TestDiskStoreHeadWaitsForAWriterInFlight(t *testing.T) {
 		if _, err := w.WriteString("2\n3\n"); err != nil {
 			t.Fatal(err)
 		}
-		st := harness.NewDiskStore(root)
+		st := store.NewDiskStore(root)
 		got := make(chan headResult, 1)
 		go func() {
 			head, err := st.Head(context.Background(), "s")
@@ -83,7 +84,7 @@ func TestDiskStoreAppendEndsWithItsContextWhileAnotherHoldsTheLock(t *testing.T)
 		w := lockedLog(t, log)
 		ctx, cancel := context.WithCancel(context.Background())
 		got := make(chan error, 1)
-		go func() { got <- harness.NewDiskStore(root).Append(ctx, "s", 1, []byte("2")) }()
+		go func() { got <- store.NewDiskStore(root).Append(ctx, "s", 1, []byte("2")) }()
 		synctest.Wait()
 		select {
 		case err := <-got:

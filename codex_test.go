@@ -13,6 +13,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // transport records each request that a provider sends through ModelTransport.
@@ -56,7 +57,7 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 		envKey, key = "", "k"
 	}
 	t.Setenv("HARNESS_TEST_CODEX_KEY", envKey)
-	st, rec, retries := harness.NewMemStore(), &transport{}, 0
+	st, rec, retries := store.NewMemStore(), &transport{}, 0
 	p := config.Provider{
 		Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
 		BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses",
@@ -149,7 +150,7 @@ func TestEachWireRunsATurn(t *testing.T) {
 			s := tc.serve(t, hi)
 			tc.p.BaseURL = s.URL() + tc.path
 			name, model, _ := strings.Cut(tc.model, "/")
-			st, rec := harness.NewMemStore(), &transport{}
+			st, rec := store.NewMemStore(), &transport{}
 			r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: config.Config{Providers: map[string]config.Provider{name: tc.p}},
 				ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, "k"} }})
 			if err != nil {
