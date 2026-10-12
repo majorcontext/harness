@@ -244,6 +244,7 @@ func TestContractRuntimeSyncClient(t *testing.T) {
 		{"catch_up_replicates_every_stored_session_without_opening_it", rowCatchUpReplicatesEveryStoredSessionWithoutOpeningIt},
 		{"catch_up_stale_epoch_fails", rowCatchUpStaleEpochFails},
 		{"catch_up_gives_way_to_open_of_the_session_that_it_holds", rowCatchUpGivesWayToOpenOfTheSessionThatItHolds},
+		{"catch_up_reports_a_release_error_when_open_takes_the_session", rowCatchUpReportsAReleaseErrorWhenOpenTakesTheSession},
 		{"close_ends_a_catch_up_that_retries", rowCloseEndsACatchUpThatRetries},
 		{"catch_up_skips_a_session_that_it_cannot_read_and_reports_it", rowCatchUpSkipsASessionThatItCannotReadAndReportsIt},
 		{"sync_reads_the_token_file_again_for_each_post", rowSyncReadsTheTokenFileAgainForEachPost},
@@ -626,4 +627,25 @@ func rowTwoCatchUpsAtOnceLetOpenTakeTheSession(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	equalLogs(t, st, rcv.store, "s1")
+}
+
+func rowCatchUpReportsAReleaseErrorWhenOpenTakesTheSession(t *testing.T) {
+	boom := errors.New("lease store down")
+	st := store.NewMemStore()
+	seedSessions(t, st, "s1")
+	rcv := newSyncReceiver(t, downUntil(2))
+	r, err := newWired(harness.Options{Store: st, Owner: heldOwner{releaseErr: boom}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	done := make(chan error, 1)
+	go func() { done <- r.CatchUp(t.Context()) }()
+	rcv.awaitCalls(t, 1)
+	if _, err := r.Open(t.Context(), "s1"); err != nil {
+		t.Fatalf("Open while catch-up retries = %v, want nil", err)
+	}
+	if err := <-done; !errors.Is(err, boom) {
+		t.Errorf("CatchUp = %v, want the release error of its grant", err)
+	}
 }
