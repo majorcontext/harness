@@ -1,4 +1,7 @@
-package harness
+// Package selftool holds the tools through which a model inspects and
+// changes its own session: goal, model, and session_info. A tool reaches its
+// session through the Sessions interface of this package.
+package selftool
 
 import (
 	"context"
@@ -36,23 +39,27 @@ const goalSchema = `{
 
 const adjustInstead = `use action "adjust" to change its condition instead`
 
-// goalTool lets the model read, set, and adjust the goal of its session.
-// The runtime binds session when the session starts. A child session has no
-// goal tool.
-type goalTool struct {
-	r       *Runtime
+// Goal is the goal tool. It lets the model read, set, and adjust the goal of
+// its session. The runtime binds session when the session starts. A child
+// session has no goal tool.
+type Goal struct {
+	host    Sessions
 	session string
 }
 
-func (goalTool) Spec() protocol.ToolSpec {
+// NewGoal returns the goal tool, unbound, over host.
+func NewGoal(host Sessions) Goal { return Goal{host: host} }
+
+// Spec returns the specification of the goal tool.
+func (Goal) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "goal", Description: goalDescription, InputSchema: json.RawMessage(goalSchema)}
 }
 
 // Alone makes the goal tool run with no other call of its model call in flight.
-func (goalTool) Alone() {}
+func (Goal) Alone() {}
 
 // Bind returns the tool of session id, or nil for a child session.
-func (t goalTool) Bind(id string, child bool, _ int) turn.Tool {
+func (t Goal) Bind(id string, child bool, _ int) turn.Tool {
 	if child {
 		return nil
 	}
@@ -60,14 +67,15 @@ func (t goalTool) Bind(id string, child bool, _ int) turn.Tool {
 	return t
 }
 
-func (t goalTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
+// Run performs the action of c.
+func (t Goal) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in struct{ Action, Condition string }
 	if err := json.Unmarshal(c.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("goal: invalid arguments: %w", err)
 	}
-	s := t.r.running(t.session)
-	if s == nil {
-		return protocol.ToolResult{}, ErrSessionNotOwned
+	s, ok := t.host.Session(t.session)
+	if !ok {
+		return protocol.ToolResult{}, session.ErrNotOwned
 	}
 	cond := strings.TrimSpace(in.Condition)
 	var err error
@@ -77,14 +85,14 @@ func (t goalTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 		if cond == "" {
 			return protocol.ToolResult{}, fmt.Errorf("goal: engine: RegisterGoal requires a non-empty condition (if a goal is already active, %s)", adjustInstead)
 		}
-		if err = s.a.StartGoal(ctx, cond); errors.Is(err, session.ErrGoalActive) {
+		if err = s.StartGoal(ctx, cond); errors.Is(err, session.ErrGoalActive) {
 			return protocol.ToolResult{}, fmt.Errorf("goal: a goal is already active; %s", adjustInstead)
 		}
 	case "adjust":
 		if cond == "" {
 			return protocol.ToolResult{}, errors.New("goal: engine: UpdateGoal requires a non-empty condition")
 		}
-		if err = s.a.AdjustGoal(ctx, cond); errors.Is(err, session.ErrNoGoal) {
+		if err = s.AdjustGoal(ctx, cond); errors.Is(err, session.ErrNoGoal) {
 			return protocol.ToolResult{}, errors.New("goal: engine: no active goal to update")
 		}
 	default:

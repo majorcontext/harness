@@ -1,4 +1,4 @@
-package harness
+package selftool
 
 import (
 	"context"
@@ -7,14 +7,17 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/prompt"
+	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
-const sessionInfoName = "session_info"
+// SessionInfoName is the name of the session_info tool.
+const SessionInfoName = "session_info"
 
 const sessionInfoDescription = "Report this session's own configuration: session id, current model, " +
 	"the reasoning-effort/thinking level (\"off\", \"minimal\", \"low\", \"medium\", \"high\", " +
@@ -40,10 +43,11 @@ type sessionInfoResult struct {
 	Plugins      []protocol.Plugin `json:"plugins"`
 }
 
-// sessionPrompt is the system prompt of one session and a record of what its
-// model calls sent. The session reads the prompt files once, when it starts.
-type sessionPrompt struct {
-	r        *Runtime
+// Prompt is the system prompt of one session and a record of what its model
+// calls sent. The session reads the prompt files once, when it starts.
+type Prompt struct {
+	procs    *process.Manager
+	workDir  string
 	read     prompt.Info
 	segments []string
 
@@ -60,24 +64,25 @@ type modelCall struct {
 	prompt  string
 }
 
-func (r *Runtime) newSessionPrompt(agent string, p prompt.Profile) *sessionPrompt {
-	read := r.prompt()
+// NewPrompt returns the prompt of a session that read describes. agent and p
+// name its agent profile. procs is nil when the runtime has no WorkDir.
+func NewPrompt(read prompt.Info, agent string, p prompt.Profile, procs *process.Manager, workDir string) *Prompt {
 	segs := slices.Clone(read.Segments)
 	if agent != "" {
 		if t := strings.Trim(p.Prompt, "\n"); t != "" {
 			segs = append(segs, t)
 		}
 	}
-	return &sessionPrompt{r: r, read: read, segments: segs}
+	return &Prompt{procs: procs, workDir: workDir, read: read, segments: segs}
 }
 
-// system returns the system prompt of a turn: the prompt of the session, the
+// System returns the system prompt of a turn: the prompt of the session, the
 // prompt of its agent profile, and the process status line. It records the
 // segments as the segments of the turn.
-func (p *sessionPrompt) system() string {
+func (p *Prompt) System() string {
 	segs := slices.Clone(p.segments)
-	if p.r.procs != nil {
-		if line := proc.StatusLine(p.r.procs, p.r.workDir); line != "" {
+	if p.procs != nil {
+		if line := proc.StatusLine(p.procs, p.workDir); line != "" {
 			segs = append(segs, prompt.RenderEngineContext(line))
 		}
 	}
@@ -87,11 +92,11 @@ func (p *sessionPrompt) system() string {
 	return strings.Join(segs, "\n\n")
 }
 
-// recording returns src and records each Toolset that it gives.
-func (p *sessionPrompt) recording(src turn.Source) turn.Source { return recorded{p, src} }
+// Recording returns src and records each Toolset that it gives.
+func (p *Prompt) Recording(src turn.Source) turn.Source { return recorded{p, src} }
 
 type recorded struct {
-	p   *sessionPrompt
+	p   *Prompt
 	src turn.Source
 }
 
@@ -110,7 +115,7 @@ func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, al
 // sent returns the system segments and the sorted tool names of the newest
 // model call. read_tool_result comes from the actor, so it is not in the
 // recorded names.
-func (p *sessionPrompt) sent() (system, tools []string) {
+func (p *Prompt) sent() (system, tools []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	system = slices.Clone(p.turn)
@@ -125,22 +130,30 @@ func (p *sessionPrompt) sent() (system, tools []string) {
 	return system, tools
 }
 
-// sessionInfoTool reports one session to its model. The runtime builds it
-// with the session.
-type sessionInfoTool struct {
-	r       *Runtime
+// SessionInfo is the session_info tool. It reports one session to its model.
+// The runtime builds it with the session.
+type SessionInfo struct {
+	host    Sessions
 	session string
-	prompt  *sessionPrompt
+	prompt  *Prompt
 }
 
-func (*sessionInfoTool) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: sessionInfoName, Description: sessionInfoDescription, InputSchema: json.RawMessage(sessionInfoSchema)}
+// NewSessionInfo returns the session_info tool of session id, which reads
+// what p recorded.
+func NewSessionInfo(host Sessions, id string, p *Prompt) *SessionInfo {
+	return &SessionInfo{host: host, session: id, prompt: p}
 }
 
-func (t *sessionInfoTool) Run(_ context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
-	s := t.r.running(t.session)
-	if s == nil {
-		return protocol.ToolResult{}, ErrSessionNotOwned
+// Spec returns the specification of the session_info tool.
+func (*SessionInfo) Spec() protocol.ToolSpec {
+	return protocol.ToolSpec{Name: SessionInfoName, Description: sessionInfoDescription, InputSchema: json.RawMessage(sessionInfoSchema)}
+}
+
+// Run reports the session.
+func (t *SessionInfo) Run(_ context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
+	s, ok := t.host.Session(t.session)
+	if !ok {
+		return protocol.ToolResult{}, session.ErrNotOwned
 	}
 	v := s.Snapshot()
 	system, tools := t.prompt.sent()

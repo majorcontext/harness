@@ -1,4 +1,4 @@
-package harness
+package selftool
 
 import (
 	"context"
@@ -8,11 +8,13 @@ import (
 	"slices"
 
 	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
-const modelToolName = "model"
+// ModelName is the name of the model tool.
+const ModelName = "model"
 
 const modelDescription = "Inspect or swap this session's MAIN model. History transcodes " +
 	"automatically for whichever model is current — there is no migration step. " +
@@ -83,71 +85,91 @@ type modelList struct {
 	Aliases   map[string]string `json:"aliases,omitempty"`
 }
 
-// modelTool lets the model inspect and swap the model of its session. The
-// runtime binds session when the session starts. A backend that owns its
-// loop gets the list action alone, because set would move the model of the
-// turn that calls it.
-type modelTool struct {
-	r        *Runtime
+// Catalog is what the runtime configures for the models of its sessions.
+type Catalog struct {
+	// Aliases maps an alias to a "provider/model" ref.
+	Aliases map[string]string
+	// Providers returns the names of the configured providers.
+	Providers func() []string
+}
+
+// Model is the model tool. It lets the model inspect and swap the model of
+// its session. The runtime binds session when the session starts. A backend
+// that owns its loop gets the list action alone, because set would move the
+// model of the turn that calls it.
+type Model struct {
+	host     Sessions
+	catalog  Catalog
 	session  string
 	listOnly bool
 }
 
-func (t modelTool) Spec() protocol.ToolSpec {
+// NewModel returns the model tool, unbound, over host and catalog.
+func NewModel(host Sessions, catalog Catalog) Model { return Model{host: host, catalog: catalog} }
+
+// ListOnly returns the tool with the list action alone.
+func (t Model) ListOnly() Model {
+	t.listOnly = true
+	return t
+}
+
+// Spec returns the specification of the model tool.
+func (t Model) Spec() protocol.ToolSpec {
 	if t.listOnly {
-		return protocol.ToolSpec{Name: modelToolName, Description: modelListDescription, InputSchema: json.RawMessage(modelListSchema)}
+		return protocol.ToolSpec{Name: ModelName, Description: modelListDescription, InputSchema: json.RawMessage(modelListSchema)}
 	}
-	return protocol.ToolSpec{Name: modelToolName, Description: modelDescription, InputSchema: json.RawMessage(modelSchema)}
+	return protocol.ToolSpec{Name: ModelName, Description: modelDescription, InputSchema: json.RawMessage(modelSchema)}
 }
 
 // Bind returns the tool of session id.
-func (t modelTool) Bind(id string, _ bool, _ int) turn.Tool {
+func (t Model) Bind(id string, _ bool, _ int) turn.Tool {
 	t.session = id
 	return t
 }
 
 // Alone makes the model tool run with no other call of its model call in flight.
-func (modelTool) Alone() {}
+func (Model) Alone() {}
 
-func (t modelTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
+// Run performs the action of c.
+func (t Model) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in struct{ Action, Model string }
 	if err := json.Unmarshal(c.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("model: invalid arguments: %w", err)
 	}
-	s := t.r.running(t.session)
-	if s == nil {
-		return protocol.ToolResult{}, ErrSessionNotOwned
+	s, ok := t.host.Session(t.session)
+	if !ok {
+		return protocol.ToolResult{}, session.ErrNotOwned
 	}
 	switch {
 	case in.Action == "list":
-		return jsonResult(modelList{Providers: t.r.providerInfos(), Aliases: t.r.aliasCopy()})
+		return jsonResult(modelList{Providers: t.catalog.providerInfos(), Aliases: t.catalog.aliasCopy()})
 	case t.listOnly:
 		return protocol.ToolResult{}, fmt.Errorf("model: action %q is not available on this surface (only \"list\" is exposed here — use task's own model override to select a model for a child session)", in.Action)
 	case in.Action == "status":
-		return jsonResult(t.r.modelStatus(s.Snapshot().Model))
+		return jsonResult(t.catalog.modelStatus(s.Snapshot().Model))
 	case in.Action == "set":
 		v, err := t.set(ctx, s, in.Model)
 		if err != nil {
 			return protocol.ToolResult{}, err
 		}
-		return jsonResult(t.r.modelStatus(v.Model))
+		return jsonResult(t.catalog.modelStatus(v.Model))
 	}
 	return protocol.ToolResult{}, fmt.Errorf("model: unknown action %q (valid actions: status, set, list — there is no clear action)", in.Action)
 }
 
 // set moves s to the model that ref names, or to the model of the alias ref.
-func (t modelTool) set(ctx context.Context, s *Session, ref string) (protocol.Session, error) {
+func (t Model) set(ctx context.Context, s Session, ref string) (protocol.Session, error) {
 	if ref == "" {
-		return protocol.Session{}, fmt.Errorf("model: set requires a non-empty model (%s)", t.r.modelChoices())
+		return protocol.Session{}, fmt.Errorf("model: set requires a non-empty model (%s)", t.catalog.modelChoices())
 	}
-	if target, ok := t.r.aliases[ref]; ok {
+	if target, ok := t.catalog.Aliases[ref]; ok {
 		ref = target
 	}
 	parsed, err := modelref.ParseModelRef(ref)
 	if err != nil {
-		return protocol.Session{}, fmt.Errorf("model: %w (%s)", err, t.r.modelChoices())
+		return protocol.Session{}, fmt.Errorf("model: %w (%s)", err, t.catalog.modelChoices())
 	}
-	if err := t.r.servesProvider(parsed); err != nil {
+	if err := t.catalog.servesProvider(parsed); err != nil {
 		return protocol.Session{}, fmt.Errorf("model: %w", err)
 	}
 	v, err := s.Update(ctx, protocol.SettingsPatch{Model: &ref})
@@ -162,19 +184,19 @@ func jsonResult(v any) (protocol.ToolResult, error) {
 	return protocol.ToolResult{Text: string(b)}, err
 }
 
-func (r *Runtime) modelStatus(model string) modelStatus {
-	return modelStatus{Model: model, Aliases: r.aliasCopy(), Providers: r.providerInfos()}
+func (c Catalog) modelStatus(model string) modelStatus {
+	return modelStatus{Model: model, Aliases: c.aliasCopy(), Providers: c.providerInfos()}
 }
 
-func (r *Runtime) aliasCopy() map[string]string {
-	if len(r.aliases) == 0 {
+func (c Catalog) aliasCopy() map[string]string {
+	if len(c.Aliases) == 0 {
 		return nil
 	}
-	return maps.Clone(r.aliases)
+	return maps.Clone(c.Aliases)
 }
 
-func (r *Runtime) providerInfos() []providerInfo {
-	names := r.models.Providers()
+func (c Catalog) providerInfos() []providerInfo {
+	names := c.Providers()
 	if len(names) == 0 {
 		return nil
 	}
@@ -187,26 +209,26 @@ func (r *Runtime) providerInfos() []providerInfo {
 
 // servesProvider reports a model whose provider no backend serves, and names
 // the valid aliases and providers.
-func (r *Runtime) servesProvider(ref modelref.ModelRef) error {
-	for _, n := range r.models.Providers() {
+func (c Catalog) servesProvider(ref modelref.ModelRef) error {
+	for _, n := range c.Providers() {
 		if n == ref.Provider {
 			return nil
 		}
 	}
-	return fmt.Errorf("provider %q is not configured (%s)", ref.Provider, r.modelChoices())
+	return fmt.Errorf("provider %q is not configured (%s)", ref.Provider, c.modelChoices())
 }
 
 // modelChoices renders the valid aliases and provider names for an error
 // that rejects a model.
-func (r *Runtime) modelChoices() string {
-	return fmt.Sprintf("valid aliases: %v; configured providers: %v", slices.Sorted(maps.Keys(r.aliases)), r.models.Providers())
+func (c Catalog) modelChoices() string {
+	return fmt.Sprintf("valid aliases: %v; configured providers: %v", slices.Sorted(maps.Keys(c.Aliases)), c.Providers())
 }
 
-// checkChildModel reports why no child can run model: it is not a ref, or no configured provider serves it.
-func (r *Runtime) checkChildModel(model string) error {
+// CheckChild reports why no child can run model: it is not a ref, or no configured provider serves it.
+func (c Catalog) CheckChild(model string) error {
 	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("invalid model %q: %w", model, err)
 	}
-	return r.servesProvider(ref)
+	return c.servesProvider(ref)
 }

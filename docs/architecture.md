@@ -323,6 +323,7 @@ Free to change.
 | `internal/eventlog` | The record codec, `Apply`, and `Check`. The event schema is in `protocol` |
 | `internal/session` | Session actor, mailbox, state machines, views, replication, and the child commands |
 | `internal/tree` | The child tree: limits, spawn, report, recovery, the tree interrupt, and the `task` tool. It reads the runtime through its own `Sessions` interface |
+| `internal/selftool` | The `goal`, `model`, and `session_info` tools, which let a model inspect and change its own session. They reach the runtime through their own `Sessions` interface |
 | `internal/turn` | One agent loop; declares `Backend`, `Tool`, and `Source`; `Restrict` |
 | `internal/backend` | The `turn.Backend` of a runtime: it builds a backend for each provider of the registry (the native `anthropic` and `openai`, the default `openrouter`, and each configured entry) and routes each model ref to one |
 | `internal/backend/modelapi` | The one model API backend, for every provider wire |
@@ -346,7 +347,7 @@ Free to change.
 | `internal/gates` | The repository checks of "CI gates" |
 | `internal/testpoll` | Polling for cross-process waits in tests |
 
-The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `backoff`, `eventlog`, and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, only `internal/backend` builds a provider wire, only `internal/backend`, `internal/provider`, `internal/plugin`, `internal/prompt`, `internal/imageclamp`, and `internal/tool/pluginsrc` import `internal/message`, `config` imports the standard library only, and no internal package imports `cmd`.
+The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `backoff`, `eventlog`, and `protocol`, `internal/selftool` imports only `modelref`, `process`, `prompt`, `session`, `tool/proc`, `toolresult`, `turn`, and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, only `internal/backend` builds a provider wire, only `internal/backend`, `internal/provider`, `internal/plugin`, `internal/prompt`, `internal/imageclamp`, and `internal/tool/pluginsrc` import `internal/message`, `config` imports the standard library only, and no internal package imports `cmd`.
 
 ## eventlog
 
