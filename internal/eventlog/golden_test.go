@@ -15,12 +15,11 @@ import (
 const goldenPath = "testdata/envelopes.golden"
 
 func goldenEvents() []protocol.Payload {
-	return []protocol.Payload{
-		protocol.SessionCreated{}, protocol.OwnerAcquired{}, protocol.SettingsChanged{}, protocol.InputAdmitted{}, protocol.InputPromoted{}, protocol.InputWithdrawn{},
-		protocol.TurnStarted{}, protocol.ItemCompleted{}, protocol.TurnSuspended{}, protocol.TurnResumed{}, protocol.TurnEnded{}, protocol.RequestOpened{}, protocol.RequestResolved{},
-		protocol.GoalSet{}, protocol.GoalEvaluated{}, protocol.GoalChanged{}, protocol.CompactionApplied{}, protocol.ChildSpawned{}, protocol.ChildSettled{}, protocol.CommandRecorded{},
-		protocol.ContextMeasured{}, protocol.BackendState{}, protocol.ToolResultRetained{},
+	var out []protocol.Payload
+	for _, p := range protocol.DurablePayloads() {
+		out = append(out, reflect.ValueOf(p).Elem().Interface().(protocol.Payload))
 	}
+	return out
 }
 
 func goldenKinds() map[string]bool {
