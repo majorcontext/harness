@@ -93,7 +93,8 @@ met. Name the evaluator in `.harness.json`:
 harness run -goal "go test ./... passes"
 ```
 
-The command exits 0 when the goal is met and 3 when it is not.
+The command exits 0 when the goal is met, 3 when it is not, and 1 when a turn
+fails.
 
 ### Serve it over HTTP
 
@@ -110,8 +111,9 @@ curl -X POST localhost:4096/sessions/demo/inputs \
 curl -N -H 'Accept: text/event-stream' localhost:4096/sessions/demo/events
 ```
 
-On `localhost`, the server needs no token. Run `harness --help` for all
-commands and flags.
+With no `HARNESS_RUN_TOKEN` set, the server needs no token on `localhost`.
+Run `harness --help` for the commands and the `run` flags, and
+`harness serve -h` for the `serve` flags.
 
 ## Embed Harness in Go
 
@@ -379,7 +381,8 @@ local model, runs with a window of 128000 tokens. Harness logs one warning for
 the model, and the session gauge sets `window_estimated`. When the provider
 rejects a request as too long, Harness compacts and tries again; it does not
 learn the window from the error. To name the window yourself, set
-`context_window_tokens`. It applies to every session and overrides the catalog.
+`context_window_tokens`. It applies to every session of a model API provider
+and overrides the catalog.
 
 ### Config errors
 
