@@ -138,8 +138,8 @@ func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
 	steps = append([]Step(nil), steps...)
 	for i := range steps {
 		st := &steps[i]
-		if r := st.Reply; r.Block || r.HTTPStatus != 0 || r.StopReason != "" || r.Hangup {
-			t.Fatalf("harnesstest: step %q: the OpenAI server does not support Block, HTTPStatus, StopReason, or Hangup", st.Name)
+		if r := st.Reply; r.Block || r.StopReason != "" {
+			t.Fatalf("harnesstest: step %q: the OpenAI server does not support Block or StopReason", st.Name)
 		}
 		if opts.Replies[st.Name].Drop && st.Reply.Text == "" {
 			t.Fatalf("harnesstest: step %q: Drop needs Reply.Text", st.Name)
@@ -295,6 +295,13 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 	step, ok := o.pick(o.request(b))
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
+		return
+	}
+	if step.Reply.Hangup {
+		panic(http.ErrAbortHandler)
+	}
+	if step.Reply.HTTPStatus != 0 {
+		writeChatReplyError(w, step.Reply)
 		return
 	}
 	f, ok := w.(http.Flusher)

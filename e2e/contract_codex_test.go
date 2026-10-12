@@ -218,7 +218,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexNoToolCallRows(), codexPluginRows(t)))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexNoToolCallRows(), codexPluginRows(t)))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -366,10 +366,12 @@ func codexWebSocketRows() []codexScenario {
 	}
 }
 
+func codexTurnStep(name, user, reply string) harnesstest.Step {
+	return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: codexText(reply)}
+}
+
 func codexHTTPRows() []codexScenario {
-	turn := func(name, user, reply string) harnesstest.Step {
-		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: codexText(reply)}
-	}
+	turn := codexTurnStep
 	return []codexScenario{
 		{
 			scenario: scenario{
@@ -389,31 +391,6 @@ func codexHTTPRows() []codexScenario {
 				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
 			},
 			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"dropped": {Drop: true}}},
-		},
-		{
-			scenario: scenario{
-				name:    "codex_http_incomplete_content_filter_is_retried",
-				model:   []harnesstest.Step{turn("filtered", "one", "partial"), turn("one", "one", "1")},
-				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
-			},
-			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"filtered": {Incomplete: "content_filter"}}},
-		},
-		{
-			scenario: scenario{
-				name:    "codex_http_incomplete_with_another_reason_is_retried",
-				model:   []harnesstest.Step{turn("odd", "one", "partial"), turn("one", "one", "1")},
-				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
-			},
-			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "unheard_of"}}},
-		},
-		{
-			scenario: scenario{
-				name:    "codex_http_incomplete_fails_the_turn_after_stream_max_retries",
-				config:  map[string]any{"stream_max_retries": 1},
-				model:   []harnesstest.Step{turn("odd", "one", "partial"), turn("odd_again", "one", "partial")},
-				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
-			},
-			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "content_filter"}, "odd_again": {Incomplete: "content_filter"}}},
 		},
 		{
 			scenario: scenario{
@@ -439,6 +416,50 @@ func codexHTTPRows() []codexScenario {
 		{
 			scenario: scenario{name: "codex_http_usage_headers_reach_session", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}})},
 			opts:     codexUsage(true),
+		},
+	}
+}
+
+func codexRetryRows() []codexScenario {
+	turn := codexTurnStep
+	return []codexScenario{
+		{
+			scenario: scenario{
+				name:   "codex_http_5xx_is_retried_by_the_request",
+				config: map[string]any{"stream_max_retries": 0},
+				model: []harnesstest.Step{
+					{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
+					{Name: "broken_again", Reply: harnesstest.Reply{HTTPStatus: 502, ErrorMessage: "upstream broke again"}},
+					{Name: "dropped", Reply: harnesstest.Reply{Hangup: true}},
+					turn("one", "one", "1"),
+				},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+		},
+		{
+			scenario: scenario{
+				name:    "codex_http_incomplete_content_filter_is_retried",
+				model:   []harnesstest.Step{turn("filtered", "one", "partial"), turn("one", "one", "1")},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"filtered": {Incomplete: "content_filter"}}},
+		},
+		{
+			scenario: scenario{
+				name:    "codex_http_incomplete_with_another_reason_is_retried",
+				model:   []harnesstest.Step{turn("odd", "one", "partial"), turn("one", "one", "1")},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "unheard_of"}}},
+		},
+		{
+			scenario: scenario{
+				name:    "codex_http_incomplete_fails_the_turn_after_stream_max_retries",
+				config:  map[string]any{"stream_max_retries": 1},
+				model:   []harnesstest.Step{turn("odd", "one", "partial"), turn("odd_again", "one", "partial")},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "content_filter"}, "odd_again": {Incomplete: "content_filter"}}},
 		},
 	}
 }

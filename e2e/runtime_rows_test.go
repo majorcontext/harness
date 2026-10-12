@@ -97,7 +97,7 @@ const (
 	specSameBody       = "| Same id, same body | `200` with the original receipt |"
 	specOtherBody      = "| Same id, other body | `409 input_conflict` |"
 	specTurnMismatch   = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
-	specRetryable      = "`ErrRetryable` (a 429, a 5xx that outlasted the request retries, a transport error, a truncated stream, a content filter) calls the model again"
+	specRetryable      = "`ErrRetryable` (a 429 with `Retry-After`, a 5xx that outlasted the request retries, a transport error, a truncated stream, a content filter) calls the model again"
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
 	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
@@ -464,6 +464,9 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_http_incomplete_content_filter_is_retried":                    sameAsServe(),
 	"codex_http_incomplete_with_another_reason_is_retried":               sameAsServe(),
 	"codex_http_incomplete_fails_the_turn_after_stream_max_retries":      sameAsServe(),
+	"provider_429_without_retry_after_is_not_retried":                    sameAsServe(),
+	"codex_http_5xx_is_retried_by_the_request":                           sameAsServe(),
+	"compact_summary_is_retried_after_a_refusal":                         sameAsServe(),
 	"max_tokens_cut_response_is_retried":                                 sameAsServe(),
 	"stream_retries_stop_after_stream_max_retries":                       reGolden(specView, specRetryable),
 	"settings_change_to_claude_code_mid_turn_fails_the_turn":             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),

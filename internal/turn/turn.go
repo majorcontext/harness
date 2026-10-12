@@ -295,7 +295,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) error {
 	s.call = callOf(req, 0, ownsLoop)
 	err := watch(ctx, b, req, s, lim.Idle)
-	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
+	for n := 0; n < lim.Retries && len(s.items) == 0 && retryable(err); n++ {
 		s.item, s.threads = "", nil
 		if err = s.wait(ctx, n, err); err == nil {
 			s.call = callOf(req, n+1, ownsLoop)
@@ -371,19 +371,51 @@ func (w watchedThread) Delta(itemID string, d Delta) {
 }
 
 func (s *sink) wait(ctx context.Context, attempt int, cause error) error {
-	d := backoff.Delay(attempt + 1)
-	var advice interface{ RetryAfter() (time.Duration, bool) }
-	if errors.As(cause, &advice) {
-		if after, ok := advice.RetryAfter(); ok {
-			d = after
+	d := retryDelay(attempt+1, cause)
+	s.Status(protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
+	if err := sleep(ctx, d); err != nil {
+		return err
+	}
+	s.Status(protocol.StatusFrame{Status: protocol.StatusRunning})
+	return nil
+}
+
+// advice is what a provider error says about its retry.
+type advice interface {
+	RetryAfter() (time.Duration, bool)
+	AdviceOnly() bool
+}
+
+// retryable reports whether a model call runs again after err. An error that
+// the provider retries only on advice is not retryable without it.
+func retryable(err error) bool {
+	if !errors.Is(err, ErrRetryable) {
+		return false
+	}
+	var a advice
+	if errors.As(err, &a) {
+		_, advised := a.RetryAfter()
+		return advised || !a.AdviceOnly()
+	}
+	return true
+}
+
+// retryDelay is the wait before retry number n: the advice of the provider, else backoff.Delay.
+func retryDelay(n int, cause error) time.Duration {
+	var a advice
+	if errors.As(cause, &a) {
+		if after, ok := a.RetryAfter(); ok {
+			return after
 		}
 	}
-	s.Status(protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
+	return backoff.Delay(n)
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-t.C:
-		s.Status(protocol.StatusFrame{Status: protocol.StatusRunning})
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)

@@ -105,12 +105,11 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
 			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
-			if err := incomplete(ev, req.AcceptCut); err != nil {
-				out.Telemetry(tel)
-				return classify(err)
-			}
 			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
 			out.Telemetry(tel)
+			if err := incomplete(ev, req.AcceptCut); err != nil {
+				return classify(err)
+			}
 			m := fromMessage(ev.Message)
 			if len(m.Parts) == 0 {
 				continue

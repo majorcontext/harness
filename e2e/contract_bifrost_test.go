@@ -169,8 +169,9 @@ func TestContractBifrostProviderErrors(t *testing.T) {
 			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
 		},
 		{
-			name: "bifrost_5xx_is_retried_by_the_request",
-			chat: true,
+			name:   "bifrost_5xx_is_retried_by_the_request",
+			chat:   true,
+			config: map[string]any{"stream_max_retries": 0},
 			model: []harnesstest.Step{
 				{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
 				{Name: "broken_again", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke again"}},

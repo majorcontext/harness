@@ -30,12 +30,16 @@ const (
 type RetryableError struct {
 	Err      error
 	Class    RetryableClass
-	After    time.Duration // the wait that the provider advised
-	HasAfter bool          // After is set; an advice of 0 differs from none
+	After    time.Duration
+	HasAfter bool // After is set; 0 differs from none
+	NoAdvice bool // an HTTP 429 with no Retry-After
 }
 
 // RetryAfter returns the wait that the provider advised, if it advised one.
 func (e *RetryableError) RetryAfter() (time.Duration, bool) { return e.After, e.HasAfter }
+
+// AdviceOnly reports an HTTP 429 with no Retry-After, which a turn does not retry.
+func (e *RetryableError) AdviceOnly() bool { return e.NoAdvice }
 
 // Error prefixes the wrapped error message with its class.
 func (e *RetryableError) Error() string {
@@ -53,13 +57,14 @@ func MarkRetryable(err error, class RetryableClass) error {
 	return &RetryableError{Err: err, Class: class}
 }
 
-// MarkRetryableAfter is MarkRetryable for an error whose response advised a
-// wait with a Retry-After header. A response with no valid header advises none.
-func MarkRetryableAfter(err error, class RetryableClass, h http.Header) error {
-	re, ok := MarkRetryable(err, class).(*RetryableError)
-	if ok {
-		re.After, re.HasAfter = ParseRetryAfter(h, time.Now())
+// MarkRetryableHTTP is MarkRetryable for the error of an HTTP response, with its Retry-After.
+func MarkRetryableHTTP(err error, class RetryableClass, resp *http.Response) error {
+	if err == nil {
+		return nil
 	}
+	re := &RetryableError{Err: err, Class: class}
+	re.After, re.HasAfter = ParseRetryAfter(resp.Header, time.Now())
+	re.NoAdvice = resp.StatusCode == http.StatusTooManyRequests && !re.HasAfter
 	return re
 }
 

@@ -290,7 +290,7 @@ func apiError(resp *http.Response) error {
 		err = fmt.Errorf("openai: HTTP %d", resp.StatusCode)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
-		return provider.MarkRetryableAfter(err, class, resp.Header)
+		return provider.MarkRetryableHTTP(err, class, resp)
 	}
 	return err
 }

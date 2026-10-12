@@ -157,7 +157,8 @@ func TestContractProviderRetryBudgets(t *testing.T) {
 	}
 	runScenarios(t, []scenario{
 		{
-			name: "provider_5xx_is_retried_by_the_request_before_the_turn_retries",
+			name:   "provider_5xx_is_retried_by_the_request_before_the_turn_retries",
+			config: map[string]any{"stream_max_retries": 0},
 			model: []harnesstest.Step{
 				{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
 				{Name: "broken_again", Reply: harnesstest.Reply{HTTPStatus: 502, ErrorMessage: "upstream broke again"}},
@@ -178,11 +179,14 @@ func TestContractProviderRetryBudgets(t *testing.T) {
 			actions: oneTurn(getSession{as: "a"}),
 		},
 		{
-			name:   "provider_429_is_not_retried_by_the_request",
-			config: map[string]any{"request_max_retries": 4, "stream_max_retries": 0},
-			model: []harnesstest.Step{
-				{Name: "limited", Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}},
-			},
+			name:    "provider_429_is_not_retried_by_the_request",
+			config:  map[string]any{"request_max_retries": 4, "stream_max_retries": 0},
+			model:   []harnesstest.Step{{Name: "limited", Reply: limited}},
+			actions: oneTurn(getSession{as: "a"}),
+		},
+		{
+			name:    "provider_429_without_retry_after_is_not_retried",
+			model:   []harnesstest.Step{{Name: "limited", Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}}},
 			actions: oneTurn(getSession{as: "a"}),
 		},
 		{
@@ -210,6 +214,14 @@ func TestContractProviderRetryBudgets(t *testing.T) {
 			},
 			actions: oneTurn(getSession{as: "a"}),
 		},
+	})
+}
+
+func TestContractProviderRefusals(t *testing.T) {
+	oneTurn := func(extra ...action) []action {
+		return append([]action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}}, extra...)
+	}
+	runScenarios(t, []scenario{
 		{
 			name: "provider_refusal_is_retried_as_a_content_filter",
 			model: []harnesstest.Step{
