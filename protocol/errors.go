@@ -89,11 +89,10 @@ var statuses = map[Code]int{
 	CodeUnauthorized:        http.StatusUnauthorized,
 	CodeInternal:            http.StatusInternalServerError,
 	CodeSessionUnreplayable: http.StatusInternalServerError,
-	CodeStaleEpoch:          http.StatusConflict,
-	CodeSyncConflict:        http.StatusConflict,
 }
 
 // HTTPStatus returns the status of the Errors table for code, or 500 for an unknown code.
+// The Sync receiver codes are not in the table.
 func HTTPStatus(code Code) int {
 	if s, ok := statuses[code]; ok {
 		return s

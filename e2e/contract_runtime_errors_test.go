@@ -19,6 +19,7 @@ func TestContractRuntimeErrors(t *testing.T) {
 		run  func(t *testing.T)
 	}{
 		{"an_error_body_decodes_to_an_error_that_matches_the_sentinel_of_its_code", rowAnErrorBodyDecodesToAnErrorThatMatchesTheSentinelOfItsCode},
+		{"a_stop_cause_reaches_a_client_in_the_error_frame_of_the_event_stream", rowAStopCauseReachesAClientInTheErrorFrameOfTheEventStream},
 		{"every_sentinel_has_the_status_of_its_code", rowEverySentinelHasTheStatusOfItsCode},
 		{"a_log_that_does_not_replay_fails_with_session_unreplayable", rowALogThatDoesNotReplayFailsWithSessionUnreplayable},
 		{"new_refuses_a_bad_option_with_a_plain_error", rowNewRefusesABadOptionWithAPlainError},
@@ -78,8 +79,8 @@ func rowEverySentinelHasTheStatusOfItsCode(t *testing.T) {
 		{harness.ErrDraining, protocol.CodeDraining, http.StatusServiceUnavailable},
 		{harness.ErrBlobNotFound, protocol.CodeBlobNotFound, http.StatusNotFound},
 		{harness.ErrUnreplayable, protocol.CodeSessionUnreplayable, http.StatusInternalServerError},
-		{harness.ErrConflict, protocol.CodeSyncConflict, http.StatusConflict},
-		{harness.ErrStaleEpoch, protocol.CodeStaleEpoch, http.StatusConflict},
+		{harness.ErrConflict, protocol.CodeSyncConflict, http.StatusInternalServerError},
+		{harness.ErrStaleEpoch, protocol.CodeStaleEpoch, http.StatusInternalServerError},
 		{errors.New("other"), protocol.CodeInternal, http.StatusInternalServerError},
 	} {
 		if got := protocol.CodeOf(tc.err); got != tc.code {
@@ -118,5 +119,37 @@ func rowNewRefusesABadOptionWithAPlainError(t *testing.T) {
 		if err == nil || errors.Is(err, harness.ErrInvalidRequest) || protocol.CodeOf(err) != protocol.CodeInternal {
 			t.Errorf("New with %s = %v, want a plain error", name, err)
 		}
+	}
+}
+
+func rowAStopCauseReachesAClientInTheErrorFrameOfTheEventStream(t *testing.T) {
+	r := lifetimeRuntimeOn(t, harness.NewMemStore(), nil)
+	s := lifetimeSession(t, r)
+	srv := httptest.NewServer(r.Handler())
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/sessions/s1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := wireClient(t, srv.Client()).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	released := make(chan error, 1)
+	go func() { released <- s.Release(t.Context()) }()
+	var last error
+	for _, err := range protocol.DecodeSSE(resp.Body) {
+		if err != nil {
+			last = err
+			break
+		}
+	}
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(last, harness.ErrSessionReleased) || !errors.Is(last, harness.ErrSessionNotOwned) || errors.Is(last, harness.ErrSessionEnded) {
+		t.Errorf("stream ended with %v, want a match for ErrSessionReleased and not ErrSessionEnded", last)
 	}
 }

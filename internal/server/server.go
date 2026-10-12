@@ -234,7 +234,11 @@ func errorBody(code protocol.Code, err error) protocol.ErrorBody {
 	case protocol.CodeSessionUnreplayable:
 		msg = "session log does not replay"
 	}
-	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: msg, Details: map[string]any{}}}
+	details := map[string]any{}
+	if e, ok := errors.AsType[*protocol.Error](err); ok && e.Code == code && code != protocol.CodeInternal {
+		maps.Copy(details, e.Details)
+	}
+	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: msg, Details: details}}
 }
 
 // reply writes v. A write error means that the client is gone.

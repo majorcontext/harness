@@ -120,14 +120,14 @@ func (s failingStore) Head(context.Context, string) (uint64, error) { return 0, 
 
 func rowTheReadHandlerLogsTheCauseOfAnErrorThatItMasks(t *testing.T) {
 	var buf bytes.Buffer
-	h := harness.ReadHandler(failingStore{harness.NewMemStore(), errors.New("store down: password hunter2")},
+	h := harness.ReadHandler(failingStore{harness.NewMemStore(), errors.New("store down: disk full")},
 		harness.ReadOptions{Logger: slog.New(slog.NewTextHandler(&buf, nil))})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/s1", nil))
-	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "hunter2") {
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "disk full") {
 		t.Errorf("response = %d %q, want 500 with the cause masked", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(buf.String(), "hunter2") {
+	if !strings.Contains(buf.String(), "disk full") {
 		t.Errorf("logger output = %q, want the cause", buf.String())
 	}
 }
