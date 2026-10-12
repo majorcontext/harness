@@ -61,11 +61,19 @@ type run struct {
 	// run takes none and leaves the notification for the run after it: the
 	// CLI would queue the input behind its own continuation and answer it in a
 	// second result.
-	steer      bool
-	mainModel  string
-	lastCall   *usage
-	compact    string
-	sawCompact bool
+	steer bool
+	// calls holds the tool calls of the main thread that wait for their
+	// result. A steer input reaches the CLI only while one is in flight: the
+	// CLI takes a queued message at the next tool result, and a message that
+	// arrives in a final text reply starts a second turn after the result.
+	calls map[string]bool
+	// owed reports a steer input on stdin that no tool result has taken, and
+	// waiting a run that reads on for the second result that the CLI owes.
+	owed, waiting bool
+	mainModel     string
+	lastCall      *usage
+	compact       string
+	sawCompact    bool
 	// live is the API response that the stream events of each thread are
 	// streaming, by parent tool call ID.
 	live map[string]*liveMessage
@@ -106,9 +114,12 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		select {
 		case line, ok := <-r.proc.Lines():
 			if !ok {
+				if r.waiting {
+					return nil
+				}
 				return errExited
 			}
-			if err := r.frame(line); err != nil || r.result != nil {
+			if err := r.frame(line); err != nil || r.result != nil && !r.waiting && !r.awaitSecond() {
 				return err
 			}
 		case <-steered:
@@ -116,12 +127,23 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}
-		if r.steer {
+		if r.steer && len(r.calls) > 0 {
 			if err := r.steered(); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// awaitSecond reports that the CLI owes a second result. A steer input that
+// no tool result took waits in the queue of the CLI, which runs it as the next
+// turn after this result. A run with a parked question owes none.
+func (r *run) awaitSecond() bool {
+	if !r.owed || r.question != nil || r.result.IsError {
+		return false
+	}
+	r.owed, r.waiting = false, true
+	return true
 }
 
 var errExited = errors.New("claudecode: the CLI exited before its result")
@@ -264,7 +286,7 @@ func (r *run) handle(env envelope) error {
 		if r.placeholder(env) {
 			return nil
 		}
-		r.result = &env
+		r.result, r.waiting = &env, false
 		if r.dismissing() {
 			return nil
 		}
@@ -396,8 +418,11 @@ func (r *run) assistant(env envelope) error {
 				parts[i].Name = name
 			}
 			r.names[p.CallID] = parts[i].Name
-			if p.Name == askTool && env.ParentToolUseID == "" {
+			switch {
+			case p.Name == askTool && env.ParentToolUseID == "":
 				r.question = &question{callID: p.CallID, input: p.Arguments}
+			case env.ParentToolUseID == "":
+				r.calls[p.CallID] = true
 			}
 		}
 	}
@@ -412,6 +437,12 @@ func (r *run) toolResults(env envelope) error {
 	parts := toolResults(decodeMessage(env.Message), r.names)
 	if len(parts) == 0 {
 		return nil
+	}
+	if env.ParentToolUseID == "" {
+		r.owed = false
+		for _, p := range parts {
+			delete(r.calls, p.CallID)
+		}
 	}
 	msg := protocol.LogMessage{Role: protocol.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID}
 	if err := r.flush(); err != nil {
@@ -448,6 +479,7 @@ func (r *run) steered() error {
 		var line input
 		if line, err = userLine(m, r.read); err == nil {
 			err = r.proc.Send(line)
+			r.owed = r.owed || err == nil
 		}
 	}
 	return err
