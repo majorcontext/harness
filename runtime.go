@@ -19,9 +19,11 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/listing"
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/storecheck"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
 	"github.com/majorcontext/harness/internal/tool/proc"
@@ -59,6 +61,8 @@ var (
 	ErrRequestNotPending = session.ErrRequestNotPending
 	// ErrDraining reports a call after Runtime.Close started.
 	ErrDraining = &protocol.Error{Code: protocol.CodeDraining, Message: "harness: runtime is draining"}
+	// ErrProcessNotFound reports a process name that the box does not define, also without a WorkDir.
+	ErrProcessNotFound = &protocol.Error{Code: protocol.CodeProcessNotFound, Message: "harness: process not found"}
 	// ErrUnreplayable reports a session log that does not replay: a record that does not decode, or breaks a rule of the log.
 	ErrUnreplayable = session.ErrUnreplayable
 )
@@ -73,7 +77,7 @@ type Options struct {
 	Owner Owner
 	// Sync replicates every record that this Runtime appends. nil: no
 	// replication. New reads neither Config.OwnerEpoch nor Config.Sync; the
-	// embedder passes NewLocalOwner and NewHTTPSync.
+	// embedder passes NewLocalOwner and httpsync.New.
 	Sync Sync
 	// Config configures the model providers and the MCP servers. A model
 	// ref "provider/model" selects the entry of Config.Providers named
@@ -158,7 +162,7 @@ type Runtime struct {
 	threshold float64
 	keep      int
 	name      func() string
-	births    births
+	lister    listing.Lister
 	base      context.Context
 	cancel    context.CancelFunc
 	// closing ends when Close starts.
@@ -273,7 +277,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, err
 	}
 	id := cmp.Or(req.ID, "ses_"+newSuffix())
-	if err := CheckName(id); err != nil {
+	if err := storecheck.Name(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin,
@@ -293,7 +297,7 @@ func newSuffix() string { return strings.ToLower(rand.Text()) }
 // Open acquires a session, fences earlier owners, replays its log, and runs
 // it. A session that this runtime already runs is returned as is.
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
-	if err := CheckName(id); err != nil {
+	if err := storecheck.Name(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return r.load(ctx, id, launch{})
@@ -464,7 +468,7 @@ func (r *Runtime) loaded(ctx context.Context, id string) *Session {
 // session that this runtime does not run is ended already; an ID with no log
 // fails with ErrSessionNotFound.
 func (r *Runtime) End(ctx context.Context, id string) error {
-	if err := CheckName(id); err != nil {
+	if err := storecheck.Name(id); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	s := r.loaded(ctx, id)
@@ -480,7 +484,7 @@ func (r *Runtime) End(ctx context.Context, id string) error {
 // List returns a page of sessions in creation order. The After of a page is
 // the ID of the last session of the page before it.
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	return listSessions(ctx, r.store, &r.births, r.log, q, r.describe)
+	return r.lister.Page(ctx, listing.Source{Sessions: r.store.Sessions, First: firstRecord(r.store), Describe: r.describe, Invalid: ErrInvalidRequest, Log: r.log}, q)
 }
 
 // pluginInfo returns the state of each plugin, or nil without plugins.
@@ -736,4 +740,15 @@ func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) 
 		return nil
 	}
 	return plug.ChatParams
+}
+
+// firstRecord reads the first record of a session of st.
+func firstRecord(st Store) func(context.Context, string) ([]byte, error) {
+	return func(ctx context.Context, id string) ([]byte, error) {
+		recs, err := st.Read(ctx, id, 0, 1)
+		if err != nil || len(recs) == 0 {
+			return nil, err
+		}
+		return recs[0].Data, nil
+	}
 }

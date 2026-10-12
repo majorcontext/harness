@@ -73,6 +73,8 @@ type input struct {
 	state inputState
 	seq   uint64
 	event protocol.InputAdmitted
+	// turnID is the turn that took the input, once promoted.
+	turnID string
 }
 
 const (
@@ -187,6 +189,13 @@ func cloneInput(in protocol.InputAdmitted) protocol.InputAdmitted {
 func (s *State) Input(id string) (protocol.InputAdmitted, uint64, bool) {
 	in, ok := s.inputs[id]
 	return cloneInput(in.event), in.seq, ok
+}
+
+// InputFate returns the turn that took input id, and whether the input was withdrawn. Both are
+// zero while the input is queued, and for an unknown input.
+func (s *State) InputFate(id string) (turnID string, withdrawn bool) {
+	in := s.inputs[id]
+	return in.turnID, in.state == inputWithdrawn
 }
 
 // Requests returns the open requests, oldest first.

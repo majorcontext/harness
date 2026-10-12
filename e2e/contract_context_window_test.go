@@ -16,6 +16,7 @@ import (
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 const unknownModel = "anthropic/no-such-model"
@@ -185,7 +186,7 @@ func TestContractUnknownModelWarnsOncePerProcess(t *testing.T) {
 	slog.SetDefault(slog.New(warns))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	model := fmt.Sprintf("bifrost/vendor/process-wide-unknown-%d", time.Now().UnixNano())
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	for i := range 2 {
 		fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "hi"}})
 		r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, WorkDir: t.TempDir(), Config: config.Config{
@@ -198,7 +199,7 @@ func TestContractUnknownModelWarnsOncePerProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hello"}}}); err != nil {
+		if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hello"}}}); err != nil {
 			t.Fatal(err)
 		}
 		for e, err := range s.Events(t.Context(), 0) {

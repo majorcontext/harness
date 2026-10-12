@@ -15,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/storecheck"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -72,13 +73,26 @@ func detach(s protocol.Session) protocol.Session {
 	return s
 }
 
-// Submit admits an input. It starts a turn when none runs. While a turn runs,
-// a steer input, which is the default, joins it at its next item boundary,
-// and a queue input waits for the next turn. A repeated input ID returns
-// the original receipt with Repeat set; the verdict is atomic with the
-// admission. A typed slash command records command.recorded instead of an
-// input, and the receipt carries its status; see docs/architecture.md, Inputs.
-func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
+// Prompt admits an input and returns the Turn that will take it. It starts a
+// turn when none runs. While a turn runs, a steer input, which is the default,
+// joins it at its next item boundary, and a queue input waits for the next
+// turn. A repeated input ID returns the Turn of the original receipt, with
+// Repeat set; the verdict is atomic with the admission. A typed slash command
+// records command.recorded instead of an input, and the receipt carries its
+// status; see docs/architecture.md, Inputs.
+func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error) {
+	adm, err := s.admitInput(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return s.Turn(adm), nil
+}
+
+// Turn returns the Turn of the receipt a, for example after Open on another
+// runtime. It reads nothing until a method of the Turn runs.
+func (s *Session) Turn(a protocol.Admitted) *Turn { return &Turn{s: s, adm: a} }
+
+func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
 		return protocol.Admitted{}, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
 	}
@@ -227,6 +241,25 @@ func (s *Session) Withdraw(ctx context.Context, inputID string) error {
 	return s.a.Withdraw(ctx, inputID)
 }
 
+var (
+	_ Reader = (*Session)(nil)
+	_ Reader = (*View)(nil)
+)
+
+// Read returns the running Session of id, or a View of its stored log. It
+// acquires nothing and appends nothing. A View names the plugins of r.
+func (r *Runtime) Read(ctx context.Context, id string) (Reader, error) {
+	if s := r.running(id); s != nil {
+		return s, nil
+	}
+	v, err := openView(ctx, r.store, id, r.models.Capabilities)
+	if err != nil {
+		return nil, err
+	}
+	v.plugins = r.pluginInfo()
+	return v, nil
+}
+
 // Reader is the read surface of a session, live or stored. *Session and *View
 // implement it. Messages, Inputs, and Blob fail with the errors of their
 // methods; Events ends with Err for a Session that stops.
@@ -269,7 +302,7 @@ type View struct {
 // ID returns the session ID.
 func (v *View) ID() string { return v.id }
 
-// OpenView reads a session from st without owning it: no Acquire, no appends.
+// OpenView reads a session from st without owning it: no Acquire, no appends. An ID that a Store must refuse fails with ErrInvalidRequest.
 // It has no backend, so the gauge window is the window of the newest reading.
 func OpenView(ctx context.Context, st Store, id string) (*View, error) {
 	return openView(ctx, st, id, nil)
@@ -278,6 +311,9 @@ func OpenView(ctx context.Context, st Store, id string) (*View, error) {
 // openView is OpenView with a resolver of the window of the session model,
 // which a runtime supplies from its backends.
 func openView(ctx context.Context, st Store, id string, windows func(model string) turn.Capabilities) (*View, error) {
+	if err := storecheck.Name(id); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
 	s, err := session.Load(ctx, id, storeLog{st, id})
 	if err != nil {
 		return nil, err
@@ -369,4 +405,12 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 		return protocol.Session{}, err
 	}
 	return s.Snapshot(), nil
+}
+
+// Advance applies the durable event e, which follows p.Seq, to p and returns the new Progress; p is unchanged.
+// It is the one incremental fold of status, queue, goal, and last turn, and the session state uses it.
+// An ephemeral frame or an unknown kind fails with protocol.ErrUnknownKind, and an event out of order with protocol.ErrSeq.
+// Advance assumes a legal log.
+func Advance(p protocol.Progress, e protocol.Event) (protocol.Progress, error) {
+	return eventlog.Advance(p, e)
 }

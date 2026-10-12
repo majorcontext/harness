@@ -14,6 +14,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // stubborn is a tool that ignores its context: it reports the call on started
@@ -57,7 +58,7 @@ func stuckRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, stubborn
 	t.Helper()
 	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "stuck"}}}})
 	tool := stubborn{started: make(chan struct{}, 1), release: make(chan struct{}), canceled: make(chan struct{})}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Owner: owner, Tools: []harness.Tool{tool}, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Owner: owner, Tools: []harness.Tool{tool}, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +67,7 @@ func stuckRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, stubborn
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
 		t.Fatal(err)
 	}
 	<-tool.started

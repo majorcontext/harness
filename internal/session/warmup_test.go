@@ -12,6 +12,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestCloseDoesNotWaitForAWarmUpThatDiscoversTools(t *testing.T) {
@@ -31,7 +32,7 @@ func TestCloseDoesNotWaitForAWarmUpThatDiscoversTools(t *testing.T) {
 	defer close(stuck)
 	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{})
 	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Config: config.Config{
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Config: config.Config{
 		Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
 			BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"},
 			UseWebSocketTransport: true}},

@@ -18,8 +18,10 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // serve serves the handler of a Runtime on a MemStore whose codex and
@@ -31,12 +33,12 @@ func serve(t *testing.T, steps ...harnesstest.Step) (*harness.Runtime, string) {
 	retries := 0
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: o.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(),
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(),
 		Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries, GoalEvaluatorModel: "codex/gpt-5", Providers: map[string]config.Provider{"codex": p, "openai": p}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(r.Handler())
+	srv := httptest.NewServer(httpapi.Handler(r))
 	t.Cleanup(func() {
 		_ = r.Close(context.Background())
 		srv.Close()
@@ -236,7 +238,7 @@ func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session,
 	return s.Snapshot(), nil
 }
 func (stub) Events(context.Context, uint64) iter.Seq2[protocol.Event, error] { return nil }
-func (s stub) Submit(context.Context, protocol.Input) (protocol.Admitted, error) {
+func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, error) {
 	return s.receipt, nil
 }
 

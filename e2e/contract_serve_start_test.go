@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/testpoll"
+	"github.com/majorcontext/harness/store"
 )
 
 // awaitStartWork waits until serve has finished what a start owes: the line
@@ -143,7 +143,7 @@ func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 		t.Fatalf("the receiver did not get every record of both sessions\n%s", second.Stderr())
 	}
 
-	local := harness.NewDiskStore(first.store)
+	local := store.NewDiskStore(first.store)
 	for _, id := range []string{a, b} {
 		equalLogs(t, local, receiver.store, id)
 	}

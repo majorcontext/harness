@@ -21,7 +21,8 @@ import (
 // Session is a session that the Runtime runs.
 type Session interface {
 	Snapshot() protocol.Session
-	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
+	// Admit admits an input and returns its receipt.
+	Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
 	Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error)
@@ -71,8 +72,8 @@ type Processes interface {
 
 // Options configures the handler.
 type Options struct {
-	// WorkDir is the root of GET /workspace/changes. Empty: no such route.
-	WorkDir string
+	// Workspace answers GET /workspace/changes. nil: no such route.
+	Workspace func(ctx context.Context, dir, scope string) (protocol.WorkspaceChanges, error)
 	// Processes serves the /processes routes. nil: no process runs.
 	Processes Processes
 	// Health is the body of GET /health.
@@ -95,10 +96,10 @@ var errInvalid = errors.New("invalid request")
 
 type handler[S Session] struct {
 	readHandler
-	rt      Runtime[S]
-	workDir string
-	procs   Processes
-	health  protocol.Health
+	rt        Runtime[S]
+	workspace func(ctx context.Context, dir, scope string) (protocol.WorkspaceChanges, error)
+	procs     Processes
+	health    protocol.Health
 	// routes names the route that runs each control command.
 	routes map[command.Op]route
 }
@@ -162,9 +163,9 @@ func (h *handler[S]) commands(w http.ResponseWriter, r *http.Request) error {
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{readHandler: readHandler{reads: rt, log: cmp.Or(opts.Logger, slog.Default())}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
+	h := &handler[S]{readHandler: readHandler{reads: rt, log: cmp.Or(opts.Logger, slog.Default())}, rt: rt, workspace: opts.Workspace, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
 	mux := http.NewServeMux()
-	bind(mux, h.handlers(), func(r Route) bool { return !r.WorkDir || h.workDir != "" }, func(r Route) {
+	bind(mux, h.handlers(), func(r Route) bool { return !r.WorkDir || h.workspace != nil }, func(r Route) {
 		for _, op := range r.Ops {
 			h.routes[op] = route{r.Method, r.Path}
 		}
@@ -348,7 +349,7 @@ func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, &in, maxInputBody); err != nil {
 		return err
 	}
-	a, err := s.Submit(r.Context(), in)
+	a, err := s.Admit(r.Context(), in)
 	if err != nil {
 		return err
 	}

@@ -18,7 +18,9 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // runtimeDriver drives harness.Runtime over its HTTP routes, on a DiskStore:
@@ -98,11 +100,11 @@ func (d *runtimeDriver) start(t *testing.T) {
 		d.startProc(t)
 		return
 	}
-	rt, err := newWired(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, AskUserQuestion: d.ask})
+	rt, err := newWired(harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
-	d.rt, d.srv = rt, httptest.NewServer(rt.Handler())
+	d.rt, d.srv = rt, httptest.NewServer(httpapi.Handler(rt))
 	if err := rt.CatchUp(t.Context()); err != nil {
 		t.Fatalf("catch up: %v", err)
 	}

@@ -21,14 +21,16 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestAGetOfASessionNeitherOwnsItNorStartsItsTurn(t *testing.T) {
 	for _, path := range []string{"/sessions/s1", "/sessions/s1/events"} {
 		t.Run(path, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				st := harness.NewMemStore()
+				st := store.NewMemStore()
 				f1 := newFake()
 				r1 := runtime(t, st, f1)
 				s := create(t, r1)
@@ -42,7 +44,7 @@ func TestAGetOfASessionNeitherOwnsItNorStartsItsTurn(t *testing.T) {
 				f2 := newFake()
 				r2 := runtime(t, st, f2)
 				rec := httptest.NewRecorder()
-				r2.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+				httpapi.Handler(r2).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 				synctest.Wait()
 				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"s1"`) && path == "/sessions/s1" {
 					t.Errorf("GET %s = %d %s, want 200 with the session", path, rec.Code, rec.Body)
@@ -62,7 +64,7 @@ func TestAGetOfASessionNeitherOwnsItNorStartsItsTurn(t *testing.T) {
 }
 
 func TestAGetOfASessionThatTheRuntimeDoesNotRunListsThePlugins(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	r1 := runtime(t, st, newFake())
 	create(t, r1)
 	closeRuntime(t, r1)
@@ -75,7 +77,7 @@ func TestAGetOfASessionThatTheRuntimeDoesNotRunListsThePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	r2.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/s1", nil))
+	httpapi.Handler(r2).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/s1", nil))
 	var got protocol.Session
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Plugins) != 1 || got.Plugins[0].Name != "fixture" {
 		t.Errorf("GET of a cold session = %d %s (%v), want the fixture plugin", rec.Code, rec.Body, err)
@@ -194,21 +196,21 @@ func storedLog(t *testing.T, st harness.Store) (head uint64) {
 }
 
 func TestTheReadHandlerAnswersAsRuntimeHandlerAnswersForTheSameLog(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	head := storedLog(t, st)
 	r2, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{Plugins: pluginFixture(t, `{}`)}}, newFake())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeRuntime(t, r2) })
-	ro := harness.ReadHandler(st, harness.ReadOptions{})
+	ro := httpapi.ReadHandler(st, httpapi.ReadOptions{})
 	for _, path := range []string{
 		"/sessions", "/sessions?limit=1", "/sessions?limit=1&after=s1", "/sessions?after=nope", "/sessions/s1", "/sessions/s2", "/sessions/nope",
 		"/sessions/s1/messages", "/sessions/s1/messages?limit=1", "/sessions/s1/messages?limit=1&before=3", "/sessions/s1/messages?limit=2000",
 		"/sessions/nope/messages", "/sessions/s1/events", "/sessions/s1/events?after=2&limit=3", "/sessions/s1/events?after=x", "/sessions/s1/inputs",
 	} {
 		t.Run(path, func(t *testing.T) {
-			want, got := get(t, r2.Handler(), path), get(t, ro, path)
+			want, got := get(t, httpapi.Handler(r2), path), get(t, ro, path)
 			if got.Code != want.Code || got.Header().Get("Content-Type") != want.Header().Get("Content-Type") {
 				t.Fatalf("read handler = %d %s, runtime handler = %d %s", got.Code, got.Header().Get("Content-Type"), want.Code, want.Header().Get("Content-Type"))
 			}
@@ -219,7 +221,7 @@ func TestTheReadHandlerAnswersAsRuntimeHandlerAnswersForTheSameLog(t *testing.T)
 	}
 	t.Run("sse_sends_the_durable_frames_to_the_head_then_ends", func(t *testing.T) {
 		got := frames(t, ro, "/sessions/s1/events?after=1", 0)
-		want := frames(t, r2.Handler(), "/sessions/s1/events?after=1", head)
+		want := frames(t, httpapi.Handler(r2), "/sessions/s1/events?after=1", head)
 		if len(want) == 0 || !reflect.DeepEqual(got, want) {
 			t.Fatalf("read handler frames = %v\nruntime handler frames = %v", got, want)
 		}
@@ -237,9 +239,9 @@ func TestTheReadHandlerAnswersAsRuntimeHandlerAnswersForTheSameLog(t *testing.T)
 }
 
 func TestTheReadHandlerAnswersAWriteWith405AndAppendsNothing(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	head := storedLog(t, st)
-	ro := harness.ReadHandler(st, harness.ReadOptions{})
+	ro := httpapi.ReadHandler(st, httpapi.ReadOptions{})
 	for _, c := range []struct{ method, path string }{
 		{"POST", "/sessions"}, {"PATCH", "/sessions/s1"}, {"DELETE", "/sessions/s1"}, {"POST", "/sessions/s1/inputs"},
 		{"DELETE", "/sessions/s1/inputs/a"}, {"POST", "/sessions/s1/interrupt"}, {"PUT", "/sessions/s1/goal"}, {"POST", "/sessions/s1/blobs/k"},
@@ -280,7 +282,7 @@ func queuedLog(t *testing.T, st harness.Store, body func(t *testing.T, live http
 		q2.Delivery = protocol.DeliveryQueue
 		submit(t, s, q2)
 		defer closeRuntime(t, r)
-		body(t, r.Handler())
+		body(t, httpapi.Handler(r))
 	})
 }
 
@@ -312,12 +314,12 @@ func wantQueued(t *testing.T, h http.Handler, label string) {
 func sha256Sum(b []byte) []byte { s := sha256.Sum256(b); return s[:] }
 
 func TestQueuedInputsListWithTheirPartsAndProvenanceOnBothHandlers(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	queuedLog(t, st, func(t *testing.T, live http.Handler) { wantQueued(t, live, "runtime handler of a running session") })
 	r2 := runtime(t, st, newFake())
 	t.Cleanup(func() { closeRuntime(t, r2) })
-	wantQueued(t, r2.Handler(), "runtime handler of a session that it does not run")
-	wantQueued(t, harness.ReadHandler(st, harness.ReadOptions{}), "read handler")
+	wantQueued(t, httpapi.Handler(r2), "runtime handler of a session that it does not run")
+	wantQueued(t, httpapi.ReadHandler(st, httpapi.ReadOptions{}), "read handler")
 }
 
 func attachmentLog(t *testing.T, st harness.Store) {
@@ -391,12 +393,12 @@ func wantBlobs(t *testing.T, h http.Handler, label string) {
 }
 
 func TestAHistoryAttachmentReadsBackByItsKeyOnBothHandlers(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	attachmentLog(t, st)
 	r2 := runtime(t, st, newFake())
 	t.Cleanup(func() { closeRuntime(t, r2) })
-	wantBlobs(t, r2.Handler(), "runtime handler")
-	wantBlobs(t, harness.ReadHandler(st, harness.ReadOptions{}), "read handler")
+	wantBlobs(t, httpapi.Handler(r2), "runtime handler")
+	wantBlobs(t, httpapi.ReadHandler(st, httpapi.ReadOptions{}), "read handler")
 }
 
 type failingQueue struct{}
@@ -406,9 +408,9 @@ func (failingQueue) Queued(context.Context, string) ([]protocol.QueuedInput, err
 }
 
 func TestAFailingQueueLeavesTheStoredHistoryReadable(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	attachmentLog(t, st)
-	ro := harness.ReadHandler(st, harness.ReadOptions{Queue: failingQueue{}})
+	ro := httpapi.ReadHandler(st, httpapi.ReadOptions{Queue: failingQueue{}})
 	key := "attachment-" + hex.EncodeToString(sha256Sum(pngBytes(t)))
 	for _, path := range []string{"/sessions/s1/messages", "/sessions/s1/events", "/sessions/s1/blobs/" + key} {
 		if rec := get(t, ro, path); rec.Code != http.StatusOK {
@@ -444,13 +446,13 @@ func inputsOf(t *testing.T, h http.Handler, path string) []protocol.QueuedInput 
 }
 
 func TestTheReadHandlerListsTheQueueAfterTheQueuedInputsOfTheLog(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	queuedLog(t, st, func(*testing.T, http.Handler) {})
-	logged := inputsOf(t, harness.ReadHandler(st, harness.ReadOptions{}), "/sessions/s1/inputs")
+	logged := inputsOf(t, httpapi.ReadHandler(st, httpapi.ReadOptions{}), "/sessions/s1/inputs")
 	if len(logged) != 2 {
 		t.Fatalf("the log queues %d inputs, want 2", len(logged))
 	}
-	ro := harness.ReadHandler(st, harness.ReadOptions{Queue: fakeQueue{"s1": {queueRow("r1", "row one"), queueRow("r2", "row two")}, "s9": {queueRow("r3", "first prompt")}}})
+	ro := httpapi.ReadHandler(st, httpapi.ReadOptions{Queue: fakeQueue{"s1": {queueRow("r1", "row one"), queueRow("r2", "row two")}, "s9": {queueRow("r3", "first prompt")}}})
 	t.Run("inputs_follow_the_log", func(t *testing.T) {
 		got, want := inputsOf(t, ro, "/sessions/s1/inputs"), append(slices.Clone(logged), queueRow("r1", "row one"), queueRow("r2", "row two"))
 		if !reflect.DeepEqual(got, want) {
@@ -480,7 +482,7 @@ func TestTheReadHandlerListsTheQueueAfterTheQueuedInputsOfTheLog(t *testing.T) {
 		}
 	})
 	t.Run("a_nil_queue_lists_the_log_only", func(t *testing.T) {
-		nilQueue := harness.ReadHandler(st, harness.ReadOptions{})
+		nilQueue := httpapi.ReadHandler(st, httpapi.ReadOptions{})
 		if got := inputsOf(t, nilQueue, "/sessions/s1/inputs"); !reflect.DeepEqual(got, logged) {
 			t.Errorf("GET inputs = %+v, want the log's %+v", got, logged)
 		}

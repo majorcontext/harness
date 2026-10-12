@@ -58,12 +58,12 @@ func SpecRoutes(spec string) ([]string, error) {
 }
 
 // SpecReadRoutes returns the "METHOD /path" of each route that the spec says
-// harness.ReadHandler serves, sorted.
+// httpapi.ReadHandler serves, sorted.
 func SpecReadRoutes(spec string) ([]string, error) {
-	const start, end = "`harness.ReadHandler(store, opts)` is the HTTP form", " through the code of"
+	const start, end = "`httpapi.ReadHandler(store, opts)` is the HTTP form", " through the code of"
 	i := strings.Index(spec, start)
 	if i < 0 {
-		return nil, errors.New("the spec has no paragraph on harness.ReadHandler")
+		return nil, errors.New("the spec has no paragraph on httpapi.ReadHandler")
 	}
 	rest := spec[i:]
 	j := strings.Index(rest, end)

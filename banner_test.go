@@ -10,6 +10,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestNoVersionSendsNoEngineBanner(t *testing.T) {
@@ -19,7 +20,7 @@ func TestNoVersionSendsNoEngineBanner(t *testing.T) {
 	retries := 0
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: s.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
-	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(),
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(),
 		Config:         config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries, Providers: map[string]config.Provider{"codex": p}},
 		ModelTransport: func(string) http.RoundTripper { return nil }})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/httpsync"
 )
 
 // replication builds the Owner and the Sync that the config keys owner_epoch
@@ -14,5 +15,5 @@ func replication(cfg *config.Config) (harness.Owner, harness.Sync) {
 	if cfg.Sync == nil {
 		return owner, nil
 	}
-	return owner, harness.NewHTTPSync(*cfg.Sync)
+	return owner, httpsync.New(*cfg.Sync)
 }

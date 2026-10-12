@@ -8,11 +8,12 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func goalRuntime(t *testing.T, f *family, evaluator string) *harness.Runtime {
 	t.Helper()
-	return familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{GoalEvaluatorModel: evaluator}, "")
+	return familyRuntime(t, store.NewMemStore(), f, nil, config.Config{GoalEvaluatorModel: evaluator}, "")
 }
 
 func judging(verdict string, more func(protocol.LogPart) []protocol.LogMessage) func(protocol.LogPart) []protocol.LogMessage {

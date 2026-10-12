@@ -17,6 +17,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 type mcpConfigFile struct {
@@ -40,7 +41,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{newProbe("echo", false)}, Config: config.Config{
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{newProbe("echo", false)}, Config: config.Config{
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}},
 		MCPServers: map[string]config.MCPServerSpec{
 			"chrome-devtools": {Command: []string{"chrome-devtools-mcp-absent", "--headless"}, Dir: dir},
@@ -169,7 +170,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")
 			argvLog := fakeClaude(t, "mcp", append(tc.env, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog)...)
-			st, echo := harness.NewMemStore(), newProbe("echo", false)
+			st, echo := store.NewMemStore(), newProbe("echo", false)
 			r := claudeRuntime(t, st, echo, newProbe("hidden", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
@@ -196,11 +197,11 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	mcpLog := filepath.Join(t.TempDir(), "mcp")
 	argvLog := fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
-	st, block := harness.NewMemStore(), newProbe("block", true)
+	st, block := store.NewMemStore(), newProbe("block", true)
 	r := claudeRuntime(t, st, block)
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
-	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+	if _, err := s.Prompt(bg, text("a", "hi")); err != nil {
 		t.Fatal(err)
 	}
 	ended := make(chan struct{})

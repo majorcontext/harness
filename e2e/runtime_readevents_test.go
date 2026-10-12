@@ -10,6 +10,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func collectEvents(t *testing.T, seq func(func(protocol.Event, error) bool)) []protocol.Event {
@@ -30,8 +31,8 @@ func TestReadEventsEqualsAViewOfTheSameLog(t *testing.T) {
 	skipShort(t)
 	t.Setenv("HARNESS_E2E_KEY", "k")
 	stores := map[string]func(t *testing.T) harness.Store{
-		"mem":  func(*testing.T) harness.Store { return harness.NewMemStore() },
-		"disk": func(t *testing.T) harness.Store { return harness.NewDiskStore(t.TempDir()) },
+		"mem":  func(*testing.T) harness.Store { return store.NewMemStore() },
+		"disk": func(t *testing.T) harness.Store { return store.NewDiskStore(t.TempDir()) },
 	}
 	for name, newStore := range stores {
 		t.Run(name, func(t *testing.T) {
@@ -113,7 +114,7 @@ func writeTwoTurnLog(t *testing.T, ctx context.Context, st harness.Store) {
 		t.Fatal(err)
 	}
 	for turn, text := range []string{"go", "two"} {
-		if _, err := s.Submit(ctx, protocol.Input{ID: text, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
+		if _, err := s.Prompt(ctx, protocol.Input{ID: text, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
 			t.Fatal(err)
 		}
 		ended := 0

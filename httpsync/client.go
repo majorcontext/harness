@@ -1,4 +1,4 @@
-package harness
+package httpsync
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -19,10 +20,10 @@ const (
 	syncPostTimeout = time.Minute
 )
 
-// httpSync, the Sync of NewHTTPSync, posts each SyncBatch to a control plane. The reply is a SyncAck.
-// A 409 with protocol.CodeStaleEpoch is ErrStaleEpoch, and one with
-// protocol.CodeSyncConflict is ErrConflict. A 400 with invalid_request is
-// ErrInvalidRequest, and any 413, 401, or 403 is ErrSyncRejected, whatever its
+// httpSync, the Sync of New, posts each SyncBatch to a control plane. The reply is a SyncAck.
+// A 409 with protocol.CodeStaleEpoch is harness.ErrStaleEpoch, and one with
+// protocol.CodeSyncConflict is harness.ErrConflict. A 400 with invalid_request is
+// harness.ErrInvalidRequest, and any 413, 401, or 403 is harness.ErrSyncRejected, whatever its
 // code. All of them are final. Any other failure is retried by the sender.
 type httpSync struct {
 	url       string
@@ -30,9 +31,9 @@ type httpSync struct {
 	client    *http.Client
 }
 
-// NewHTTPSync returns a Sync that posts each batch to spec.URL as JSON with
+// New returns a Sync that posts each batch to spec.URL as JSON with
 // the bearer token that it reads from spec.TokenFile for each post.
-func NewHTTPSync(s config.SyncSpec) Sync {
+func New(s config.SyncSpec) harness.Sync {
 	return &httpSync{url: s.URL, tokenFile: s.TokenFile, client: &http.Client{Timeout: syncPostTimeout}}
 }
 
@@ -74,15 +75,15 @@ func (h *httpSync) Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.
 func rejection(status int, code protocol.Code, b protocol.SyncBatch) error {
 	switch {
 	case status == http.StatusConflict && code == protocol.CodeStaleEpoch:
-		return fmt.Errorf("%w: epoch %d", ErrStaleEpoch, b.Epoch)
+		return fmt.Errorf("%w: epoch %d", harness.ErrStaleEpoch, b.Epoch)
 	case status == http.StatusConflict && code == protocol.CodeSyncConflict:
-		return fmt.Errorf("%w: the receiver holds other bytes at seq %d", ErrConflict, b.FromSeq)
+		return fmt.Errorf("%w: the receiver holds other bytes at seq %d", harness.ErrConflict, b.FromSeq)
 	case status == http.StatusBadRequest && code == protocol.CodeInvalidRequest:
-		return fmt.Errorf("%w: %w: seq %d", ErrInvalidRequest, ErrSyncRejected, b.FromSeq)
+		return fmt.Errorf("%w: %w: seq %d", harness.ErrInvalidRequest, harness.ErrSyncRejected, b.FromSeq)
 	case status == http.StatusRequestEntityTooLarge:
-		return fmt.Errorf("%w: seq %d is over the size bound of the receiver", ErrSyncRejected, b.FromSeq)
+		return fmt.Errorf("%w: seq %d is over the size bound of the receiver", harness.ErrSyncRejected, b.FromSeq)
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return fmt.Errorf("%w: status %d", ErrSyncRejected, status)
+		return fmt.Errorf("%w: status %d", harness.ErrSyncRejected, status)
 	}
 	return fmt.Errorf("harness: sync post: status %d %s", status, code)
 }

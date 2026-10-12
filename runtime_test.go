@@ -16,6 +16,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 var bg = context.Background()
@@ -152,13 +153,13 @@ func text(id, s string) protocol.Input {
 // DiskStore on the same directory.
 func eachStore(t *testing.T, body func(t *testing.T, open func() harness.Store)) {
 	t.Helper()
-	mem := harness.NewMemStore()
+	mem := store.NewMemStore()
 	stores := []struct {
 		name string
 		open func(dir string) harness.Store
 	}{
 		{"mem", func(string) harness.Store { return mem }},
-		{"disk", func(dir string) harness.Store { return harness.NewDiskStore(dir) }},
+		{"disk", func(dir string) harness.Store { return store.NewDiskStore(dir) }},
 	}
 	for _, s := range stores {
 		t.Run(s.name, func(t *testing.T) {
@@ -188,12 +189,12 @@ func create(t *testing.T, r *harness.Runtime) *harness.Session {
 
 func submit(t *testing.T, s *harness.Session, in protocol.Input) protocol.Admitted {
 	t.Helper()
-	a, err := s.Submit(bg, in)
+	turn, err := s.Prompt(bg, in)
 	if err != nil {
-		t.Fatalf("Submit(%s): %v", in.ID, err)
+		t.Fatalf("Prompt(%s): %v", in.ID, err)
 	}
 	synctest.Wait()
-	return a
+	return turn.Admitted()
 }
 
 func closeRuntime(t *testing.T, r *harness.Runtime) {
@@ -285,7 +286,7 @@ func (b *scripted) Run(_ context.Context, _ turn.Request, out turn.Sink) error {
 func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		errFlaky := fmt.Errorf("%w: flaky", turn.ErrRetryable)
-		st, retries := harness.NewMemStore(), 3
+		st, retries := store.NewMemStore(), 3
 		b := &scripted{steps: []func(turn.Sink) error{func(out turn.Sink) error { _ = out.Item(callTool("c1")); return errFlaky }}}
 		r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{StreamMaxRetries: &retries}}, b)
 		if err != nil {
@@ -319,7 +320,7 @@ func (g *gatedRead) Read(ctx context.Context, id string, after uint64, limit int
 
 func TestCreateWaitsForAnOpenOfTheSameIDThatFindsNoSession(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st := &gatedRead{Store: harness.NewMemStore(), reading: make(chan struct{}), release: make(chan struct{})}
+		st := &gatedRead{Store: store.NewMemStore(), reading: make(chan struct{}), release: make(chan struct{})}
 		st.armed.Store(true)
 		r := runtime(t, st, newFake())
 		opened, created := make(chan error, 1), make(chan error, 1)
@@ -423,7 +424,7 @@ func TestCancelOfAGrandchildWhoseParentStoppedReportsOnce(t *testing.T) {
 			return calls("task", onChild("cancel", "session_id", grand))
 		})}
 		y := &stoppingSync{release: make(chan struct{})}
-		ps := &parkingStore{Store: harness.NewMemStore(), armed: make(chan struct{}), entered: make(chan struct{}), resume: make(chan struct{})}
+		ps := &parkingStore{Store: store.NewMemStore(), armed: make(chan struct{}), entered: make(chan struct{}), resume: make(chan struct{})}
 		r, err := harness.NewWithBackend(harness.Options{Store: ps, Sync: y, WorkDir: t.TempDir()}, f)
 		if err != nil {
 			t.Fatal(err)

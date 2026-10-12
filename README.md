@@ -63,12 +63,12 @@ The runtime is a Go package. The CLI and the HTTP server are clients of it. Add 
 go get github.com/majorcontext/harness@latest
 ```
 
-Then create a runtime and a session, send the session a prompt, and read its events:
+Then create a runtime and a session, send the session a prompt, and read the events of its turn:
 
 ```go
 ctx := context.Background()
 rt, err := harness.New(harness.Options{
-	Store:   harness.NewMemStore(),
+	Store:   store.NewMemStore(),
 	WorkDir: ".",
 })
 if err != nil {
@@ -80,15 +80,14 @@ s, err := rt.Create(ctx, protocol.CreateSession{})
 if err != nil {
 	log.Fatal(err)
 }
-head := s.Snapshot().HeadSeq
-_, err = s.Submit(ctx, protocol.Input{
+turn, err := s.Prompt(ctx, protocol.Input{
 	ID:    "prompt-1",
 	Parts: []protocol.Part{{Type: protocol.PartText, Text: "List the files in this directory."}},
 })
 if err != nil {
 	log.Fatal(err)
 }
-for e, err := range s.Events(ctx, head) {
+for e, err := range turn.Events(ctx) {
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,14 +97,11 @@ for e, err := range s.Events(ctx, head) {
 			fmt.Print(f.Text)
 		}
 	}
-	if e.Kind == "turn.ended" {
-		break
-	}
 }
 ```
 
 `WorkDir` gives each session the built-in tools, bash among them. Leave it empty for a session with no file access.
-`Runtime.Handler` serves the same sessions over HTTP, and `harness.NewDiskStore` keeps them on disk.
+`httpapi.Handler(rt)` serves the same sessions over HTTP, and `store.NewDiskStore` keeps them on disk. `turn.Wait` returns the stop reason and usage of the turn.
 
 See [examples/](examples) for programs that run, and the
 [API reference](https://pkg.go.dev/github.com/majorcontext/harness) for

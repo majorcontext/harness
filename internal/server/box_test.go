@@ -8,8 +8,10 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // serveBox serves a Runtime with process dev in workDir, which can be empty.
@@ -27,12 +29,12 @@ func box(t *testing.T, workDir string) (*harness.Runtime, string) {
 // boxWith serves a Runtime with process dev as dev.
 func boxWith(t *testing.T, workDir string, dev config.ProcessSpec) (*harness.Runtime, string) {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: workDir, Config: config.Config{
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: workDir, Config: config.Config{
 		Processes: map[string]config.ProcessSpec{"dev": dev}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(r.Handler())
+	srv := httptest.NewServer(httpapi.Handler(r))
 	t.Cleanup(func() {
 		_ = r.Close(context.Background())
 		srv.Close()

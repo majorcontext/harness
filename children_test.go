@@ -19,6 +19,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // family is a Backend that answers each model call by the last part of its
@@ -136,7 +137,7 @@ func profileApplied(t *testing.T, f *family, children []protocol.Session) {
 // when the first child.spawned record arrives.
 func rewriteReader(t *testing.T, dir string) harness.Store {
 	var once sync.Once
-	return &hooked{Store: harness.NewMemStore(), before: func(string) {
+	return &hooked{Store: store.NewMemStore(), before: func(string) {
 		once.Do(func() {
 			v2 := strings.NewReplacer("tools: ls", "tools: grep", "Only read files.", "Version two.").Replace(readerProfile)
 			if err := os.WriteFile(filepath.Join(dir, ".agents", "reader.md"), []byte(v2), 0o644); err != nil {
@@ -192,7 +193,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 			}
 			synctest.Test(t, func(t *testing.T) {
 				f := &family{answer: delegation(tc.agent, max(tc.spawns, 1), tc.child)}
-				var st harness.Store = harness.NewMemStore()
+				var st harness.Store = store.NewMemStore()
 				if tc.store != nil {
 					st = tc.store(t, dir)
 				}
@@ -341,7 +342,7 @@ func TestTaskNamesArgumentsOfTheWrongType(t *testing.T) {
 			}
 			return []protocol.LogMessage{call}
 		}}
-		r := familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{}, t.TempDir())
+		r := familyRuntime(t, store.NewMemStore(), f, nil, config.Config{}, t.TempDir())
 		submit(t, create(t, r), text("a", "delegate"))
 		if _, got := f.last("s1", "task: invalid arguments"); got == "" {
 			t.Error("a task call with arguments of the wrong type does not report invalid arguments")
@@ -386,7 +387,7 @@ func (g *gated) Read(ctx context.Context, id string, after uint64, limit int) ([
 
 func TestAnOpenedParentCountsItsUnsettledChildrenBeforeItRecoversThem(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		st, dir := harness.NewMemStore(), t.TempDir()
+		st, dir := store.NewMemStore(), t.TempDir()
 		cfg := config.Config{MaxConcurrentTasks: 1}
 		f1 := &family{answer: delegation("general-purpose", 1, func() []protocol.LogMessage { return nil })}
 		r1 := familyRuntime(t, st, f1, nil, cfg, dir)
@@ -422,7 +423,7 @@ func TestTwoSpawnsInOneTreeCountEachOthersChildren(t *testing.T) {
 			return []protocol.LogMessage{task("general-purpose", 1)}
 		})}
 		open, spawned := make(chan struct{}), 0
-		st := &hooked{Store: harness.NewMemStore(), before: func(id string) {
+		st := &hooked{Store: store.NewMemStore(), before: func(id string) {
 			if id == "s1" {
 				if spawned++; spawned == 2 {
 					<-open
@@ -466,7 +467,7 @@ func TestAgentDefsDirsReplaceTheDefaultProfileDir(t *testing.T) {
 		t.Run(tc.agent, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := &family{answer: delegation(tc.agent, 1, done)}
-				r := familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{AgentDefsDirs: []string{"team"}}, dir)
+				r := familyRuntime(t, store.NewMemStore(), f, nil, config.Config{AgentDefsDirs: []string{"team"}}, dir)
 				submit(t, create(t, r), text("a", "delegate"))
 				kids := children(t, r)
 				switch {

@@ -18,6 +18,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func main() {
@@ -26,7 +27,7 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -49,11 +50,11 @@ func main() {
 
 // say sends text and streams the reply until the turn ends.
 func say(ctx context.Context, s *harness.Session, id, text string) {
-	head := s.Snapshot().HeadSeq
-	if _, err := s.Submit(ctx, protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
+	t, err := s.Prompt(ctx, protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}})
+	if err != nil {
 		log.Fatal(err)
 	}
-	for e, err := range s.Events(ctx, head) {
+	for e, err := range t.Events(ctx) {
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -63,8 +64,6 @@ func say(ctx context.Context, s *harness.Session, id, text string) {
 			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
 				fmt.Print(f.Text)
 			}
-		case "turn.ended":
-			return
 		}
 	}
 }

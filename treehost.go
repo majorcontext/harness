@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
+	"github.com/majorcontext/harness/internal/storecheck"
 	"github.com/majorcontext/harness/internal/tree"
 )
 
@@ -61,7 +62,7 @@ func (h host) Created(ctx context.Context, id string) (protocol.SessionCreated, 
 
 // valid reports a session ID that no store holds as a session with no log.
 func (h host) valid(id string) error {
-	if CheckName(id) != nil {
+	if storecheck.Name(id) != nil {
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	}
 	return nil

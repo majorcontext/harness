@@ -13,6 +13,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // stateChunkBytes is the bound of one chunk of Claude Code state (spec
@@ -122,7 +123,7 @@ func newCCLane(t *testing.T, hangAfter string, fixtures ...string) *ccLane {
 	t.Helper()
 	t.Setenv("HARNESS_E2E_KEY", "k")
 	dir := t.TempDir()
-	l := &ccLane{t: t, st: harness.NewMemStore(), rcv: newSyncReceiver(t, nil), seen: filepath.Join(dir, "seen.jsonl"), argv: filepath.Join(dir, "argv.jsonl")}
+	l := &ccLane{t: t, st: store.NewMemStore(), rcv: newSyncReceiver(t, nil), seen: filepath.Join(dir, "seen.jsonl"), argv: filepath.Join(dir, "argv.jsonl")}
 	for k, v := range map[string]string{
 		"FAKE_CLAUDE_MODE": "mirror", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"), "FAKE_CLAUDE_MIRROR_FIXTURE": strings.Join(fixtures, ","),
 		"FAKE_CLAUDE_MIRROR_SEEN": l.seen, "FAKE_CLAUDE_LOG": l.argv, "FAKE_CLAUDE_MIRROR_HANG_AFTER": hangAfter,
@@ -176,7 +177,7 @@ func (l *ccLane) open(r *harness.Runtime) *harness.Session {
 
 func (l *ccLane) send(s *harness.Session, id string) {
 	l.t.Helper()
-	if _, err := s.Submit(l.t.Context(), protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: "go " + id}}}); err != nil {
+	if _, err := s.Prompt(l.t.Context(), protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: "go " + id}}}); err != nil {
 		l.t.Fatal(err)
 	}
 }

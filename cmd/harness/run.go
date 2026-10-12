@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // errGoalNotAchieved makes `harness run -goal` exit 3. Its final status is on
@@ -150,13 +151,13 @@ func runCmd(args []string) error {
 // runStore is a DiskStore in the session dir, or a MemStore with -no-save.
 func runStore(cfg *config.Config, noSave bool) (harness.Store, error) {
 	if noSave {
-		return harness.NewMemStore(), nil
+		return store.NewMemStore(), nil
 	}
 	dir, err := sessionDir(cfg.SessionDir)
 	if err != nil {
 		return nil, err
 	}
-	return harness.NewDiskStore(dir), nil
+	return store.NewDiskStore(dir), nil
 }
 
 // runSession creates the session of the run, or opens the one that -r or -c
@@ -235,11 +236,12 @@ func drive(ctx context.Context, s *harness.Session, opts runOptions, out *printe
 		if err != nil {
 			return err
 		}
-		admitted, err = s.Submit(ctx, protocol.Input{ID: id, Source: protocol.SourceTyped,
+		t, err := s.Prompt(ctx, protocol.Input{ID: id, Source: protocol.SourceTyped,
 			Parts: []protocol.Part{{Type: protocol.PartText, Text: opts.prompt}}})
 		if err != nil {
 			return err
 		}
+		admitted = t.Admitted()
 	}
 	if err := out.stream(ctx, s, head, admitted.Command != ""); err != nil {
 		return err

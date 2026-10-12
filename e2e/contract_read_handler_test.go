@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 type waitingInputs map[string][]protocol.QueuedInput
@@ -29,7 +30,7 @@ func TestContractReadHandler(t *testing.T) {
 			d.WaitIdle(t, id)
 			key := blobKeyOf(t, d, id)
 			queue := waitingInputs{"waiting": {{ID: "q1", Delivery: protocol.DeliveryQueue, Source: "user", Parts: []protocol.MessagePart{{Type: "text", Text: "later"}}}}}
-			srv := httptest.NewServer(harness.ReadHandler(harness.NewDiskStore(d.store), harness.ReadOptions{Queue: queue}))
+			srv := httptest.NewServer(httpapi.ReadHandler(store.NewDiskStore(d.store), httpapi.ReadOptions{Queue: queue}))
 			t.Cleanup(srv.Close)
 			client := wireClientReadOnly(t, srv.Client())
 			session := "/sessions/" + id

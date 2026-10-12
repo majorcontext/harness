@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestContractRuntimeReader(t *testing.T) {
@@ -35,7 +36,7 @@ func readerRuntime(t *testing.T) (*harness.Runtime, *harness.Session, []byte) {
 	t.Helper()
 	t.Setenv("HARNESS_E2E_READER_KEY", "k")
 	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "seen"}})
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_READER_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +48,7 @@ func readerRuntime(t *testing.T) (*harness.Runtime, *harness.Session, []byte) {
 	}
 	pdf := rowAttachments()[1].data
 	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "application/pdf", Data: pdf}}}
-	if _, err := s.Submit(t.Context(), in); err != nil {
+	if _, err := s.Prompt(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {

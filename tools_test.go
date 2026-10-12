@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 const noTool = "no such tool available: "
@@ -152,7 +153,7 @@ func (f *family) results(session string) []string {
 }
 
 func TestNewRejectsAToolThatTakesTheHistoryToolName(t *testing.T) {
-	_, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{newProbe("get_conversation_history", false)}})
+	_, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{newProbe("get_conversation_history", false)}})
 	if err == nil || errors.Is(err, harness.ErrInvalidRequest) {
 		t.Errorf("New = %v, want a plain error", err)
 	}
@@ -163,7 +164,7 @@ func TestNewRejectsAToolThatTakesTheSessionInfoNameOnlyWithAWorkDir(t *testing.T
 		workDir string
 		reject  bool
 	}{{t.TempDir(), true}, {"", false}} {
-		_, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: tc.workDir, Tools: []harness.Tool{newProbe("session_info", false)}})
+		_, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: tc.workDir, Tools: []harness.Tool{newProbe("session_info", false)}})
 		if (err != nil) != tc.reject || errors.Is(err, harness.ErrInvalidRequest) {
 			t.Errorf("New with WorkDir %q = %v, want rejected = %v with a plain error", tc.workDir, err, tc.reject)
 		}

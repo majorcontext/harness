@@ -1,13 +1,14 @@
-package harness
+package httpapi
 
 import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 
+	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/internal/listing"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -28,28 +29,25 @@ type Queue interface {
 	Queued(ctx context.Context, session string) ([]protocol.QueuedInput, error)
 }
 
-// ReadHandler returns the HTTP API of the read routes of Runtime.Handler over st, with no Runtime and no owner.
+// ReadHandler returns the HTTP API of the read routes of Handler over st, with no Runtime and no owner.
 // The inputs of opts.Queue follow the queued inputs of the log in GET /sessions/{id}/inputs and in Session.queued. A
 // session with no log but with waiting inputs answers GET /sessions/{id}/inputs from the queue alone; its other
 // routes answer session_not_found. A nil opts.Queue lists the log only.
-func ReadHandler(st Store, opts ReadOptions) http.Handler {
+func ReadHandler(st harness.Store, opts ReadOptions) http.Handler {
 	log := cmp.Or(opts.Logger, slog.Default())
-	return server.NewReads(storeReads{st: st, births: &births{}, queue: opts.Queue, log: log}, server.Options{Logger: log})
+	return server.NewReads(storeReads{st: st, lister: &listing.Lister{}, queue: opts.Queue, log: log}, server.Options{Logger: log})
 }
 
 // storeReads is a Store and its Queue as the reads of the server.
 type storeReads struct {
-	st     Store
-	births *births
+	st     harness.Store
+	lister *listing.Lister
 	queue  Queue
 	log    *slog.Logger
 }
 
 func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) {
-	if err := CheckName(id); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
-	}
-	v, err := OpenView(ctx, s.st, id)
+	v, err := harness.OpenView(ctx, s.st, id)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +56,6 @@ func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) 
 
 // Session returns the session with the IDs of the queued inputs of the log and then those of the queue.
 func (s storeReads) Session(ctx context.Context, id string) (protocol.Session, error) {
-	if err := CheckName(id); err != nil {
-		return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
-	}
 	rd, err := s.open(ctx, id)
 	if err != nil {
 		return protocol.Session{}, err
@@ -69,7 +64,7 @@ func (s storeReads) Session(ctx context.Context, id string) (protocol.Session, e
 }
 
 func (s storeReads) open(ctx context.Context, id string) (queued, error) {
-	v, err := OpenView(ctx, s.st, id)
+	v, err := harness.OpenView(ctx, s.st, id)
 	if err != nil {
 		return queued{}, err
 	}
@@ -87,11 +82,8 @@ func (s storeReads) waiting(ctx context.Context, id string) ([]protocol.QueuedIn
 // Inputs returns the queued inputs of the log and then those of the queue. A session with no log lists those of
 // the queue alone.
 func (s storeReads) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
-	if err := CheckName(id); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
-	}
 	rd, err := s.open(ctx, id)
-	if !errors.Is(err, ErrSessionNotFound) {
+	if !errors.Is(err, harness.ErrSessionNotFound) {
 		if err != nil {
 			return nil, err
 		}
@@ -108,18 +100,28 @@ func (s storeReads) Inputs(ctx context.Context, id string) ([]protocol.QueuedInp
 }
 
 func (s storeReads) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	return listSessions(ctx, s.st, s.births, s.log, q, func(ctx context.Context, id string) (protocol.Session, error) {
-		rd, err := s.open(ctx, id)
-		if err != nil {
-			return protocol.Session{}, err
-		}
-		return rd.Snapshot(), nil
-	})
+	return s.lister.Page(ctx, listing.Source{Sessions: s.st.Sessions, First: s.first, Describe: s.describe, Invalid: harness.ErrInvalidRequest, Log: s.log}, q)
+}
+
+func (s storeReads) describe(ctx context.Context, id string) (protocol.Session, error) {
+	rd, err := s.open(ctx, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return rd.Snapshot(), nil
+}
+
+func (s storeReads) first(ctx context.Context, id string) ([]byte, error) {
+	recs, err := s.st.Read(ctx, id, 0, 1)
+	if err != nil || len(recs) == 0 {
+		return nil, err
+	}
+	return recs[0].Data, nil
 }
 
 // queued is a stored session with the inputs of a Queue behind those of its log.
 type queued struct {
-	*View
+	*harness.View
 	waiting []protocol.QueuedInput
 }
 

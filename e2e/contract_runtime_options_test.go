@@ -14,7 +14,9 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func TestContractRuntimeOptions(t *testing.T) {
@@ -39,7 +41,7 @@ func TestContractRuntimeOptions(t *testing.T) {
 func authorizationOfOneTurn(t *testing.T, getenv func(string) string, steps ...harnesstest.Step) string {
 	t.Helper()
 	fake := harnesstest.NewChat(t, steps...)
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Getenv: getenv, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: getenv, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_OPTIONS_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +51,7 @@ func authorizationOfOneTurn(t *testing.T, getenv func(string) string, steps ...h
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {
@@ -93,7 +95,7 @@ func rowARuntimeWithAGetenvSendsTheKeyThatItReturns(t *testing.T) {
 }
 
 func rowTheLoggerOptionReceivesTheLogLinesOfTheRuntime(t *testing.T) {
-	st := harness.NewMemStore()
+	st := store.NewMemStore()
 	if err := st.Append(t.Context(), "bad", 0, []byte("not an envelope")); err != nil {
 		t.Fatal(err)
 	}
@@ -120,8 +122,8 @@ func (s failingStore) Head(context.Context, string) (uint64, error) { return 0, 
 
 func rowTheReadHandlerLogsTheCauseOfAnErrorThatItMasks(t *testing.T) {
 	var buf bytes.Buffer
-	h := harness.ReadHandler(failingStore{harness.NewMemStore(), errors.New("store down: disk full")},
-		harness.ReadOptions{Logger: slog.New(slog.NewTextHandler(&buf, nil))})
+	h := httpapi.ReadHandler(failingStore{store.NewMemStore(), errors.New("store down: disk full")},
+		httpapi.ReadOptions{Logger: slog.New(slog.NewTextHandler(&buf, nil))})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/s1", nil))
 	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "disk full") {
@@ -133,7 +135,7 @@ func rowTheReadHandlerLogsTheCauseOfAnErrorThatItMasks(t *testing.T) {
 }
 
 func rowCommandsReturnsTheCauseOfAnEndedContext(t *testing.T) {
-	r := lifetimeRuntimeOn(t, harness.NewMemStore(), nil)
+	r := lifetimeRuntimeOn(t, store.NewMemStore(), nil)
 	ctx, cancel := context.WithCancelCause(t.Context())
 	boom := errors.New("caller left")
 	cancel(boom)

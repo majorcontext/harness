@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // serveBudget bounds Runtime.Close and the HTTP shutdown together.
@@ -99,7 +101,7 @@ func serveCmd(args []string) error {
 	if unauthenticated {
 		warnUnauthenticated(logger, bound)
 	}
-	store := newObservedStore(harness.NewDiskStore(dir), logger)
+	store := newObservedStore(store.NewDiskStore(dir), logger)
 	owner, replica := replication(cfg)
 	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask, Getenv: os.Getenv, Logger: logger,
 		ServeURL: serveURLForAddr(bound), RunToken: token})
@@ -112,7 +114,7 @@ func serveCmd(args []string) error {
 	defer stopBackground()
 	go newGCWatcher(logger).run(background)
 	go store.watch(background)
-	httpSrv := &http.Server{Handler: corsHandler(bearer(rt.Handler(), token, unauthenticated), o.corsOrigin)}
+	httpSrv := &http.Server{Handler: corsHandler(bearer(httpapi.Handler(rt), token, unauthenticated), o.corsOrigin)}
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	var caughtUp atomic.Bool

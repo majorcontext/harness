@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/majorcontext/harness/internal/process"
-	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -26,7 +25,7 @@ func (h *handler[S]) boxHandlers() map[string]http.HandlerFunc {
 		"processLogs": h.process(logs),
 		"workspaceChanges": h.serve(func(w http.ResponseWriter, r *http.Request) error {
 			q := r.URL.Query()
-			c, err := workspace.Changes(r.Context(), h.workDir, q.Get("dir"), q.Get("scope"))
+			c, err := h.workspace(r.Context(), q.Get("dir"), q.Get("scope"))
 			if err != nil {
 				return err
 			}

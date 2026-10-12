@@ -14,6 +14,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 var bg = context.Background()
@@ -80,7 +81,7 @@ func ask(t *testing.T, s *harness.Session, texts ...string) {
 	t.Helper()
 	for _, txt := range texts {
 		after := s.Snapshot().HeadSeq
-		if _, err := s.Submit(bg, protocol.Input{ID: txt, Parts: []protocol.Part{{Type: protocol.PartText, Text: txt}}}); err != nil {
+		if _, err := s.Prompt(bg, protocol.Input{ID: txt, Parts: []protocol.Part{{Type: protocol.PartText, Text: txt}}}); err != nil {
 			t.Fatal(err)
 		}
 		awaitTurn(t, s, after)
@@ -133,7 +134,7 @@ func TestHandoffDuringCompaction(t *testing.T) {
 				steps = append(steps, compactSummary("summary again", harnesstest.Reply{Text: "sum"}))
 			}
 			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
-			st := harness.NewMemStore()
+			st := store.NewMemStore()
 			hold := holdNth{n: 4, seen: new(atomic.Int32), held: make(chan struct{}), finish: tc.finish}
 			r1, sess := openCompacting(t, s, st, 1, hold)
 			ask(t, sess, "alpha", "bravo", "charlie")

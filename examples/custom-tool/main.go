@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // rollDice is a harness.Tool: a spec for the model and a function to run.
@@ -51,7 +52,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -60,12 +61,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	head := s.Snapshot().HeadSeq
 	prompt := "Roll a 20-sided die twice and tell me the total."
-	if _, err := s.Submit(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}}); err != nil {
+	t, err := s.Prompt(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}})
+	if err != nil {
 		log.Fatal(err)
 	}
-	for e, err := range s.Events(ctx, head) {
+	for e, err := range t.Events(ctx) {
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -92,9 +93,7 @@ func main() {
 					fmt.Printf("\n[%s %s]\n", p.Name, p.Arguments)
 				}
 			}
-		case "turn.ended":
-			fmt.Println()
-			return
 		}
 	}
+	fmt.Println()
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: ".", Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: ".", Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -36,11 +37,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	head := s.Snapshot().HeadSeq
-	if _, err := s.Submit(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}}); err != nil {
+	t, err := s.Prompt(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}})
+	if err != nil {
 		log.Fatal(err)
 	}
-	for e, err := range s.Events(ctx, head) {
+	for e, err := range t.Events(ctx) {
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -50,9 +51,7 @@ func main() {
 			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
 				fmt.Print(f.Text)
 			}
-		case "turn.ended":
-			fmt.Println()
-			return
 		}
 	}
+	fmt.Println()
 }
