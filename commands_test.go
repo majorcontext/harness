@@ -108,15 +108,15 @@ func TestCloseRefusesATypedCommand(t *testing.T) {
 		go func() { closed <- r.Close(bg) }()
 		synctest.Wait()
 		admitted := make(chan error, 1)
-		go func() { _, err := s.Submit(bg, typed("a", "/thinking high")); admitted <- err }()
+		go func() { _, err := s.Prompt(bg, typed("a", "/thinking high")); admitted <- err }()
 		synctest.Wait()
 		select {
 		case err := <-admitted:
 			if !errors.Is(err, harness.ErrDraining) {
-				t.Errorf("Submit = %v, want ErrDraining", err)
+				t.Errorf("Prompt = %v, want ErrDraining", err)
 			}
 		default:
-			t.Error("Submit waits for the session while Close runs, want ErrDraining")
+			t.Error("Prompt waits for the session while Close runs, want ErrDraining")
 		}
 		close(st.hold)
 		if err := <-closed; err != nil {

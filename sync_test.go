@@ -220,8 +220,8 @@ func TestStaleEpochStopsTheSessionWithoutAnAppend(t *testing.T) {
 		r := syncRuntime(t, st, rep, f)
 		s := create(t, r)
 		synctest.Wait()
-		if _, err := s.Submit(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
-			t.Fatalf("Submit after a stale-epoch rejection = %v, want ErrSessionNotOwned", err)
+		if _, err := s.Prompt(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
+			t.Fatalf("Prompt after a stale-epoch rejection = %v, want ErrSessionNotOwned", err)
 		}
 		noRun(t, f)
 		wantLog(t, st, 0, "session.created", "owner.acquired 1")
@@ -298,8 +298,8 @@ func TestADivergedReceiverStopsTheSession(t *testing.T) {
 		r := syncRuntime(t, st, rep, f)
 		s := create(t, r)
 		synctest.Wait()
-		if _, err := s.Submit(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
-			t.Fatalf("Submit after a conflict rejection = %v, want ErrSessionNotOwned", err)
+		if _, err := s.Prompt(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
+			t.Fatalf("Prompt after a conflict rejection = %v, want ErrSessionNotOwned", err)
 		}
 		ctx, cancel := context.WithTimeout(bg, time.Minute)
 		defer cancel()

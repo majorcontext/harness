@@ -101,7 +101,7 @@ var nodeRules = []nodeRule{
 		name:   "single_blob_writer",
 		detail: "only the session, the runtime, ApplySync, and the store wrappers call Store.PutBlob (spec: Inputs, Store)",
 		match:  callsMethod("PutBlob", 4),
-		allow:  append([]string{"session.go#Submit"}, storeWriters...),
+		allow:  append([]string{"session.go#admitInput"}, storeWriters...),
 	},
 	{
 		name:   "single_applier",

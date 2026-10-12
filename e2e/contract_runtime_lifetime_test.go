@@ -239,7 +239,7 @@ func submitAfterArming(t *testing.T, st *flaky) *harness.Session {
 	t.Helper()
 	s := lifetimeSession(t, lifetimeRuntimeOn(t, st, nil))
 	st.armed.Store(true)
-	_, _ = s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
+	_, _ = s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
 	awaitDone(t, s)
 	return s
 }

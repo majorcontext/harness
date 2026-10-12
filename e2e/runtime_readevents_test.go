@@ -113,7 +113,7 @@ func writeTwoTurnLog(t *testing.T, ctx context.Context, st harness.Store) {
 		t.Fatal(err)
 	}
 	for turn, text := range []string{"go", "two"} {
-		if _, err := s.Submit(ctx, protocol.Input{ID: text, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
+		if _, err := s.Prompt(ctx, protocol.Input{ID: text, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
 			t.Fatal(err)
 		}
 		ended := 0

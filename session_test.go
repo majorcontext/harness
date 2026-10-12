@@ -27,7 +27,7 @@ func watch(t *testing.T, s *harness.Session, after, end uint64, in protocol.Inpu
 			t.Fatal(err)
 		}
 		if out = append(out, e); len(out) == 1 {
-			if _, err := s.Submit(bg, in); err != nil {
+			if _, err := s.Prompt(bg, in); err != nil {
 				t.Fatal(err)
 			}
 			if stall {

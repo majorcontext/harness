@@ -188,12 +188,12 @@ func create(t *testing.T, r *harness.Runtime) *harness.Session {
 
 func submit(t *testing.T, s *harness.Session, in protocol.Input) protocol.Admitted {
 	t.Helper()
-	a, err := s.Submit(bg, in)
+	turn, err := s.Prompt(bg, in)
 	if err != nil {
-		t.Fatalf("Submit(%s): %v", in.ID, err)
+		t.Fatalf("Prompt(%s): %v", in.ID, err)
 	}
 	synctest.Wait()
-	return a
+	return turn.Admitted()
 }
 
 func closeRuntime(t *testing.T, r *harness.Runtime) {

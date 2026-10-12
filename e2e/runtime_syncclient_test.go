@@ -270,7 +270,7 @@ func rowSyncPostsTheLogWithTheBearerTokenAndTheEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hi"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hi"}}}); err != nil {
 		t.Fatal(err)
 	}
 	awaitIdle(t, s)
@@ -406,7 +406,7 @@ func rowPluginGetsServeUrlAndRunTokenFromOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hi"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hi"}}}); err != nil {
 		t.Fatal(err)
 	}
 	awaitIdle(t, s)

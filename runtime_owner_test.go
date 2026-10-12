@@ -175,8 +175,8 @@ func TestFenceStopsTheStaleOwner(t *testing.T) {
 		}
 		open(t, r2)
 		for range 2 {
-			if _, err := stale.Submit(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
-				t.Fatalf("Submit on the stale owner = %v, want ErrSessionNotOwned", err)
+			if _, err := stale.Prompt(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
+				t.Fatalf("Prompt on the stale owner = %v, want ErrSessionNotOwned", err)
 			}
 		}
 		wantLog(t, st, 0, "session.created", "owner.acquired 1", "owner.acquired 1")

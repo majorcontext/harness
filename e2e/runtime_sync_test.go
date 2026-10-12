@@ -50,7 +50,7 @@ func TestSyncCarriesTheAttachmentOfAnInput(t *testing.T) {
 	}
 	pdf := rowAttachments()[1].data
 	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "application/pdf", Data: pdf}}}
-	if _, err := s.Submit(t.Context(), in); err != nil {
+	if _, err := s.Prompt(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {
@@ -88,7 +88,7 @@ func TestSyncCarriesTheBlobOfARetainedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {
@@ -136,7 +136,7 @@ func TestSyncCarriesTheImageOfAToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {

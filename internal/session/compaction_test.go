@@ -80,7 +80,7 @@ func ask(t *testing.T, s *harness.Session, texts ...string) {
 	t.Helper()
 	for _, txt := range texts {
 		after := s.Snapshot().HeadSeq
-		if _, err := s.Submit(bg, protocol.Input{ID: txt, Parts: []protocol.Part{{Type: protocol.PartText, Text: txt}}}); err != nil {
+		if _, err := s.Prompt(bg, protocol.Input{ID: txt, Parts: []protocol.Part{{Type: protocol.PartText, Text: txt}}}); err != nil {
 			t.Fatal(err)
 		}
 		awaitTurn(t, s, after)

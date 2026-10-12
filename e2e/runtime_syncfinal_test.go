@@ -122,7 +122,7 @@ func rowSyncSplitsABatchUnderTheBodyCap(t *testing.T) {
 		pdf := append([]byte("%PDF-1.4\n"), make([]byte, 12<<20)...)
 		pdf[len(pdf)-1] = byte(i + 1)
 		in := protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: "see"}, {Type: protocol.PartBlob, MediaType: "application/pdf", Data: pdf}}}
-		if _, err := s.Submit(t.Context(), in); err != nil {
+		if _, err := s.Prompt(t.Context(), in); err != nil {
 			t.Fatal(err)
 		}
 		awaitTurns(t, s, i+1)

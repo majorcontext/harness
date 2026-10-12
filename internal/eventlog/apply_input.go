@@ -34,7 +34,7 @@ func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 	if len(s.prog.Requests) > 0 {
 		return illegal("request %s is open", s.prog.Requests[0])
 	}
-	s.inputs[e.InputID] = input{inputAdmitted, seq, e}
+	s.inputs[e.InputID] = input{state: inputAdmitted, seq: seq, event: e}
 	return nil
 }
 
@@ -49,6 +49,7 @@ func (s *State) applyPromoted(e protocol.InputPromoted) error {
 		return illegal("input %s waits for the next turn", e.InputID)
 	}
 	s.takeInput(e.InputID, inputPromoted)
+	s.setInputTurn(e.InputID, e.TurnID)
 	return nil
 }
 
@@ -58,6 +59,12 @@ func (s *State) applyWithdrawn(e protocol.InputWithdrawn) error {
 	}
 	s.takeInput(e.InputID, inputWithdrawn)
 	return nil
+}
+
+func (s *State) setInputTurn(id, turnID string) {
+	in := s.inputs[id]
+	in.turnID = turnID
+	s.inputs[id] = in
 }
 
 func (s *State) takeInput(id string, to inputState) {

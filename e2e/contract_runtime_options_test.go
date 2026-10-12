@@ -49,7 +49,7 @@ func authorizationOfOneTurn(t *testing.T, getenv func(string) string, steps ...h
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {

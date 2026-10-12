@@ -24,7 +24,7 @@ func (r *Runtime) Handler() http.Handler {
 	if r.procs != nil {
 		procs = processRoutes{r}
 	}
-	return server.New[*Session](serving{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health, Logger: r.log})
+	return server.New[served](serving{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health, Logger: r.log})
 }
 
 // Read returns the running Session of id, or a View of its stored log. It
@@ -46,6 +46,27 @@ func (r *Runtime) Read(ctx context.Context, id string) (Reader, error) {
 
 // serving is the Runtime as the server runs it.
 type serving struct{ *Runtime }
+
+func (s serving) Create(ctx context.Context, req protocol.CreateSession) (served, error) {
+	sess, err := s.Runtime.Create(ctx, req)
+	return served{sess}, err
+}
+
+func (s serving) Open(ctx context.Context, id string) (served, error) {
+	sess, err := s.Runtime.Open(ctx, id)
+	return served{sess}, err
+}
+
+// served is a Session as the server runs it.
+type served struct{ *Session }
+
+func (s served) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
+	t, err := s.Prompt(ctx, in)
+	if err != nil {
+		return protocol.Admitted{}, err
+	}
+	return t.Admitted(), nil
+}
 
 func (s serving) Read(ctx context.Context, id string) (server.Reader, error) {
 	rd, err := s.Runtime.Read(ctx, id)

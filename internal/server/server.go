@@ -21,7 +21,8 @@ import (
 // Session is a session that the Runtime runs.
 type Session interface {
 	Snapshot() protocol.Session
-	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
+	// Admit admits an input and returns its receipt.
+	Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
 	Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error)
@@ -348,7 +349,7 @@ func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, &in, maxInputBody); err != nil {
 		return err
 	}
-	a, err := s.Submit(r.Context(), in)
+	a, err := s.Admit(r.Context(), in)
 	if err != nil {
 		return err
 	}

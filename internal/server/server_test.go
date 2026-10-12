@@ -236,7 +236,7 @@ func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session,
 	return s.Snapshot(), nil
 }
 func (stub) Events(context.Context, uint64) iter.Seq2[protocol.Event, error] { return nil }
-func (s stub) Submit(context.Context, protocol.Input) (protocol.Admitted, error) {
+func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, error) {
 	return s.receipt, nil
 }
 

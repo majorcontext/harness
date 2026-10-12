@@ -47,7 +47,7 @@ func readerRuntime(t *testing.T) (*harness.Runtime, *harness.Session, []byte) {
 	}
 	pdf := rowAttachments()[1].data
 	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "application/pdf", Data: pdf}}}
-	if _, err := s.Submit(t.Context(), in); err != nil {
+	if _, err := s.Prompt(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
 	for e, err := range s.Events(t.Context(), 0) {

@@ -66,7 +66,7 @@ func stuckRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, stubborn
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
 		t.Fatal(err)
 	}
 	<-tool.started

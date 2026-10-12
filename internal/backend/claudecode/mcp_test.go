@@ -200,7 +200,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	r := claudeRuntime(t, st, block)
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
-	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+	if _, err := s.Prompt(bg, text("a", "hi")); err != nil {
 		t.Fatal(err)
 	}
 	ended := make(chan struct{})

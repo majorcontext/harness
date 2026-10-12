@@ -36,6 +36,7 @@ func (s *State) applyStarted(e protocol.TurnStarted) error {
 	}
 	for _, id := range e.InputIDs {
 		s.takeInput(id, inputPromoted)
+		s.setInputTurn(id, e.TurnID)
 	}
 	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
 	s.turnAt, s.turnBy, s.turnItems = len(s.history), ProviderOf(s.model), 0

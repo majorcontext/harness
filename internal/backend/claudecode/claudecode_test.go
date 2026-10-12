@@ -100,7 +100,7 @@ func await(t *testing.T, s *harness.Session, after uint64, kind string) uint64 {
 func turnOf(t *testing.T, s *harness.Session, in protocol.Input) {
 	t.Helper()
 	after := s.Snapshot().HeadSeq
-	if _, err := s.Submit(bg, in); err != nil {
+	if _, err := s.Prompt(bg, in); err != nil {
 		t.Fatal(err)
 	}
 	await(t, s, after, "turn.ended")
@@ -225,7 +225,7 @@ func TestClaudeCodeStreamsDeltas(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got == nil {
-			if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+			if _, err := s.Prompt(bg, text("a", "hi")); err != nil {
 				t.Fatal(err)
 			}
 		}

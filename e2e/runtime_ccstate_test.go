@@ -176,7 +176,7 @@ func (l *ccLane) open(r *harness.Runtime) *harness.Session {
 
 func (l *ccLane) send(s *harness.Session, id string) {
 	l.t.Helper()
-	if _, err := s.Submit(l.t.Context(), protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: "go " + id}}}); err != nil {
+	if _, err := s.Prompt(l.t.Context(), protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: "go " + id}}}); err != nil {
 		l.t.Fatal(err)
 	}
 }

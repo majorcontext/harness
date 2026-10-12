@@ -72,13 +72,26 @@ func detach(s protocol.Session) protocol.Session {
 	return s
 }
 
-// Submit admits an input. It starts a turn when none runs. While a turn runs,
-// a steer input, which is the default, joins it at its next item boundary,
-// and a queue input waits for the next turn. A repeated input ID returns
-// the original receipt with Repeat set; the verdict is atomic with the
-// admission. A typed slash command records command.recorded instead of an
-// input, and the receipt carries its status; see docs/architecture.md, Inputs.
-func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
+// Prompt admits an input and returns the Turn that will take it. It starts a
+// turn when none runs. While a turn runs, a steer input, which is the default,
+// joins it at its next item boundary, and a queue input waits for the next
+// turn. A repeated input ID returns the Turn of the original receipt, with
+// Repeat set; the verdict is atomic with the admission. A typed slash command
+// records command.recorded instead of an input, and the receipt carries its
+// status; see docs/architecture.md, Inputs.
+func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error) {
+	adm, err := s.admitInput(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return s.Turn(adm), nil
+}
+
+// Turn returns the Turn of the receipt a, for example after Open on another
+// runtime. It reads nothing until a method of the Turn runs.
+func (s *Session) Turn(a protocol.Admitted) *Turn { return &Turn{s: s, adm: a} }
+
+func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
 		return protocol.Admitted{}, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
 	}

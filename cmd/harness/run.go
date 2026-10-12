@@ -235,11 +235,12 @@ func drive(ctx context.Context, s *harness.Session, opts runOptions, out *printe
 		if err != nil {
 			return err
 		}
-		admitted, err = s.Submit(ctx, protocol.Input{ID: id, Source: protocol.SourceTyped,
+		t, err := s.Prompt(ctx, protocol.Input{ID: id, Source: protocol.SourceTyped,
 			Parts: []protocol.Part{{Type: protocol.PartText, Text: opts.prompt}}})
 		if err != nil {
 			return err
 		}
+		admitted = t.Admitted()
 	}
 	if err := out.stream(ctx, s, head, admitted.Command != ""); err != nil {
 		return err

@@ -70,7 +70,7 @@ func turn(t *testing.T, r *harness.Runtime, id, text string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sess.Submit(bg, protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
+	if _, err := sess.Prompt(bg, protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
 		t.Fatal(err)
 	}
 	var results []string
