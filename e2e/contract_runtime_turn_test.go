@@ -194,7 +194,9 @@ func rowSteerJoinsTheRunningTurn(t *testing.T) {
 }
 
 func rowSteerOfAnInputThatWaitsFailsWithTurnMismatch(t *testing.T) {
-	_, s, fake := turnRuntime(t, harnesstest.Step{Name: "first", Reply: harnesstest.Reply{Text: "working", Block: true}})
+	_, s, fake := turnRuntime(t,
+		harnesstest.Step{Name: "first", Reply: harnesstest.Reply{Text: "working", Block: true}},
+		harnesstest.Step{Name: "later", Reply: harnesstest.Reply{Text: "done"}})
 	running := promptTurn(t, s, textInput("a", "go"))
 	awaitRequest(t, fake)
 	queued := textInput("b", "later")
@@ -205,6 +207,7 @@ func rowSteerOfAnInputThatWaitsFailsWithTurnMismatch(t *testing.T) {
 	}
 	fake.Release("first")
 	waitTurn(t, running)
+	waitTurn(t, waiting)
 }
 
 func rowATypedCommandWaitsForItsFinalStatus(t *testing.T) {
