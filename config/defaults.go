@@ -9,7 +9,8 @@ const DefaultModel = "anthropic/claude-fable-5"
 func Defaults() Config {
 	return Config{
 		Model:                   DefaultModel,
-		PromptRetries:           new(2),
+		RequestMaxRetries:       new(4),
+		StreamMaxRetries:        new(5),
 		StreamIdleTimeoutS:      300,
 		CompactionThreshold:     0.8,
 		CompactionKeepTurns:     2,
@@ -54,9 +55,17 @@ func applyProviderDefaults(providers map[string]Provider) {
 	}
 }
 
-// PromptRetriesValue returns prompt_retries, or its default.
-func (c *Config) PromptRetriesValue() int {
-	return valueOr(c, func(c *Config) *int { return c.PromptRetries })
+// MaxRetries is the largest value of request_max_retries and stream_max_retries.
+const MaxRetries = 100
+
+// RequestMaxRetriesValue returns request_max_retries, or its default, at most MaxRetries.
+func (c *Config) RequestMaxRetriesValue() int {
+	return min(valueOr(c, func(c *Config) *int { return c.RequestMaxRetries }), MaxRetries)
+}
+
+// StreamMaxRetriesValue returns stream_max_retries, or its default, at most MaxRetries.
+func (c *Config) StreamMaxRetriesValue() int {
+	return min(valueOr(c, func(c *Config) *int { return c.StreamMaxRetries }), MaxRetries)
 }
 
 // ModelToolEnabled returns model_tool, or its default.

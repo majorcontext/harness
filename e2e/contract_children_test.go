@@ -132,7 +132,7 @@ func TestContractChildReportText(t *testing.T) {
 	}}}
 	runScenarios(t, []scenario{
 		busyChildReport("child_usage_limit_reaches_a_busy_parent", nil, harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}),
-		busyChildReport("child_rate_limit_reaches_a_busy_parent", map[string]any{"prompt_retries": 0}, harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}),
+		busyChildReport("child_rate_limit_reaches_a_busy_parent", map[string]any{"stream_max_retries": 0}, harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}),
 		busyChildReport("child_long_result_reaches_a_busy_parent", nil, harnesstest.Reply{Text: strings.Repeat("long result ", 400)}),
 		busyChildReport("child_result_within_the_byte_limit_reaches_a_busy_parent", nil, harnesstest.Reply{Text: strings.Repeat("wide result ", 337)}),
 		busyChildReport("child_long_error_reaches_a_busy_parent", nil, harnesstest.Reply{HTTPStatus: 400, ErrorMessage: longError}),

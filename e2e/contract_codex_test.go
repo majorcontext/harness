@@ -392,6 +392,31 @@ func codexHTTPRows() []codexScenario {
 		},
 		{
 			scenario: scenario{
+				name:    "codex_http_incomplete_content_filter_is_retried",
+				model:   []harnesstest.Step{turn("filtered", "one", "partial"), turn("one", "one", "1")},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"filtered": {Incomplete: "content_filter"}}},
+		},
+		{
+			scenario: scenario{
+				name:    "codex_http_incomplete_with_another_reason_is_retried",
+				model:   []harnesstest.Step{turn("odd", "one", "partial"), turn("one", "one", "1")},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "unheard_of"}}},
+		},
+		{
+			scenario: scenario{
+				name:    "codex_http_incomplete_fails_the_turn_after_stream_max_retries",
+				config:  map[string]any{"stream_max_retries": 1},
+				model:   []harnesstest.Step{turn("odd", "one", "partial"), turn("odd_again", "one", "partial")},
+				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "content_filter"}, "odd_again": {Incomplete: "content_filter"}}},
+		},
+		{
+			scenario: scenario{
 				name:    "codex_service_tier_reaches_the_request",
 				model:   codexHi,
 				actions: codexSession([]action{setServiceTier{as: "a", tier: "priority"}}, codexTurn("a", "hello"), []action{recordWire{}}),

@@ -69,7 +69,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	for name, p := range cfg.ResolvedProviders() {
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
-		} else if c := client(name, p, transport, env); c != nil {
+		} else if c := client(name, p, transport, env, cfg.RequestMaxRetriesValue()); c != nil {
 			backends[name] = modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 		}
 	}
@@ -79,7 +79,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 // client returns the model API client of entry name, or nil for an entry
 // that names no model API. An entry keyed by a native family may leave Type
 // empty. A transport may supply the credentials, so the key variable may be unset.
-func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env) provider.Provider {
+func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, retries int) provider.Provider {
 	var hc *http.Client
 	if transport != nil {
 		if rt := transport(name); rt != nil {
@@ -90,13 +90,13 @@ func client(name string, p config.Provider, transport func(provider string) http
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
 		return &responses.Client{Family: name, APIKey: env.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
-			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport}
+			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: env.Getenv(p.APIKeyEnv), BaseURL: p.BaseURL,
-			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey}
+			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
 		return &anthropic.Client{APIKey: env.Getenv(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY")), BaseURL: p.BaseURL,
-			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders}
+			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
 }

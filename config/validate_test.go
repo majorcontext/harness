@@ -34,6 +34,8 @@ func TestValidate(t *testing.T) {
 		{name: "a negative max_concurrent_tasks", cfg: Config{MaxConcurrentTasks: -1}, want: "max_concurrent_tasks"},
 		{name: "a negative max_tree_tokens", cfg: Config{MaxTreeTokens: -1}, want: "max_tree_tokens"},
 		{name: "a negative max_tokens", cfg: Config{MaxTokens: -1}, want: "max_tokens"},
+		{name: "a negative request_max_retries", cfg: Config{RequestMaxRetries: new(-1)}, want: "request_max_retries"},
+		{name: "a negative stream_max_retries", cfg: Config{StreamMaxRetries: new(-1)}, want: "stream_max_retries"},
 		{name: "an append prompt that extra_args replaces", cfg: Config{AppendSystemPrompt: []string{"fact"}, Providers: cc}, want: "conflicts with append_system_prompt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

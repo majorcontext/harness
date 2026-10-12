@@ -54,7 +54,8 @@ type Client struct {
 	// Authorization. Here they are applied first and the fixed headers
 	// overwrite them, so no config can replace X-Api-Key, Anthropic-Version,
 	// or Content-Type.
-	ExtraHeaders map[string]string
+	ExtraHeaders   map[string]string
+	RequestRetries int // see provider.Do
 }
 
 func (c *Client) Name() string { return Family }
@@ -101,7 +102,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	resp, err := hc.Do(httpReq)
+	resp, err := provider.Do(ctx, hc, httpReq, c.RequestRetries)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func apiError(resp *http.Response) error {
 		err = fmt.Errorf("anthropic: HTTP %d", resp.StatusCode)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
-		return provider.MarkRetryable(err, class)
+		return provider.MarkRetryableAfter(err, class, resp.Header)
 	}
 	return err
 }

@@ -53,6 +53,7 @@ type Client struct {
 	// parameter. It suppresses that ONE field: "user" keeps carrying the
 	// session key either way.
 	NoPromptCacheKey bool
+	RequestRetries   int // see provider.Do
 }
 
 // transcodeOptions renders this client's wire choices for the transcoder.
@@ -95,7 +96,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	resp, err := hc.Do(httpReq)
+	resp, err := provider.Do(ctx, hc, httpReq, c.RequestRetries)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,7 @@ func apiError(family string, resp *http.Response) error {
 		err = fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
-		return provider.MarkRetryable(err, class)
+		return provider.MarkRetryableAfter(err, class, resp.Header)
 	}
 	return err
 }

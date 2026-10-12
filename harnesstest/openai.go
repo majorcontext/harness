@@ -49,6 +49,9 @@ type CodexReply struct {
 	// Drop ends the response after the first text delta, with no terminal
 	// event. The Step needs Reply.Text.
 	Drop bool
+	// Incomplete ends the response with a response.incomplete event that
+	// carries this incomplete_details.reason, in place of response.completed.
+	Incomplete string
 }
 
 // RateLimits is a Codex subscription usage snapshot.
@@ -135,8 +138,8 @@ func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
 	steps = append([]Step(nil), steps...)
 	for i := range steps {
 		st := &steps[i]
-		if r := st.Reply; r.Block || r.HTTPStatus != 0 || r.StopReason != "" {
-			t.Fatalf("harnesstest: step %q: the OpenAI server does not support Block, HTTPStatus, or StopReason", st.Name)
+		if r := st.Reply; r.Block || r.HTTPStatus != 0 || r.StopReason != "" || r.Hangup {
+			t.Fatalf("harnesstest: step %q: the OpenAI server does not support Block, HTTPStatus, StopReason, or Hangup", st.Name)
 		}
 		if opts.Replies[st.Name].Drop && st.Reply.Text == "" {
 			t.Fatalf("harnesstest: step %q: Drop needs Reply.Text", st.Name)

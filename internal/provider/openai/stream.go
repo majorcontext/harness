@@ -3,6 +3,7 @@ package openai
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -529,9 +530,13 @@ func (s *stream) handle(name string, data []byte) error {
 		s.usage.CacheReadTokens = cached
 
 		var stop provider.StopReason
+		var incomplete string
 		switch {
 		case name == "response.incomplete":
 			stop = mapIncompleteReason(ev.Response.IncompleteDetails.Reason)
+			if stop == provider.StopIncomplete {
+				incomplete = cmp.Or(ev.Response.IncompleteDetails.Reason, "unknown")
+			}
 		case s.hasToolCall:
 			stop = provider.StopToolUse
 		default:
@@ -551,6 +556,7 @@ func (s *stream) handle(name string, data []byte) error {
 			Type:              provider.EventDone,
 			Message:           assistant,
 			StopReason:        stop,
+			IncompleteReason:  incomplete,
 			Usage:             s.usage,
 			SubscriptionUsage: s.subUsage,
 			RequestMetadata:   s.requestMetadata,
@@ -603,8 +609,10 @@ func mapIncompleteReason(reason string) provider.StopReason {
 		return provider.StopMaxTokens
 	case "content_filter":
 		return provider.StopRefusal
-	default:
+	case "interrupted":
 		return provider.StopOther
+	default:
+		return provider.StopIncomplete
 	}
 }
 

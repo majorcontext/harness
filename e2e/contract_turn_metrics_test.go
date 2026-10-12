@@ -61,7 +61,7 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	fake := harnesstest.NewAnthropic(t,
-		harnesstest.Step{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
+		harnesstest.Step{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 429, RetryAfter: "0", ErrorMessage: "upstream broke"}},
 		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{
 			ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: map[string]any{"command": "echo hi"}}},
 			Usage:     harnesstest.Usage{Input: 11, Output: 7}}},

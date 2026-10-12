@@ -53,6 +53,7 @@ type Client struct {
 	// instead of HTTP POST + SSE. Any failure falls back to HTTP for that
 	// request. The websocket path sends the already-transcoded body.
 	UseWebSocketTransport bool
+	RequestRetries        int // see provider.Do
 
 	wsPoolOnce sync.Once
 	wsPoolVal  *wsPool
@@ -179,7 +180,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
 
-	resp, err := hc.Do(httpReq)
+	resp, err := provider.Do(ctx, hc, httpReq, c.RequestRetries)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +290,7 @@ func apiError(resp *http.Response) error {
 		err = fmt.Errorf("openai: HTTP %d", resp.StatusCode)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
-		return provider.MarkRetryable(err, class)
+		return provider.MarkRetryableAfter(err, class, resp.Header)
 	}
 	return err
 }

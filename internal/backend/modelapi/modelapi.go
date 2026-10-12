@@ -27,6 +27,9 @@ const maxTokens = 8192
 // errIncomplete is a response that the output cap cut off. The turn treats it as a stream that ended before its terminal event.
 var errIncomplete = errors.New("incomplete response returned, reason: max_tokens")
 
+// errFiltered is a response that the provider refused or filtered. The turn retries it, as the Codex CLI retries a content filter.
+var errFiltered = errors.New("response refused or filtered by the provider")
+
 // defaultContextWindow is the window, in tokens, of a model that has no
 // configured window and no entry in the modelmeta table.
 const defaultContextWindow = 128000
@@ -102,9 +105,9 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
 			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
-			if ev.StopReason == provider.StopMaxTokens && !req.AcceptCut {
+			if err := incomplete(ev, req.AcceptCut); err != nil {
 				out.Telemetry(tel)
-				return classify(provider.MarkStreamTruncated(errIncomplete))
+				return classify(err)
 			}
 			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
 			out.Telemetry(tel)
@@ -222,6 +225,21 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 		preq.System = []string{req.Instructions}
 	}
 	return preq, nil
+}
+
+// incomplete returns the retryable error of a response that did not finish, or nil.
+func incomplete(ev provider.Event, acceptCut bool) error {
+	switch ev.StopReason {
+	case provider.StopMaxTokens:
+		if !acceptCut {
+			return provider.MarkStreamTruncated(errIncomplete)
+		}
+	case provider.StopRefusal:
+		return provider.MarkRetryable(errFiltered, provider.RetryableContentFilter)
+	case provider.StopIncomplete:
+		return provider.MarkStreamTruncated(fmt.Errorf("incomplete response returned, reason: %s", ev.IncompleteReason))
+	}
+	return nil
 }
 
 func classify(err error) error {

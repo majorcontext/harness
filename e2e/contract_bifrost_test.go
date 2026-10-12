@@ -159,6 +159,26 @@ func TestContractBifrostProviderErrors(t *testing.T) {
 			},
 			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
 		},
+		{
+			name: "bifrost_content_filter_response_is_retried",
+			chat: true,
+			model: []harnesstest.Step{
+				{Name: "filtered", Reply: harnesstest.Reply{Text: "first half ", StopReason: "content_filter"}},
+				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
+			},
+			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
+		},
+		{
+			name: "bifrost_5xx_is_retried_by_the_request",
+			chat: true,
+			model: []harnesstest.Step{
+				{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
+				{Name: "broken_again", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke again"}},
+				{Name: "broken_thrice", Reply: harnesstest.Reply{HTTPStatus: 502, ErrorMessage: "upstream broke thrice"}},
+				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
+			},
+			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
+		},
 	})
 }
 

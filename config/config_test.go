@@ -706,69 +706,69 @@ func TestGoalEvaluatorModel(t *testing.T) {
 	})
 }
 
-// TestPromptRetries covers the prompt_retries config field: a *int so
-// unset means the product default (PromptRetriesValue -> 2), an explicit 0
+// TestStreamMaxRetries covers the stream_max_retries config field: a *int so
+// unset means the product default (StreamMaxRetriesValue -> 5), an explicit 0
 // disables the base-loop retry, and a project value overrides the user layer
 // like ModelTool's *bool does.
-func TestPromptRetries(t *testing.T) {
-	t.Run("unset uses default 2", func(t *testing.T) {
+func TestStreamMaxRetries(t *testing.T) {
+	t.Run("unset uses default 5", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
 		c, err := Load(p)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if c.PromptRetries != nil {
-			t.Errorf("PromptRetries = %v, want nil (unset)", c.PromptRetries)
+		if c.StreamMaxRetries != nil {
+			t.Errorf("StreamMaxRetries = %v, want nil (unset)", c.StreamMaxRetries)
 		}
-		if got := c.PromptRetriesValue(); got != 2 {
-			t.Errorf("PromptRetriesValue = %d, want 2 (default)", got)
+		if got := c.StreamMaxRetriesValue(); got != 5 {
+			t.Errorf("StreamMaxRetriesValue = %d, want 5 (default)", got)
 		}
 	})
 	t.Run("explicit zero disables", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
-		writeFile(t, p, `{"prompt_retries": 0}`)
+		writeFile(t, p, `{"stream_max_retries": 0}`)
 		c, err := Load(p)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if c.PromptRetries == nil || *c.PromptRetries != 0 {
-			t.Fatalf("PromptRetries = %v, want explicit 0", c.PromptRetries)
+		if c.StreamMaxRetries == nil || *c.StreamMaxRetries != 0 {
+			t.Fatalf("StreamMaxRetries = %v, want explicit 0", c.StreamMaxRetries)
 		}
-		if got := c.PromptRetriesValue(); got != 0 {
-			t.Errorf("PromptRetriesValue = %d, want 0 (disabled)", got)
+		if got := c.StreamMaxRetriesValue(); got != 0 {
+			t.Errorf("StreamMaxRetriesValue = %d, want 0 (disabled)", got)
 		}
 	})
 	t.Run("explicit value", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
-		writeFile(t, p, `{"prompt_retries": 5}`)
+		writeFile(t, p, `{"stream_max_retries": 7}`)
 		c, err := Load(p)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if got := c.PromptRetriesValue(); got != 5 {
-			t.Errorf("PromptRetriesValue = %d, want 5", got)
+		if got := c.StreamMaxRetriesValue(); got != 7 {
+			t.Errorf("StreamMaxRetriesValue = %d, want 7", got)
 		}
 	})
 	t.Run("nil receiver uses default", func(t *testing.T) {
 		var c *Config
-		if got := c.PromptRetriesValue(); got != 2 {
-			t.Errorf("nil PromptRetriesValue = %d, want 2", got)
+		if got := c.StreamMaxRetriesValue(); got != 5 {
+			t.Errorf("nil StreamMaxRetriesValue = %d, want 5", got)
 		}
 	})
 	t.Run("project overrides user", func(t *testing.T) {
 		zero := 0
-		base := &Config{PromptRetries: intPtr(3)}
-		merged := merge(base, &Config{PromptRetries: &zero})
-		if merged.PromptRetries == nil || *merged.PromptRetries != 0 {
-			t.Errorf("merged = %v, want project override 0", merged.PromptRetries)
+		base := &Config{StreamMaxRetries: intPtr(3)}
+		merged := merge(base, &Config{StreamMaxRetries: &zero})
+		if merged.StreamMaxRetries == nil || *merged.StreamMaxRetries != 0 {
+			t.Errorf("merged = %v, want project override 0", merged.StreamMaxRetries)
 		}
 	})
 	t.Run("unset project inherits user", func(t *testing.T) {
-		base := &Config{PromptRetries: intPtr(3)}
+		base := &Config{StreamMaxRetries: intPtr(3)}
 		merged := merge(base, &Config{})
-		if merged.PromptRetries == nil || *merged.PromptRetries != 3 {
-			t.Errorf("merged = %v, want inherited 3", merged.PromptRetries)
+		if merged.StreamMaxRetries == nil || *merged.StreamMaxRetries != 3 {
+			t.Errorf("merged = %v, want inherited 3", merged.StreamMaxRetries)
 		}
 	})
 }
