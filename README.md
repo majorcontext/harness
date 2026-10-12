@@ -227,7 +227,7 @@ func (rollDice) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{
 		Name:        "roll_dice",
 		Description: "Roll a die with the given number of sides.",
-		InputSchema: json.RawMessage(`{"type": "object", "properties": {"sides": {"type": "integer"}}, "required": ["sides"]}`),
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {"sides": {"type": "integer", "minimum": 2}}, "required": ["sides"]}`),
 	}
 }
 
@@ -235,6 +235,9 @@ func (rollDice) Run(ctx context.Context, call harness.Call) (protocol.ToolResult
 	var in struct{ Sides int }
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, err
+	}
+	if in.Sides < 2 {
+		return protocol.ToolResult{}, fmt.Errorf("sides must be at least 2, got %d", in.Sides)
 	}
 	return protocol.ToolResult{Text: strconv.Itoa(rand.IntN(in.Sides) + 1)}, nil
 }
