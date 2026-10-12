@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/workspace"
@@ -12,7 +13,11 @@ import (
 )
 
 // Health returns the body of GET /health.
-func (r *Runtime) Health() protocol.Health { return r.health }
+func (r *Runtime) Health() protocol.Health {
+	h := r.health
+	h.Capabilities = slices.Clone(h.Capabilities)
+	return h
+}
 
 // Logger returns the logger that receives the log lines of the runtime.
 func (r *Runtime) Logger() *slog.Logger { return r.log }
