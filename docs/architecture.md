@@ -132,13 +132,21 @@ type Options struct {
 }
 
 // A Runtime hosts many sessions. Each runs only while its Ownership holds.
-func (r *Runtime) Handler() http.Handler
 func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Session, error)
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) End(ctx context.Context, id string) error // end and unload; session_busy while a turn or a control command runs; the log stays
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) // creation order
 func (r *Runtime) Models() []protocol.Model
 func (r *Runtime) Commands(ctx context.Context) (protocol.Commands, error) // the slash-command menu; the cause of ctx when it has ended
+// The box: health, the work directory, the logger, and the processes of the box.
+func (r *Runtime) Health() protocol.Health
+func (r *Runtime) WorkDir() string // "" without a WorkDir
+func (r *Runtime) Logger() *slog.Logger
+func (r *Runtime) Processes() []protocol.ProcessInfo // none without a WorkDir
+func (r *Runtime) ProcessLogs(name string, tail int) (protocol.ProcessLogs, error) // ErrProcessNotFound for an unknown name
+func (r *Runtime) StartProcess(ctx context.Context, name string) (protocol.ProcessStatus, error) // work that Close waits for; ErrDraining after Close starts
+func (r *Runtime) StopProcess(ctx context.Context, name string) (protocol.ProcessStatus, error)
+func (r *Runtime) RestartProcess(ctx context.Context, name string) (protocol.ProcessStatus, error)
 // Close hands off every session, then returns once Sync has acknowledged
 // every record through each handoff. It is idempotent: the first call shuts
 // the runtime down and later calls return its result. Each call returns by the
@@ -160,7 +168,10 @@ func (s *Session) ID() string
 func (s *Session) Done() <-chan struct{} // closes when the session stops on this runtime
 func (s *Session) Err() error            // nil before Done; then matches ErrSessionNotOwned and one cause: ErrSessionReleased, ErrSessionEnded, or ErrOwnershipLost; a Store failure or a Sync rejection that stops the session matches ErrSessionNotOwned and that error instead
 func (s *Session) Snapshot() protocol.Session // includes HeadSeq and SyncedSeq
-func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
+// Prompt admits an input and returns the Turn that will take it. A repeated input ID returns the Turn of the original receipt (Admitted.Repeat).
+func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error)
+// Turn returns the Turn of an earlier receipt, for example after Open on a new runtime.
+func (s *Session) Turn(a protocol.Admitted) *Turn
 func (s *Session) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) // a limit above protocol.MaxMessageLimit fails with invalid_request
 func (s *Session) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) // queued inputs, oldest first
 func (s *Session) Blob(ctx context.Context, key string) (Blob, error) // an attachment that an input names; else ErrBlobNotFound
@@ -173,6 +184,32 @@ func (s *Session) ClearGoal(ctx context.Context) error
 func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] // ends with Err when the session stops
 func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, release ownership
+
+// Turn follows the outcome of one input. It holds no goroutine: Events and Wait read the log of the session.
+type Turn struct{ /* unexported */ }
+
+func (t *Turn) Admitted() protocol.Admitted // the receipt of the input
+// Events yields the events from the admission through turn.ended, input.withdrawn, or the final command.recorded; it ends with Session.Err when the session stops first.
+func (t *Turn) Events(ctx context.Context) iter.Seq2[protocol.Event, error]
+// Wait returns when the turn that took the input ends, the input is withdrawn, or the command finishes.
+func (t *Turn) Wait(ctx context.Context) (TurnResult, error)
+// Steer admits a steer input with expected_turn_id set to this turn; ErrTurnMismatch when no turn runs.
+func (t *Turn) Steer(ctx context.Context, in protocol.Input) (*Turn, error)
+// Cancel withdraws the input while it is queued, or interrupts the turn that took it.
+func (t *Turn) Cancel(ctx context.Context) error
+
+// TurnResult is the outcome of an input.
+type TurnResult struct {
+	InputID    string
+	TurnID     string              // empty for a withdrawn input and for a slash command
+	StopReason protocol.StopReason // completed, interrupted, failed, or awaiting_input
+	Cause      protocol.Cause      // why the turn stopped early; empty otherwise
+	Error      string              // masked failure text
+	ErrorClass protocol.ErrorClass
+	Usage      protocol.Usage      // the model calls of the turn that the log holds from the admission of the input on
+	Command    string              // the final status of a typed slash command
+	Withdrawn  bool                // no turn took the input
+}
 
 // OpenView reads a session from any Store without owning it: no Acquire, no appends.
 func OpenView(ctx context.Context, st Store, id string) (*View, error)
@@ -209,9 +246,6 @@ func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq
 
 // NewLocalOwner grants every session to this process at epoch, one grant at a time.
 func NewLocalOwner(epoch uint64) Owner
-// NewHTTPSync posts each batch to spec.URL and reads spec.TokenFile again for each post.
-func NewHTTPSync(spec config.SyncSpec) Sync
-
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
 	// Deliver returns the receiver's head on success and on a seq mismatch;
@@ -219,9 +253,6 @@ type Sync interface {
 	// ErrSyncRejected stops the session and releases its Ownership.
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
-
-// ApplySync appends b to st by the receiver rules of a Sync (see Events).
-func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error)
 
 // Tool is an embedder tool. The runtime reads Spec once, at New. The calls of one
 // model response run at the same time, so Run allows concurrent calls, and it
@@ -245,7 +276,39 @@ type AloneTool interface { Tool; Alone() }            // the call runs with no o
 type KeyedTool interface { Tool; Key(c Call) string } // calls with the same non-empty key run one at a time, in call order
 ```
 
-The HTTP handler is a thin mapping of the exported methods of these types, and it calls no other method; `Runtime.Read` serves every read route. A read of a session that the runtime does not run names the plugins of that runtime. An embedder and a remote client see the same types and the same errors.
+The three adapter packages import `harness` and nothing of its internals beyond the packages that `.golangci.yml` lists:
+
+```go
+package store // harness/store
+
+func NewDiskStore(root string) *DiskStore // flock-fenced files; fsyncs every Append and PutBlob
+func NewMemStore() *MemStore              // in memory, for tests and -no-save runs
+func CheckName(name string) error         // reports a session ID or blob key that a Store must refuse
+func CheckRecords(records [][]byte) error // reports an empty record, or a record with a newline
+
+package httpapi // harness/httpapi
+
+// Handler serves the HTTP API of r. It calls only exported methods of Runtime and Session and has no authentication.
+func Handler(r *harness.Runtime) http.Handler
+// ReadHandler serves the read routes over st with no Runtime.
+func ReadHandler(st harness.Store, opts ReadOptions) http.Handler
+type ReadOptions struct {
+	Queue  Queue        // inputs that wait outside the log; nil: the log only
+	Logger *slog.Logger // receives the cause of each error that the handler masks as internal; nil: slog.Default()
+}
+type Queue interface {
+	Queued(ctx context.Context, session string) ([]protocol.QueuedInput, error) // oldest first
+}
+
+package httpsync // harness/httpsync
+
+// New returns a Sync that posts each batch to spec.URL and reads spec.TokenFile again for each post.
+func New(spec config.SyncSpec) harness.Sync
+// ApplySync appends b to st by the receiver rules of a Sync (see Events).
+func ApplySync(ctx context.Context, st harness.Store, b protocol.SyncBatch) (protocol.SyncAck, error)
+```
+
+`httpapi.Handler` is a thin mapping of the exported methods of these types, and it calls no other method; `Runtime.Read` serves every read route, and the compiler proves that the Go API covers each route. `httpapi.ReadHandler` maps `OpenView`. A read of a session that the runtime does not run names the plugins of that runtime. An embedder and a remote client see the same types and the same errors.
 
 ### Internal packages
 
@@ -253,7 +316,9 @@ Free to change.
 
 | Package | Owns |
 | --- | --- |
-| `internal/server` | HTTP mapping of the Go API |
+| `internal/server` | HTTP mapping of the Go API, generic over the sessions that `httpapi` supplies |
+| `internal/listing` | The page of sessions in creation order, shared by `Runtime.List` and `httpapi.ReadHandler` |
+| `internal/storecheck` | The name and record rules that `store.CheckName` and `store.CheckRecords` report and the runtime applies |
 | `internal/eventlog` | The record codec, `Apply`, and `Check`. The event schema is in `protocol` |
 | `internal/session` | Session actor, mailbox, state machines, views, replication, and the child commands |
 | `internal/tree` | The child tree: limits, spawn, report, recovery, the tree interrupt, and the `task` tool. It reads the runtime through its own `Sessions` interface |
@@ -307,14 +372,9 @@ type Record struct {
 }
 
 var ErrConflict = errors.New("harness: append conflict")
-
-// CheckName reports a session ID or blob key that a Store must refuse.
-func CheckName(name string) error
-// CheckRecords reports an empty record, or a record with a newline.
-func CheckRecords(records [][]byte) error
 ```
 
-- A `Store` refuses what `CheckName` and `CheckRecords` report: an empty name, `.`, `..`, or a name with a slash, a backslash, or a NUL; and an empty record or a record with a newline. `DiskStore` and `MemStore` call them, and so does the runtime for a session ID in a path. A store of another storage calls them too, so a name or record that one store accepts, every store accepts.
+- A `Store` refuses what `store.CheckName` and `store.CheckRecords` report: an empty name, `.`, `..`, or a name with a slash, a backslash, or a NUL; and an empty record or a record with a newline. `DiskStore` and `MemStore` call them, and so do the runtime and `OpenView` for a session ID in a path. A store of another storage calls them too, so a name or record that one store accepts, every store accepts.
 - `seq` starts at 1 and has no gaps. `Head` returns the last seq, or 0 for an empty session. `expectedSeq` is the last seq the writer has seen, so it equals the record count.
 - A stale writer gets `ErrConflict` and stops. This holds across `Store` instances on one storage, in one process or in many: the fence is in the storage, not in an instance.
 - Any other append error also stops the session actor, with no retry. The next `Open` fences and replays from the store, so an append that landed is in the replay, and one that did not land is not.
@@ -658,6 +718,8 @@ A part is `{type: "text", text}` or an attachment `{type: "blob", media_type, da
 | Same id, same body | `200` with the original receipt |
 | Same id, other body | `409 input_conflict` |
 
+`Session.Prompt` admits an input in the Go API and returns a `Turn`. A `Turn` is a view over the log: it adds no event kind and holds no goroutine. `Turn.Events` yields the events from the `input.admitted` record of the receipt (the first `command.recorded` of a typed command) through the end of the input: the `turn.ended` of the turn that took it (the turn named by `input.promoted` or by `turn.started.input_ids`), its `input.withdrawn`, or the first `command.recorded` with a status other than `accepted`. `Turn.Wait` folds the same events into a `TurnResult`: the stop reason, cause, masked error and its class from `turn.ended`; the sum of the `usage` of the `context.measured` and `compaction.applied` records from the start of the turn, or from the admission when the input joins a running turn; the command status; and `Withdrawn`. When the session stops first, both end with `Session.Err`. `Turn.Steer` admits a steer input with `expected_turn_id` set to the turn that took the input, so it fails with `turn_mismatch` while no turn runs the input, also while the input waits. `Turn.Cancel` withdraws a queued input, or interrupts the turn that took it, and is no error for an input that is withdrawn, a turn that has ended, or a command. `Session.Turn(receipt)` returns the `Turn` of an earlier receipt, for example on a session that `Open` returned on a new runtime. The HTTP API has no `Turn`: a client tails `GET /sessions/{id}/events` from the `seq` of the receipt.
+
 `protocol.Resolution.Validate` reports a resolution that holds both an answer and a dismissal, or neither, or an answer that is not valid JSON. An answer of `null`, `{}`, or `""` counts as none. `Session.Resolve` calls it and fails with `ErrInvalidRequest`; a remote client calls it before it posts.
 
 A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command, and its `seq` is the first `command.recorded` record. See Slash commands.
@@ -673,9 +735,9 @@ A typed slash command answers the same way. Its receipt adds `command`, the newe
 - `protocol.DecodeSSE(r)` is the one reader of the events stream for Go clients. It yields each frame as an `Event`, and an `error` frame as a `*protocol.Error` that ends the sequence.
 - A live frame (`item.started`, `item.delta`, `item.discarded`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
 - A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
-- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The blobs of a batch are those that its records name: the chunk of a `backend.state` record, the blob of `tool_result.retained`, the blob parts of `input.admitted`, and the blobs of the tool results in `item.completed`. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The blobs of a batch are those that its records name: the chunk of a `backend.state` record, the blob of `tool_result.retained`, the blob parts of `input.admitted`, and the blobs of the tool results in `item.completed`. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `httpsync.ApplySync` implements these receiver rules over any `Store`.
 - The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch), `ErrConflict` (different bytes at a seq), and `ErrSyncRejected` (a request that a resend cannot fix) are final: each stops the session with no further append and releases its `Ownership`, and `Session.Release` then returns the rejection (`ErrSessionNotOwned` after a stale epoch). Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. On start, a box harness replicates every session that its `Store` holds, not only the sessions that it opens. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
-- A box harness replicates through the config keys `owner_epoch` and `sync {url, token_file}`, which the box boot code writes. `New` reads neither key. `cmd/harness` passes `NewLocalOwner(owner_epoch)` and, with `sync` set, `NewHTTPSync(sync)`. `NewHTTPSync` returns a sender that posts each `protocol.SyncBatch` as JSON to `sync.url` with `Authorization: Bearer <token>`, and reads the token from `token_file` for each post. The receiver replies `200` with `SyncAck{head}` (also on a seq mismatch); `409` with `protocol.CodeStaleEpoch` (`ErrStaleEpoch`) or `protocol.CodeSyncConflict` (`ErrConflict`); `400` with `invalid_request` (`ErrInvalidRequest`); `413` with `payload_too_large` when the body is over `protocol.MaxSyncBatchBytes` (32 MiB); `401`; or `403`. The `400`, `413`, `401`, and `403` rejections also match `ErrSyncRejected`. Only those rejections (`409` with either code, `400 invalid_request`, any `413`, `401`, `403`) are final; the sender takes every `413` as final whatever its code. Any other status and a transport error resend with backoff. The sender keeps the JSON body of a batch under `protocol.MaxSyncBatchBytes` by cutting it after fewer records than the page of 512, so a `413` happens only when one record with its blobs is over the bound.
+- A box harness replicates through the config keys `owner_epoch` and `sync {url, token_file}`, which the box boot code writes. `New` reads neither key. `cmd/harness` passes `NewLocalOwner(owner_epoch)` and, with `sync` set, `httpsync.New(sync)`. `httpsync.New` returns a sender that posts each `protocol.SyncBatch` as JSON to `sync.url` with `Authorization: Bearer <token>`, and reads the token from `token_file` for each post. The receiver replies `200` with `SyncAck{head}` (also on a seq mismatch); `409` with `protocol.CodeStaleEpoch` (`ErrStaleEpoch`) or `protocol.CodeSyncConflict` (`ErrConflict`); `400` with `invalid_request` (`ErrInvalidRequest`); `413` with `payload_too_large` when the body is over `protocol.MaxSyncBatchBytes` (32 MiB); `401`; or `403`. The `400`, `413`, `401`, and `403` rejections also match `ErrSyncRejected`. Only those rejections (`409` with either code, `400 invalid_request`, any `413`, `401`, `403`) are final; the sender takes every `413` as final whatever its code. Any other status and a transport error resend with backoff. The sender keeps the JSON body of a batch under `protocol.MaxSyncBatchBytes` by cutting it after fewer records than the page of 512, so a `413` happens only when one record with its blobs is over the bound.
 - `Runtime.CatchUp` is the start of a box harness: for each session in the `Store` that this runtime does not run, it takes a grant of the `Owner`, sends the log in pages from seq 1 (each acknowledgement moves the next page to the head that the receiver reports), and releases the grant. It appends nothing, so an idle session gets no `owner.acquired`. `Open` of a session that `CatchUp` holds ends the catch-up of that session first, and the opened session replicates itself. `Close` ends `CatchUp` with `ErrDraining`, and the next start catches up again. A stale epoch ends it with `ErrStaleEpoch`. If that `Open` fails, `CatchUp` replicates the session itself. Two calls at once run one after the other. A session that fails for another reason, such as a log that cannot be read, is skipped, and `CatchUp` returns each failure with its session ID after the other sessions finish.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch.
 
@@ -718,20 +780,20 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `session_unreplayable` | 500 |
 | `internal` | 500 |
 
-Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant of type `protocol.Code`. A sentinel of the Go API is a `*protocol.Error`, and `Error.Is` matches another `*protocol.Error` with the same code, so an error that a client decodes from a body matches the sentinel of its code. A stop cause (`ErrSessionHeld`, `ErrSessionReleased`, `ErrSessionEnded`, `ErrOwnershipLost`) is a `session_not_owned` error with a cause in its details, and it matches only its own cause and `ErrSessionNotOwned`. The body carries that cause in `details.cause`, so an error that a client decodes matches the same sentinel. The Sync receiver codes are not in the table, so `protocol.HTTPStatus` answers 500 for them, and a receiver chooses its status from the sync wire contract. `protocol.CodeOf(err)` returns the code of the first `*protocol.Error` in the chain of `err`, or `internal`, and `protocol.HTTPStatus(code)` returns the status of the table, or 500 for an unknown code. `New` returns a plain wrapped error for a bad `Options`, never `ErrInvalidRequest`. A log that does not replay fails with `ErrUnreplayable`, code `session_unreplayable`, and its body message is fixed. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `internal/server`. The session codes are sentinels in `harness`, and `blob_not_found` is `ErrBlobNotFound`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `internal/server` takes the code of an error from `protocol.CodeOf`, after its own dependencies' sentinels. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant of type `protocol.Code`. A sentinel of the Go API is a `*protocol.Error`, and `Error.Is` matches another `*protocol.Error` with the same code, so an error that a client decodes from a body matches the sentinel of its code. A stop cause (`ErrSessionHeld`, `ErrSessionReleased`, `ErrSessionEnded`, `ErrOwnershipLost`) is a `session_not_owned` error with a cause in its details, and it matches only its own cause and `ErrSessionNotOwned`. The body carries that cause in `details.cause`, so an error that a client decodes matches the same sentinel. The Sync receiver codes are not in the table, so `protocol.HTTPStatus` answers 500 for them, and a receiver chooses its status from the sync wire contract. `protocol.CodeOf(err)` returns the code of the first `*protocol.Error` in the chain of `err`, or `internal`, and `protocol.HTTPStatus(code)` returns the status of the table, or 500 for an unknown code. `New` returns a plain wrapped error for a bad `Options`, never `ErrInvalidRequest`. A log that does not replay fails with `ErrUnreplayable`, code `session_unreplayable`, and its body message is fixed. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `internal/server`. The session codes are sentinels in `harness`, and `blob_not_found` is `ErrBlobNotFound`. `process_not_found` is `ErrProcessNotFound`, and the three git codes are sentinels of `internal/workspace`. `internal/server` takes the code of an error from `protocol.CodeOf`, after its own dependencies' sentinels. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 The actor masks and bounds each error text that it writes to the log (`turn.ended` error, `goal.changed` reason): recognized credential shapes are redacted (best effort: a free-form text can hold a shape that the fixed patterns miss), and a text longer than 256 runes keeps its first 256 runes and ends with `...[truncated]`. A failed `turn.ended` also holds the message as a report to a parent reads it, in `error_detail`, when that differs from `error`: masked by the secret patterns and cut at 500 runes with `… [truncated]` (see Settle).
 
 ### Slash commands
 
-`Session.Submit` resolves an input with `source: typed` and one text part through the `command` package. Any other input is never a command.
+`Session.Prompt` resolves an input with `source: typed` and one text part through the `command` package. Any other input is never a command.
 
 - Not a command: the input is admitted as is. `//x` is admitted as the text `/x`.
 - An unknown name: the prompt command of that name under `commands_dirs` (default `<WorkDir>/.agents/commands`) is admitted as its expanded text with `source: command` and the typed line, cleaned as `source_label` is, as its `source_label`; the client's `source_id` stays. With no such file, or no `WorkDir`, the line is admitted as text.
 - Bad arguments: one `command.recorded` with `failed` and the error of `Resolve`. Nothing runs.
 - A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
 - A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
-- Any other control command records `accepted`, runs after `Submit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
+- Any other control command records `accepted`, runs after `Prompt` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
 - The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is the process list of `GET /processes`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `protocol.Compacted` of `Compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
 - `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
 - A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
@@ -753,7 +815,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 - `serve` applies the `HARNESS_*` variables with `config.ApplyEnv`, then the flags `-no-instructions`, `-skills-dir`, and `-agent-def-dir`, so a flag wins. It keeps the sessions in a `DiskStore` at `HARNESS_SESSION_DIR`, else `session_dir`, else `~/.harness/sessions`. It serves `httpapi.Handler` behind the bearer token of `HARNESS_RUN_TOKEN`; `GET /health` needs no token, a request without the token gets 401 with the error code `unauthorized`, and an empty token is allowed only on a loopback bind or with `-unauthenticated` or `HARNESS_UNAUTHENTICATED`. With `-cors-origin` it adds the CORS headers, and a preflight skips the token. It binds `-addr` before it builds the runtime and takes `Options.ServeURL` from the bound address, so `-addr 127.0.0.1:0` serves on a free port that the `addr` field of the `serve start` log line names. Then it calls `CatchUp` and opens each session that has work to resume, and a failure of either is logged and never stops `serve`.
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
-- `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Submit` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, or a typed command did not succeed, and 3 when `-goal` does not reach `achieved` and no turn failed. It prints `session: <id>` on stderr when it saved the session.
+- `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Prompt` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, or a typed command did not succeed, and 3 when `-goal` does not reach `achieved` and no turn failed. It prints `session: <id>` on stderr when it saved the session.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins`, which probes each plugin again and refreshes the manifest cache, and prints each plugin with its hooks.
 - `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline; a session whose tool ignores the cancel then keeps its lease until the lease expires. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
@@ -1020,7 +1082,7 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 - When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
 - Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
 - `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes, and returns without waiting for a turn to end.
-- The process tool and the `/processes` routes share the one manager. A `start`, `stop`, or `restart` route is work that `Runtime.Close` waits for, and fails with `draining` (503) after `Close` starts, so no route starts a process that `Close` does not stop. The runtime does not expose the manager. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message.
+- The process tool and the `/processes` routes share the one manager. A `start`, `stop`, or `restart` route is work that `Runtime.Close` waits for, and fails with `draining` (503) after `Close` starts, so no route starts a process that `Close` does not stop. `Runtime.Processes`, `ProcessLogs`, `StartProcess`, `StopProcess`, and `RestartProcess` expose the manager to `httpapi.Handler`. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message.
 
 ### workspace
 
@@ -1104,7 +1166,7 @@ The size and test gates compare a branch with its merge base. The route, structu
 
 Boxes is a control plane that embeds and hosts harness. The two share one pattern: a resource is one ordered log with one owner, every change is a command, every seam belongs to its consumer, and the contract is generated from Go types.
 
-- Two session hosts. A box session runs in the harness of its box. A home session runs in an embedded `harness.Runtime` inside the control plane, under a lease. Boxes forwards `/v1/boxes/{id}/sessions/…` to one `SessionHost` seam: a reverse proxy to the box, or the local `Runtime.Handler()`, or a proxy to the replica that holds the lease. The console cannot tell them apart.
+- Two session hosts. A box session runs in the harness of its box. A home session runs in an embedded `harness.Runtime` inside the control plane, under a lease. Boxes forwards `/v1/boxes/{id}/sessions/…` to one `SessionHost` seam: a reverse proxy to the box, or the local `httpapi.Handler(rt)`, or a proxy to the replica that holds the lease. The console cannot tell them apart.
 - One store for every session. `pgstore` is one Postgres `harness.Store`, proven by `storetest`. Home sessions write it directly. Box sessions replicate into it through `Sync`. `OpenView` over it serves reads of a box that is not running, and `httpapi.ReadHandler` mounted over it serves them as HTTP, with the undelivered commands of the box as its `Queue`.
 - One pinned commit. Boxes builds each box image from an exact harness commit that it pins (`ARG HARNESS_REF`), never from harness `main` at its head. Harness reaches boxes only through an explicit bump PR on boxes that moves that pin. A harness change that merges to `main` ships to no box until a bump.
 - One epoch. The box `claim_epoch` is the `Ownership.Epoch`. It is a plain counter that boxes increments when it admits a Spawn. It is recorded in `owner.acquired`, carried by every `SyncBatch`, and checked by boxes. A stale box learns it is fenced from the rejection. Boxes writes one `BootConfig` file that embeds `harness/config`, validates it once, and sends post-boot values as an update to that same file.
