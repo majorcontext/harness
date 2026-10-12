@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -56,7 +57,8 @@ var profileKeys = []string{"name", "description", "tools", "model", "color"}
 // that repeats the name of an earlier file, in one directory or across dirs,
 // is left out, and the load returns the profiles of the other files with the
 // error of the first such file; a repeat names both files.
-func Profiles(dirs []string) (map[string]Profile, error) {
+func Profiles(dirs []string, log *slog.Logger) (map[string]Profile, error) {
+	log = cmp.Or(log, slog.Default())
 	out := map[string]Profile{GeneralPurpose: generalPurpose, explore.Name: explore, plan.Name: plan}
 	source := map[string]string{}
 	read := map[string]bool{}
@@ -75,7 +77,7 @@ func Profiles(dirs []string) (map[string]Profile, error) {
 			p, err := profile(path)
 			switch {
 			case errors.Is(err, skill.ErrUnknownKey):
-				slog.Warn("prompt: agent profile skipped", "path", path, "err", err)
+				log.Warn("prompt: agent profile skipped", "path", path, "err", err)
 				continue
 			case err != nil:
 				if failed == nil {

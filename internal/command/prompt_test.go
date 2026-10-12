@@ -13,7 +13,7 @@ func TestDiscoverRejectsSpecialFiles(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(root, "review.md"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Discover([]string{root}); err == nil {
+	if _, err := Discover([]string{root}, nil); err == nil {
 		t.Fatal("Discover accepted a non-regular command file")
 	}
 }
@@ -25,7 +25,7 @@ func TestDiscoverRejectsInvalidFrontmatterUTF8(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "review.md"), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Discover([]string{root}); err == nil {
+	if _, err := Discover([]string{root}, nil); err == nil {
 		t.Fatal("Discover advertised a command whose metadata is invalid UTF-8")
 	}
 	if _, err := LookupPrompt([]string{root}, "review"); err == nil {
@@ -40,7 +40,7 @@ func TestPromptCommandRootSymlinkRejected(t *testing.T) {
 	if err := os.Symlink(outside, root); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Discover([]string{root}); err == nil {
+	if _, err := Discover([]string{root}, nil); err == nil {
 		t.Fatal("Discover followed a symlinked command root")
 	}
 	if _, err := LookupPrompt([]string{root}, "review"); err == nil {
@@ -53,7 +53,7 @@ func TestDiscoverPromptCommands(t *testing.T) {
 	writePromptCommand(t, root, "review.md", "---\ndescription: Review changes\nargument-hint: <ref>\n---\nReview $1 and $ARGUMENTS\n")
 	writePromptCommand(t, root, "git/sync.md", "---\ndescription: Sync changes\n---\nSync now\n")
 
-	got, err := Discover([]string{root})
+	got, err := Discover([]string{root}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestDiscoverPromptArgumentsWhitespace(t *testing.T) {
 		t.Run(strings.ReplaceAll(ending, "\n", "newline"), func(t *testing.T) {
 			root := t.TempDir()
 			writePromptCommand(t, root, "review.md", "---\ndescription: Review\narguments:"+ending+"  - name: ref\n    required: true\n---\nbody")
-			got, err := Discover([]string{root})
+			got, err := Discover([]string{root}, nil)
 			if err != nil || len(got) != 1 || got[0].Name != "review" {
 				t.Fatalf("Discover = %v, %v, want review", got, err)
 			}
@@ -114,7 +114,7 @@ func TestDiscoverPromptCommandPrecedenceAndBuiltinCollision(t *testing.T) {
 	writePromptCommand(t, project, "review.md", "---\ndescription: Project version\n---\nproject\n")
 	writePromptCommand(t, project, "clear.md", "---\ndescription: Collision\n---\nno\n")
 
-	got, err := Discover([]string{user, project})
+	_, err := Discover([]string{user, project}, nil)
 	if err == nil || !strings.Contains(err.Error(), "clear") {
 		t.Fatalf("Discover error = %v, want builtin collision for clear", err)
 	}
@@ -122,7 +122,7 @@ func TestDiscoverPromptCommandPrecedenceAndBuiltinCollision(t *testing.T) {
 	if err := os.Remove(filepath.Join(project, "clear.md")); err != nil {
 		t.Fatal(err)
 	}
-	got, err = Discover([]string{user, project})
+	got, err := Discover([]string{user, project}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestDiscoverRejectsInvalidCommandMetadataAndNames(t *testing.T) {
 			} else if err := os.WriteFile(filepath.Join(root, "bad.md"), []byte(tc.file), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Discover([]string{root}); err == nil {
+			if _, err := Discover([]string{root}, nil); err == nil {
 				t.Fatal("Discover succeeded, want validation error")
 			}
 		})
@@ -175,7 +175,7 @@ func TestLoadBodyRejectsInvalidOrEmptyBody(t *testing.T) {
 			if err := os.WriteFile(path, contents, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			commands, err := Discover([]string{root})
+			commands, err := Discover([]string{root}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +190,7 @@ func TestCommandDiscoveryRejectsNestedSymlinkPaths(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	writePromptCommand(t, outside, "review.md", "---\ndescription: Review\n---\nbody\n")
 	writePromptCommand(t, root, "nested/review.md", "---\ndescription: Review\n---\nbody\n")
-	commands, err := Discover([]string{root})
+	commands, err := Discover([]string{root}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestCommandDiscoveryRejectsNestedSymlinkPaths(t *testing.T) {
 	if _, err := commands[0].LoadBody(); err == nil {
 		t.Fatal("LoadBody followed a nested directory symlink after discovery")
 	}
-	if _, err := Discover([]string{root}); err == nil {
+	if _, err := Discover([]string{root}, nil); err == nil {
 		t.Fatal("Discover accepted a nested directory symlink")
 	}
 }

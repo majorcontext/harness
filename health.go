@@ -5,18 +5,13 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
 )
 
 // healthOf describes a runtime that started at started.
-func healthOf(version string, cfg config.Config, started time.Time) protocol.Health {
+func healthOf(version string, started time.Time) protocol.Health {
 	rev, at := buildInfo()
-	mode := "fsync"
-	if cfg.SessionSync == "volume" {
-		mode = "volume"
-	}
-	return protocol.Health{Status: "ok", Version: version, VCSRevision: rev, VCSTime: at, SessionSync: mode,
+	return protocol.Health{Status: "ok", Version: version, VCSRevision: rev, VCSTime: at,
 		StartedAt: started.UTC().Format(time.RFC3339), Capabilities: []string{protocol.CapabilityDeltaRowIdentity}}
 }
 

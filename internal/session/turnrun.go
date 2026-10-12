@@ -162,7 +162,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 	f.c.Summary, f.c.Usage = a.indexed(summary, f.metas), usage
 	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
 		if a.run != r || ctx.Err() != nil {
-			reply(nil, cmp.Or(context.Cause(ctx), ErrTurnMismatch))
+			reply(nil, cmp.Or(context.Cause(ctx), error(ErrTurnMismatch)))
 			return
 		}
 		err := a.append(f.c)

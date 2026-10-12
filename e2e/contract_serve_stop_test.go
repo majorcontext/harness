@@ -84,7 +84,7 @@ func TestContractServeStopReportsCrashedWhenSyncDoesNotAcknowledge(t *testing.T)
 	t.Parallel()
 	fake := harnesstest.NewAnthropic(t, replyText("ok"), replyText("again"))
 	var down atomic.Bool
-	receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
+	receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
 		if down.Load() {
 			return http.StatusServiceUnavailable, "unavailable"
 		}
@@ -111,7 +111,7 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 	rows := []struct {
 		name   string
 		status int
-		code   string
+		code   protocol.Code
 	}{
 		{"sync_conflict", http.StatusConflict, protocol.CodeSyncConflict},
 		{"unauthorized", http.StatusUnauthorized, "unauthorized"},
@@ -121,7 +121,7 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 		t.Run(row.name, func(t *testing.T) {
 			fake := harnesstest.NewAnthropic(t, replyText("ok"), replyText("again"))
 			var refuse atomic.Bool
-			receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
+			receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
 				if refuse.Load() {
 					return row.status, row.code
 				}

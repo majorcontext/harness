@@ -71,7 +71,7 @@ func (h *httpSync) Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.
 
 // rejection maps a failed post to its error. Only the final statuses of the
 // receiver contract get a sentinel; the sender resends a batch for any other.
-func rejection(status int, code string, b protocol.SyncBatch) error {
+func rejection(status int, code protocol.Code, b protocol.SyncBatch) error {
 	switch {
 	case status == http.StatusConflict && code == protocol.CodeStaleEpoch:
 		return fmt.Errorf("%w: epoch %d", ErrStaleEpoch, b.Epoch)

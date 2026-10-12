@@ -6,16 +6,6 @@ import (
 	"strings"
 )
 
-// validSessionSync lists the accepted session_sync values. A typo must fail, because "volume" avoids a deadlock on some network volumes.
-var validSessionSync = map[string]bool{"": true, "fsync": true, "volume": true}
-
-func validateSessionSync(v string) error {
-	if !validSessionSync[v] {
-		return fmt.Errorf("session_sync: unknown value %q; valid values: \"\" (default), \"fsync\", \"volume\"", v)
-	}
-	return nil
-}
-
 // validMCPToolLoading lists the accepted mcp_tool_loading values. "auto" is global-only: the threshold measures the whole catalog.
 var validMCPToolLoading = map[string]bool{"": true, "eager": true, "auto": true, "lazy": true}
 

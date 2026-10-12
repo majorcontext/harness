@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"net/http"
+	"os"
 	"slices"
 	"testing"
 
@@ -18,7 +19,7 @@ func TestNoVersionSendsNoEngineBanner(t *testing.T) {
 	retries := 0
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: s.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(),
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(),
 		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p}},
 		ModelTransport: func(string) http.RoundTripper { return nil }})
 	if err != nil {

@@ -1,12 +1,14 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strconv"
@@ -21,7 +23,7 @@ import (
 // part records.
 type Blob struct {
 	MediaType string
-	Size      int
+	Size      int64
 	Body      io.ReadCloser
 }
 
@@ -41,14 +43,21 @@ type Reads interface {
 // readHandler serves the routes that read sessions.
 type readHandler struct {
 	reads Reads
-	codes []Code
+	log   *slog.Logger
 }
 
-func newCodes(opts Options) []Code {
-	return append([]Code{{errInvalid, protocol.CodeInvalidRequest},
-		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
-		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
-		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)
+// staticCodes are the wire codes of the errors of the handler's own dependencies. Any other error has the
+// code of its first *protocol.Error, or CodeInternal.
+var staticCodes = []struct {
+	err  error
+	code protocol.Code
+}{
+	{errInvalid, protocol.CodeInvalidRequest},
+	{process.ErrUnknownProcess, protocol.CodeProcessNotFound},
+	{workspace.ErrInvalid, protocol.CodeInvalidRequest},
+	{workspace.ErrNotRepo, protocol.CodeNotAGitRepo},
+	{workspace.ErrNoBase, protocol.CodeNoBase},
+	{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges},
 }
 
 // NewReads returns the HTTP API of the routes of Table that only read, over
@@ -56,7 +65,7 @@ func newCodes(opts Options) []Code {
 // answers 405; any other path answers 404. The handler appends nothing, opens
 // nothing, and starts no turn.
 func NewReads(rt Reads, opts Options) http.Handler {
-	h := &readHandler{reads: rt, codes: newCodes(opts)}
+	h := &readHandler{reads: rt, log: cmp.Or(opts.Logger, slog.Default())}
 	mux := http.NewServeMux()
 	bind(mux, h.readRoutes(h.eventsOf(func(ctx context.Context, id string, after uint64) (iter.Seq2[protocol.Event, error], error) {
 		rd, err := rt.Read(ctx, id)
@@ -93,25 +102,29 @@ func (h *readHandler) serve(f func(http.ResponseWriter, *http.Request) error) ht
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := f(w, r); err != nil {
 			code := h.code(err)
-			status, ok := statuses[code]
-			if !ok {
-				status = http.StatusInternalServerError
-			}
-			reply(w, status, errorBody(code, err))
+			h.report(r, code, err)
+			reply(w, protocol.HTTPStatus(code), errorBody(code, err))
 		}
 	}
 }
 
-func (h *readHandler) code(err error) string {
+// report logs the cause of an error that its body masks.
+func (h *readHandler) report(r *http.Request, code protocol.Code, err error) {
+	if code == protocol.CodeInternal {
+		h.log.Error("harness: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+	}
+}
+
+func (h *readHandler) code(err error) protocol.Code {
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		return protocol.CodePayloadTooLarge
 	}
-	for _, c := range h.codes {
-		if errors.Is(err, c.Err) {
-			return c.Code
+	for _, c := range staticCodes {
+		if errors.Is(err, c.err) {
+			return c.code
 		}
 	}
-	return protocol.CodeInternal
+	return protocol.CodeOf(err)
 }
 
 func (h *readHandler) list(w http.ResponseWriter, r *http.Request) error {
@@ -187,7 +200,7 @@ func (h *readHandler) blob(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer func() { _ = b.Body.Close() }()
 	w.Header().Set("Content-Type", b.MediaType)
-	w.Header().Set("Content-Length", strconv.Itoa(b.Size))
+	w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, b.Body)
 	return nil
@@ -243,7 +256,7 @@ func (h *readHandler) eventsPage(w http.ResponseWriter, r *http.Request, id stri
 	if err != nil {
 		return err
 	}
-	head := rd.Session().HeadSeq
+	head := rd.Snapshot().HeadSeq
 	page := protocol.EventPage{Events: []protocol.Event{}}
 	if after < head {
 		for e, err := range rd.Events(r.Context(), after) {
@@ -278,7 +291,9 @@ func (h *readHandler) stream(events iter.Seq2[protocol.Event, error], w http.Res
 	for e, err := range events {
 		if err != nil {
 			if r.Context().Err() == nil {
-				data, _ := json.Marshal(errorBody(h.code(err), err))
+				code := h.code(err)
+				h.report(r, code, err)
+				data, _ := json.Marshal(errorBody(code, err))
 				_ = frame(rc, w, "event: error\ndata: %s\n\n", data)
 			}
 			return

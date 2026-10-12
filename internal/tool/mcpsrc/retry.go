@@ -2,7 +2,6 @@ package mcpsrc
 
 import (
 	"fmt"
-	"log/slog"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -48,10 +47,10 @@ func (s *Source) retry(name string) {
 			return
 		}
 		if err == nil {
-			slog.Info("mcp: server connected after a retry", "server", name)
+			s.log.Info("mcp: server connected after a retry", "server", name)
 			return
 		}
-		slog.Warn("mcp: retry did not connect", "server", name, "err", hide(name, err))
+		s.log.Warn("mcp: retry did not connect", "server", name, "err", hide(name, err))
 	}
 	s.mu.Lock()
 	parked := !s.servers[name].up()
@@ -60,7 +59,7 @@ func (s *Source) retry(name string) {
 	}
 	s.mu.Unlock()
 	if parked {
-		slog.Warn("mcp: server parked; the mcp tool can connect it", "server", name)
+		s.log.Warn("mcp: server parked; the mcp tool can connect it", "server", name)
 	}
 }
 

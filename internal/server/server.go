@@ -2,12 +2,14 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"maps"
 	"net/http"
 	"strconv"
@@ -18,7 +20,7 @@ import (
 
 // Session is a session that the Runtime runs.
 type Session interface {
-	View() protocol.Session
+	Snapshot() protocol.Session
 	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
@@ -34,7 +36,7 @@ type Session interface {
 
 // Reader is a session for reads: its state and its events, with no owner.
 type Reader interface {
-	Session() protocol.Session
+	Snapshot() protocol.Session
 	// Messages returns the page of the conversation before seq before.
 	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 	// Events yields the events after seq, and ends at the head when the
@@ -55,7 +57,7 @@ type Runtime[S Session] interface {
 	Open(ctx context.Context, id string) (S, error)
 	End(ctx context.Context, id string) error
 	Models() []protocol.Model
-	Commands() (protocol.Commands, error)
+	Commands(ctx context.Context) (protocol.Commands, error)
 }
 
 // Processes runs the processes of the box.
@@ -69,21 +71,15 @@ type Processes interface {
 
 // Options configures the handler.
 type Options struct {
-	// Codes maps an error to the code of its first matching entry, or to
-	// CodeInternal.
-	Codes []Code
 	// WorkDir is the root of GET /workspace/changes. Empty: no such route.
 	WorkDir string
 	// Processes serves the /processes routes. nil: no process runs.
 	Processes Processes
 	// Health is the body of GET /health.
 	Health protocol.Health
-}
-
-// Code is the wire code of a sentinel error.
-type Code struct {
-	Err  error
-	Code string
+	// Logger receives the cause of each error that the handler masks as
+	// internal. nil: slog.Default().
+	Logger *slog.Logger
 }
 
 const (
@@ -93,30 +89,6 @@ const (
 	defaultLimit = 100
 	maxLimit     = 1000
 )
-
-var statuses = map[string]int{
-	protocol.CodeInvalidRequest:    http.StatusBadRequest,
-	protocol.CodeSessionNotFound:   http.StatusNotFound,
-	protocol.CodeSessionExists:     http.StatusConflict,
-	protocol.CodeSessionNotOwned:   http.StatusConflict,
-	protocol.CodeInputConflict:     http.StatusConflict,
-	protocol.CodeTurnMismatch:      http.StatusConflict,
-	protocol.CodeSessionBusy:       http.StatusConflict,
-	protocol.CodeRequestNotPending: http.StatusConflict,
-	protocol.CodeModelUnavailable:  http.StatusConflict,
-	protocol.CodePayloadTooLarge:   http.StatusRequestEntityTooLarge,
-	protocol.CodeDraining:          http.StatusServiceUnavailable,
-	protocol.CodeNotAGitRepo:       http.StatusConflict,
-	protocol.CodeNoBase:            http.StatusConflict,
-	protocol.CodeTooManyChanges:    http.StatusConflict,
-	protocol.CodeProcessNotFound:   http.StatusNotFound,
-	protocol.CodeBlobNotFound:      http.StatusNotFound,
-	protocol.CodeUnauthorized:      http.StatusUnauthorized,
-	protocol.CodeInternal:          http.StatusInternalServerError,
-}
-
-// CodeStatuses returns the HTTP status of each error code of the API.
-func CodeStatuses() map[string]int { return maps.Clone(statuses) }
 
 // errInvalid reports a request that the handler cannot decode.
 var errInvalid = errors.New("invalid request")
@@ -175,8 +147,8 @@ func (h *handler[S]) readHandlers() map[string]http.HandlerFunc {
 	}))
 }
 
-func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
-	c, err := h.rt.Commands()
+func (h *handler[S]) commands(w http.ResponseWriter, r *http.Request) error {
+	c, err := h.rt.Commands(r.Context())
 	if err != nil {
 		return err
 	}
@@ -190,7 +162,7 @@ func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{readHandler: readHandler{reads: rt, codes: newCodes(opts)}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
+	h := &handler[S]{readHandler: readHandler{reads: rt, log: cmp.Or(opts.Logger, slog.Default())}, rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}}
 	mux := http.NewServeMux()
 	bind(mux, h.handlers(), func(r Route) bool { return !r.WorkDir || h.workDir != "" }, func(r Route) {
 		for _, op := range r.Ops {
@@ -254,12 +226,19 @@ func (h *handler[S]) session(f func(S, http.ResponseWriter, *http.Request) error
 }
 
 // errorBody hides the cause of an internal error: it can hold store details.
-func errorBody(code string, err error) protocol.ErrorBody {
+func errorBody(code protocol.Code, err error) protocol.ErrorBody {
 	msg := err.Error()
-	if code == protocol.CodeInternal {
+	switch code {
+	case protocol.CodeInternal:
 		msg = "internal error"
+	case protocol.CodeSessionUnreplayable:
+		msg = "session log does not replay"
 	}
-	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: msg, Details: map[string]any{}}}
+	details := map[string]any{}
+	if e, ok := errors.AsType[*protocol.Error](err); ok && e.Code == code && code != protocol.CodeInternal {
+		maps.Copy(details, e.Details)
+	}
+	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: msg, Details: details}}
 }
 
 // reply writes v. A write error means that the client is gone.
@@ -346,7 +325,7 @@ func (h *handler[S]) create(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	reply(w, http.StatusCreated, s.View())
+	reply(w, http.StatusCreated, s.Snapshot())
 	return nil
 }
 
@@ -439,7 +418,7 @@ func (h *handler[S]) setGoal(s S, w http.ResponseWriter, r *http.Request) error 
 	if err := s.SetGoal(r.Context(), g); err != nil {
 		return err
 	}
-	reply(w, http.StatusOK, s.View())
+	reply(w, http.StatusOK, s.Snapshot())
 	return nil
 }
 

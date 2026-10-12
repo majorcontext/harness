@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -187,7 +188,7 @@ func TestContractUnknownModelWarnsOncePerProcess(t *testing.T) {
 	st := harness.NewMemStore()
 	for i := range 2 {
 		fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "hi"}})
-		r, err := harness.New(harness.Options{Store: st, WorkDir: t.TempDir(), Config: config.Config{
+		r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, WorkDir: t.TempDir(), Config: config.Config{
 			Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 		if err != nil {
 			t.Fatal(err)
@@ -219,7 +220,7 @@ func TestContractUnknownModelWarnsOncePerProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.Session().Context; got.Window != 128000 || !got.WindowEstimated {
+	if got := v.Snapshot().Context; got.Window != 128000 || !got.WindowEstimated {
 		t.Errorf("OpenView gauge = %+v, want window 128000 estimated, as the live session reported", got)
 	}
 }

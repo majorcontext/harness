@@ -51,7 +51,7 @@ The Go guidance these rules follow:
 - A contract test is a scenario row in `e2e/`. A behavior change adds a row and a bug fix adds one row to the nearest table. No other test is written unless the code is pure (see Unit tests).
 - A comment never states history: no issue numbers, dates, "previously", or "no longer". A history comment leaves when its code changes.
 - Every `protocol` type change and every `internal/server` `Table` change commits the output of `go generate ./protocol`.
-- Every error code is owned in four places: a `protocol` constant, an entry of the `internal/server` status map, a row of the Errors table with the same status, and a value of the `Error.code` enum of `protocol/openapi.json`. A sentinel error backs every code except `internal`, `payload_too_large`, and `unauthorized`.
+- Every error code is owned in four places: a `protocol` constant, a `protocol.HTTPStatus` entry, a row of the Errors table with the same status, and a value of the `Error.code` enum of `protocol/openapi.json`. A sentinel error backs every code except `internal`, `payload_too_large`, and `unauthorized`.
 - The Sync receiver is not the session API. Its codes (`protocol.CodeStaleEpoch`, `protocol.CodeSyncConflict`) and its body bound (`protocol.MaxSyncBatchBytes`) are `protocol` constants, not rows of the Errors table. A receiver and a sender import them; neither copies the strings or the number.
 - One concept has one resolver or one writer, and `internal/gates/structure.go` lists it (see CI gates, Structure). An allow-list entry carries a date and a reason, and a stale entry fails.
 - The gates in "CI gates" run on every PR. A change never weakens a gate to pass it.
@@ -84,7 +84,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `ReadHandler`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `Call`, `AloneTool`, `KeyedTool`, `DiskStore`, `MemStore`, sentinel errors | embedders, control planes, CLI |
 | `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`; imports only the standard library | boot code that writes a config |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated `openapi.json` and `protocol.ts` | servers, web clients, CLIs |
 | `harness/storetest` | Conformance suite for a `Store` | store implementations |
@@ -107,6 +107,12 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
+	// Getenv reads the variables that hold provider API keys. nil: New and the
+	// runtime read no variable of the process. A backend child process, a plugin,
+	// an MCP stdio server, a process, or a bash call still inherits the environment.
+	Getenv func(key string) string
+	// Logger receives every log line of the runtime. nil: slog.Default().
+	Logger *slog.Logger
 	Tools          []Tool // embedder tools, beside the built-in, process, task, MCP, and plugin tools
 	// WorkDir is the directory of a coding agent. Each session gets the
 	// built-in tools, bash among them, so it grants command execution.
@@ -129,7 +135,7 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acqu
 func (r *Runtime) End(ctx context.Context, id string) error // end and unload; session_busy while a turn or a control command runs; the log stays
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) // creation order
 func (r *Runtime) Models() []protocol.Model
-func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
+func (r *Runtime) Commands(ctx context.Context) (protocol.Commands, error) // the slash-command menu; the cause of ctx when it has ended
 // Close hands off every session, then returns once Sync has acknowledged
 // every record through each handoff. It is idempotent: the first call shuts
 // the runtime down and later calls return its result. Each call returns by the
@@ -150,8 +156,12 @@ func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 func (s *Session) ID() string
 func (s *Session) Done() <-chan struct{} // closes when the session stops on this runtime
 func (s *Session) Err() error            // nil before Done; then matches ErrSessionNotOwned and one cause: ErrSessionReleased, ErrSessionEnded, or ErrOwnershipLost; a Store failure or a Sync rejection that stops the session matches ErrSessionNotOwned and that error instead
-func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
+func (s *Session) Snapshot() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
+func (s *Session) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) // a limit above protocol.MaxMessageLimit fails with invalid_request
+func (s *Session) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) // queued inputs, oldest first
+func (s *Session) Blob(ctx context.Context, key string) (Blob, error) // an attachment that an input names; else ErrBlobNotFound
+func (s *Session) Withdraw(ctx context.Context, inputID string) error // removes a queued input; an input that is not queued is no error
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error)
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -163,11 +173,33 @@ func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, re
 
 // OpenView reads a session from any Store without owning it: no Acquire, no appends.
 func OpenView(ctx context.Context, st Store, id string) (*View, error)
-func (v *View) Session() protocol.Session
+func (v *View) ID() string
+func (v *View) Snapshot() protocol.Session
+func (v *View) Inputs(ctx context.Context) ([]protocol.QueuedInput, error)
+func (v *View) Blob(ctx context.Context, key string) (Blob, error)
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 func (v *View) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 // Resumable reports whether Open would resume something: a running or suspended turn, a queued input, an active or paused goal, a command that no owner finished, or a child that has not settled.
 func (v *View) Resumable() bool
+
+// Reader is the read surface of a session, live or stored. *Session and *View implement it.
+type Reader interface {
+	Snapshot() protocol.Session
+	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
+	Inputs(ctx context.Context) ([]protocol.QueuedInput, error)
+	Blob(ctx context.Context, key string) (Blob, error)
+	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+}
+
+// Blob is an attachment. The caller closes Body.
+type Blob struct {
+	MediaType string
+	Size      int64
+	Body      io.ReadCloser
+}
+
+// Read returns the running Session of id, or a View of its stored log. It acquires nothing.
+func (r *Runtime) Read(ctx context.Context, id string) (Reader, error)
 
 // ReadEvents yields the stored events after `after`, through the head it reads first; it neither owns the session nor replays the log.
 func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error]
@@ -188,18 +220,29 @@ type Sync interface {
 // ApplySync appends b to st by the receiver rules of a Sync (see Events).
 func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error)
 
-// The calls of one model response run at the same time, so Run allows concurrent
-// calls. A Tool may also have `Alone()` (the call runs with no other call in
-// flight) or `Key(protocol.ToolCall) string` (calls with the same non-empty key
-// run one at a time, in call order).
+// Tool is an embedder tool. The runtime reads Spec once, at New. The calls of one
+// model response run at the same time, so Run allows concurrent calls, and it
+// must return when ctx ends. An error becomes an error result.
 type Tool interface {
 	Spec() protocol.ToolSpec
-	// Run receives call.ID, stable across a resumed turn, for idempotent effects.
-	Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error)
+	Run(ctx context.Context, call Call) (protocol.ToolResult, error)
 }
+
+// Call is one tool call and the session that made it.
+type Call struct {
+	ID        string // the call ID of the model, stable across a resumed turn, for idempotent effects
+	Name      string
+	Arguments json.RawMessage
+	Session   string // the calling session
+	Root      string // the root of the session tree
+	TurnID    string
+}
+
+type AloneTool interface { Tool; Alone() }            // the call runs with no other call in flight
+type KeyedTool interface { Tool; Key(c Call) string } // calls with the same non-empty key run one at a time, in call order
 ```
 
-The HTTP handler is a thin mapping of these methods. An embedder and a remote client see the same types and the same errors.
+The HTTP handler is a thin mapping of the exported methods of these types, and it calls no other method; `Runtime.Read` serves every read route. A read of a session that the runtime does not run names the plugins of that runtime. An embedder and a remote client see the same types and the same errors.
 
 ### Internal packages
 
@@ -391,7 +434,7 @@ The cause of a stop is the first of these. `Release` and a handoff by `Close` gi
 Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped.
 
 - The gauge window is the window of the session model, or the window of the newest reading when the model reports none. A reading (`context.measured`) carries `window_estimated` with its window. `OpenView` has no backend and reads the window and the flag of the newest reading from the log; the runtime reads of a session that it does not run take the window of the session model from the backend, as a running session does.
-- `Session.View`, `Runtime.List`, and a read of a session that the runtime does not run also fill `Plugins`: the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin. The plugin host owns that state, and the log does not hold it.
+- `Session.Snapshot`, `Runtime.List`, and a read of a session that the runtime does not run also fill `Plugins`: the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin. The plugin host owns that state, and the log does not hold it.
 - The `View` also holds the profile of a child session and its unsettled children.
 - A read of the whole `State`, such as the history for a plugin or the usage of a child, goes to the actor through `Actor.Read`, which runs a function on the actor goroutine. The runtime replays a log only for a session that it does not run.
 
@@ -586,9 +629,9 @@ A route that only reads a session, `GET /sessions/{id}`, `GET /sessions/{id}/inp
 
 A restart opens no session by itself: the embedder opens each session that has work to resume (`View.Resumable`), `cmd/harness` when it starts and a control plane when it wakes the box. A session that has no work stays closed and gets no `owner.acquired`; a log that does not replay is skipped and logged.
 
-`harness.ReadHandler(store, queue)` is the HTTP form of those reads for an embedder with a `Store` and no runtime. It serves `GET /sessions`, `GET /sessions/{id}`, `GET /sessions/{id}/inputs`, `GET /sessions/{id}/messages`, `GET /sessions/{id}/events`, and `GET /sessions/{id}/blobs/{key}` through the code of `Runtime.Handler`, so bodies, limits, paging, and error bodies are those of that handler for a session that the runtime does not run. The SSE form sends the durable frames after the cursor, each with its `id`, and ends at the head, because no owner appends. A session lists no plugins. It appends nothing, opens nothing, and starts no turn, and every route that changes something answers 405 in the error body. `queue` is a `harness.Queue`, one method `Queued(ctx, session) ([]protocol.QueuedInput, error)`, for inputs that wait outside the log, such as the undelivered inputs of a box that is not running. The inputs of the queue follow the queued inputs of the log in `GET /sessions/{id}/inputs`, and their IDs follow those of the log in `Session.queued` of `GET /sessions/{id}` and of each session of `GET /sessions`. A session with no log but with waiting inputs answers `GET /sessions/{id}/inputs` from the queue alone, for a box that is still starting; every other route answers `session_not_found` for it, and `GET /sessions` does not list it. The handler asks the queue only for the session, the session list, and the inputs; a queue error never fails the messages, events, or blob routes. A nil `queue` lists the log only. `Runtime.Handler` takes no queue.
+`harness.ReadHandler(store, opts)` is the HTTP form of those reads for an embedder with a `Store` and no runtime. It serves `GET /sessions`, `GET /sessions/{id}`, `GET /sessions/{id}/inputs`, `GET /sessions/{id}/messages`, `GET /sessions/{id}/events`, and `GET /sessions/{id}/blobs/{key}` through the code of `Runtime.Handler`, so bodies, limits, paging, and error bodies are those of that handler for a session that the runtime does not run. The SSE form sends the durable frames after the cursor, each with its `id`, and ends at the head, because no owner appends. A session lists no plugins. It appends nothing, opens nothing, and starts no turn, and every route that changes something answers 405 in the error body. `opts` is a `harness.ReadOptions{Queue, Logger}`. `opts.Queue` is a `harness.Queue`, one method `Queued(ctx, session) ([]protocol.QueuedInput, error)`, for inputs that wait outside the log, such as the undelivered inputs of a box that is not running. The inputs of the queue follow the queued inputs of the log in `GET /sessions/{id}/inputs`, and their IDs follow those of the log in `Session.queued` of `GET /sessions/{id}` and of each session of `GET /sessions`. A session with no log but with waiting inputs answers `GET /sessions/{id}/inputs` from the queue alone, for a box that is still starting; every other route answers `session_not_found` for it, and `GET /sessions` does not list it. The handler asks the queue only for the session, the session list, and the inputs; a queue error never fails the messages, events, or blob routes. A nil `opts.Queue` lists the log only. `opts.Logger` receives the cause of each error that the handler masks as `internal` (nil: `slog.Default()`), and `Runtime.Handler` logs those causes to `Options.Logger`. `Runtime.Handler` takes no queue.
 
-`Runtime.Handler` serves every route above. A route that answers with more than one success status has one entry for each status in the route table: `POST /sessions/{id}/inputs` answers 201 for a new input and 200 for a repeat, with the same body, and `POST /sessions/{id}/requests/{request}` answers 202 with `{seq, status}` for an answer and 204 for a dismissal. `GET /health` answers `protocol.Health`: `status`, `version`, `vcs_revision`, `vcs_time`, `session_sync` (`fsync` or `volume`), `started_at` (the start of the runtime, RFC 3339 UTC), and `capabilities` (`delta_row_identity`, which says that each `item.delta` frame names its item). The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves every route above. A route that answers with more than one success status has one entry for each status in the route table: `POST /sessions/{id}/inputs` answers 201 for a new input and 200 for a repeat, with the same body, and `POST /sessions/{id}/requests/{request}` answers 202 with `{seq, status}` for an answer and 204 for a dismissal. `GET /health` answers `protocol.Health`: `status`, `version`, `vcs_revision`, `vcs_time`, `started_at` (the start of the runtime, RFC 3339 UTC), and `capabilities` (`delta_row_identity`, which says that each `item.delta` frame names its item). The handler has no authentication; the embedder wraps it.
 
 ### Inputs
 
@@ -659,9 +702,10 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `payload_too_large` | 413 |
 | `draining` | 503 |
 | `unauthorized` | 401 |
+| `session_unreplayable` | 500 |
 | `internal` | 500 |
 
-Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `internal/server`. The session codes are sentinels in `harness`, and `blob_not_found` is `ErrBlobNotFound`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `internal/server` maps each sentinel with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant of type `protocol.Code`. A sentinel of the Go API is a `*protocol.Error`, and `Error.Is` matches another `*protocol.Error` with the same code, so an error that a client decodes from a body matches the sentinel of its code. A stop cause (`ErrSessionHeld`, `ErrSessionReleased`, `ErrSessionEnded`, `ErrOwnershipLost`) is a `session_not_owned` error with a cause in its details, and it matches only its own cause and `ErrSessionNotOwned`. The body carries that cause in `details.cause`, so an error that a client decodes matches the same sentinel. The Sync receiver codes are not in the table, so `protocol.HTTPStatus` answers 500 for them, and a receiver chooses its status from the sync wire contract. `protocol.CodeOf(err)` returns the code of the first `*protocol.Error` in the chain of `err`, or `internal`, and `protocol.HTTPStatus(code)` returns the status of the table, or 500 for an unknown code. `New` returns a plain wrapped error for a bad `Options`, never `ErrInvalidRequest`. A log that does not replay fails with `ErrUnreplayable`, code `session_unreplayable`, and its body message is fixed. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `internal/server`. The session codes are sentinels in `harness`, and `blob_not_found` is `ErrBlobNotFound`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `internal/server` takes the code of an error from `protocol.CodeOf`, after its own dependencies' sentinels. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 The actor masks and bounds each error text that it writes to the log (`turn.ended` error, `goal.changed` reason): recognized credential shapes are redacted (best effort: a free-form text can hold a shape that the fixed patterns miss), and a text longer than 256 runes keeps its first 256 runes and ends with `...[truncated]`. A failed `turn.ended` also holds the message as a report to a parent reads it, in `error_detail`, when that differs from `error`: masked by the secret patterns and cut at 500 runes with `… [truncated]` (see Settle).
 
@@ -687,12 +731,12 @@ The actor masks and bounds each error text that it writes to the log (`turn.ende
 Go types in `protocol` are the source. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `internal/server` exports. CI regenerates and fails on a diff.
 
 - A test in `internal/gates` reads the route list under Routes and the read routes of `harness.ReadHandler` from this spec, and fails when the route table, the read routes of the table, or a route that `Runtime.Handler` or `ReadHandler` mounts differs from them.
-- The same test fails when the `protocol` `Code` constants, the status map of `internal/server`, the Errors table, or the enum of `Error.code` in `protocol/openapi.json` (generated from the status map) names a code that another one lacks, or gives a code another status.
+- The same test fails when the `protocol` `Code` constants, `protocol.HTTPStatus`, the Errors table, or the enum of `Error.code` in `protocol/openapi.json` (generated from the `Code` constants) names a code that another one lacks, or gives a code another status.
 - The generated contract holds what the handler does: each request body is optional, because the handler reads an empty body as the zero request; a type that only a request holds refuses unknown fields, as the handler answers `invalid_request`; and each success status of a route is an entry of the table. The process, logs, and health bodies are `protocol` types (`ProcessInfo`, `ProcessStatus`, `ProcessLogs`, and `Health`).
 
 ### Command
 
-`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds the `Owner` and `Sync` that `owner_epoch` and `sync` name, builds one `harness.Runtime`, and holds no runtime behavior.
+`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds the `Owner` and `Sync` that `owner_epoch` and `sync` name, builds one `harness.Runtime`, and holds no runtime behavior. It passes `os.Getenv` as `Options.Getenv` and its JSON `slog` logger as `Options.Logger`.
 
 - `serve` applies the `HARNESS_*` variables with `config.ApplyEnv`, then the flags `-no-instructions`, `-skills-dir`, and `-agent-def-dir`, so a flag wins. It keeps the sessions in a `DiskStore` at `HARNESS_SESSION_DIR`, else `session_dir`, else `~/.harness/sessions`. It serves `Runtime.Handler` behind the bearer token of `HARNESS_RUN_TOKEN`; `GET /health` needs no token, a request without the token gets 401 with the error code `unauthorized`, and an empty token is allowed only on a loopback bind or with `-unauthenticated` or `HARNESS_UNAUTHENTICATED`. With `-cors-origin` it adds the CORS headers, and a preflight skips the token. It binds `-addr` before it builds the runtime and takes `Options.ServeURL` from the bound address, so `-addr 127.0.0.1:0` serves on a free port that the `addr` field of the `serve start` log line names. Then it calls `CatchUp` and opens each session that has work to resume, and a failure of either is logged and never stops `serve`.
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
@@ -870,7 +914,7 @@ type Notice struct {
 - The tools of a model call keep one order from call to call, because the tools come first in the cached prefix of every provider and a changed byte invalidates the whole prefix. A `Source` returns its tools in a fixed order and never ranges over a map: `mcpsrc` orders the servers by name and the tools of a server by name.
 - `turn.Sources` chains the `turn.Hooks` of its `Source`s in order: `Before` runs in order and a deny ends the chain, and `After` runs in order.
 - The loop runs the tool calls of a response at the same time, up to 8 at once. Results reach the log in call order: a result is recorded as soon as it and every call before it have ended. A tool that is `Alone` waits for every call before it and holds back every call after it. The calls of a `Keyed` tool with one key run one at a time in call order: `read_file`, `write_file`, and `edit_file` key on the resolved path with symlinks resolved, `process` on the process name, and `task` on the target session. `goal`, `model`, and `mcp` are `Alone`. `Before` and `After` run around each call, and calls that run together run their hooks together, so a hook keeps no state across calls that it does not guard. A panic in a tool is an error result of that call. An interrupt cancels every running call and starts none; every call that ran has its own result recorded in call order, including a call that the interrupt cut short, and a call that did not start gets the result of an interrupted call. When only the step ends, as in a handoff, running calls finish and no call starts. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
-- No tool receives a session. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts.
+- An embedder tool receives its session, the root of the session tree, and the turn in `harness.Call`. The runtime binds them for each model call, also for `AloneTool.Alone` and `KeyedTool.Key`. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts. `turn.Tool` takes a `protocol.ToolCall` and no session.
 
 Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored.
 
@@ -948,7 +992,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts (see processes). Each model call then adds the MCP segment, then the plugin segments. The only ambient messages are the banner and the MCP notice of a server that is down; the system prompt carries neither. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction moves the place to the end of the history that it leaves. A backend that owns its loop gets no banner.
+Each turn sends the prompt with one process status line after it, built when the turn starts (see processes). Each model call then adds the MCP segment, then the plugin segments. The only ambient messages are the banner and the MCP notice of a server that is down; the system prompt carries neither. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction moves the place to the end of the history that it leaves. A backend that owns its loop gets no banner.
 
 ### processes
 
@@ -982,7 +1026,7 @@ One `Config` struct. `Defaults` is the one defaults table, and each accessor rea
 
 `max_tokens` caps the output tokens of each model call of a turn. 0 is the backend default, and a negative value fails `Validate`. `HARNESS_MAX_TOKENS` sets it.
 
-`Load` rejects a key that `Config` has no field for, with an error that names the key. `session_dir` is for `cmd/harness`, and `session_sync` sets the banner; `model_tool` turns the `model` tool off, and `New` reads it.
+`Load` rejects a key that `Config` has no field for, with an error that names the key. `session_dir` is for `cmd/harness`; `model_tool` turns the `model` tool off, and `New` reads it.
 
 `plugin_cache` (a path; `HARNESS_PLUGIN_CACHE`) names the plugin manifest cache. Only the user file sets it: a project file cannot. `cmd/harness` sets it to `plugin_cache.json` beside the user config when no variable names it, and the Go API has no default.
 
@@ -1036,7 +1080,7 @@ The size and test gates compare a branch with its merge base. The route, structu
 `internal/gates` and `e2e` parse four parts of this document. Keep their format when you edit them.
 
 - The fenced block under `### Routes`: one route per line or several joined by `·`, each `METHOD /path`. `POST /processes/{name}/{action}` stands for the three actions that the processes section names in its sentence on the replies with the status.
-- The paragraph on `harness.ReadHandler(store, queue)`: the backticked `METHOD /path` tokens before "through the code of" are the read routes.
+- The paragraph on `harness.ReadHandler(store, opts)`: the backticked `METHOD /path` tokens before "through the code of" are the read routes.
 - The rows of the Public packages table whose first cell is a backticked package that starts with `harness`.
 - The rows of the Errors table, each a backticked code and a three-digit status between pipes.
 
@@ -1048,5 +1092,5 @@ Boxes is a control plane that embeds and hosts harness. The two share one patter
 - One store for every session. `pgstore` is one Postgres `harness.Store`, proven by `storetest`. Home sessions write it directly. Box sessions replicate into it through `Sync`. `OpenView` over it serves reads of a box that is not running, and `harness.ReadHandler` mounted over it serves them as HTTP, with the undelivered commands of the box as its `Queue`.
 - One pinned commit. Boxes builds each box image from an exact harness commit that it pins (`ARG HARNESS_REF`), never from harness `main` at its head. Harness reaches boxes only through an explicit bump PR on boxes that moves that pin. A harness change that merges to `main` ships to no box until a bump.
 - One epoch. The box `claim_epoch` is the `Ownership.Epoch`. It is a plain counter that boxes increments when it admits a Spawn. It is recorded in `owner.acquired`, carried by every `SyncBatch`, and checked by boxes. A stale box learns it is fenced from the rejection. Boxes writes one `BootConfig` file that embeds `harness/config`, validates it once, and sends post-boot values as an update to that same file.
-- The seams that boxes uses: `OpenView` (read-only open), `harness/harnesstest` (public scripted model), `Sync` and `protocol.SyncBatch` (the pump contract), `harness/config` (a config without server dependencies), `protocol.Session.HeadSeq` (durable head per session), the `crashed` cause (open after a forced stop), `Models()` (no sessions needed; `New` does no I/O), `Ownership.Epoch` with `ErrStaleEpoch` (an external lease that fences a stale epoch), `ReadEvents` (events after a cursor, with no replay), and `ReadHandler(store, queue)` (the read routes of a box that is not running, with queued commands).
+- The seams that boxes uses: `OpenView` (read-only open), `harness/harnesstest` (public scripted model), `Sync` and `protocol.SyncBatch` (the pump contract), `harness/config` (a config without server dependencies), `protocol.Session.HeadSeq` (durable head per session), the `crashed` cause (open after a forced stop), `Models()` (no sessions needed; `New` does no I/O), `Ownership.Epoch` with `ErrStaleEpoch` (an external lease that fences a stale epoch), `ReadEvents` (events after a cursor, with no replay), and `ReadHandler(store, opts)` (the read routes of a box that is not running, with queued commands).
 - `Runtime.Close` and `Session.Release` return only after `Sync` acknowledges every record through the handoff, and `View` reports `SyncedSeq`. `Sync.Deliver` returns `SyncAck{head}` on every reply. The home chat is one per person.

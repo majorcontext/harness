@@ -41,14 +41,14 @@ type syncReceiver struct {
 	srv   *httptest.Server
 	store harness.Store
 	// script returns a status and an error code for call n with batch b, or 0 to apply the batch.
-	script func(n int, b protocol.SyncBatch) (int, string)
+	script func(n int, b protocol.SyncBatch) (int, protocol.Code)
 
 	mu      sync.Mutex
 	calls   []syncCall
 	changed chan struct{}
 }
 
-func newSyncReceiver(t *testing.T, script func(n int, b protocol.SyncBatch) (int, string)) *syncReceiver {
+func newSyncReceiver(t *testing.T, script func(n int, b protocol.SyncBatch) (int, protocol.Code)) *syncReceiver {
 	t.Helper()
 	r := &syncReceiver{store: harness.NewMemStore(), script: script, changed: make(chan struct{})}
 	mux := http.NewServeMux()
@@ -75,7 +75,7 @@ func (r *syncReceiver) handle(w http.ResponseWriter, req *http.Request) {
 	r.calls = append(r.calls, syncCall{req.Header.Get("Authorization"), b, len(body)})
 	close(r.changed)
 	r.changed = make(chan struct{})
-	status, code := 0, ""
+	status, code := 0, protocol.Code("")
 	if r.script != nil {
 		status, code = r.script(len(r.calls), b)
 	}
@@ -101,7 +101,7 @@ func (r *syncReceiver) handle(w http.ResponseWriter, req *http.Request) {
 	_ = json.NewEncoder(w).Encode(ack)
 }
 
-func writeSyncError(w http.ResponseWriter, status int, code string) {
+func writeSyncError(w http.ResponseWriter, status int, code protocol.Code) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.Error{Code: code, Message: "scripted"}})
@@ -207,7 +207,7 @@ func equalLogs(t *testing.T, want, got harness.Store, id string) {
 // and returns the head of each.
 func seedSessions(t *testing.T, st harness.Store, ids ...string) map[string]uint64 {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: st, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +287,7 @@ func rowSyncPostsTheLogWithTheBearerTokenAndTheEpoch(t *testing.T) {
 }
 
 func rowSyncResendsTheSameBatchAfterAFailedPost(t *testing.T) {
-	rcv := newSyncReceiver(t, func(n int, _ protocol.SyncBatch) (int, string) {
+	rcv := newSyncReceiver(t, func(n int, _ protocol.SyncBatch) (int, protocol.Code) {
 		if n == 1 {
 			return http.StatusServiceUnavailable, "internal"
 		}
@@ -312,7 +312,9 @@ func rowSyncResendsTheSameBatchAfterAFailedPost(t *testing.T) {
 }
 
 func rowSyncStaleEpochIsFinalAndEndsTheSession(t *testing.T) {
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusConflict, protocol.CodeStaleEpoch })
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
+		return http.StatusConflict, protocol.CodeStaleEpoch
+	})
 	r, err := newWired(harness.Options{Store: harness.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +365,9 @@ func rowCatchUpReplicatesEveryStoredSessionWithoutOpeningIt(t *testing.T) {
 func rowCatchUpStaleEpochFails(t *testing.T) {
 	st := harness.NewMemStore()
 	seedSessions(t, st, "s1")
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusConflict, protocol.CodeStaleEpoch })
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
+		return http.StatusConflict, protocol.CodeStaleEpoch
+	})
 	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -412,8 +416,8 @@ func rowPluginGetsServeUrlAndRunTokenFromOptions(t *testing.T) {
 	}
 }
 
-func downUntil(n int) func(int, protocol.SyncBatch) (int, string) {
-	return func(call int, _ protocol.SyncBatch) (int, string) {
+func downUntil(n int) func(int, protocol.SyncBatch) (int, protocol.Code) {
+	return func(call int, _ protocol.SyncBatch) (int, protocol.Code) {
 		if call <= n {
 			return http.StatusServiceUnavailable, "internal"
 		}
@@ -447,7 +451,7 @@ func rowCatchUpGivesWayToOpenOfTheSessionThatItHolds(t *testing.T) {
 func rowCloseEndsACatchUpThatRetries(t *testing.T) {
 	st := harness.NewMemStore()
 	seedSessions(t, st, "s1")
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return http.StatusServiceUnavailable, "internal" })
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) { return http.StatusServiceUnavailable, "internal" })
 	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -498,7 +502,7 @@ func rowSyncReadsTheTokenFileAgainForEachPost(t *testing.T) {
 	st := harness.NewMemStore()
 	seedSessions(t, st, "s1")
 	var tokenFile string
-	rcv := newSyncReceiver(t, func(n int, _ protocol.SyncBatch) (int, string) {
+	rcv := newSyncReceiver(t, func(n int, _ protocol.SyncBatch) (int, protocol.Code) {
 		if n == 1 {
 			if err := os.WriteFile(tokenFile, []byte("rotated\n"), 0o600); err != nil {
 				t.Error(err)

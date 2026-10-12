@@ -2,10 +2,12 @@
 package turn
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"time"
 
@@ -194,6 +196,8 @@ type Limits struct {
 	// Idle stops a model call that reports nothing to its Sink for this
 	// long. Zero or less: no limit.
 	Idle time.Duration
+	// Log receives the turn_metrics line of each model call. nil: slog.Default().
+	Log *slog.Logger
 }
 
 // Turn is what a running turn reports through, bound to its turn. Started
@@ -237,6 +241,7 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context.
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
+	ctx, step = context.WithValue(ctx, turnIDKey{}, req.TurnID), context.WithValue(step, turnIDKey{}, req.TurnID)
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
@@ -248,7 +253,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err
 		}
-		s, call := &sink{Turn: to}, req
+		s, call := &sink{Turn: to, log: cmp.Or(lim.Log, slog.Default())}, req
 		if err := applyParams(step, b, caps, req, &call); err != nil {
 			return err
 		}
@@ -395,6 +400,7 @@ type sink struct {
 	threads map[string]string
 	// call describes the model call in flight, for its turn_metrics line.
 	call callInfo
+	log  *slog.Logger
 }
 
 // Delta streams d into the next item. The backend item ID is not used: one
@@ -484,4 +490,12 @@ func adopt(b Backend, caps Capabilities, to Turn, req *Request) error {
 		req.Model, req.Settings = m, set
 	}
 	return nil
+}
+
+type turnIDKey struct{}
+
+// ID returns the ID of the turn whose model call or tool call runs under ctx, or "".
+func ID(ctx context.Context) string {
+	id, _ := ctx.Value(turnIDKey{}).(string)
+	return id
 }

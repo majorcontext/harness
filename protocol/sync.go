@@ -18,7 +18,7 @@ type SyncAck struct {
 // CodeSyncConflict, 400 with invalid_request, any 413, 401, or 403. A 200 is
 // the SyncAck; it resends for any other status and for a transport error.
 const (
-	MaxSyncBatchBytes = 32 << 20 // largest JSON body of a SyncBatch; a receiver answers 413 with CodePayloadTooLarge above it
-	CodeStaleEpoch    = "stale_epoch"
-	CodeSyncConflict  = "sync_conflict"
+	MaxSyncBatchBytes      = 32 << 20 // largest JSON body of a SyncBatch; a receiver answers 413 with CodePayloadTooLarge above it
+	CodeStaleEpoch    Code = "stale_epoch"
+	CodeSyncConflict  Code = "sync_conflict"
 )

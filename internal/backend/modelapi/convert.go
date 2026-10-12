@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/message"
@@ -15,7 +14,7 @@ import (
 
 // toMessage maps m to the provider message. A blob part reads its bytes through req.Blob.
 // A tool result whose image the store lacks keeps its text, so one lost blob does not fail every later turn.
-func toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (message.Message, error) {
+func (be *Backend) toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (message.Message, error) {
 	out := message.Message{Role: message.Role(m.Role)}
 	for _, p := range m.Parts {
 		switch p.Type {
@@ -32,7 +31,7 @@ func toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (messa
 			for _, b := range p.Blobs {
 				data, err := readBlob(ctx, req, b.BlobKey)
 				if errors.Is(err, fs.ErrNotExist) {
-					slog.Warn("harness: a tool result image is missing from the store, so the model gets the text only", "session", req.SessionID, "call", p.CallID, "blob", b.BlobKey)
+					be.log.Warn("harness: a tool result image is missing from the store, so the model gets the text only", "session", req.SessionID, "call", p.CallID, "blob", b.BlobKey)
 					continue
 				}
 				if err != nil {

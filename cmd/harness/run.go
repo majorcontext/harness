@@ -119,13 +119,13 @@ func runCmd(args []string) error {
 		return err
 	}
 	owner, replica := replication(cfg)
-	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version})
+	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv, Logger: logger})
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	line, err := checkLine(cfg, rt, opts, modelSet)
+	line, err := checkLine(ctx, cfg, rt, opts, modelSet)
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}
@@ -133,7 +133,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}
-	out := &printer{out: os.Stdout, errW: os.Stderr, jsonOut: opts.jsonOut, enc: json.NewEncoder(os.Stdout), rootID: s.View().ID,
+	out := &printer{out: os.Stdout, errW: os.Stderr, jsonOut: opts.jsonOut, enc: json.NewEncoder(os.Stdout), rootID: s.Snapshot().ID,
 		streamed: map[string]bool{}, names: map[string]string{}, open: rt.Open, store: store, followers: map[string]*follower{}, closing: make(chan struct{})}
 	out.markExisting(ctx, out.rootID, map[string]bool{})
 	runErr := drive(ctx, s, opts, out)
@@ -142,7 +142,7 @@ func runCmd(args []string) error {
 		fmt.Println()
 	}
 	if !opts.noSave && (runErr == nil || errors.Is(runErr, errGoalNotAchieved)) {
-		fmt.Fprintln(os.Stderr, "session:", s.View().ID)
+		fmt.Fprintln(os.Stderr, "session:", s.Snapshot().ID)
 	}
 	return errors.Join(runErr, closeRuntime(rt))
 }
@@ -183,7 +183,7 @@ func runSession(ctx context.Context, rt *harness.Runtime, store harness.Store, c
 		if err != nil {
 			return nil, err
 		}
-		if err := line.refuseOn(v.Session().Model); err != nil {
+		if err := line.refuseOn(v.Snapshot().Model); err != nil {
 			return nil, err
 		}
 	}
@@ -224,7 +224,7 @@ func lastSession(ctx context.Context, rt *harness.Runtime) (string, error) {
 // drive starts the work of the run and prints the stream of the session until
 // it settles.
 func drive(ctx context.Context, s *harness.Session, opts runOptions, out *printer) error {
-	head := s.View().HeadSeq
+	head := s.Snapshot().HeadSeq
 	var admitted protocol.Admitted
 	if opts.goal != "" {
 		if err := s.SetGoal(ctx, protocol.Goal{Condition: opts.goal, MaxTurns: opts.goalMaxTurns}); err != nil {
@@ -314,7 +314,7 @@ type jsonLine struct {
 // stream prints each event after seq, and returns when the session has
 // settled. A typed command is settled when its newest record is final.
 func (p *printer) stream(ctx context.Context, s *harness.Session, after uint64, command bool) error {
-	if !command && settled(s.View()) && s.View().HeadSeq > after {
+	if !command && settled(s.Snapshot()) && s.Snapshot().HeadSeq > after {
 		return p.drain(ctx, s, after)
 	}
 	for ev, err := range s.Events(ctx, after) {
@@ -333,7 +333,7 @@ func (p *printer) stream(ctx context.Context, s *harness.Session, after uint64, 
 
 // drain prints the records that a settled session holds after seq.
 func (p *printer) drain(ctx context.Context, s *harness.Session, after uint64) error {
-	head := s.View().HeadSeq
+	head := s.Snapshot().HeadSeq
 	for ev, err := range s.Events(ctx, after) {
 		if err != nil {
 			return err
@@ -348,7 +348,7 @@ func (p *printer) drain(ctx context.Context, s *harness.Session, after uint64) e
 
 func (p *printer) finished(s *harness.Session, ev protocol.Event, command bool) bool {
 	if command {
-		return ev.Kind == "command.recorded" && commandFinal(ev) && settled(s.View())
+		return ev.Kind == "command.recorded" && commandFinal(ev) && settled(s.Snapshot())
 	}
 	if p.waiting() {
 		return false
@@ -393,13 +393,13 @@ func (p *printer) waiting() bool {
 // after it appends a record, so the view of a record that a reader has just
 // received can still be the one before it.
 func viewAt(s *harness.Session, seq uint64) protocol.Session {
-	v := s.View()
+	v := s.Snapshot()
 	for range viewWaits {
 		if v.HeadSeq >= seq {
 			break
 		}
 		time.Sleep(time.Millisecond)
-		v = s.View()
+		v = s.Snapshot()
 	}
 	return v
 }
@@ -492,7 +492,7 @@ func (p *printer) item(ev protocol.Event) {
 // verdict returns the failure of the run: a turn that failed, a typed command
 // that did not succeed, or a goal that was not achieved.
 func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol.Admitted) error {
-	v := s.View()
+	v := s.Snapshot()
 	if opts.goal != "" {
 		g := v.Goal
 		switch {
@@ -610,7 +610,7 @@ func (p *printer) markExisting(ctx context.Context, id string, seen map[string]b
 		}
 		f := p.followerOf(c.ChildID)
 		p.mu.Lock()
-		f.mark = cv.Session().HeadSeq
+		f.mark = cv.Snapshot().HeadSeq
 		p.mu.Unlock()
 		p.markExisting(ctx, c.ChildID, seen)
 	}
@@ -659,7 +659,7 @@ func (p *printer) printChild(ctx context.Context, id string, f *follower) {
 	go func() {
 		select {
 		case <-p.closing:
-			target.Store(cs.View().HeadSeq)
+			target.Store(cs.Snapshot().HeadSeq)
 			if last.Load() >= target.Load() {
 				cancel()
 			}

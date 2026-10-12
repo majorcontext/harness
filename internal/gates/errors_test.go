@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/internal/server"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestErrorCodesAgreeAcrossTheirSources(t *testing.T) {
@@ -35,6 +35,10 @@ func TestErrorCodesAgreeAcrossTheirSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	listed, err := ProtocolStatusCodes(srcs...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	spec, err := SpecErrorStatuses(readSpec(t))
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,7 @@ func TestErrorCodesAgreeAcrossTheirSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range CheckErrorCodes(ErrorCodeSources{Constants: constants, Statuses: server.CodeStatuses(), Spec: spec, Enum: enum}) {
+	for _, v := range CheckErrorCodes(ErrorCodeSources{Constants: constants, Statuses: statusesOf(listed), Spec: spec, Enum: enum}) {
 		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
 	}
 }
@@ -91,5 +95,21 @@ func TestProtocolCodesReadsTheCodeConstants(t *testing.T) {
 	got, err := ProtocolCodes("package p\n\nconst (\n\tCodeB = \"b\"\n\tCodeA = \"a\"\n\tOther = \"x\"\n)\n", "package p\n\nconst CodeC = \"c\"\n")
 	if err != nil || strings.Join(got, ",") != "a,b,c" {
 		t.Errorf("ProtocolCodes = %v, %v", got, err)
+	}
+}
+
+// statusesOf returns protocol.HTTPStatus of each code that the table lists.
+func statusesOf(codes []string) map[string]int {
+	out := map[string]int{}
+	for _, c := range codes {
+		out[c] = protocol.HTTPStatus(protocol.Code(c))
+	}
+	return out
+}
+
+func TestProtocolStatusCodesReadsTheTableKeys(t *testing.T) {
+	got, err := ProtocolStatusCodes("package p\n\nconst (\n\tCodeB = \"b\"\n\tCodeA = \"a\"\n)\n\nvar statuses = map[Code]int{CodeA: 400}\n")
+	if err != nil || strings.Join(got, ",") != "a" {
+		t.Errorf("ProtocolStatusCodes = %v, %v; want only the listed code", got, err)
 	}
 }

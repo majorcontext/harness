@@ -111,9 +111,9 @@ var nodeRules = []nodeRule{
 	},
 	{
 		name:   "single_error_envelope",
-		detail: "only internal/server and the serve token check build the error body (spec: Errors)",
+		detail: "only internal/server, the serve token check, and the sentinel errors build the error body (spec: Errors)",
 		match:  literalOf(modulePath+"/protocol", "ErrorBody", "Error"),
-		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer"},
+		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer", "runtime.go#", "internal/session/actor.go#", "internal/session/actor.go#notOwned", "internal/session/compact.go#", "internal/session/requests.go#", "internal/session/sync.go#", "internal/backend/router.go#"},
 	},
 	{
 		name:   "single_route_mount",

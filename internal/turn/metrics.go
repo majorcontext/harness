@@ -49,14 +49,14 @@ func callOf(req Request, retry int, ownsLoop bool) callInfo {
 // Telemetry logs the turn_metrics line of a completed model call, then passes t on.
 func (s *sink) Telemetry(t Telemetry) {
 	if t.Call != nil {
-		logCall(s.call, t)
+		logCall(s.log, s.call, t)
 	}
 	s.Turn.Telemetry(t)
 }
 
 // logCall writes one turn_metrics line. A key that means "the backend chose"
 // when absent is left out, so a query counts it apart from any named value.
-func logCall(c callInfo, t Telemetry) {
+func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 	m := t.Call
 	args := []any{
 		"session_id", c.sessionID,
@@ -96,5 +96,5 @@ func logCall(c callInfo, t Telemetry) {
 			args = append(args, "chain_refusal_item", *m.ChainRefusalItem)
 		}
 	}
-	slog.Info("turn_metrics", args...)
+	log.Info("turn_metrics", args...)
 }

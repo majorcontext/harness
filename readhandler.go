@@ -1,14 +1,25 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
+
+// ReadOptions configures ReadHandler.
+type ReadOptions struct {
+	// Queue lists inputs that wait outside the log. nil: the log only.
+	Queue Queue
+	// Logger receives the cause of each error that the handler masks as
+	// internal. nil: slog.Default().
+	Logger *slog.Logger
+}
 
 // Queue lists inputs that wait outside the log of a session, such as the
 // undelivered inputs of a box that is not running.
@@ -18,11 +29,12 @@ type Queue interface {
 }
 
 // ReadHandler returns the HTTP API of the read routes of Runtime.Handler over st, with no Runtime and no owner.
-// The inputs of queue follow the queued inputs of the log in GET /sessions/{id}/inputs and in Session.queued. A
+// The inputs of opts.Queue follow the queued inputs of the log in GET /sessions/{id}/inputs and in Session.queued. A
 // session with no log but with waiting inputs answers GET /sessions/{id}/inputs from the queue alone; its other
-// routes answer session_not_found. A nil queue lists the log only.
-func ReadHandler(st Store, queue Queue) http.Handler {
-	return server.NewReads(storeReads{st: st, births: &births{}, queue: queue}, server.Options{Codes: codes})
+// routes answer session_not_found. A nil opts.Queue lists the log only.
+func ReadHandler(st Store, opts ReadOptions) http.Handler {
+	log := cmp.Or(opts.Logger, slog.Default())
+	return server.NewReads(storeReads{st: st, births: &births{}, queue: opts.Queue, log: log}, server.Options{Logger: log})
 }
 
 // storeReads is a Store and its Queue as the reads of the server.
@@ -30,6 +42,7 @@ type storeReads struct {
 	st     Store
 	births *births
 	queue  Queue
+	log    *slog.Logger
 }
 
 func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) {
@@ -40,7 +53,7 @@ func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) 
 	if err != nil {
 		return nil, err
 	}
-	return stored{View: v}, nil
+	return asServer{v}, nil
 }
 
 // Session returns the session with the IDs of the queued inputs of the log and then those of the queue.
@@ -52,7 +65,7 @@ func (s storeReads) Session(ctx context.Context, id string) (protocol.Session, e
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	return rd.Session(), nil
+	return rd.Snapshot(), nil
 }
 
 func (s storeReads) open(ctx context.Context, id string) (queued, error) {
@@ -61,7 +74,7 @@ func (s storeReads) open(ctx context.Context, id string) (queued, error) {
 		return queued{}, err
 	}
 	q, err := s.waiting(ctx, id)
-	return queued{stored: stored{View: v}, waiting: q}, err
+	return queued{View: v, waiting: q}, err
 }
 
 func (s storeReads) waiting(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
@@ -95,23 +108,23 @@ func (s storeReads) Inputs(ctx context.Context, id string) ([]protocol.QueuedInp
 }
 
 func (s storeReads) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	return listSessions(ctx, s.st, s.births, q, func(ctx context.Context, id string) (protocol.Session, error) {
+	return listSessions(ctx, s.st, s.births, s.log, q, func(ctx context.Context, id string) (protocol.Session, error) {
 		rd, err := s.open(ctx, id)
 		if err != nil {
 			return protocol.Session{}, err
 		}
-		return rd.Session(), nil
+		return rd.Snapshot(), nil
 	})
 }
 
 // queued is a stored session with the inputs of a Queue behind those of its log.
 type queued struct {
-	stored
+	*View
 	waiting []protocol.QueuedInput
 }
 
-func (q queued) Session() protocol.Session {
-	s := q.stored.Session()
+func (q queued) Snapshot() protocol.Session {
+	s := q.View.Snapshot()
 	for _, in := range q.waiting {
 		s.Queued = append(s.Queued, in.ID)
 	}
@@ -119,6 +132,6 @@ func (q queued) Session() protocol.Session {
 }
 
 func (q queued) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) {
-	in, err := q.stored.Inputs(ctx)
+	in, err := q.View.Inputs(ctx)
 	return append(in, q.waiting...), err
 }

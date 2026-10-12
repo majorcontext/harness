@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -27,7 +28,7 @@ func (stubborn) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "stuck", Description: "stuck", InputSchema: json.RawMessage(`{"type":"object"}`)}
 }
 
-func (s stubborn) Run(ctx context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
+func (s stubborn) Run(ctx context.Context, _ harness.Call) (protocol.ToolResult, error) {
 	s.started <- struct{}{}
 	go func() {
 		select {
@@ -56,7 +57,7 @@ func stuckRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, stubborn
 	t.Helper()
 	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "stuck"}}}})
 	tool := stubborn{started: make(chan struct{}, 1), release: make(chan struct{}), canceled: make(chan struct{})}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Owner: owner, Tools: []harness.Tool{tool}, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Owner: owner, Tools: []harness.Tool{tool}, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

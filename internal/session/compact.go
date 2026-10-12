@@ -11,7 +11,7 @@ import (
 )
 
 // ErrBusy reports a Compact while a turn or a compaction runs, or inputs wait.
-var ErrBusy = errors.New("harness: session busy")
+var ErrBusy = &protocol.Error{Code: protocol.CodeSessionBusy, Message: "harness: session busy"}
 
 // ErrKeepTurns reports a keep count for a backend that owns its context.
 var ErrKeepTurns = errors.New("keep_turns does not apply to a backend that owns its context")

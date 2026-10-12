@@ -69,7 +69,7 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeRuntime(t, r) })
-	menu, err := r.Commands()
+	menu, err := r.Commands(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestCommandListNamesNoRouteAndEachRouteExists(t *testing.T) {
 		}
 		rec := httptest.NewRecorder()
 		r.Handler().ServeHTTP(rec, httptest.NewRequest(c.Method, strings.ReplaceAll(c.Path, "{id}", "nope"), nil))
-		if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound && strings.Contains(rec.Body.String(), protocol.CodeInvalidRequest) {
+		if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound && strings.Contains(rec.Body.String(), string(protocol.CodeInvalidRequest)) {
 			t.Errorf("%s %s has no route: %d %s", c.Method, c.Path, rec.Code, rec.Body)
 		}
 	}

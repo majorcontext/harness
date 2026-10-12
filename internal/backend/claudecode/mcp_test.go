@@ -94,7 +94,7 @@ type lookup struct{}
 
 func (lookup) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: "lookup"} }
 
-func (lookup) Run(context.Context, protocol.ToolCall) (protocol.ToolResult, error) {
+func (lookup) Run(context.Context, harness.Call) (protocol.ToolResult, error) {
 	return protocol.ToolResult{}, nil
 }
 
@@ -103,11 +103,11 @@ func (lookup) Run(context.Context, protocol.ToolCall) (protocol.ToolResult, erro
 type probe struct {
 	name    string
 	started chan struct{}
-	ended   chan protocol.ToolCall
+	ended   chan harness.Call
 }
 
 func newProbe(name string, blocks bool) probe {
-	p := probe{name: name, ended: make(chan protocol.ToolCall, 1)}
+	p := probe{name: name, ended: make(chan harness.Call, 1)}
 	if blocks {
 		p.started = make(chan struct{})
 	}
@@ -116,7 +116,7 @@ func newProbe(name string, blocks bool) probe {
 
 func (p probe) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: p.name} }
 
-func (p probe) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
+func (p probe) Run(ctx context.Context, c harness.Call) (protocol.ToolResult, error) {
 	defer func() { p.ended <- c }()
 	if p.started != nil {
 		close(p.started)
@@ -134,7 +134,7 @@ type mcpRun struct {
 
 // endedCall returns the call that p ran to its end, and checks that the
 // MCP endpoint of run and the --mcp-config file of argv are gone.
-func endedCall(t *testing.T, p probe, run mcpRun, argv []string) protocol.ToolCall {
+func endedCall(t *testing.T, p probe, run mcpRun, argv []string) harness.Call {
 	t.Helper()
 	if resp, err := http.Post(run.URL, "application/json", strings.NewReader("{}")); err == nil {
 		_ = resp.Body.Close()
@@ -150,7 +150,7 @@ func endedCall(t *testing.T, p probe, run mcpRun, argv []string) protocol.ToolCa
 		return c
 	default:
 		t.Fatalf("tool %s did not return before the turn ended", p.name)
-		return protocol.ToolCall{}
+		return harness.Call{}
 	}
 }
 

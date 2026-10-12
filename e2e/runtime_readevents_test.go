@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"testing"
 
@@ -102,7 +103,7 @@ func writeTwoTurnLog(t *testing.T, ctx context.Context, st harness.Store) {
 		harnesstest.Step{Name: "bash", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: ftArgs("command", "echo hi")}}}},
 		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ok"}},
 		harnesstest.Step{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "second"}})
-	r, err := harness.New(harness.Options{Store: st, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

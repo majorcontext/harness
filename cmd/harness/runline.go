@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -40,7 +41,7 @@ func (u *unknownLine) refuseOn(model string) error {
 // run on, and an unknown /name on a model that is not Claude Code. It returns
 // the unknown /name when the model of the run is the one of the opened
 // session, and so is not known yet.
-func checkLine(cfg *config.Config, rt *harness.Runtime, opts runOptions, modelSet bool) (*unknownLine, error) {
+func checkLine(ctx context.Context, cfg *config.Config, rt *harness.Runtime, opts runOptions, modelSet bool) (*unknownLine, error) {
 	if opts.goal != "" {
 		if cfg.GoalEvaluatorModel == "" {
 			return nil, errors.New("goal_evaluator_model must be set in config to use -goal")
@@ -63,7 +64,7 @@ func checkLine(cfg *config.Config, rt *harness.Runtime, opts runOptions, modelSe
 	case !isUnknown:
 		return nil, err
 	}
-	owned, err := promptCommand(rt, unknown.Name)
+	owned, err := promptCommand(ctx, rt, unknown.Name)
 	if err != nil || owned {
 		return nil, err
 	}
@@ -74,8 +75,8 @@ func checkLine(cfg *config.Config, rt *harness.Runtime, opts runOptions, modelSe
 	return line, nil
 }
 
-func promptCommand(rt *harness.Runtime, name string) (bool, error) {
-	menu, err := rt.Commands()
+func promptCommand(ctx context.Context, rt *harness.Runtime, name string) (bool, error) {
+	menu, err := rt.Commands(ctx)
 	if err != nil {
 		return false, err
 	}

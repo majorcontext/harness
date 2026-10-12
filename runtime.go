@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -31,17 +32,17 @@ import (
 
 var (
 	// ErrInvalidRequest reports a malformed request.
-	ErrInvalidRequest = errors.New("harness: invalid request")
+	ErrInvalidRequest = &protocol.Error{Code: protocol.CodeInvalidRequest, Message: "harness: invalid request"}
 	// ErrSessionNotFound reports a session with no log.
 	ErrSessionNotFound = session.ErrNotFound
 	// ErrBlobNotFound reports a blob key that no blob part of an input of the session names, or whose bytes the Store lacks.
-	ErrBlobNotFound = errors.New("harness: blob not found")
+	ErrBlobNotFound = &protocol.Error{Code: protocol.CodeBlobNotFound, Message: "harness: blob not found"}
 	// ErrSessionExists reports a Create with the ID of an existing session.
 	ErrSessionExists = session.ErrExists
 	// ErrSessionNotOwned reports a session that this runtime does not run.
 	ErrSessionNotOwned = session.ErrNotOwned
 	// ErrSessionHeld reports a session that another owner holds. It matches ErrSessionNotOwned. An Owner fails Acquire with it.
-	ErrSessionHeld = fmt.Errorf("%w: held by another owner", session.ErrNotOwned)
+	ErrSessionHeld = session.ErrHeld
 	// ErrSessionReleased is the cause that Session.Err reports after Release, or after Close handed the session off. It matches ErrSessionNotOwned.
 	ErrSessionReleased = session.ErrReleased
 	// ErrSessionEnded is the cause that Session.Err reports after End. It matches ErrSessionNotOwned.
@@ -57,7 +58,9 @@ var (
 	// ErrRequestNotPending reports a Resolve of a request that is not open.
 	ErrRequestNotPending = session.ErrRequestNotPending
 	// ErrDraining reports a call after Runtime.Close started.
-	ErrDraining = errors.New("harness: runtime is draining")
+	ErrDraining = &protocol.Error{Code: protocol.CodeDraining, Message: "harness: runtime is draining"}
+	// ErrUnreplayable reports a session log that does not replay: a record that does not decode, or breaks a rule of the log.
+	ErrUnreplayable = session.ErrUnreplayable
 )
 
 // Options configures a Runtime.
@@ -79,6 +82,15 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
+	// Getenv reads the variables that hold provider API keys, by the
+	// api_key_env of the provider or its default name. nil: New and the
+	// runtime read no variable, so a provider has no key unless
+	// ModelTransport supplies the credentials. A backend child process, such
+	// as the claude CLI, a plugin, an MCP stdio server, a process, or a bash
+	// call, still inherits the environment of this process.
+	Getenv func(key string) string
+	// Logger receives every log line of the runtime. nil: slog.Default().
+	Logger *slog.Logger
 	// Tools are the embedder tools. Each name must be unique. With a
 	// WorkDir, no name may be process, task, model, or a built-in tool name. With a
 	// goal evaluator, no name may be goal. With Config.MCPServers, no name
@@ -113,6 +125,7 @@ type Runtime struct {
 	store Store
 	owner Owner
 	sync  Sync
+	log   *slog.Logger
 	tools []turn.Tool
 	// models routes each turn to the backend of its model.
 	models    *backend.Router
@@ -169,25 +182,25 @@ type Runtime struct {
 // New returns a Runtime. It does no I/O; sessions load on Create or Open.
 func New(opts Options) (*Runtime, error) {
 	if opts.Store == nil {
-		return nil, fmt.Errorf("%w: Options.Store is nil", ErrInvalidRequest)
+		return nil, errors.New("harness: Options.Store is nil")
 	}
 	if err := opts.Config.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		return nil, fmt.Errorf("harness: %w", err)
 	}
 	if opts.RunToken != "" && opts.ServeURL == "" {
 		return nil, errors.New("harness: Options.RunToken needs Options.ServeURL")
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(),
-		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
+		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log}
 	if opts.Config.GoalEvaluatorModel != "" {
 		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
 	}
-	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir) }
+	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
@@ -195,11 +208,14 @@ func New(opts Options) (*Runtime, error) {
 	r.closing, r.closeStart = context.WithCancel(r.base)
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
-		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs) },
-		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix})
-	tools := opts.Tools
-	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t Tool) bool { return t.Spec().Name == modelToolName }) {
-		return nil, fmt.Errorf("%w: tool name %q is reserved", ErrInvalidRequest, modelToolName)
+		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },
+		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix, Log: r.log})
+	tools := make([]turn.Tool, len(opts.Tools))
+	for i, t := range opts.Tools {
+		tools[i] = embedded{t}
+	}
+	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == modelToolName }) {
+		return nil, fmt.Errorf("harness: tool name %q is reserved", modelToolName)
 	}
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
@@ -211,12 +227,12 @@ func New(opts Options) (*Runtime, error) {
 			tools = append(tools, modelTool{r: r})
 		}
 	}
-	r.mcp = mcpsrc.New(opts.Config)
-	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob, opts.ServeURL, opts.RunToken)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport)
+	r.mcp = mcpsrc.New(opts.Config, r.log)
+	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob, opts.ServeURL, opts.RunToken, r.log)
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, Log: r.log})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
-			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
+			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
 	}
@@ -227,20 +243,16 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
-	r.banner, r.questions = banner(opts.Version, opts.Config.SessionSync, time.Now()), opts.AskUserQuestion
+	r.banner, r.questions = banner(opts.Version, time.Now()), opts.AskUserQuestion
 	return r, nil
 }
 
 // banner renders the engine status line, or "" for an empty version.
-func banner(version, sessionSync string, started time.Time) string {
+func banner(version string, started time.Time) string {
 	if version == "" {
 		return ""
 	}
-	mode := "fsync"
-	if sessionSync == "volume" {
-		mode = sessionSync
-	}
-	return "[engine: harness " + version + " · session_sync=" + mode + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
+	return "[engine: harness " + version + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
 }
 
 // positive returns v, or def when v is not positive.
@@ -322,12 +334,12 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if l.created != nil {
 		c = *l.created
 	} else if c, err = r.created(ctx, id); err != nil {
-		session.Discard(own, id)
+		session.Discard(own, id, r.log)
 		return nil, err
 	}
 	root, depth, err := r.tree.Lineage(ctx, id, c.ParentID)
 	if err != nil {
-		session.Discard(own, id)
+		session.Discard(own, id, r.log)
 		return nil, err
 	}
 	profile := r.profile(c.Agent, l.profile)
@@ -346,12 +358,13 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Source:          r.source(id, c.ParentID != "", depth, plug, sp),
+		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp),
 		Retain:          r.workDir != "",
 		Prompt:          sp.system,
 		Appended:        r.appended(id, plug),
 		Params:          chatParams(plug),
 		Sync:            r.sync,
+		Log:             r.log,
 		Limits:          r.limits,
 		MaxTokens:       r.maxTokens,
 		Threshold:       r.threshold,
@@ -387,7 +400,7 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 	case agent == "":
 		return prompt.Profile{}
 	}
-	profiles, _ := prompt.Profiles(r.agentDirs)
+	profiles, _ := prompt.Profiles(r.agentDirs, r.log)
 	return profiles[agent]
 }
 
@@ -467,7 +480,7 @@ func (r *Runtime) End(ctx context.Context, id string) error {
 // List returns a page of sessions in creation order. The After of a page is
 // the ID of the last session of the page before it.
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	return listSessions(ctx, r.store, &r.births, q, r.describe)
+	return listSessions(ctx, r.store, &r.births, r.log, q, r.describe)
 }
 
 // pluginInfo returns the state of each plugin, or nil without plugins.
@@ -479,25 +492,11 @@ func (r *Runtime) pluginInfo() []protocol.Plugin {
 }
 
 func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, error) {
-	r.mu.Lock()
-	e := r.sessions[id]
-	r.mu.Unlock()
-	if e != nil {
-		select {
-		case <-e.ready:
-			if e.s != nil {
-				return e.s.View(), nil
-			}
-		default:
-		}
-	}
-	v, err := openView(ctx, r.store, id, r.models.Capabilities)
+	rd, err := r.Read(ctx, id)
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	out := v.Session()
-	out.Plugins = r.pluginInfo()
-	return out, nil
+	return rd.Snapshot(), nil
 }
 
 // Close hands off every session, then closes the model connections and stops
@@ -636,11 +635,11 @@ func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreat
 	}
 	env, err := eventlog.Decode(recs[0].Data)
 	if err != nil {
-		return eventlog.SessionCreated{}, err
+		return eventlog.SessionCreated{}, fmt.Errorf("%w: session %s: %w", ErrUnreplayable, id, err)
 	}
 	c, ok := env.Event.(eventlog.SessionCreated)
 	if !ok {
-		return c, fmt.Errorf("harness: session %s starts with %s, not session.created", id, env.Event.Kind())
+		return c, fmt.Errorf("%w: session %s starts with %s, not session.created", ErrUnreplayable, id, env.Event.Kind())
 	}
 	return c, nil
 }

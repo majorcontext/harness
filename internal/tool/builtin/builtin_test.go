@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func start(t *testing.T, workDir string, cfg config.Config, steps ...harnesstest
 	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
 	cfg.Providers = map[string]config.Provider{"codex": {Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
 		BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: workDir, Config: cfg})
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), WorkDir: workDir, Config: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}

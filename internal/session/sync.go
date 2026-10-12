@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -13,7 +12,7 @@ import (
 )
 
 // ErrStaleEpoch reports a SyncBatch whose epoch is older than the receiver's.
-var ErrStaleEpoch = errors.New("harness: stale epoch")
+var ErrStaleEpoch = &protocol.Error{Code: protocol.CodeStaleEpoch, Message: "harness: stale epoch"}
 
 // ErrRejected reports a SyncBatch that the receiver refuses for a reason that
 // a resend cannot change, such as a malformed or oversized batch.
@@ -72,7 +71,7 @@ func (a *Actor) replicate() error {
 		}
 		if final(err) {
 			close(a.rejected)
-			slog.Error("harness: sync stopped for a session", "session", a.cfg.ID, "from_seq", b.FromSeq, "err", err)
+			a.log().Error("harness: sync stopped for a session", "session", a.cfg.ID, "from_seq", b.FromSeq, "err", err)
 			return fmt.Errorf("harness: the Sync receiver rejected seq %d of session %s: %w", b.FromSeq, a.cfg.ID, err)
 		}
 		if err != nil {

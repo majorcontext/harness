@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"iter"
 	"slices"
 	"strings"
@@ -39,8 +41,8 @@ func (s *Session) Done() <-chan struct{} { return s.a.Done() }
 // Err is nil before Done, then the stop cause; see ErrSessionReleased. An error of the Store or a Sync rejection that stops the session matches ErrSessionNotOwned and that error, and none of the three causes.
 func (s *Session) Err() error { return s.a.Err() }
 
-// View returns the session as of its last durable record.
-func (s *Session) View() protocol.Session {
+// Snapshot returns the session as of its last durable record.
+func (s *Session) Snapshot() protocol.Session {
 	synced := s.a.Synced()
 	v := detach(s.a.View().Session)
 	v.SyncedSeq = synced
@@ -189,13 +191,83 @@ func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.E
 // acknowledge every record, and releases the ownership.
 func (s *Session) Release(ctx context.Context) error { return s.a.Release(ctx) }
 
-// View is a read-only session that no runtime needs to own.
+// Messages returns the page of the conversation before seq before; 0 is the
+// newest page. A limit above protocol.MaxMessageLimit fails with ErrInvalidRequest.
+func (s *Session) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) {
+	if err := checkMessageLimit(limit); err != nil {
+		return protocol.MessagePage{}, err
+	}
+	var page protocol.MessagePage
+	err := s.a.Read(ctx, func(st *eventlog.State) { page = st.MessagePage(before, limit) })
+	return page, err
+}
+
+// Inputs returns the inputs that no turn has taken, oldest first.
+func (s *Session) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) {
+	var in []protocol.QueuedInput
+	err := s.a.Read(ctx, func(st *eventlog.State) { in = st.QueuedInputs() })
+	return in, err
+}
+
+// Blob returns the attachment that a blob part of an input of the session
+// names by key. Any other key fails with ErrBlobNotFound.
+func (s *Session) Blob(ctx context.Context, key string) (Blob, error) {
+	var mediaType string
+	var size int
+	var ok bool
+	if err := s.a.Read(ctx, func(st *eventlog.State) { mediaType, size, ok = st.Attachment(key) }); err != nil {
+		return Blob{}, err
+	}
+	return attachment(ctx, s.r.store, s.id, key, mediaType, size, ok)
+}
+
+// Withdraw removes the queued input inputID. An input that is not queued is
+// no error.
+func (s *Session) Withdraw(ctx context.Context, inputID string) error {
+	return s.a.Withdraw(ctx, inputID)
+}
+
+// Reader is the read surface of a session, live or stored. *Session and *View
+// implement it. Messages, Inputs, and Blob fail with the errors of their
+// methods; Events ends with Err for a Session that stops.
+type Reader interface {
+	Snapshot() protocol.Session
+	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
+	Inputs(ctx context.Context) ([]protocol.QueuedInput, error)
+	Blob(ctx context.Context, key string) (Blob, error)
+	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+}
+
+// Blob is an attachment. The caller closes Body.
+type Blob struct {
+	MediaType string
+	Size      int64
+	Body      io.ReadCloser
+}
+
+func attachment(ctx context.Context, st Store, id, key, mediaType string, size int, ok bool) (Blob, error) {
+	if !ok {
+		return Blob{}, fmt.Errorf("%w: %s", ErrBlobNotFound, key)
+	}
+	body, err := st.GetBlob(ctx, id, key)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Blob{}, fmt.Errorf("%w: %s", ErrBlobNotFound, key)
+	}
+	return Blob{MediaType: mediaType, Size: int64(size), Body: body}, err
+}
+
+// View is a session read from a Store with no owner. It is immutable.
 type View struct {
 	st    Store
 	id    string
 	state protocol.Session
 	log   *eventlog.State
+	// plugins are those of the runtime that read the view; the log holds none.
+	plugins []protocol.Plugin
 }
+
+// ID returns the session ID.
+func (v *View) ID() string { return v.id }
 
 // OpenView reads a session from st without owning it: no Acquire, no appends.
 // It has no backend, so the gauge window is the window of the newest reading.
@@ -236,8 +308,24 @@ func checkMessageLimit(limit int) error {
 	return nil
 }
 
-// Session returns the session as of OpenView.
-func (v *View) Session() protocol.Session { return detach(v.state) }
+// Snapshot returns the session as of OpenView.
+func (v *View) Snapshot() protocol.Session {
+	s := detach(v.state)
+	s.Plugins = v.plugins
+	return s
+}
+
+// Inputs returns the inputs that no turn has taken, oldest first, as of OpenView.
+func (v *View) Inputs(context.Context) ([]protocol.QueuedInput, error) {
+	return v.log.QueuedInputs(), nil
+}
+
+// Blob returns the attachment that a blob part of an input of the session
+// names by key. Any other key fails with ErrBlobNotFound.
+func (v *View) Blob(ctx context.Context, key string) (Blob, error) {
+	mediaType, size, ok := v.log.Attachment(key)
+	return attachment(ctx, v.st, v.id, key, mediaType, size, ok)
+}
 
 // Events yields the events after seq and ends at the head that OpenView read.
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
@@ -280,5 +368,5 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	return s.View(), nil
+	return s.Snapshot(), nil
 }

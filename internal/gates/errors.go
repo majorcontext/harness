@@ -54,6 +54,64 @@ func ProtocolCodes(srcs ...string) ([]string, error) {
 	return out, nil
 }
 
+// ProtocolStatusCodes returns the value of each code constant that the
+// statuses map literal of the protocol source names as a key, except the Sync
+// receiver codes. It reads the table itself, so a code that HTTPStatus
+// answers by its fallback is not listed.
+func ProtocolStatusCodes(srcs ...string) ([]string, error) {
+	values, keys := map[string]string{}, map[string]bool{}
+	for _, src := range srcs {
+		f, err := parser.ParseFile(token.NewFileSet(), "errors.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					switch {
+					case gd.Tok == token.CONST && strings.HasPrefix(name.Name, "Code") && i < len(vs.Values):
+						if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+							v, err := strconv.Unquote(lit.Value)
+							if err != nil {
+								return nil, err
+							}
+							values[name.Name] = v
+						}
+					case gd.Tok == token.VAR && name.Name == "statuses" && i < len(vs.Values):
+						if lit, ok := vs.Values[i].(*ast.CompositeLit); ok {
+							for _, el := range lit.Elts {
+								if kv, ok := el.(*ast.KeyValueExpr); ok {
+									if id, ok := kv.Key.(*ast.Ident); ok {
+										keys[id.Name] = true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	var out []string
+	for name := range keys {
+		v, ok := values[name]
+		if !ok {
+			return nil, fmt.Errorf("the statuses map names %s, which is no Code constant", name)
+		}
+		out = append(out, v)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
 // OpenAPICodeEnum returns the enum of Error.code in the OpenAPI document.
 func OpenAPICodeEnum(doc []byte) ([]string, error) {
 	var d struct {
@@ -78,7 +136,7 @@ func OpenAPICodeEnum(doc []byte) ([]string, error) {
 }
 
 // ErrorCodeSources holds the four places that name the error codes: the
-// protocol constants, the status map of internal/server, the Errors table of
+// protocol constants, protocol.HTTPStatus, the Errors table of
 // the spec, and the enum of Error.code in protocol/openapi.json.
 type ErrorCodeSources struct {
 	Constants []string
@@ -115,7 +173,7 @@ func CheckErrorCodes(s ErrorCodeSources) []Violation {
 			has  bool
 		}{
 			{"a protocol Code constant", slices.Contains(s.Constants, c)},
-			{"the status map of internal/server", inStatuses},
+			{"an entry of protocol.HTTPStatus", inStatuses},
 			{"the Errors table of the spec", inSpec},
 			{"the enum of Error.code in protocol/openapi.json", slices.Contains(s.Enum, c)},
 		} {
@@ -124,7 +182,7 @@ func CheckErrorCodes(s ErrorCodeSources) []Violation {
 			}
 		}
 		if inStatuses && inSpec && s.Statuses[c] != s.Spec[c] {
-			add(c, fmt.Sprintf("answers %d in internal/server and %d in the Errors table of the spec", s.Statuses[c], s.Spec[c]))
+			add(c, fmt.Sprintf("answers %d in protocol.HTTPStatus and %d in the Errors table of the spec", s.Statuses[c], s.Spec[c]))
 		}
 	}
 	return out

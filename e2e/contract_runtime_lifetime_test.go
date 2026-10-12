@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -26,7 +27,7 @@ func lifetimeRuntime(t *testing.T, owner harness.Owner) *harness.Runtime {
 
 func lifetimeRuntimeOn(t *testing.T, st harness.Store, owner harness.Owner) *harness.Runtime {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: st, Owner: owner, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Owner: owner, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +279,7 @@ func (r rejecting) Deliver(context.Context, protocol.SyncBatch) (protocol.SyncAc
 
 func syncedSession(t *testing.T, sync harness.Sync) *harness.Session {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Sync: sync, Config: config.Config{ContextWindowTokens: 100000,
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: harness.NewMemStore(), Sync: sync, Config: config.Config{ContextWindowTokens: 100000,
 		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "HARNESS_E2E_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)

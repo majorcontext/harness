@@ -18,12 +18,12 @@ import (
 // listSessions returns a page of sessions in creation order. describe reads
 // the view of one session; a session that does not replay is skipped with a
 // WARN log line.
-func listSessions(ctx context.Context, st Store, b *births, q protocol.ListSessions, describe func(context.Context, string) (protocol.Session, error)) (protocol.SessionPage, error) {
+func listSessions(ctx context.Context, st Store, b *births, log *slog.Logger, q protocol.ListSessions, describe func(context.Context, string) (protocol.Session, error)) (protocol.SessionPage, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 100
 	}
-	ids, err := sessionsByCreation(ctx, st, b, q.After, limit)
+	ids, err := sessionsByCreation(ctx, st, b, log, q.After, limit)
 	if err != nil {
 		return protocol.SessionPage{}, err
 	}
@@ -31,7 +31,7 @@ func listSessions(ctx context.Context, st Store, b *births, q protocol.ListSessi
 	for _, id := range ids {
 		v, err := describe(ctx, id)
 		if errors.Is(err, session.ErrUnreplayable) {
-			slog.Warn("harness: session skipped in the list", "session", id, "err", err)
+			log.Warn("harness: session skipped in the list", "session", id, "err", err)
 			continue
 		}
 		if err != nil {
@@ -69,7 +69,7 @@ func (b *births) keep(at map[string]time.Time) {
 // creation order. The creation time of a session is the time of its first
 // record; equal times order by ID. A session whose first record does not
 // decode is skipped with a WARN log line. An after that names no session fails.
-func sessionsByCreation(ctx context.Context, st Store, b *births, after string, limit int) ([]string, error) {
+func sessionsByCreation(ctx context.Context, st Store, b *births, log *slog.Logger, after string, limit int) ([]string, error) {
 	type created struct {
 		id string
 		at time.Time
@@ -94,7 +94,7 @@ func sessionsByCreation(ctx context.Context, st Store, b *births, after string, 
 				}
 				env, err := eventlog.Decode(recs[0].Data)
 				if err != nil {
-					slog.Warn("harness: session skipped in the list", "session", id, "err", err)
+					log.Warn("harness: session skipped in the list", "session", id, "err", err)
 					continue
 				}
 				at = env.Time

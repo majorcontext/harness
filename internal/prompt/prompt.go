@@ -2,6 +2,7 @@
 package prompt
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -56,11 +57,14 @@ var toolBatching = fmt.Sprintf("If you intend to call multiple tools and there a
 // chain, and the skill list. With
 // no workDir it reads no file and returns only append_system_prompt. A file
 // that cannot be used is skipped.
-func Build(cfg config.Config, workDir string) []string { return Describe(cfg, workDir).Segments }
+func Build(cfg config.Config, workDir string, log *slog.Logger) []string {
+	return Describe(cfg, workDir, log).Segments
+}
 
 // Describe returns what Build returns, with the instructions files and the
-// skills that it read.
-func Describe(cfg config.Config, workDir string) Info {
+// skills that it read. A nil log is slog.Default().
+func Describe(cfg config.Config, workDir string, log *slog.Logger) Info {
+	log = cmp.Or(log, slog.Default())
 	if workDir == "" {
 		return Info{Segments: slices.Clone(cfg.AppendSystemPrompt)}
 	}
@@ -69,8 +73,8 @@ func Describe(cfg config.Config, workDir string) Info {
 	}
 	segs := append([]string{Base(workDir)}, cfg.AppendSystemPrompt...)
 	segs = append(segs, toolBatching)
-	instr, names := instructions(cfg, workDir)
-	list, skills := skillList(cfg, workDir)
+	instr, names := instructions(cfg, workDir, log)
+	list, skills := skillList(cfg, workDir, log)
 	for _, s := range []string{instr, list} {
 		if s != "" {
 			segs = append(segs, s)
@@ -81,7 +85,7 @@ func Describe(cfg config.Config, workDir string) Info {
 
 type file struct{ name, body string }
 
-func instructions(cfg config.Config, workDir string) (string, []string) {
+func instructions(cfg config.Config, workDir string, log *slog.Logger) (string, []string) {
 	if cfg.Instructions != nil && !*cfg.Instructions {
 		return "", nil
 	}
@@ -95,12 +99,12 @@ func instructions(cfg config.Config, workDir string) (string, []string) {
 		p := resolve(workDir, cfg.InstructionsPath)
 		data, err := os.ReadFile(p)
 		if err != nil {
-			slog.Warn("prompt: instructions file skipped", "path", p, "err", err)
-		} else if body, ok := render(p, data, limit, outline); ok {
+			log.Warn("prompt: instructions file skipped", "path", p, "err", err)
+		} else if body, ok := render(p, data, limit, outline, log); ok {
 			files = append(files, file{cfg.InstructionsPath, body})
 		}
 	} else {
-		files = chain(workDir, limit, outline)
+		files = chain(workDir, limit, outline, log)
 	}
 	names := make([]string, len(files))
 	for i, f := range files {
@@ -124,7 +128,7 @@ func instructions(cfg config.Config, workDir string) (string, []string) {
 // git root down to workDir. Outside a repository only workDir counts, so a
 // scratch directory never picks up a file of $HOME. A chain over four times
 // limit loses its middle files, nearest the root first.
-func chain(workDir string, limit int, outline bool) []file {
+func chain(workDir string, limit int, outline bool, log *slog.Logger) []file {
 	var dirs []string
 	for dir := workDir; ; dir = filepath.Dir(dir) {
 		dirs = append(dirs, dir)
@@ -145,17 +149,17 @@ func chain(workDir string, limit int, outline bool) []file {
 				continue
 			}
 			if err != nil {
-				slog.Warn("prompt: instructions file skipped", "path", p, "err", err)
+				log.Warn("prompt: instructions file skipped", "path", p, "err", err)
 				continue
 			}
-			if body, ok := render(p, data, limit, outline); ok {
+			if body, ok := render(p, data, limit, outline, log); ok {
 				rel, _ := filepath.Rel(workDir, p)
 				files = append(files, file{rel, body})
 			}
 			break
 		}
 	}
-	return capChain(files, limit)
+	return capChain(files, limit, log)
 }
 
 const chainCeilingFactor = 4
@@ -164,7 +168,7 @@ const chainCeilingFactor = 4
 // the root first, until the bodies fit chainCeilingFactor times limit or none
 // is left to drop. The root and the deepest file stay whole, so the total can
 // stay over the ceiling. A negative limit keeps the whole chain.
-func capChain(files []file, limit int) []file {
+func capChain(files []file, limit int, log *slog.Logger) []file {
 	if limit < 0 || len(files) <= 2 {
 		return files
 	}
@@ -183,7 +187,7 @@ func capChain(files []file, limit int) []file {
 		dropped = append(dropped, kept[i].name)
 		kept = slices.Delete(kept, i, i+1)
 	}
-	slog.Warn("prompt: instructions chain cut to fit the ceiling", "ceiling", ceiling, "dropped", strings.Join(dropped, ", "))
+	log.Warn("prompt: instructions chain cut to fit the ceiling", "ceiling", ceiling, "dropped", strings.Join(dropped, ", "))
 	return kept
 }
 
@@ -192,23 +196,23 @@ func capChain(files []file, limit int) []file {
 // its head and a marker that names path, so the model knows that the file goes
 // on. A negative limit keeps the whole file. An empty or invalid file has no
 // body.
-func render(path string, data []byte, limit int, outline bool) (string, bool) {
+func render(path string, data []byte, limit int, outline bool, log *slog.Logger) (string, bool) {
 	if !utf8.Valid(data) || strings.TrimSpace(string(data)) == "" {
-		slog.Warn("prompt: instructions file skipped, empty or not UTF-8", "path", path)
+		log.Warn("prompt: instructions file skipped, empty or not UTF-8", "path", path)
 		return "", false
 	}
 	if limit < 0 || len(data) <= limit {
 		return string(data), true
 	}
 	if outline {
-		return outlined(path, data, limit), true
+		return outlined(path, data, limit, log), true
 	}
-	return truncated(path, data, limit, len(data)), true
+	return truncated(path, data, limit, len(data), log), true
 }
 
 // truncated cuts data at limit bytes on a rune boundary and adds the marker.
 // total is the size of the whole file, which the marker reports.
-func truncated(path string, data []byte, limit, total int) string {
+func truncated(path string, data []byte, limit, total int, log *slog.Logger) string {
 	if limit < 0 || len(data) <= limit {
 		return string(data)
 	}
@@ -216,13 +220,13 @@ func truncated(path string, data []byte, limit, total int) string {
 	for len(kept) > 0 && !utf8.Valid(kept) {
 		kept = kept[:len(kept)-1]
 	}
-	slog.Warn("prompt: instructions file truncated", "path", path, "bytes", total, "kept", len(kept))
+	log.Warn("prompt: instructions file truncated", "path", path, "bytes", total, "kept", len(kept))
 	return fmt.Sprintf("%s\n[... truncated: %s is %d bytes. The first %d bytes are above. %d bytes are not shown. Read the full file with the read_file tool. ...]",
 		kept, path, total, len(kept), total-len(kept))
 }
 
 // skillList lists each valid skill of the skills dirs once, sorted by name.
-func skillList(cfg config.Config, workDir string) (string, []Skill) {
+func skillList(cfg config.Config, workDir string, log *slog.Logger) (string, []Skill) {
 	dirs := cfg.SkillsDirs
 	if dirs == nil {
 		dirs = []string{filepath.Join(".agents", "skills")}
@@ -237,12 +241,12 @@ func skillList(cfg config.Config, workDir string) (string, []Skill) {
 			s, err := skill.Load(filepath.Join(dir, e.Name()))
 			if err != nil {
 				if e.IsDir() && !errors.Is(err, fs.ErrNotExist) {
-					slog.Warn("prompt: skill skipped", "dir", filepath.Join(dir, e.Name()), "err", err)
+					log.Warn("prompt: skill skipped", "dir", filepath.Join(dir, e.Name()), "err", err)
 				}
 				continue
 			}
 			if seen[s.Name] {
-				slog.Warn("prompt: skill skipped, duplicate name", "name", s.Name, "path", s.Path)
+				log.Warn("prompt: skill skipped, duplicate name", "name", s.Name, "path", s.Path)
 				continue
 			}
 			seen[s.Name] = true

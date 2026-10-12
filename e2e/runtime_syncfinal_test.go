@@ -35,9 +35,9 @@ func TestContractRuntimeSyncReceiverContract(t *testing.T) {
 	}
 }
 
-func finalRejection(t *testing.T, status int, code string, want error) {
+func finalRejection(t *testing.T, status int, code protocol.Code, want error) {
 	t.Helper()
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) { return status, code })
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) { return status, code })
 	r, err := newWired(harness.Options{Store: harness.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func rowSyncUnauthorizedAndForbiddenAreFinal(t *testing.T) {
 }
 
 func rowSyncServerErrorIsSentAgain(t *testing.T) {
-	rcv := newSyncReceiver(t, func(n int, _ protocol.SyncBatch) (int, string) {
+	rcv := newSyncReceiver(t, func(n int, _ protocol.SyncBatch) (int, protocol.Code) {
 		if n <= 2 {
 			return http.StatusBadGateway, "internal"
 		}
@@ -103,7 +103,7 @@ func rowSyncServerErrorIsSentAgain(t *testing.T) {
 
 func rowSyncSplitsABatchUnderTheBodyCap(t *testing.T) {
 	var up atomic.Bool
-	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
 		if !up.Load() {
 			return http.StatusServiceUnavailable, "internal"
 		}
@@ -161,7 +161,7 @@ func awaitTurns(t *testing.T, s *harness.Session, n int) {
 func rowCatchUpConflictSkipsTheSessionAndReportsIt(t *testing.T) {
 	st := harness.NewMemStore()
 	seedSessions(t, st, "s1", "s2")
-	rcv := newSyncReceiver(t, func(_ int, b protocol.SyncBatch) (int, string) {
+	rcv := newSyncReceiver(t, func(_ int, b protocol.SyncBatch) (int, protocol.Code) {
 		if b.Session == "s1" {
 			return http.StatusConflict, protocol.CodeSyncConflict
 		}

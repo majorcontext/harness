@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -64,13 +65,13 @@ func (p *zstdRequestEncoderPool) compress(ctx context.Context, body []byte) ([]b
 
 var codexZstdEncoders = zstdRequestEncoderPool{capacity: codexZstdEncoderCapacity}
 
-func compressCodexHTTPRequest(ctx context.Context, body []byte) ([]byte, error) {
+func compressCodexHTTPRequest(ctx context.Context, body []byte, log *slog.Logger) ([]byte, error) {
 	started := time.Now()
 	compressed, err := codexZstdEncoders.compress(ctx, body)
 	if err != nil {
 		return nil, err
 	}
-	slog.Debug("openai: compressed request body with zstd",
+	cmp.Or(log, slog.Default()).Debug("openai: compressed request body with zstd",
 		"before_bytes", len(body),
 		"after_bytes", len(compressed),
 		"duration_ms", time.Since(started).Milliseconds(),

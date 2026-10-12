@@ -2,6 +2,7 @@ package command
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -63,9 +64,9 @@ func (c *PromptCommand) LoadBody() (string, error) {
 
 // Discover reads command metadata from Markdown files in dirs. Directories
 // have increasing precedence: a later directory shadows an earlier one.
-// Results are sorted by command name. It does not read command bodies.
-func Discover(dirs []string) ([]*PromptCommand, error) {
-	commands, _, err := discover(dirs, false)
+// Results are sorted by command name. It does not read command bodies. A nil log is slog.Default().
+func Discover(dirs []string, log *slog.Logger) ([]*PromptCommand, error) {
+	commands, _, err := discover(dirs, false, log)
 	return commands, err
 }
 
@@ -89,11 +90,13 @@ type PromptError struct {
 	Reason string
 }
 
-func DiscoverWithErrors(dirs []string) ([]*PromptCommand, []PromptError, error) {
-	return discover(dirs, true)
+// DiscoverWithErrors is Discover that also returns the commands it left out, with the reason.
+func DiscoverWithErrors(dirs []string, log *slog.Logger) ([]*PromptCommand, []PromptError, error) {
+	return discover(dirs, true, log)
 }
 
-func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, error) {
+func discover(dirs []string, keepErrors bool, log *slog.Logger) ([]*PromptCommand, []PromptError, error) {
+	log = cmp.Or(log, slog.Default())
 	commands := make(map[string]*PromptCommand)
 	failures := make(map[string]string)
 	var general []PromptError
@@ -162,7 +165,7 @@ func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, 
 				return err
 			}
 			if previous := commands[name]; previous != nil {
-				slog.Warn("prompt command shadowed", "name", name, "previous", previous.Path, "winner", path)
+				log.Warn("prompt command shadowed", "name", name, "previous", previous.Path, "winner", path)
 			}
 			delete(commands, name)
 			delete(failures, name)

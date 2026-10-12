@@ -4,11 +4,10 @@ package backend
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 
@@ -28,7 +27,7 @@ import (
 const defaultOpenRouter = "openrouter"
 
 // ErrUnavailable reports a model that no configured provider serves.
-var ErrUnavailable = errors.New("harness: model unavailable")
+var ErrUnavailable = &protocol.Error{Code: protocol.CodeModelUnavailable, Message: "harness: model unavailable"}
 
 // Router is the turn.Backend of a runtime. It routes each turn to the backend
 // of its model's provider.
@@ -41,10 +40,22 @@ func NewRouter(backends map[string]turn.Backend) *Router {
 	return &Router{backends: backends}
 }
 
+// Env is what the backends read from their process: the variables that hold API keys, and the log.
+type Env struct {
+	// Getenv reads an API-key variable. nil: no variable is set.
+	Getenv func(key string) string
+	// Log receives the log lines of the backends. nil: slog.Default().
+	Log *slog.Logger
+}
+
 // New returns the Router of the providers of cfg, and of the providers that
 // need no entry: the native anthropic and openai, and the default openrouter.
 // The backend of a claude-code-cli provider runs in workDir.
-func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper) *Router {
+func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper, env Env) *Router {
+	env.Log = cmp.Or(env.Log, slog.Default())
+	if env.Getenv == nil {
+		env.Getenv = func(string) string { return "" }
+	}
 	backends := map[string]turn.Backend{}
 	cfg.Providers = maps.Clone(cfg.Providers)
 	if cfg.Providers == nil {
@@ -58,8 +69,8 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	for name, p := range cfg.ResolvedProviders() {
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
-		} else if c := client(name, p, transport); c != nil {
-			backends[name] = modelapi.New(c, cfg.ContextWindowTokens)
+		} else if c := client(name, p, transport, env); c != nil {
+			backends[name] = modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 		}
 	}
 	return NewRouter(backends)
@@ -68,7 +79,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 // client returns the model API client of entry name, or nil for an entry
 // that names no model API. An entry keyed by a native family may leave Type
 // empty. A transport may supply the credentials, so the key variable may be unset.
-func client(name string, p config.Provider, transport func(provider string) http.RoundTripper) provider.Provider {
+func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env) provider.Provider {
 	var hc *http.Client
 	if transport != nil {
 		if rt := transport(name); rt != nil {
@@ -77,14 +88,14 @@ func client(name string, p config.Provider, transport func(provider string) http
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
-		return &responses.Client{Family: name, APIKey: os.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")), BaseURL: p.BaseURL,
+		return &responses.Client{Family: name, APIKey: env.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport}
 	case p.Type == config.TypeOpenAICompat:
-		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: os.Getenv(p.APIKeyEnv), BaseURL: p.BaseURL,
+		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: env.Getenv(p.APIKeyEnv), BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey}
 	case p.Type == "" && name == anthropic.Family:
-		return &anthropic.Client{APIKey: os.Getenv(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY")), BaseURL: p.BaseURL,
+		return &anthropic.Client{APIKey: env.Getenv(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY")), BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders}
 	}
 	return nil

@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
@@ -25,7 +26,7 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: harness.NewMemStore()})
+	rt, err := harness.New(harness.Options{Store: harness.NewMemStore(), Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,20 +36,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("[%s]\n", s.View().Model)
+	fmt.Printf("[%s]\n", s.Snapshot().Model)
 	say(ctx, s, "first", "Pick a random animal. Reply with only its name.")
 
 	if _, err := s.Update(ctx, protocol.SettingsPatch{Model: then}); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("\n\n[%s]\n", s.View().Model)
+	fmt.Printf("\n\n[%s]\n", s.Snapshot().Model)
 	say(ctx, s, "second", "Which animal did you pick? Give one fact about it.")
 	fmt.Println()
 }
 
 // say sends text and streams the reply until the turn ends.
 func say(ctx context.Context, s *harness.Session, id, text string) {
-	head := s.View().HeadSeq
+	head := s.Snapshot().HeadSeq
 	if _, err := s.Submit(ctx, protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
 		log.Fatal(err)
 	}

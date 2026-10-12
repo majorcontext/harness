@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/process"
-	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -37,7 +35,7 @@ var ops = map[command.Op]op{
 		if err := s.SetGoal(ctx, protocol.Goal{Condition: args["condition"].(string)}); err != nil {
 			return nil, err
 		}
-		return s.View(), nil
+		return s.Snapshot(), nil
 	},
 	command.OpClearGoal: func(ctx context.Context, s *Session, _ map[string]any) (any, error) {
 		return nil, s.ClearGoal(ctx)
@@ -46,10 +44,10 @@ var ops = map[command.Op]op{
 	command.OpSetThinking:    update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Effort: &v} }, "effort"),
 	command.OpSetServiceTier: update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{ServiceTier: &v} }, "service_tier"),
 	command.OpStatus: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
-		return s.View(), nil
+		return s.Snapshot(), nil
 	},
 	command.OpQueueList: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
-		return append([]string{}, s.View().Queued...), nil
+		return append([]string{}, s.Snapshot().Queued...), nil
 	},
 	command.OpProcessList: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		if s.r.procs == nil {
@@ -107,9 +105,13 @@ func resolveDirs(workDir string, dirs []string, def string) []string {
 }
 
 // Commands returns the slash-command menu: every built-in command and the
-// prompt commands of the WorkDir, which it reads on each call.
-func (r *Runtime) Commands() (protocol.Commands, error) {
-	prompts, invalid, err := command.DiscoverWithErrors(r.commandDirs)
+// prompt commands of the WorkDir, which it reads on each call. It returns the
+// cause of ctx when ctx has ended.
+func (r *Runtime) Commands(ctx context.Context) (protocol.Commands, error) {
+	if err := ctx.Err(); err != nil {
+		return protocol.Commands{}, context.Cause(ctx)
+	}
+	prompts, invalid, err := command.DiscoverWithErrors(r.commandDirs, r.log)
 	if err != nil {
 		return protocol.Commands{}, err
 	}
@@ -254,7 +256,7 @@ func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, erro
 func (s *Session) dispatch(rec eventlog.CommandRecorded, res command.Resolution) {
 	defer func() {
 		if p := recover(); p != nil {
-			slog.Error("harness: command panicked", "input_id", rec.InputID, "command", rec.Name, "panic", p)
+			s.r.log.Error("harness: command panicked", "input_id", rec.InputID, "command", rec.Name, "panic", p)
 			rec.Status, rec.Text, rec.Result, rec.ResultTruncated = protocol.CommandFailed, "/"+session.Typed(rec.Line)+" failed: internal error", nil, false
 			_, _, _, _ = s.a.Record(s.r.base, rec, nil)
 		}
@@ -282,8 +284,17 @@ func outcome(typed string, spec *command.Spec, result any, err error) (status, t
 		return protocol.CommandRefused, refusal(typed), nil, false
 	case errors.Is(err, ErrDraining), errors.Is(err, ErrSessionNotOwned), errors.Is(err, context.Canceled):
 		return protocol.CommandInterrupted, "harness stopped before /" + typed + " finished; it will not run again", nil, false
-	case slices.ContainsFunc(codes, func(c server.Code) bool { return errors.Is(err, c.Err) }):
+	case apiError(err):
 		return protocol.CommandFailed, err.Error(), nil, false
 	}
 	return protocol.CommandFailed, "/" + typed + " failed: internal error", nil, false
+}
+
+// apiError reports whether err is an error that the HTTP API reports with its text: any code except the internal ones.
+func apiError(err error) bool {
+	switch protocol.CodeOf(err) {
+	case protocol.CodeInternal, protocol.CodeSessionUnreplayable, protocol.CodeStaleEpoch, protocol.CodeSyncConflict:
+		return false
+	}
+	return true
 }

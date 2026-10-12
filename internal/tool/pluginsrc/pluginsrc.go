@@ -3,11 +3,13 @@
 package pluginsrc
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -34,6 +36,7 @@ type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error
 
 // Plugins starts the configured plugins once for each runtime.
 type Plugins struct {
+	log       *slog.Logger
 	specs     []config.PluginSpec
 	opts      plugin.Options
 	workDir   string
@@ -46,11 +49,11 @@ type Plugins struct {
 }
 
 // New returns the Plugins of cfg.Plugins, or nil when it is empty. It does no I/O.
-func New(cfg config.Config, workDir string, history History, blob Blob, serveURL, runToken string) *Plugins {
+func New(cfg config.Config, workDir string, history History, blob Blob, serveURL, runToken string, log *slog.Logger) *Plugins {
 	if len(cfg.Plugins) == 0 {
 		return nil
 	}
-	return &Plugins{specs: cfg.Plugins, workDir: workDir, cachePath: cfg.PluginCache,
+	return &Plugins{log: cmp.Or(log, slog.Default()), specs: cfg.Plugins, workDir: workDir, cachePath: cfg.PluginCache,
 		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob},
 			ServeURL: serveURL, RunToken: runToken}}
 }
@@ -69,7 +72,7 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 	c := &cache{Entries: map[string]cacheEntry{}}
 	if p.cachePath != "" {
 		var err error
-		if c, err = loadCache(p.cachePath); err != nil {
+		if c, err = loadCache(p.cachePath, p.log); err != nil {
 			return fmt.Errorf("plugin cache: %w", err)
 		}
 	}

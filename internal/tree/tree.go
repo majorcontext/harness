@@ -4,6 +4,7 @@
 package tree
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -71,6 +72,8 @@ type Config struct {
 	CheckModel func(model string) error
 	// Suffix returns a fresh random suffix for an ID.
 	Suffix func() string
+	// Log receives the log lines of the tree. nil: slog.Default().
+	Log *slog.Logger
 }
 
 // Tree runs the child sessions of the sessions of one runtime.
@@ -205,7 +208,7 @@ func (t *Tree) available(model string, names []string) []string {
 	}
 	out := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !t.s.Known(model, n) })
 	if len(out) == 0 && len(names) > 0 {
-		slog.Warn("harness: the child has no tool of its profile", "model", model, "tools", names)
+		cmp.Or(t.cfg.Log, slog.Default()).Warn("harness: the child has no tool of its profile", "model", model, "tools", names)
 	}
 	return out
 }
