@@ -292,6 +292,7 @@ func (r *run) handle(env envelope) error {
 			return nil
 		}
 		r.result, r.waiting = &env, false
+		clear(r.calls)
 		if r.dismissing() {
 			return nil
 		}
