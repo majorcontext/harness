@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -59,6 +61,9 @@ func TestContractRuntimeOwner(t *testing.T) {
 		{"a_held_session_fails_open_with_session_held_and_session_not_owned", rowAHeldSessionFailsOpenWithSessionHeldAndSessionNotOwned},
 		{"catch_up_skips_a_session_that_another_owner_holds", rowCatchUpSkipsASessionThatAnotherOwnerHolds},
 		{"a_release_error_reaches_the_caller_of_release_and_close", rowAReleaseErrorReachesTheCallerOfReleaseAndClose},
+		{"a_release_error_that_matches_a_stop_sentinel_still_reaches_close", rowAReleaseErrorThatMatchesAStopSentinelStillReachesClose},
+		{"a_sync_rejection_does_not_hide_a_release_error_from_release", rowASyncRejectionDoesNotHideAReleaseErrorFromRelease},
+		{"catch_up_reports_a_release_error", rowCatchUpReportsAReleaseError},
 		{"the_local_owner_grants_a_session_once_at_a_time", rowTheLocalOwnerGrantsASessionOnceAtATime},
 		{"new_reads_neither_owner_epoch_nor_sync_from_the_config", rowNewReadsNeitherOwnerEpochNorSyncFromTheConfig},
 		{"a_run_token_without_a_serve_url_is_refused", rowARunTokenWithoutAServeURLIsRefused},
@@ -168,5 +173,52 @@ func rowARunTokenWithoutAServeURLIsRefused(t *testing.T) {
 	_, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), RunToken: "tok"})
 	if err == nil {
 		t.Error("New = nil, want an error")
+	}
+}
+
+func rowAReleaseErrorThatMatchesAStopSentinelStillReachesClose(t *testing.T) {
+	boom := fmt.Errorf("lease expired: %w", harness.ErrSessionNotOwned)
+	r := lifetimeRuntime(t, heldOwner{releaseErr: boom})
+	lifetimeSession(t, r)
+	if err := r.Close(t.Context()); !errors.Is(err, boom) {
+		t.Errorf("Close = %v, want the release error", err)
+	}
+}
+
+func rowASyncRejectionDoesNotHideAReleaseErrorFromRelease(t *testing.T) {
+	boom := errors.New("lease store down")
+	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
+		return http.StatusConflict, protocol.CodeSyncConflict
+	})
+	r, err := newWired(harness.Options{Store: store.NewMemStore(), Owner: heldOwner{releaseErr: boom}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rcv.awaitCalls(t, 1)
+	err = s.Release(t.Context())
+	if !errors.Is(err, harness.ErrConflict) || !errors.Is(err, boom) {
+		t.Errorf("Release = %v, want a match for the sync rejection and the release error", err)
+	}
+}
+
+func rowCatchUpReportsAReleaseError(t *testing.T) {
+	boom := errors.New("lease store down")
+	rcv := newSyncReceiver(t, nil)
+	st := store.NewMemStore()
+	seedSessions(t, st, "s1")
+	cfg := syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: cfg, Sync: httpsync.New(*cfg.Sync), Owner: heldOwner{releaseErr: boom}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	err = r.CatchUp(t.Context())
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "s1") {
+		t.Errorf("CatchUp = %v, want the release error with the session ID", err)
 	}
 }

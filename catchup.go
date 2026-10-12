@@ -142,7 +142,13 @@ func (r *Runtime) catchUp(ctx context.Context, id string) (again bool, err error
 	case err != nil:
 		return false, fmt.Errorf("session %s: %w", id, err)
 	}
-	defer session.Discard(own, id, r.log)
+	defer func() {
+		if rerr := session.ReleaseBounded(own); rerr != nil {
+			r.log.Warn("harness: release ownership", "session", id, "err", rerr)
+			err = errors.Join(err, fmt.Errorf("session %s: release ownership: %w", id, rerr))
+			again = false
+		}
+	}()
 	err = session.CatchUp(sctx, storeLog{r.store, id}, r.sync, own.Epoch(), id)
 	switch {
 	case err == nil:

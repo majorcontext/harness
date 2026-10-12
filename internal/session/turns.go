@@ -495,6 +495,17 @@ func (a *Actor) End(ctx context.Context) error {
 	return err
 }
 
+// ReleaseErr returns the error of Ownership.Release once the actor is done,
+// and nil before.
+func (a *Actor) ReleaseErr() error {
+	select {
+	case <-a.done:
+		return a.releaseErr
+	default:
+		return nil
+	}
+}
+
 func (a *Actor) turnRuns() bool { return a.run != nil && a.run.kind == kindTurn }
 
 // halt runs begin on the actor goroutine, and returns once the actor that
@@ -506,11 +517,8 @@ func (a *Actor) halt(ctx context.Context, begin func(reply func(struct{}, error)
 	}
 	select {
 	case <-a.done:
-		if a.syncErr != nil {
-			return a.syncErr
-		}
-		if a.releaseErr != nil {
-			return a.releaseErr
+		if joined := errors.Join(a.syncErr, a.releaseErr); joined != nil {
+			return joined
 		}
 		return err
 	case <-ctx.Done():
