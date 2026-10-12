@@ -65,9 +65,6 @@ func mergeScalars(out, over *Config) {
 	if over.CompactionKeepTurns != 0 {
 		out.CompactionKeepTurns = over.CompactionKeepTurns
 	}
-	if over.SessionSync != "" {
-		out.SessionSync = over.SessionSync
-	}
 	if over.MCPToolLoading != "" {
 		out.MCPToolLoading = over.MCPToolLoading
 	}

@@ -11,36 +11,6 @@ import (
 	"time"
 )
 
-func TestContractRuntimeSessionSync(t *testing.T) {
-	skipShort(t)
-	rows := []struct {
-		name, setting, want string
-	}{
-		{"session_sync_default_reports_fsync", "", "fsync"},
-		{"session_sync_fsync_reports_fsync", "fsync", "fsync"},
-		{"session_sync_volume_is_reported_in_the_engine_status", "volume", "volume"},
-	}
-	onHosts(t, func(t *testing.T, h host) {
-		for _, row := range rows {
-			t.Run(row.name, func(t *testing.T) {
-				t.Parallel()
-				cfg := map[string]any{}
-				if row.setting != "" {
-					cfg["session_sync"] = row.setting
-				}
-				d, fake := startOn(t, h, runtimeWorkdir(t, nil), cfg, replyText("ok"))
-				runTurn(t, d, "go")
-				if got := fake.Requests()[0].LastUserText(); !strings.Contains(got, " · session_sync="+row.want+" · ") {
-					t.Errorf("engine status line = %q, want session_sync=%s", got, row.want)
-				}
-				if got := bodyOf(t, d.call(t, http.MethodGet, "/health", nil))["session_sync"]; got != row.want {
-					t.Errorf("/health session_sync = %v, want %q", got, row.want)
-				}
-			})
-		}
-	})
-}
-
 func TestContractRuntimeHealth(t *testing.T) {
 	skipShort(t)
 	rows := []struct {
@@ -48,13 +18,13 @@ func TestContractRuntimeHealth(t *testing.T) {
 		check func(t *testing.T, body map[string]any, before time.Time)
 	}{
 		{"health_names_the_build_and_the_start", func(t *testing.T, body map[string]any, before time.Time) {
-			for _, key := range []string{"version", "vcs_revision", "vcs_time", "session_sync", "started_at", "capabilities"} {
+			for _, key := range []string{"version", "vcs_revision", "vcs_time", "started_at", "capabilities"} {
 				if _, ok := body[key]; !ok {
 					t.Errorf("/health has no %s: %v", key, body)
 				}
 			}
-			if body["session_sync"] != "fsync" {
-				t.Errorf("/health session_sync = %v, want fsync", body["session_sync"])
+			if _, ok := body["session_sync"]; ok {
+				t.Errorf("/health has session_sync: %v", body)
 			}
 			if body["version"] == "" {
 				t.Errorf("/health version is empty")
@@ -86,7 +56,7 @@ func TestContractRuntimeHealth(t *testing.T) {
 	})
 }
 
-func TestContractRuntimeSessionSyncUnknownValue(t *testing.T) {
+func TestContractRuntimeSessionSyncIsAnUnknownKey(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	cfgPath := writeGoalConfigWith(t, "http://127.0.0.1:1", map[string]any{"session_sync": "bogus"})
@@ -103,9 +73,9 @@ func TestContractRuntimeSessionSyncUnknownValue(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() == 0 {
-		t.Fatalf("serve with session_sync bogus = %v, want a non-zero exit\n%s", err, out)
+		t.Fatalf("serve with session_sync = %v, want a non-zero exit\n%s", err, out)
 	}
-	if want := `session_sync: unknown value "bogus"`; !strings.Contains(string(out), want) {
-		t.Errorf("serve output does not name the bad value, want %q in:\n%s", want, out)
+	if want := "session_sync"; !strings.Contains(string(out), want) {
+		t.Errorf("serve output does not name the key, want %q in:\n%s", want, out)
 	}
 }

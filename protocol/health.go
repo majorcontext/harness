@@ -9,7 +9,6 @@ type Health struct {
 	Version     string `json:"version"`
 	VCSRevision string `json:"vcs_revision"`
 	VCSTime     string `json:"vcs_time"`
-	SessionSync string `json:"session_sync"`
 	// StartedAt is the start of the runtime, RFC 3339 in UTC.
 	StartedAt    string   `json:"started_at"`
 	Capabilities []string `json:"capabilities"`

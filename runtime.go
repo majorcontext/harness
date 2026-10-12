@@ -191,7 +191,7 @@ func New(opts Options) (*Runtime, error) {
 		return nil, errors.New("harness: Options.RunToken needs Options.ServeURL")
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, opts.Config, time.Now()),
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
@@ -243,20 +243,16 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
-	r.banner, r.questions = banner(opts.Version, opts.Config.SessionSync, time.Now()), opts.AskUserQuestion
+	r.banner, r.questions = banner(opts.Version, time.Now()), opts.AskUserQuestion
 	return r, nil
 }
 
 // banner renders the engine status line, or "" for an empty version.
-func banner(version, sessionSync string, started time.Time) string {
+func banner(version string, started time.Time) string {
 	if version == "" {
 		return ""
 	}
-	mode := "fsync"
-	if sessionSync == "volume" {
-		mode = sessionSync
-	}
-	return "[engine: harness " + version + " · session_sync=" + mode + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
+	return "[engine: harness " + version + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
 }
 
 // positive returns v, or def when v is not positive.

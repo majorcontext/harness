@@ -486,12 +486,12 @@ func TestContractCLIRunLogsWhichConfigFileLoaded(t *testing.T) {
 	if want := "config: " + h.config + " (1 process, 0 mcp servers, 0 plugins)"; code != 0 || !strings.Contains(errOut, want) {
 		t.Fatalf("run = %d, want the log line %q\n%s", code, want, errOut)
 	}
-	project := `{"processes":{"b":{"command":["true"]}},"session_sync":"volume"}`
+	project := `{"processes":{"b":{"command":["true"]}}}`
 	if err := os.WriteFile(filepath.Join(h.work, ".harness.json"), []byte(project), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, errOut, code = h.run("run", "-p", "hi")
-	if want := ".harness.json (2 processes, 0 mcp servers, 0 plugins), session_sync=volume"; code != 0 || !strings.Contains(errOut, want) {
+	if want := ".harness.json (2 processes, 0 mcp servers, 0 plugins)"; code != 0 || !strings.Contains(errOut, want) {
 		t.Fatalf("run with a project file = %d, want the log line to name it and end %q\n%s", code, want, errOut)
 	}
 }

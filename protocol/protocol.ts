@@ -122,7 +122,6 @@ export interface Health {
   version: string;
   vcs_revision: string;
   vcs_time: string;
-  session_sync: string;
   started_at: string;
   capabilities: string[];
 }

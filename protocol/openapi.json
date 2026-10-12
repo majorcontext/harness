@@ -421,9 +421,6 @@
           "vcs_time": {
             "type": "string"
           },
-          "session_sync": {
-            "type": "string"
-          },
           "started_at": {
             "type": "string"
           },
@@ -440,7 +437,6 @@
           "version",
           "vcs_revision",
           "vcs_time",
-          "session_sync",
           "started_at",
           "capabilities"
         ]

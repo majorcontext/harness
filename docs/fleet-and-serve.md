@@ -91,7 +91,6 @@ runs always on.
   It never calls `runtime.ReadMemStats`, because that call stops the world.
   The first sample reports nothing, because the counts are cumulative for the
   life of the process.
-- The config summary at start echoes `session_sync=volume` when it is set.
 
 `harness serve` has no `-pprof` flag and serves no `/debug` route. Never
 import `net/http/pprof` in this repository: its `init` registers

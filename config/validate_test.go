@@ -21,7 +21,6 @@ func TestValidate(t *testing.T) {
 		{name: "a plugin without command", cfg: Config{Plugins: []PluginSpec{{Name: "p"}}}, want: "plugins[0] (p): command is required"},
 		{name: "an MCP server with no transport", cfg: Config{MCPServers: map[string]MCPServerSpec{"m": {}}}, want: "mcp_servers.m: exactly one of"},
 		{name: "a process with two ready gates", cfg: Config{Processes: map[string]ProcessSpec{"web": {Command: []string{"x"}, ReadyPort: 80, ReadyRegex: "up"}}}, want: "at most one of"},
-		{name: "an unknown session_sync", cfg: Config{SessionSync: "bogus"}, want: "session_sync"},
 		{name: "an unknown mcp_tool_loading", cfg: Config{MCPToolLoading: "bogus"}, want: "mcp_tool_loading"},
 		{name: "a sync block with an owner epoch and a token file", cfg: Config{OwnerEpoch: 3, Sync: &SyncSpec{URL: "https://b.test/sync", TokenFile: "/run/t"}}},
 		{name: "an owner epoch of zero with no sync block"},

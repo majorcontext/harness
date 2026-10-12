@@ -143,16 +143,6 @@ type Config struct {
 	// Zero (omitted) defaults to 2 (see Defaults); the effective value
 	// can never go below 1.
 	CompactionKeepTurns int `json:"compaction_keep_turns,omitempty"`
-	// SessionSync selects the durability mechanism for attested session-store
-	// writes (durable enqueue, session-create persist). "fsync" (default)
-	// fsyncs the log file and, on first creation, its directory — correct for
-	// local POSIX filesystems. "volume" skips both fsync round-trips: for
-	// stores on continuously-synced network volumes whose own commit layer is
-	// the documented durability boundary, where fsync adds no durability and
-	// some FUSE/9p transports deadlock permanently on it (fsync(dirfd)
-	// especially). With "volume", an attestation means the write(2) completed
-	// and durability is delegated to the volume layer.
-	SessionSync string `json:"session_sync,omitempty"`
 	// MCPToolLoading selects when a session defers MCP tool SCHEMAS instead
 	// of registering every one of them up front (see
 	// docs/design/mcp-lazy-tools.md). "eager" (the default, and what an

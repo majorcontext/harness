@@ -35,11 +35,10 @@ type configSummary struct {
 	// path is the project file when it exists, else the user file when it exists, else empty.
 	path                           string
 	processes, mcpServers, plugins int
-	sessionSync                    string
 }
 
 func configSummaryOf(cfg *config.Config, userPath, projPath string) configSummary {
-	info := configSummary{processes: len(cfg.Processes), mcpServers: len(cfg.MCPServers), plugins: len(cfg.Plugins), sessionSync: cfg.SessionSync}
+	info := configSummary{processes: len(cfg.Processes), mcpServers: len(cfg.MCPServers), plugins: len(cfg.Plugins)}
 	switch {
 	case fileExists(projPath):
 		info.path = projPath
@@ -66,13 +65,6 @@ func logConfigSummary(logger *slog.Logger, info configSummary) {
 		return
 	}
 	msg := fmt.Sprintf("config: %s (%s)", info.path, formatConfigCounts(info))
-	// Only called out when it changes behavior from the built-in default:
-	// "" and the explicit "fsync" are behaviorally identical (see
-	// config.Config.SessionSync), so only "volume" is worth an operator's
-	// attention here.
-	if info.sessionSync == "volume" {
-		msg += fmt.Sprintf(", session_sync=%s", info.sessionSync)
-	}
 	logger.Info(msg)
 }
 

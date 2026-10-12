@@ -63,7 +63,7 @@ Global policy, in `config.Config` (`config/config.go`):
 }
 ```
 
-`mcp_tool_loading` is a three-value enum, validated like `session_sync`:
+`mcp_tool_loading` is a three-value enum, validated by `Validate`:
 
 | Value | Meaning |
 |---|---|
@@ -104,7 +104,7 @@ not a property of one server. An absent value inherits the global mode.
 
 `validateMCPServers` (`config/config.go`) rejects an unknown value, the
 same "a typo must not silently fall back" rule the file already applies to
-`session_sync` and to `mcp_servers` entries.
+`mcp_servers` entries.
 
 ### Where the policy lives in the engine
 
