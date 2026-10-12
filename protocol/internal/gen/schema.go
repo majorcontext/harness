@@ -32,12 +32,15 @@ const (
 // wireTypes are the types of the wire that no route names: the data of an
 // ephemeral frame, the replication call of Sync, the payload of each durable
 // event, and the progress of a log.
-var wireTypes = []any{protocol.ItemFrame{}, protocol.StatusFrame{}, protocol.SyncBatch{}, protocol.SyncAck{}, protocol.Progress{},
-	protocol.SessionCreated{}, protocol.OwnerAcquired{}, protocol.SettingsChanged{}, protocol.InputAdmitted{}, protocol.InputPromoted{},
-	protocol.InputWithdrawn{}, protocol.TurnStarted{}, protocol.ItemCompleted{}, protocol.TurnSuspended{}, protocol.TurnResumed{},
-	protocol.TurnEnded{}, protocol.RequestOpened{}, protocol.RequestResolved{}, protocol.GoalSet{}, protocol.GoalEvaluated{},
-	protocol.GoalChanged{}, protocol.CompactionApplied{}, protocol.ChildSpawned{}, protocol.ChildSettled{}, protocol.CommandRecorded{},
-	protocol.ContextMeasured{}, protocol.BackendState{}, protocol.ToolResultRetained{}}
+var wireTypes = append([]any{protocol.ItemFrame{}, protocol.StatusFrame{}, protocol.SyncBatch{}, protocol.SyncAck{}, protocol.Progress{}}, payloadTypes()...)
+
+func payloadTypes() []any {
+	var out []any
+	for _, p := range protocol.DurablePayloads() {
+		out = append(out, reflect.ValueOf(p).Elem().Interface())
+	}
+	return out
+}
 
 func rootTypes() []reflect.Type {
 	types := []reflect.Type{reflect.TypeOf(protocol.ErrorBody{})}

@@ -381,7 +381,7 @@ export interface ProcessStatus {
 
 export interface Progress {
   seq: number;
-  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
+  status?: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
   turn_id?: string;
   queued?: string[];
   requests?: string[];

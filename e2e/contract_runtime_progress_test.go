@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -66,6 +67,9 @@ func rowAdvanceFoldsTheEventsOfASessionToTheStateOfItsSnapshot(t *testing.T) {
 		if rest, err = harness.Advance(rest, e); err != nil {
 			t.Fatalf("Advance %s at seq %d from a stored cursor: %v", e.Kind, e.Seq, err)
 		}
+	}
+	if _, err := harness.Advance(mid, protocol.Event{Seq: mid.Seq + 2, Kind: protocol.KindOwnerAcquired, Data: []byte(`{}`)}); !errors.Is(err, protocol.ErrSeq) {
+		t.Errorf("Advance of an event that skips a seq = %v, want protocol.ErrSeq", err)
 	}
 	if !reflect.DeepEqual(rest, p) {
 		t.Errorf("Progress resumed from seq %d = %+v, want %+v", mid.Seq, rest, p)

@@ -16,7 +16,7 @@ var (
 	// ErrVersion reports an envelope version that this package cannot read.
 	ErrVersion = errors.New("eventlog: unsupported envelope version")
 	// ErrSeq reports a record whose seq does not follow the head.
-	ErrSeq = errors.New("eventlog: seq out of order")
+	ErrSeq = protocol.ErrSeq
 )
 
 // Record is one stored record: its seq and its opaque bytes.

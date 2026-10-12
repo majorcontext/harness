@@ -1343,8 +1343,7 @@
         },
         "type": "object",
         "required": [
-          "seq",
-          "status"
+          "seq"
         ]
       },
       "QueuedInput": {

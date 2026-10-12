@@ -4,10 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 )
 
-// ErrUnknownKind reports an event kind with no durable payload type.
-var ErrUnknownKind = errors.New("protocol: unknown event kind")
+var (
+	// ErrUnknownKind reports an event kind with no durable payload type.
+	ErrUnknownKind = errors.New("protocol: unknown event kind")
+	// ErrSeq reports a record or event whose seq does not follow the head.
+	ErrSeq = errors.New("protocol: seq out of order")
+)
 
 var payloads = map[string]func() Payload{
 	KindSessionCreated:     func() Payload { return new(SessionCreated) },
@@ -33,6 +39,15 @@ var payloads = map[string]func() Payload{
 	KindContextMeasured:    func() Payload { return new(ContextMeasured) },
 	KindBackendState:       func() Payload { return new(BackendState) },
 	KindToolResultRetained: func() Payload { return new(ToolResultRetained) },
+}
+
+// DurablePayloads returns a pointer to a zero payload of each durable kind, in kind order.
+func DurablePayloads() []Payload {
+	out := make([]Payload, 0, len(payloads))
+	for _, k := range slices.Sorted(maps.Keys(payloads)) {
+		out = append(out, payloads[k]())
+	}
+	return out
 }
 
 // IsDurableKind reports whether kind is the kind of a durable event.
