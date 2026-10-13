@@ -31,3 +31,13 @@ test internal/gates TestRepository 12
 test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
 # Each row restarts a runtime over a CLI-backed session and replays a large saved state (16 s on CI).
 test e2e TestContractRuntimeClaudeCodeStateChunks 24
+# Rows that build a large transcript for a goal evaluator (7-12 s on CI).
+test e2e TestContractGoalEvaluatorTranscript 18
+# Rows that wait for a real hook timeout (6 s on CI).
+test e2e TestContractPluginHookTimeouts 15
+# Rows that stop a server and wait for its sync report (5 s on CI).
+test e2e TestContractServeStopReportsCrashed 15
+# Rows that start a real MCP server process (5 s on CI).
+test e2e TestContractRuntimeSessionMCP 15
+# Rows that run git on a fixture repository (9 s under load locally).
+test e2e TestContractWorkspace 15
