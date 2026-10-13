@@ -60,13 +60,14 @@ const (
 	specWarm          = "The session calls `Warm` once on create and on wake, fire-and-forget under the session context."
 	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
-	specClaudeGauge     = "A Claude Code turn reads its context gauge and its cost from the `result` frame."
-	specToolCallsAtOnce = "The backend records the assistant item that holds a tool call when the `tool_use` frame arrives"
-	specClaudeOnce      = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
-	specHistoryBridge   = "When another provider recorded a message after the newest message that this backend saw"
-	specBackendState    = "Private backend state is a chain of `backend.state` records"
-	specMirrorBlob      = "are appended as chunk blobs"
-	specKeepOwned       = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
+	specClaudeGauge             = "A Claude Code turn reads its context gauge and its cost from the `result` frame."
+	specClaudeCompactPostTokens = "A `compact_boundary` with positive `post_tokens` sets the reading until a later main-thread assistant frame reports usage."
+	specToolCallsAtOnce         = "The backend records the assistant item that holds a tool call when the `tool_use` frame arrives"
+	specClaudeOnce              = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
+	specHistoryBridge           = "When another provider recorded a message after the newest message that this backend saw"
+	specBackendState            = "Private backend state is a chain of `backend.state` records"
+	specMirrorBlob              = "are appended as chunk blobs"
+	specKeepOwned               = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
 
 	specErrorText    = "The actor masks and bounds each error text that it writes to the log"
 	specGoalFailed   = "An error the user must fix yields `failed`."
@@ -269,7 +270,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_long_child_result_has_no_readable_handle":                       sameAsServe(),
 	"child_long_error_reaches_a_busy_parent":                                    reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
 	"child_long_result_reaches_a_busy_parent":                                   reGolden(specChildReport, specChildLong, specChildWording),
-	"claudecode_compact_delegated":                                              reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specRestartOpens),
+	"claudecode_compact_delegated":                                              reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specClaudeCompactPostTokens, specRestartOpens),
 	"claudecode_child_report_waits_for_the_next_turn":                           sameAsServe(),
 	"claudecode_child_reports_share_the_next_turn":                              sameAsServe(),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":                    reGolden(specQueue, specChildReport, specChildClaude),
@@ -278,8 +279,9 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_bridge_refuses_set_on_the_model_tool":                           sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":                           sameAsServe(),
 	"claudecode_context_window_from_model_usage":                                reGolden(specView, specClaudeGauge),
-	"claudecode_compact_after_tokens_reads_zero":                                reGolden(specView, specClaudeGauge),
-	"claudecode_compact_keeps_the_window":                                       reGolden(specView, specClaudeGauge),
+	"claudecode_compact_reads_post_tokens":                                      reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
+	"claudecode_compact_post_tokens_yields_to_assistant_usage":                  reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
+	"claudecode_compact_keeps_the_window":                                       reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
 	"claudecode_cli_exit_runs_once":                                             reGolden(specView, specClaudeOnce),
 	"claudecode_error_result_fails_turn":                                        reGolden(specView, specClaudeOnce, specClaudeGauge),
 	"claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors":      sameAsServe(),
@@ -590,7 +592,7 @@ var runtimeRows = map[string]runtimeRow{
 
 	"claudecode_runs_in_the_work_dir":                               sameAsServe(),
 	"claudecode_append_system_prompt_reaches_the_cli_as_one_value":  sameAsServe(),
-	"claudecode_compact_result_with_no_local_command_ends_the_turn": reGolden(specView, specCompactOwned, specClaudeGauge),
+	"claudecode_compact_result_with_no_local_command_ends_the_turn": reGolden(specView, specCompactOwned, specClaudeGauge, specClaudeCompactPostTokens),
 	"claudecode_subagent_and_main_frames_keep_their_wire_order":     reGolden(specOneResult),
 	"claudecode_queued_notification_result_does_not_end_the_turn":   reGolden(specView, specClaudeGauge),
 	"claudecode_compact_refuses_keep_turns":                         reGolden(specView, specKeepOwned, specErrors, specClaudeGauge),

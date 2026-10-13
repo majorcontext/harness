@@ -103,6 +103,14 @@ func compactBoundary(f *fake) {
 	)
 }
 
+func compactBoundaryPostTokens(f *fake) {
+	f.emit(
+		system("compact_boundary", obj{"compact_metadata": obj{"trigger": "auto", "pre_tokens": 123456, "post_tokens": 7039}, "session_id": f.sessionID}),
+		say("Continuing after compaction.").inMessage("usage", obj{"input_tokens": 31, "cache_read_input_tokens": 11, "cache_creation_input_tokens": 7}),
+		success("Continuing after compaction.", 12, 6),
+	)
+}
+
 func hang(f *fake) {
 	f.emit()
 	time.Sleep(time.Hour)
@@ -114,26 +122,27 @@ func hang(f *fake) {
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
-	"parallel_calls":           parallelCalls,
-	"per_call_usage":           perCallUsage,
-	"compact_after_window":     perCallUsage,
-	"compact_boundary":         compactBoundary,
-	"rate_limit_event":         rateLimitTurn(),
-	"hang_after_text":          hangAfterText,
-	"hang_after_listing":       hangAfterListing,
-	"hang_in_tool":             hangInTool,
-	"tool_on_interrupt":        hangAfterText,
-	"tool_result_on_interrupt": hangAfterText,
-	"success_on_interrupt":     hangAfterText,
-	"placeholder_on_interrupt": hangAfterText,
-	"exit_on_interrupt":        hangAfterText,
-	"crash":                    crashAfter(),
-	"placeholder_before_turn":  frames(success("", 0, 0).set("num_turns", 0), say("Real answer."), success("Real answer.", 7, 2)),
-	"fast_no_drain":            frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
-	"fast_gated":               fastGated,
-	"error":                    frames(failed(11, 3, "fake failure")),
-	"rate_limit_error":         frames(failed(6, 1, "rate_limit_error: please retry later")),
-	"credential_error":         frames(failed(6, 1, "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.")),
+	"parallel_calls":               parallelCalls,
+	"per_call_usage":               perCallUsage,
+	"compact_after_window":         perCallUsage,
+	"compact_boundary":             compactBoundary,
+	"compact_boundary_post_tokens": compactBoundaryPostTokens,
+	"rate_limit_event":             rateLimitTurn(),
+	"hang_after_text":              hangAfterText,
+	"hang_after_listing":           hangAfterListing,
+	"hang_in_tool":                 hangInTool,
+	"tool_on_interrupt":            hangAfterText,
+	"tool_result_on_interrupt":     hangAfterText,
+	"success_on_interrupt":         hangAfterText,
+	"placeholder_on_interrupt":     hangAfterText,
+	"exit_on_interrupt":            hangAfterText,
+	"crash":                        crashAfter(),
+	"placeholder_before_turn":      frames(success("", 0, 0).set("num_turns", 0), say("Real answer."), success("Real answer.", 7, 2)),
+	"fast_no_drain":                frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
+	"fast_gated":                   fastGated,
+	"error":                        frames(failed(11, 3, "fake failure")),
+	"rate_limit_error":             frames(failed(6, 1, "rate_limit_error: please retry later")),
+	"credential_error":             frames(failed(6, 1, "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.")),
 }
 
 // fastGated is fast_no_drain that reads its input and waits for the gate file

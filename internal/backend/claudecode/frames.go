@@ -105,8 +105,9 @@ type modelUsage struct {
 }
 
 type compactMetadata struct {
-	Trigger   string `json:"trigger,omitempty"`
-	PreTokens int64  `json:"pre_tokens,omitempty"`
+	Trigger    string `json:"trigger,omitempty"`
+	PreTokens  int64  `json:"pre_tokens,omitempty"`
+	PostTokens int64  `json:"post_tokens,omitempty"`
 }
 
 // usage is the usage of a result frame (the turn) or of an assistant frame

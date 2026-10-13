@@ -72,11 +72,12 @@ type run struct {
 	owed, waiting bool
 	// cost is the total_cost_usd of the previous result of the run, which the
 	// CLI reports as a running total.
-	cost       float64
-	mainModel  string
-	lastCall   *usage
-	compact    string
-	sawCompact bool
+	cost              float64
+	mainModel         string
+	lastCall          *usage
+	compactPostTokens int64
+	compact           string
+	sawCompact        bool
 	// live is the API response that the stream events of each thread are
 	// streaming, by parent tool call ID.
 	live map[string]*liveMessage
@@ -357,6 +358,9 @@ func (r *run) system(env envelope) error {
 		r.compact = "Claude Code compacted its context."
 		if m := env.CompactMetadata; m != nil {
 			r.compact = fmt.Sprintf("Claude Code compacted its context (%s, %d tokens before).", m.Trigger, m.PreTokens)
+			if m.PostTokens > 0 {
+				r.compactPostTokens = m.PostTokens
+			}
 		}
 	}
 	return nil
@@ -402,6 +406,7 @@ func (r *run) assistant(env envelope) error {
 	m := decodeMessage(env.Message)
 	if m.Usage != nil && env.ParentToolUseID == "" {
 		r.lastCall = m.Usage
+		r.compactPostTokens = 0
 	}
 	parts := assistantParts(m)
 	if len(parts) == 0 {
@@ -513,11 +518,17 @@ func (r *run) telemetry(env envelope) {
 	cost := max(0, env.TotalCostUSD-r.cost)
 	r.cost = env.TotalCostUSD
 	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &cost, Call: callMetrics(env)}
-	last := r.lastCall
-	if last == nil {
-		last = env.Usage
+	if r.compactPostTokens > 0 {
+		t.Context.Tokens = r.compactPostTokens
+	} else {
+		last := r.lastCall
+		if last == nil {
+			last = env.Usage
+		}
+		t.Context.Tokens = last.prompt()
 	}
-	t.Context = protocol.ContextMeasured{Tokens: last.prompt(), Window: env.ModelUsage[r.mainModel].ContextWindow, Source: stateKey}
+	t.Context.Window = env.ModelUsage[r.mainModel].ContextWindow
+	t.Context.Source = stateKey
 	r.out.Telemetry(t)
 }
 
