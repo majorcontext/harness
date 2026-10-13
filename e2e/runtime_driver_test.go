@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -112,6 +113,7 @@ func (d *runtimeDriver) start(t *testing.T) {
 		d.startProc(t)
 		return
 	}
+	mcpsrc.HoldRetries()
 	rt, err := newWired(harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)

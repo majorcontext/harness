@@ -13,3 +13,4 @@ Read the root AGENTS.md.
 - Keep fixtures local and deterministic. Require no live provider credentials.
 - Keep subprocess output on failure. Mask secret values.
 - Every HTTP client of a host comes from `wireClient`, which checks each response (a CORS preflight excepted) and error against `protocol/openapi.json` and the Errors table of the spec. A host that serves only the read routes (`httpapi.ReadHandler`) uses `wireClientReadOnly`, which also requires its refusals: 405 for a route that changes something, 404 for any other route it does not serve.
+- A row with `runtimeOnly` skips the serve host because it needs a seam that only the in-process host reaches (`mcpsrc.HoldRetries`). `-update` writes its golden from the runtime host.

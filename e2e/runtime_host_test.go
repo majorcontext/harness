@@ -107,11 +107,13 @@ func (r runtimeRow) String() string {
 const runtimeEnv = "HARNESS_E2E_RUNTIME"
 
 // onHost runs each row of table on h by its disposition. The runtime host
-// runs only with runtimeEnv, and not under -update, which the serve host
-// writes. Every row owns its environment, so every row runs in parallel.
-func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func(*testing.T, S) observation) {
+// runs only with runtimeEnv, and under -update only the rows that skip the
+// serve host, which writes the others. runtimeOnly gives the reason a row
+// skips the serve host, or "". Every row owns its environment, so every row
+// runs in parallel.
+func onHost[S any](t *testing.T, h host, table []S, key func(S) string, runtimeOnly func(S) string, run func(*testing.T, S) observation) {
 	t.Helper()
-	if h.runtime && (os.Getenv(runtimeEnv) == "" || *updateGoldens) {
+	if h.runtime && os.Getenv(runtimeEnv) == "" && !*updateGoldens {
 		return
 	}
 	t.Run(h.name(), func(t *testing.T) {
@@ -125,6 +127,13 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func
 				if row.kind == rowDeleted {
 					t.Skip(row)
 				}
+				why := runtimeOnly(sc)
+				if !h.runtime && why != "" {
+					t.Skip(why)
+				}
+				if h.runtime && *updateGoldens && why == "" {
+					t.Skip("-update writes this row from the serve host")
+				}
 				pending := row.kind == rowPending
 				if pending && os.Getenv(pendingBinEnv) == "" {
 					expectPendingFailure(t, row)
@@ -134,7 +143,7 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func
 					t.Parallel()
 				}
 				obs := run(t, sc)
-				if row.kind == rowSame && !h.runtime && !pending {
+				if row.kind == rowSame && (!h.runtime || why != "") && !pending {
 					compareGoldenAt(t, filepath.Join("testdata", "contract", name+".golden.json"), obs, *updateGoldens)
 					return
 				}
@@ -142,7 +151,7 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func
 					compareSame(t, name, obs)
 					return
 				}
-				compareGoldenAt(t, filepath.Join("testdata", "runtime", name+".golden.json"), obs, *updateGoldens && !h.runtime)
+				compareGoldenAt(t, filepath.Join("testdata", "runtime", name+".golden.json"), obs, *updateGoldens && (!h.runtime || why != ""))
 			})
 		}
 	})
