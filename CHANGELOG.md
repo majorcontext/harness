@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Session takeover error** (`harness`, `cmd/harness`) — a run that another process fenced by opening the same session now fails with `harness: session not owned: another process took over session <id>` in place of the append-conflict text, and still matches `ErrOwnershipLost`, `ErrSessionNotOwned`, and `ErrConflict`. `cmd/harness` prints the prefix `harness: ` once, so an error that starts with it no longer shows `harness: harness:`.
 - **Plugin failure log line** (`harness`) — a plugin hook that fails open writes one `plugin: hook failed` Warn line through the runtime logger, with the plugin name, the hook, and the error text with secrets masked.
 - **Guardrail example** (`examples/guardrail`) — one `plugin.Plugin` value that denies a force push, `rm -rf` on a broad target, and a `read_file` call on a `.env` file. `go run ./examples/guardrail` runs it in the host process, and `examples/guardrail/cmd/guardrail-plugin` serves it as a plugin process.
 - **TypeScript plugin SDK flags** (`sdk/typescript`) — `createPlugin` takes `denyOnFailure: ['toolExecuteBefore']` and `hookTimeouts: { <hookKey>: ms }`, and writes `deny_on_failure` and `hook_timeouts` to the manifest. It throws for a value the host would reject.

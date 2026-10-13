@@ -53,6 +53,21 @@ func notOwned(cause string) *protocol.Error {
 		Details: map[string]any{protocol.CauseKey: cause}}
 }
 
+type takeover struct {
+	lost     *protocol.Error
+	conflict error
+}
+
+func (t *takeover) Error() string   { return t.lost.Message }
+func (t *takeover) Unwrap() []error { return []error{t.lost, t.conflict} }
+
+// takenOver returns the ownership-lost error of a session whose append conflicted with a later owner. It still matches ErrConflict.
+func takenOver(id string, conflict error) error {
+	lost := *ErrOwnershipLost
+	lost.Message = "harness: session not owned: another process took over session " + id
+	return &takeover{lost: &lost, conflict: conflict}
+}
+
 // Log is the record log of one session. Append fails with an error that
 // matches ErrConflict when expectedSeq is not the head.
 type Log interface {
@@ -586,8 +601,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	}
 	if err := a.cfg.Store.Append(ctx, head, recs...); err != nil {
 		if errors.Is(err, ErrConflict) {
-			a.stopWith(fmt.Errorf("%w: %w", ErrOwnershipLost, err))
-			return fmt.Errorf("%w: %w", ErrNotOwned, err)
+			lost := takenOver(a.cfg.ID, err)
+			a.stopWith(lost)
+			return lost
 		}
 		a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))
 		return err

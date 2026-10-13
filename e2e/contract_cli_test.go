@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -111,6 +112,35 @@ func TestContractCLIRunSavesAndContinuesTheSession(t *testing.T) {
 	}
 	if got := len(h.fake.Requests()[2].Messages); got != 5 {
 		t.Errorf("the third request holds %d messages, want the 5 of the history and the prompt", got)
+	}
+}
+
+func TestContractCLIRunFailsClearlyWhenAnotherProcessTakesOverTheSession(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil,
+		harnesstest.Step{Name: "slow", Match: userStarts("slow"), Reply: harnesstest.Reply{Text: "slow done", Block: true}},
+		replyText("quick"))
+	_, errOut, code := h.run("run", "-p", "first")
+	if code != 0 {
+		t.Fatalf("first run = %d\n%s", code, errOut)
+	}
+	id := sessionID(t, errOut)
+	older := h.start("run", "-c", "-p", "slow")
+	if !h.fake.AwaitRequests(2, waitBound) {
+		t.Fatalf("waited %s for the older run to reach the model; saw %d requests", waitBound, len(h.fake.Requests()))
+	}
+	if out, errOut, code := h.run("run", "-c", "-p", "newer"); code != 0 || out != "quick\n" {
+		t.Fatalf("newer run = %d %q, want 0 and the reply\n%s", code, out, errOut)
+	}
+	h.fake.Release("slow")
+	_, errOut, code = older()
+	want := fmt.Sprintf("harness: session not owned: another process took over session %s\n", id)
+	if code != 1 || !strings.HasSuffix(errOut, want) {
+		t.Errorf("older run = %d, want 1 and stderr ending with %q\n%s", code, want, errOut)
+	}
+	if strings.Contains(errOut, "harness: harness:") {
+		t.Errorf("stderr doubles the prefix:\n%s", errOut)
 	}
 }
 
