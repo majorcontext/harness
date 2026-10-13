@@ -61,10 +61,10 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 			},
 		},
 		{
-			name:   "claudecode_compact_after_tokens_reads_zero",
+			name:   "claudecode_compact_reads_post_tokens",
 			driver: claudeLaneDriver("compact_after_tokens"),
 			actions: []action{
-				create{as: "a"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
+				create{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
 				claudeSession{as: "a"},
 				compact{as: "a"},
 				claudeSession{as: "a"},

@@ -30,7 +30,7 @@
       "body": {
         "compaction_count": 1,
         "context": {
-          "tokens": 0,
+          "tokens": 7039,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
