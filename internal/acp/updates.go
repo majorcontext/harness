@@ -58,11 +58,17 @@ func (h *held) usageUpdate(st *pumpState) error {
 		return nil
 	}
 	st.last.usage = u
+	return h.update(usageBody(u))
+}
+
+// usageBody is the usage_update of u. The cost is the cumulative session cost
+// in USD, and is omitted when the session reports none.
+func usageBody(u usageState) map[string]any {
 	body := map[string]any{"sessionUpdate": "usage_update", "used": u.used, "size": u.size}
 	if u.hasCost {
 		body["cost"] = map[string]any{"amount": u.cost, "currency": "USD"}
 	}
-	return h.update(body)
+	return body
 }
 
 // sessionInfo sends the time of the last activity of the session.

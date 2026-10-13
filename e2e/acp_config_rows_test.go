@@ -17,7 +17,11 @@ type acpSetConfig struct {
 
 func (s acpSetConfig) run(t *testing.T, c *acpConn) {
 	t.Helper()
-	id := c.request("session/set_config_option", map[string]any{"sessionId": c.session(s.as), "configId": s.id, "value": s.value})
+	params := map[string]any{"sessionId": c.session(s.as), "configId": s.id, "value": s.value}
+	if _, isBool := s.value.(bool); isBool {
+		params["type"] = "boolean"
+	}
+	id := c.request("session/set_config_option", params)
 	updated := false
 	for {
 		f := c.read()

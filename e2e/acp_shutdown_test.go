@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -27,6 +28,13 @@ func TestACPSessionNewRacesEndOfInput(t *testing.T) {
 				f := c.response(id)
 				if _, ok := f["result"]; !ok {
 					c.mustBeError(f, acpInternal)
+				} else {
+					// The commands update follows the answer, and the end of input can come first.
+					for l := range c.lines {
+						if l.text != "" && !strings.Contains(l.text, "available_commands_update") {
+							t.Errorf("stdout holds an unexpected line: %q", l.text)
+						}
+					}
 				}
 				c.finish(stop)
 			}

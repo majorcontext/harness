@@ -234,6 +234,7 @@
         "params": {
           "configId": "effort",
           "sessionId": "\u003csession:a\u003e",
+          "type": "boolean",
           "value": true
         }
       }
