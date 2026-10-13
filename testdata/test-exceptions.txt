@@ -28,3 +28,4 @@ internal/turn/turn_test.go the window between the before hook and the context ch
 internal/workspace/workspace_test.go rows run in parallel, so each row needs its own git repository, and the serial rows need t.Chdir or t.Setenv; no contract row can start that many git repositories
 internal/imageclamp/imageclamp_test.go each test encodes large PNG fixtures, and the race detector makes each encode slow; a per-size fixture cache in a package-level variable shares one encode across the tests
 plugin/example_test.go the package examples are documentation that pkg.go.dev renders; only the Manifest example runs, and it checks pure encoding that no contract row isolates
+harnesstest/mcp_test.go the port of the MCP fixture and its refusal after Close are properties of the fixture itself, which no serve scenario observes
