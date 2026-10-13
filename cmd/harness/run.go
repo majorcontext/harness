@@ -48,7 +48,6 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 		opts = &runOptions{}
 	}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.prompt, "p", "", "the prompt (required unless -goal is given)")
 	fs.StringVar(&opts.goal, "goal", "", "pursue a goal: run this condition as a turn, then run turns with evaluator feedback until an independent evaluator judges it met (requires config goal_evaluator_model)")
 	fs.IntVar(&opts.goalMaxTurns, "goal-max-turns", 0, "maximum turns for -goal (0 = unlimited)")
@@ -78,7 +77,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 func runCmd(args []string) error {
 	var opts runOptions
 	fs := runFlags(&opts)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	var modelSet, maxTokensSet bool

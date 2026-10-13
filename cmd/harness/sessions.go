@@ -23,10 +23,9 @@ type sessionRow struct {
 
 func sessionsCmd(args []string) error {
 	fs := flag.NewFlagSet("sessions", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
 	var jsonOut bool
 	fs.BoolVar(&jsonOut, "json", false, "emit the session list as a JSON array")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	cfg, err := loadConfig()

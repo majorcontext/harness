@@ -41,7 +41,6 @@ type serveOptions struct {
 func serveFlags(args []string) (*serveOptions, error) {
 	var o serveOptions
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
 	fs.StringVar(&o.addr, "addr", "localhost:4096", "listen address")
 	fs.StringVar(&o.corsOrigin, "cors-origin", "", "enable browser CORS by echoing this Access-Control-Allow-Origin value (e.g. a browser client's origin, or * for dev); empty disables CORS")
 	fs.BoolVar(&o.noInstructions, "no-instructions", false, "disable automatic AGENTS.md injection for sessions served by this instance")
@@ -55,7 +54,7 @@ func serveFlags(args []string) (*serveOptions, error) {
 	})
 	fs.BoolVar(&o.unauthenticated, "unauthenticated", false, "serve without a bearer token on a non-loopback bind; for a deployment where a trusted external gate restricts reachability. Ignored when HARNESS_RUN_TOKEN is set. Also HARNESS_UNAUTHENTICATED=1")
 	fs.BoolVar(&o.ask, "ask-user-question", false, "offer the Claude Code AskUserQuestion tool to root claude-code sessions; set only when a client answers parked questions through POST /sessions/{id}/requests/{request}")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	return &o, nil

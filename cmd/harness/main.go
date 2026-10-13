@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,13 +26,16 @@ const closeBudget = 5 * time.Second
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "version", "--version", "-v":
 		fmt.Println("harness " + version)
+		return
+	case "help", "-h", "--help":
+		usage(os.Stdout)
 		return
 	case "run":
 		err = runCmd(os.Args[2:])
@@ -45,17 +49,21 @@ func main() {
 	case "plugin":
 		err = pluginCmd(os.Args[2:])
 	default:
-		usage()
+		usage(os.Stderr)
 		os.Exit(2)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, errHelp):
+	case errors.Is(err, errUsage):
+		os.Exit(2)
+	case err != nil:
 		fmt.Fprintln(os.Stderr, errorLine(err))
 		os.Exit(1)
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `usage:
+func usage(w io.Writer) {
+	_, _ = fmt.Fprint(w, `usage:
   harness run -p <prompt> [flags]   run a one-shot prompt
   harness run -goal <condition> [flags]
                                     pursue a goal until an evaluator judges it
@@ -67,9 +75,13 @@ func usage() {
   harness sessions [--json]         list persisted sessions
   harness version                   print version
 
+Run harness <command> -h for the flags of a command.
+
 run flags:
 `)
-	runFlags(nil).PrintDefaults()
+	fs := runFlags(nil)
+	fs.SetOutput(w)
+	fs.PrintDefaults()
 }
 
 // sessionDir returns the directory of the session logs: HARNESS_SESSION_DIR,

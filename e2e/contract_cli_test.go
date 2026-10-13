@@ -548,3 +548,38 @@ func TestContractCLIRunRefusesANegativeMaxTokens(t *testing.T) {
 		})
 	}
 }
+
+func TestContractCLIHelpPrintsUsageOnStdoutAndExitsZero(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil)
+	for _, args := range [][]string{
+		{"-h"}, {"--help"}, {"help"}, {"plugin", "-h"}, {"plugin", "--help"}, {"plugin", "help"},
+		{"run", "-h"}, {"run", "--help"}, {"serve", "-h"}, {"serve", "--help"},
+		{"sessions", "-h"}, {"sessions", "--help"}, {"plugin", "probe", "-h"}, {"plugin", "probe", "--help"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, errOut, code := h.run(args...)
+			if code != 0 || !strings.Contains(out, "usage:") || errOut != "" || strings.Contains(out+errOut, "help requested") {
+				t.Fatalf("harness %v = %d, want exit 0, usage on stdout, and nothing on stderr\nstdout: %s\nstderr: %s", args, code, out, errOut)
+			}
+		})
+	}
+}
+
+func TestContractCLIUsageErrorPrintsUsageOnStderrAndExitsTwo(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil)
+	for _, args := range [][]string{
+		nil, {"bogus"}, {"serve", "help"}, {"serve", "extra"}, {"serve", "-addr", "127.0.0.1:0", "help"}, {"sessions", "extra"}, {"run", "extra"}, {"run", "help"}, {"sessions", "help"}, {"plugin", "probe", "help"},
+		{"plugin", "probe", "extra"}, {"plugin", "bogus"}, {"plugin"}, {"serve", "-bogus"}, {"sessions", "-bogus"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, errOut, code := h.run(args...)
+			if code != 2 || out != "" || !strings.Contains(errOut, "usage:") {
+				t.Fatalf("harness %v = %d, want exit 2, usage on stderr, and nothing on stdout\nstdout: %s\nstderr: %s", args, code, out, errOut)
+			}
+		})
+	}
+}
