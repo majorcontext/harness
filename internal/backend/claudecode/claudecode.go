@@ -242,6 +242,9 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[stri
 		for name, spec := range configured {
 			servers[name] = serverOf(spec)
 		}
+		for name, m := range req.MCPServers {
+			servers[name] = serverOf(config.MCPServerSpec{Command: m.Command, Env: m.Env, Dir: m.Dir, URL: m.URL, Headers: m.Headers})
+		}
 	}
 	if len(req.Tools) > 0 {
 		url, err := r.serveTools(ctx, req)

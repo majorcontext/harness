@@ -1,0 +1,54 @@
+package harness
+
+import (
+	"fmt"
+
+	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
+)
+
+// SessionOption changes how Create or Open starts one session. It is Go-only:
+// no protocol field carries it, and no HTTP client can set it.
+type SessionOption func(*sessionOptions)
+
+type sessionOptions struct {
+	mcp map[string]config.MCPServerSpec
+}
+
+// WithSessionMCP gives the session MCP servers beside the servers of Config.MCPServers. The map key
+// names a server, as in Config.MCPServers. The runtime connects a server at the first model call of
+// the session and stops it when the session stops. Nothing persists: not the specs and not the
+// secrets in their env and headers, so a later Open has the servers only when it passes this option
+// again. An Open of a session that this runtime already runs keeps the servers that it has.
+func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption {
+	return func(o *sessionOptions) { o.mcp = servers }
+}
+
+// sessionOptions applies opts and checks the session servers: each must meet the rules of
+// Config.MCPServers, and none may take the name of a runtime server.
+func (r *Runtime) sessionOptions(opts []SessionOption) (sessionOptions, error) {
+	var so sessionOptions
+	for _, o := range opts {
+		o(&so)
+	}
+	if len(so.mcp) == 0 {
+		return so, nil
+	}
+	if err := (&config.Config{MCPServers: so.mcp}).Validate(); err != nil {
+		return so, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	for name := range so.mcp {
+		if _, ok := r.mcpCfg.MCPServers[name]; ok {
+			return so, fmt.Errorf("%w: session MCP server %q has the name of a runtime server", ErrInvalidRequest, name)
+		}
+	}
+	return so, nil
+}
+
+// sessionSource returns the source of the session servers, or nil for none.
+func (r *Runtime) sessionSource(servers map[string]config.MCPServerSpec) *mcpsrc.Source {
+	if len(servers) == 0 {
+		return nil
+	}
+	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.log)
+}

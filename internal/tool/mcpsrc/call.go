@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -17,7 +16,7 @@ import (
 // with IsError; a failed connect or transport returns an error without the
 // endpoint.
 func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMessage) (protocol.ToolResult, error) {
-	if !slices.Contains(s.names, server) {
+	if !s.owns(server) {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not configured", server)
 	}
 	var in any

@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -52,7 +53,7 @@ func (r *Runtime) builtin(name string) bool {
 // them. A session tool binds to the session or drops out. Each session has
 // its own file tools, because the write_file guard belongs to one session,
 // and its own session_info tool, which reads what sp recorded of the session.
-func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc.Session, sp *selftool.Prompt) turn.Source {
+func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc.Session, sp *selftool.Prompt, sm *mcpsrc.Source) turn.Source {
 	var static, loopOnly []turn.Tool
 	var model *selftool.Model
 	for _, t := range r.tools {
@@ -103,12 +104,12 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			return files
 		}})
 	}
-	if r.mcp != nil {
+	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {
 			if allowed == nil && c.OwnsMCP {
 				return nil
 			}
-			return r.mcp
+			return mcp
 		}})
 	}
 	if plug != nil {

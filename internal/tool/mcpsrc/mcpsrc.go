@@ -44,9 +44,13 @@ func Reserved(name string) bool {
 // down. After maxRetries failed retries it stays down until the model asks
 // the mcp tool to connect it.
 type Source struct {
-	log   *slog.Logger
-	specs map[string]config.MCPServerSpec
-	names []string
+	log *slog.Logger
+	// specs are the servers that this Source connects. names holds them and the
+	// servers of parent, sorted. parent is nil for the Source of the runtime.
+	specs  map[string]config.MCPServerSpec
+	names  []string
+	own    []string
+	parent *Source
 	// defers is set when a server can defer its tools, which gives the mcp
 	// tool its search and select actions.
 	defers    bool
@@ -83,10 +87,26 @@ func New(cfg config.Config, log *slog.Logger) *Source {
 	if len(cfg.MCPServers) == 0 {
 		return nil
 	}
-	s := &Source{log: cmp.Or(log, slog.Default()), specs: cfg.MCPServers, names: slices.Sorted(maps.Keys(cfg.MCPServers)), mode: cfg.MCPToolLoading,
+	return build(cfg, nil, cfg.MCPServers, log)
+}
+
+// NewSession returns the Source of one session: the servers in specs beside the servers of parent, which
+// may be nil. It connects only the servers in specs, and Close stops only them. It does no I/O. A name
+// in specs must not be a name of parent.
+func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, log *slog.Logger) *Source {
+	return build(cfg, parent, specs, log)
+}
+
+func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, log *slog.Logger) *Source {
+	s := &Source{log: cmp.Or(log, slog.Default()), specs: specs, own: slices.Sorted(maps.Keys(specs)), parent: parent, mode: cfg.MCPToolLoading,
 		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold), dialing: map[string]chan struct{}{},
 		ready: make(chan struct{}), servers: map[string]*server{}, health: map[string]*health{}}
-	for _, name := range s.names {
+	s.names = s.own
+	if parent != nil {
+		s.names = slices.Sorted(slices.Values(slices.Concat(parent.names, s.own)))
+		s.defers = parent.defers
+	}
+	for _, name := range s.own {
 		s.dialing[name], s.health[name] = make(chan struct{}, 1), &health{}
 		s.defers = s.defers || s.loading(name) != "eager"
 	}
@@ -94,12 +114,24 @@ func New(cfg config.Config, log *slog.Logger) *Source {
 	return s
 }
 
+// owns reports whether s connects server itself.
+func (s *Source) owns(server string) bool {
+	_, ok := s.specs[server]
+	return ok
+}
+
 func (s *Source) loading(server string) string {
+	if !s.owns(server) && s.parent != nil {
+		return s.parent.loading(server)
+	}
 	return cmp.Or(s.specs[server].ToolLoading, s.mode, "eager")
 }
 
-// Close closes every connection and stops every stdio server.
+// Close closes every connection and stops every stdio server. A nil Source has none.
 func (s *Source) Close() {
+	if s == nil {
+		return
+	}
 	s.cancel()
 	s.start.Do(func() { close(s.ready) })
 	s.group.Wait()
@@ -119,12 +151,15 @@ func (s *Source) Close() {
 
 // wait connects every server once and reports whether that ended before ctx.
 func (s *Source) wait(ctx context.Context) bool {
+	if s.parent != nil && !s.parent.wait(ctx) {
+		return false
+	}
 	s.start.Do(func() {
 		s.group.Go(func() {
 			var wg sync.WaitGroup
 			var okMu sync.Mutex
 			first := map[string]bool{}
-			for _, name := range s.names {
+			for _, name := range s.own {
 				wg.Go(func() {
 					if err := s.connect(s.ctx, name); err != nil {
 						s.log.Warn("mcp: server did not connect", "server", name, "err", hide(name, err))
@@ -138,7 +173,7 @@ func (s *Source) wait(ctx context.Context) bool {
 			}
 			wg.Wait()
 			s.mu.Lock()
-			s.reached = slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return !first[n] })
+			s.reached = slices.DeleteFunc(slices.Clone(s.own), func(n string) bool { return !first[n] })
 			s.mu.Unlock()
 			close(s.ready)
 		})
@@ -153,6 +188,9 @@ func (s *Source) wait(ctx context.Context) bool {
 
 // connect dials server unless it is connected.
 func (s *Source) connect(ctx context.Context, name string) error {
+	if !s.owns(name) && s.parent != nil {
+		return s.parent.connect(ctx, name)
+	}
 	lock := s.dialing[name]
 	select {
 	case lock <- struct{}{}:
@@ -181,6 +219,9 @@ func (s *Source) connect(ctx context.Context, name string) error {
 }
 
 func (s *Source) server(name string) *server {
+	if !s.owns(name) && s.parent != nil {
+		return s.parent.server(name)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.servers[name]
@@ -210,6 +251,21 @@ func dial(ctx context.Context, spec config.MCPServerSpec) (*server, error) {
 	return &server{client: c, tools: tools}, nil
 }
 
+// snapshot returns the connected servers, the servers that the first connect reached, and the
+// notice text of the servers that are down, including those of the parent.
+func (s *Source) snapshot() (servers map[string]*server, reached []string, down string) {
+	if s.parent != nil {
+		servers, reached, _ = s.parent.snapshot()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if servers == nil {
+		servers = map[string]*server{}
+	}
+	maps.Copy(servers, s.servers)
+	return servers, slices.Concat(reached, s.reached), s.unavailable()
+}
+
 // Toolset returns the mcp tool, the resource tools when a server serves
 // resources, and the tools of each connected server. A tool that defers is
 // in Deferred, and the prompt lists it, until history selects or calls it.
@@ -217,9 +273,7 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	if !s.wait(ctx) {
 		return turn.Toolset{}
 	}
-	s.mu.Lock()
-	servers, reached, down := maps.Clone(s.servers), s.reached, s.unavailable()
-	s.mu.Unlock()
+	servers, reached, down := s.snapshot()
 	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
 	var all []remote
 	resources := false

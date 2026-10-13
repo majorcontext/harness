@@ -99,7 +99,7 @@ func sameJSON(x, y any) bool {
 // the conversation as the model reads it, with each pinned segment.
 func (a *Actor) modelRequest() turn.Request {
 	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
-		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params}
+		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params, MCPServers: a.mcpServers()}
 }
 
 func (a *Actor) start(id string, inputIDs []string) {
@@ -561,4 +561,12 @@ func (a *Actor) stop(err error) {
 		w(struct{}{}, err)
 	}
 	a.releasing = nil
+}
+
+func (a *Actor) mcpServers() map[string]turn.MCPServer {
+	out := map[string]turn.MCPServer{}
+	for n, s := range a.cfg.MCPServers {
+		out[n] = turn.MCPServer{Command: s.Command, Env: s.Env, Dir: s.Dir, URL: s.URL, Headers: s.Headers}
+	}
+	return out
 }

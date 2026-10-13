@@ -134,7 +134,7 @@ func runCmd(args []string) error {
 		return errors.Join(err, closeRuntime(rt))
 	}
 	out := &printer{out: os.Stdout, errW: os.Stderr, jsonOut: opts.jsonOut, enc: json.NewEncoder(os.Stdout), rootID: s.Snapshot().ID,
-		streamed: map[string]bool{}, names: map[string]string{}, open: rt.Open, store: store, followers: map[string]*follower{}, closing: make(chan struct{})}
+		streamed: map[string]bool{}, names: map[string]string{}, open: func(ctx context.Context, id string) (*harness.Session, error) { return rt.Open(ctx, id) }, store: store, followers: map[string]*follower{}, closing: make(chan struct{})}
 	out.markExisting(ctx, out.rootID, map[string]bool{})
 	runErr := drive(ctx, s, opts, out)
 	out.finishChildren()
