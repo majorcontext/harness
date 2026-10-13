@@ -51,12 +51,14 @@ function reply(res, { text = "", toolCalls = [] }) {
  */
 export async function fakeModel(replies) {
   const requests = [];
+  const waiters = [];
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
       requests.push({ path: req.url, headers: req.headers, body });
+      for (const w of waiters) if (requests.length >= w.n) w.resolve();
       reply(res, replies[Math.min(requests.length, replies.length) - 1]);
     });
   });
@@ -64,6 +66,8 @@ export async function fakeModel(replies) {
   return {
     url: `http://127.0.0.1:${server.address().port}`,
     requests,
+    /** Resolves when the server has had n requests. */
+    reached: (n) => (requests.length >= n ? Promise.resolve() : new Promise((resolve) => waiters.push({ n, resolve }))),
     close: () => server.close(),
   };
 }
@@ -98,6 +102,7 @@ export function acpClient(h) {
   return {
     updates,
     done,
+    cancelReader: () => reader.cancel(),
     request(method, params) {
       const id = nextId++;
       return new Promise((resolve, reject) => {

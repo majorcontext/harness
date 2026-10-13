@@ -1,6 +1,6 @@
 # SDK
 
-Read the root AGENTS.md. Each SDK has its own rules: read the AGENTS.md of the directory you change.
+Read the root AGENTS.md. `sdk/embed` has its own AGENTS.md. `sdk/typescript` has none: its rules are the section below.
 
 ## sdk/typescript
 

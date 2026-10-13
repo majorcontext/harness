@@ -52,7 +52,7 @@ async function start({ module, wasmExec, options }) {
     config: options.config,
     builtinTools: options.builtinTools,
     storeDir: options.storeDir,
-    proxy: { headers: options.proxyHeaders },
+    proxy: options.proxy,
     tools: options.tools.map((spec) => ({ ...spec, run: (input, { signal }) => bridge.callTool(spec.name, input, signal) })),
     onFrame: (frame) => port.post({ frame }),
     onLog: (line) => port.post({ log: line }),
@@ -71,8 +71,11 @@ port.onMessage(async (m) => {
   } else if (m.frame !== undefined) {
     conn?.send(m.frame);
   } else if (m.close) {
-    await conn?.close();
-    port.post({ closed: true });
+    try {
+      await conn?.close();
+    } finally {
+      port.post({ closed: true });
+    }
   } else {
     bridge.handle(m);
   }

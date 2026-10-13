@@ -3,6 +3,7 @@
 // `node --test sdk/embed/test/*.test.mjs` after setting HARNESS_WASM and
 // HARNESS_WASM_EXEC (see support.mjs).
 import { test } from "node:test";
+import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
 import { createHarness, wasm } from "../src/index.mjs";
 import { acpClient, bodyText, fakeModel, moduleFiles, tempDir, userConfig } from "./support.mjs";
@@ -77,10 +78,10 @@ test("a cancel aborts the signal of a running page tool", async () => {
   }
 });
 
-test("proxy.baseURL sets the base URL of each provider and proxy.headers reach the request", async () => {
+test("proxy.baseURL carries the model request of a config with no provider and proxy.headers reach the request", async () => {
   const model = await fakeModel([{ text: "hello" }]);
   const h = await harness({
-    config: userConfig(),
+    config: { model: "anthropic/claude-fable-5" },
     proxy: { baseURL: model.url, headers: { "x-proxy-token": "t1" } },
   });
   try {
@@ -198,4 +199,57 @@ test("close ends the stream and a second close settles", async () => {
 
 test("a transport that is not a Worker is refused", async () => {
   await assert.rejects(createHarness({ transport: wasm({ ...moduleFiles(), worker: false }) }), /Worker/);
+});
+
+test("a frame after the page cancels the readable does not throw, and the connection closes", async () => {
+  const model = await fakeModel([{ text: "late" }]);
+  const h = await harness({ config: userConfig(model.url) });
+  try {
+    const c = acpClient(h);
+    const sessionId = await c.session();
+    c.prompt(sessionId, "go").catch(() => {});
+    await c.cancelReader();
+    await h.close();
+  } finally {
+    model.close();
+  }
+});
+
+// failWorker ends the Worker that the next createHarness starts, the way a crash does.
+function captureWorker() {
+  const original = Worker.prototype.postMessage;
+  const captured = {};
+  Worker.prototype.postMessage = function (...args) {
+    captured.worker = this;
+    return original.apply(this, args);
+  };
+  return { captured, restore: () => (Worker.prototype.postMessage = original) };
+}
+
+test("close settles after a Worker failure and releases the store directory", async () => {
+  const dir = tempDir();
+  const { captured, restore } = captureWorker();
+  const h = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  restore();
+  const c = acpClient(h);
+  c.done.catch(() => {});
+  await captured.worker.terminate();
+  await Promise.race([h.close(), new Promise((_, reject) => setTimeout(() => reject(new Error("close hangs")), 5000).unref())]);
+  const again = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  await again.close();
+});
+
+test("a write after close rejects", async () => {
+  const h = await harness({ config: userConfig("http://127.0.0.1:1") });
+  const writer = h.stream.writable.getWriter();
+  await h.close();
+  await assert.rejects(writer.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+});
+
+test("aborting the writable closes the connection", async () => {
+  const dir = tempDir();
+  const h = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  await h.stream.writable.getWriter().abort(new Error("done"));
+  const again = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  await again.close();
 });

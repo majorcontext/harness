@@ -21,17 +21,6 @@ function absolute(value) {
   return value;
 }
 
-// withProxy fills base_url of each provider entry that sets none.
-function withProxy(config, proxy) {
-  if (!proxy?.baseURL) return config;
-  const base = absolute(proxy.baseURL);
-  const providers = {};
-  for (const [name, provider] of Object.entries(config.providers ?? {})) {
-    providers[name] = provider.base_url || provider.type === "claude-code-cli" ? provider : { ...provider, base_url: base };
-  }
-  return { ...config, providers };
-}
-
 async function lockStore(store) {
   if (!isNode) {
     if (store.persist) throw new Error("a persistent store is not available in the browser");
@@ -64,32 +53,56 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
     throw err;
   }
   let controller;
+  let streamOpen = true;
   let closed;
-  const readable = new ReadableStream({ start: (c) => (controller = c) });
+  let failed = false;
+  let closing;
+  const emit = (frame) => {
+    if (!streamOpen) return;
+    try {
+      controller.enqueue(frame);
+    } catch {
+      streamOpen = false;
+    }
+  };
+  const endStream = (err) => {
+    if (!streamOpen) return;
+    streamOpen = false;
+    try {
+      if (err) controller.error(err);
+      else controller.close();
+    } catch {
+      // The reader canceled the stream.
+    }
+  };
+  const readable = new ReadableStream({
+    start: (c) => (controller = c),
+    cancel() {
+      streamOpen = false;
+      return close();
+    },
+  });
   const bridge = pageBridge({ tools, pageFetch, post: (m, transfer) => w.post(m, transfer) });
   const ready = new Promise((resolve, reject) => {
     w.onMessage((m) => {
       if (m.ready) resolve();
       else if (m.error) reject(new Error(m.error));
-      else if (m.frame !== undefined) controller.enqueue(JSON.parse(m.frame));
+      else if (m.frame !== undefined) emit(JSON.parse(m.frame));
       else if (m.log !== undefined) log?.(m.log);
       else if (m.closed) closed?.();
       else bridge.handle(m);
     });
     w.onFailure((err) => {
+      failed = true;
       reject(err);
       closed?.();
-      try {
-        controller.error(err);
-      } catch {
-        // The stream has ended.
-      }
+      endStream(err);
     });
   });
   const options = {
-    config: withProxy(config, proxy),
+    config,
     builtinTools,
-    proxyHeaders: proxy.headers,
+    proxy: { headers: proxy.headers, baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL) },
     storeDir: isNode ? store.dir : undefined,
     tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),
     bridgeFetch: typeof pageFetch === "function",
@@ -103,26 +116,26 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
     unlock();
     throw err;
   }
-  let closing;
-  const close = () =>
-    (closing ??= (async () => {
-      const done = new Promise((resolve) => (closed = resolve));
-      w.post({ close: true });
-      await done;
+  function close() {
+    return (closing ??= (async () => {
+      if (!failed) {
+        const done = new Promise((resolve) => (closed = resolve));
+        w.post({ close: true });
+        await done;
+      }
       bridge.close();
       await w.terminate();
-      try {
-        controller.close();
-      } catch {
-        // The stream failed first.
-      }
+      endStream();
       unlock();
     })());
+  }
   const writable = new WritableStream({
     write(message) {
-      if (!closing) w.post({ frame: JSON.stringify(message) });
+      if (closing) throw new Error("the harness is closed");
+      w.post({ frame: JSON.stringify(message) });
     },
     close,
+    abort: close,
   });
   return { stream: { readable, writable }, close };
 }

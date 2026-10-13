@@ -28,11 +28,12 @@ type options struct {
 	builtinTools []string
 	tools        []harness.Tool
 	proxyHeaders map[string]string
+	proxyBase    string
 	onFrame      js.Value
 	logger       *slog.Logger
 }
 
-// readOptions reads {config, storeDir, env, tools, builtinTools, proxy: {headers},
+// readOptions reads {config, storeDir, env, tools, builtinTools, proxy: {headers, baseURL},
 // onFrame, onLog}. Every option that is present must have its type. A bad value
 // does not throw: the first error fails the first session/new as an invalid
 // request.
@@ -59,6 +60,10 @@ func readOptions(o js.Value) *options {
 	} else {
 		opts.proxyHeaders, err = jshost.StringMap("proxy.headers", jshost.Object(proxy, "headers"))
 		keep(err)
+		if proxy.Type() == js.TypeObject {
+			opts.proxyBase, err = jshost.StringField(proxy, "baseURL")
+			keep(err)
+		}
 	}
 	if fn := o.Get("onLog"); fn.Type() == js.TypeFunction {
 		opts.logger = slog.New(slog.NewJSONHandler(jshost.LogWriter{Fn: fn}, nil))
@@ -93,7 +98,12 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			if o.err != nil {
 				return nil, o.err
 			}
-			return config.MergeProject(o.user, "the config of harnessConnect", cwd)
+			cfg, err := config.MergeProject(o.user, "the config of harnessConnect", cwd)
+			if err != nil {
+				return nil, err
+			}
+			out := cfg.WithProxyBase(o.proxyBase)
+			return &out, nil
 		},
 		Shared: func(*config.Config) (harness.Store, harness.Owner, error) {
 			if o.storeDir == "" {

@@ -90,7 +90,7 @@ These are the compatibility surface.
 | `harness/store` | `DiskStore`, `MemStore`, `CheckName`, `CheckRecords`: the stores that ship with harness | embedders, CLI |
 | `harness/httpapi` | `Handler` over a `Runtime`, `ReadHandler` over a `Store`, `ReadOptions`, `Queue`: the HTTP API, built on the exported methods of `harness` | control planes, CLI |
 | `harness/httpsync` | `New`, the `Sync` that posts batches over HTTP, and `ApplySync`, the rules of its receiver | box harness, control planes |
-| `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`, `Parse`, `LoadProject`, `MergeProject`; imports only the standard library | boot code that writes a config |
+| `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`, `Parse`, `LoadProject`, `MergeProject`, `Config.WithProxyBase`; imports only the standard library | boot code that writes a config |
 | `harness/plugin` | `Plugin`, `ToolBefore`, `Tool`, `Client`, `Serve`, `ServeConn`, and the wire records of each hook, event, tool, and client call, with `Manifest`, `Part`, and `Message`: the Go API for a plugin, as a process or as a value in a runtime | plugin authors |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated `openapi.json` and `protocol.ts` | servers, web clients, CLIs |
 | `harness/storetest` | Conformance suite for a `Store` | store implementations |
@@ -103,10 +103,10 @@ These are the compatibility surface.
 
 - A tool call of the module arrives at the page as `{tool: {tid, name, args}}`. The page runs `run(input, {signal})` of the tool and answers `{toolResult}`; `{toolAbort}` aborts the signal. A rejection is an error result.
 - When the page passes `fetch`, the Worker replaces its global `fetch` with a bridge. A request goes to the page as a `{fetch}` message with the method, the URL, the headers, and the body. The page answers the status and the headers, then each body chunk as a transferred `ArrayBuffer`, then an end message or an error message. An abort of the request, or a cancel of the response body, posts `{fetchAbort}` and the page aborts its `AbortController`. Without `fetch`, the Worker calls its own `fetch`.
-- `proxy.headers` go to `harnessConnect`. `proxy.baseURL` sets `base_url` of each entry of `config.providers` that sets none. A relative URL resolves against the page.
+- `proxy.headers` and `proxy.baseURL` go to `harnessConnect`. A relative `baseURL` resolves against the page.
 - `store.dir` under Node is a directory that one process holds through `.embed.lock`; a second `createHarness` on it fails. Without `store.dir` the store is in memory. A browser page cannot ask for a persistent store.
 
-`close()` ends the connection, waits for the module to release its sessions, ends the Worker, and closes `stream`.
+`stream` has no backpressure in either direction. `close()` ends the connection, waits for the module to release its sessions (it does not wait when the Worker has failed), ends the Worker, releases the store directory, and closes `stream`. A cancel of `readable` or an abort of `writable` does the same, and a write after the close rejects.
 
 The Go API:
 
@@ -1271,7 +1271,7 @@ The module exports `globalThis.harnessConnect(options)`, which opens one ACP con
 | `env` | The only variables that `Options.Getenv` returns. |
 | `tools` | The JavaScript tools: `{name, description, schema, run(input, {signal})}`. `run` returns a string, `{text, isError}`, or a promise of either. The signal aborts when the call context ends. A rejection is an error result. |
 | `builtinTools` | The `allowed_tools` of every session that `session/new` creates. Absent: every tool. |
-| `proxy` | `{headers}`: headers that the fetch transport adds to each request that does not set them. |
+| `proxy` | `{headers, baseURL}`. `headers` are added to each request that does not set them. `baseURL` sends all model traffic to the proxy: it is the `base_url` of the native `anthropic` and `openai` providers when the config has no entry for them, and of each `providers` entry that sets none, except a Claude Code CLI entry. |
 | `onFrame`, `onLog` | `onFrame(line)` receives each ACP message of the agent. `onLog(line)` receives each JSON log line. |
 
 Every option that is present must have its type. A bad option does not throw: the first error fails the first `session/new` as an invalid request. The module advertises no MCP transport and refuses `mcpServers`, because it starts no MCP server.

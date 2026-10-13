@@ -20,7 +20,9 @@ await h.close();
 ```
 
 - `wasm_exec.js` is the file of the same Go version as the module (`$(go env GOROOT)/lib/wasm/wasm_exec.js`).
-- `proxy.baseURL` sets `base_url` of each entry of `config.providers` that sets none. Put no key in the page: a same-origin proxy holds it.
+- `proxy.baseURL` sends all model traffic to a same-origin proxy: the module sets `base_url` of the native `anthropic` and `openai` providers and of each `config.providers` entry that sets none. Put no key in the page: the proxy holds it.
+- `h.stream` has no backpressure in either direction: frames queue without a bound.
+- A write after `close()` rejects, and aborting the writable closes the connection. Cancelling the readable closes it too.
 - `run` returns a string, `{text, isError}`, or a promise of either. The signal aborts when the turn is canceled.
 
 Test: build the module with `GOOS=js GOARCH=wasm go build -o harness.wasm ./cmd/harness-wasm`, then run `HARNESS_WASM=harness.wasm HARNESS_WASM_EXEC=wasm_exec.js node --test sdk/embed/test/*.test.mjs`.
