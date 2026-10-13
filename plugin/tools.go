@@ -51,5 +51,5 @@ type ToolExecuteAfterRequest struct {
 
 // ToolExecuteAfterResponse is the response of the tool.execute.after hook.
 type ToolExecuteAfterResponse struct {
-	Output []Part `json:"output,omitempty"` // non-nil: its text parts, joined by a newline, replace the result text
+	Output []Part `json:"output,omitempty"` // non-empty: its text parts, joined by a newline, replace the result text; one empty text part clears it
 }

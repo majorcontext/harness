@@ -26,12 +26,12 @@ own requests independently.
 3. Hook dispatches, tool executions, and client API calls flow until:
 4. Harness → `shutdown` (notification), then closes stdin. Plugin exits.
 
-`InitializeParams` carries `serve_url` and `run_token` when (and only when)
-the harness is running in `harness serve` mode: a plugin process — in any
-language — can then also hit the HTTP API directly
-(`GET /sessions/{id}/messages`, etc.) instead of going through the stdio
-client API. Both are empty in `harness run` mode, where there is no HTTP
-API to reach. See "Trust model" below.
+`InitializeParams` carries `serve_url` and `run_token` when the host serves
+the HTTP API: `harness serve` sets them, and an embedder sets them with
+`Options.ServeURL` and `Options.RunToken`. A plugin process in any language
+can then call the HTTP API directly (`GET /sessions/{id}/messages`, for
+example) instead of the stdio client API. Both are empty when the host serves
+no HTTP API, as in `harness run`. See "Trust model" below.
 
 ### Trust model
 

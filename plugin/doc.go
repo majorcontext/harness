@@ -62,7 +62,7 @@
 //     the call as the model made it.
 //   - ToolExecuteAfter runs after each tool call that ran, unless the turn
 //     stopped. Output holds one
-//     text part with the result text. Return Output to replace that text: the
+//     text part with the result text. Return a non-empty Output to replace that text: the
 //     host joins its text parts with a newline. The error flag and the blobs
 //     of the result do not change.
 //   - ChatParams runs before each model call. Params replaces all the
