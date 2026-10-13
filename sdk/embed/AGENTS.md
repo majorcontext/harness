@@ -8,6 +8,6 @@ Read the root AGENTS.md and `sdk/AGENTS.md`. The rules of `sdk/typescript` do no
 - The message names between the page and the Worker are the contract of `src/bridge.mjs` and `src/workerbridge.mjs`. Change both ends together.
 - A new option of `createHarness` needs a line in the Public packages section of the spec first.
 - A message to the Worker moves data, not functions. Keep every option serializable.
-- Tests start the real module in a Worker against a scripted model server. They need `HARNESS_WASM` and `HARNESS_WASM_EXEC`, and a missing variable fails the test.
+- Tests start the real module in a Worker against a scripted model server. The model is `internal/embedfake`, the scripted server of `harnesstest`; a test double of its own would escape the wire gate. The tests need `HARNESS_WASM`, `HARNESS_WASM_EXEC`, and `HARNESS_EMBEDFAKE`, and a missing variable fails the test.
 - Keep `src/index.d.ts` equal to the exported API of `src/index.mjs`.
 - Run `node --test sdk/embed/test/*.test.mjs`.

@@ -1,7 +1,7 @@
 // Test support: a scripted Anthropic Messages server and a minimal ACP client
 // over the stream of a Harness.
 import fs from "node:fs";
-import http from "node:http";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,56 +19,27 @@ export function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "harness-embed-"));
 }
 
-function sse(res, events) {
-  res.writeHead(200, { "content-type": "text/event-stream" });
-  for (const e of events) res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
-  res.end();
-}
-
-function reply(res, { text = "", toolCalls = [] }) {
-  const events = [{ type: "message_start", message: { id: "msg_fake", usage: { input_tokens: 5 } } }];
-  let index = 0;
-  if (text !== "" || toolCalls.length === 0) {
-    events.push({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
-    events.push({ type: "content_block_delta", index, delta: { type: "text_delta", text } });
-    events.push({ type: "content_block_stop", index });
-    index++;
-  }
-  for (const tc of toolCalls) {
-    events.push({ type: "content_block_start", index, content_block: { type: "tool_use", id: tc.id, name: tc.name, input: {} } });
-    events.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(tc.input) } });
-    events.push({ type: "content_block_stop", index });
-    index++;
-  }
-  events.push({ type: "message_delta", delta: { stop_reason: toolCalls.length ? "tool_use" : "end_turn" }, usage: { output_tokens: 3 } });
-  events.push({ type: "message_stop" });
-  sse(res, events);
-}
-
 /**
- * Starts a model server that answers its requests in order with the replies.
- * requests holds each request as {path, headers, body}.
+ * Starts the scripted Anthropic server of harnesstest (internal/embedfake) with
+ * replies [{text, toolCalls: [{id, name, input}], block}], answered in order.
+ * requests() resolves with each request as {path, headers, body}.
  */
 export async function fakeModel(replies) {
-  const requests = [];
-  const waiters = [];
-  const server = http.createServer((req, res) => {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-      requests.push({ path: req.url, headers: req.headers, body });
-      for (const w of waiters) if (requests.length >= w.n) w.resolve();
-      reply(res, replies[Math.min(requests.length, replies.length) - 1]);
-    });
+  const bin = process.env.HARNESS_EMBEDFAKE;
+  if (!bin) throw new Error("set HARNESS_EMBEDFAKE to the built internal/embedfake");
+  const child = spawn(bin, [JSON.stringify(replies)], { stdio: ["ignore", "pipe", "inherit"] });
+  const url = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => reject(new Error(`embedfake exited with code ${code}`)));
+    child.stdout.once("data", (chunk) => resolve(chunk.toString().trim()));
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
-    url: `http://127.0.0.1:${server.address().port}`,
-    requests,
-    /** Resolves when the server has had n requests. */
-    reached: (n) => (requests.length >= n ? Promise.resolve() : new Promise((resolve) => waiters.push({ n, resolve }))),
-    close: () => server.close(),
+    url,
+    async requests() {
+      const list = await (await fetch(url + "/__requests")).json();
+      return list.map((r) => ({ ...r, headers: Object.fromEntries(Object.entries(r.headers).map(([k, v]) => [k.toLowerCase(), v[0]])) }));
+    },
+    close: () => child.kill("SIGTERM"),
   };
 }
 

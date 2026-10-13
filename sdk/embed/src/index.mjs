@@ -56,7 +56,7 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
   let streamOpen = true;
   let closed;
   let failed = false;
-  let closing;
+  let cleaned;
   const emit = (frame) => {
     if (!streamOpen) return;
     try {
@@ -75,6 +75,16 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
       // The reader canceled the stream.
     }
   };
+  // cleanup is the one end of the harness, for a failure and for close(): it
+  // stops the bridges and the Worker, releases the store directory once, and
+  // ends the stream.
+  const cleanup = (err) =>
+    (cleaned ??= (async () => {
+      bridge.close();
+      await w.terminate();
+      unlock();
+      endStream(err);
+    })());
   const readable = new ReadableStream({
     start: (c) => (controller = c),
     cancel() {
@@ -96,7 +106,7 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
       failed = true;
       reject(err);
       closed?.();
-      endStream(err);
+      cleanup(err);
     });
   });
   const options = {
@@ -111,11 +121,10 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
   try {
     await ready;
   } catch (err) {
-    bridge.close();
-    await w.terminate();
-    unlock();
+    await cleanup(err);
     throw err;
   }
+  let closing;
   function close() {
     return (closing ??= (async () => {
       if (!failed) {
@@ -123,15 +132,12 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
         w.post({ close: true });
         await done;
       }
-      bridge.close();
-      await w.terminate();
-      endStream();
-      unlock();
+      await cleanup();
     })());
   }
   const writable = new WritableStream({
     write(message) {
-      if (closing) throw new Error("the harness is closed");
+      if (closing || failed) throw new Error("the harness is closed");
       w.post({ frame: JSON.stringify(message) });
     },
     close,

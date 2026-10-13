@@ -21,7 +21,7 @@ export interface CreateHarnessOptions {
   transport: WasmTransport;
   /** The config.Config JSON. It holds no key. */
   config?: object;
-  /** A same-origin proxy: baseURL fills every provider that sets none; headers go on each model request. */
+  /** A same-origin proxy: baseURL fills every provider that sets none; headers go only on requests to the origin of baseURL. */
   proxy?: { baseURL?: string | URL; headers?: Record<string, string> };
   /** A page fetch that carries the model requests. */
   fetch?: (url: string, init: { method: string; headers: Record<string, string>; body?: Uint8Array; signal: AbortSignal }) => Promise<Response>;

@@ -8,8 +8,7 @@
     ".": {
       "types": "./src/index.d.ts",
       "default": "./src/index.mjs"
-    },
-    "./worker": "./src/worker.mjs"
+    }
   },
   "files": [
     "src"

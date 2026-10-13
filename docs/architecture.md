@@ -1271,7 +1271,7 @@ The module exports `globalThis.harnessConnect(options)`, which opens one ACP con
 | `env` | The only variables that `Options.Getenv` returns. |
 | `tools` | The JavaScript tools: `{name, description, schema, run(input, {signal})}`. `run` returns a string, `{text, isError}`, or a promise of either. The signal aborts when the call context ends. A rejection is an error result. |
 | `builtinTools` | The `allowed_tools` of every session that `session/new` creates. Absent: every tool. |
-| `proxy` | `{headers, baseURL}`. `headers` are added to each request that does not set them. `baseURL` sends all model traffic to the proxy: it is the `base_url` of the native `anthropic` and `openai` providers when the config has no entry for them, and of each `providers` entry that sets none, except a Claude Code CLI entry. |
+| `proxy` | `{headers, baseURL}`. `headers` are added to a request that does not set them and that goes to the scheme and host of `baseURL`; without `baseURL` no request gets them, so a credential never reaches another origin. `baseURL` sends all model traffic to the proxy: it is the `base_url` of the native `anthropic` and `openai` providers when the config has no entry for them, and of each `providers` entry that sets none, except a Claude Code CLI entry. |
 | `onFrame`, `onLog` | `onFrame(line)` receives each ACP message of the agent. `onLog(line)` receives each JSON log line. |
 
 Every option that is present must have its type. A bad option does not throw: the first error fails the first `session/new` as an invalid request. The module advertises no MCP transport and refuses `mcpServers`, because it starts no MCP server.

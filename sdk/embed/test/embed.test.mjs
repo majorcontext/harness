@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
 import { createHarness, wasm } from "../src/index.mjs";
+import { workerBridge } from "../src/workerbridge.mjs";
 import { acpClient, bodyText, fakeModel, moduleFiles, tempDir, userConfig } from "./support.mjs";
 
 const echo = {
@@ -27,8 +28,9 @@ test("a tool call of the module reaches the run function of the page and returns
     const c = acpClient(h);
     const result = await c.prompt(await c.session(), "go");
     assert.equal(result.stopReason, "end_turn");
-    assert.ok(model.requests[0].body.tools.some((t) => t.name === "js_echo"));
-    assert.match(bodyText(model.requests[1]), /echo:hi/);
+    const requests = await model.requests();
+    assert.ok(requests[0].body.tools.some((t) => t.name === "js_echo"));
+    assert.match(bodyText(requests[1]), /echo:hi/);
   } finally {
     await h.close();
     model.close();
@@ -43,7 +45,7 @@ test("a tool failure on the page is an error result for the model", async () => 
     const c = acpClient(h);
     const result = await c.prompt(await c.session(), "go");
     assert.equal(result.stopReason, "end_turn");
-    assert.match(bodyText(model.requests[1]), /disk on fire/);
+    assert.match(bodyText((await model.requests())[1]), /disk on fire/);
   } finally {
     await h.close();
     model.close();
@@ -87,7 +89,7 @@ test("proxy.baseURL carries the model request of a config with no provider and p
   try {
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    assert.equal(model.requests[0].headers["x-proxy-token"], "t1");
+    assert.equal((await model.requests())[0].headers["x-proxy-token"], "t1");
   } finally {
     await h.close();
     model.close();
@@ -100,7 +102,7 @@ test("a base_url that the config sets wins over proxy.baseURL", async () => {
   try {
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    assert.equal(model.requests.length, 1);
+    assert.equal((await model.requests()).length, 1);
   } finally {
     await h.close();
     model.close();
@@ -121,7 +123,7 @@ test("a page fetch carries the model request and streams the response back", asy
     assert.equal(seen.length, 1);
     assert.equal(seen[0].method, "POST");
     assert.equal(seen[0].url, model.url + "/v1/messages");
-    assert.deepEqual(JSON.parse(new TextDecoder().decode(seen[0].body)), model.requests[0].body);
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(seen[0].body)), (await model.requests())[0].body);
     assert.ok(c.updates.some((u) => u.sessionUpdate === "agent_message_chunk" && u.content.text === "hello"));
   } finally {
     await h.close();
@@ -130,22 +132,18 @@ test("a page fetch carries the model request and streams the response back", asy
 });
 
 test("a cancel aborts the signal of a page fetch that has begun to stream", async () => {
+  const model = await fakeModel([{ text: "partial", block: true }]);
   let started;
   const running = new Promise((resolve) => (started = resolve));
   let aborted;
   const sawAbort = new Promise((resolve) => (aborted = resolve));
-  const pageFetch = async (_url, init) => {
+  const pageFetch = async (url, init) => {
     init.signal.addEventListener("abort", aborted);
-    const body = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('event: message_start\ndata: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":1}}}\n\n'));
-        init.signal.addEventListener("abort", () => controller.error(init.signal.reason));
-        started();
-      },
-    });
-    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const res = await fetch(url, init);
+    started();
+    return res;
   };
-  const h = await harness({ config: userConfig("http://127.0.0.1:1"), fetch: pageFetch });
+  const h = await harness({ config: userConfig(model.url), fetch: pageFetch });
   try {
     const c = acpClient(h);
     const sessionId = await c.session();
@@ -156,6 +154,7 @@ test("a cancel aborts the signal of a page fetch that has begun to stream", asyn
     assert.equal((await turn).stopReason, "cancelled");
   } finally {
     await h.close();
+    model.close();
   }
 });
 
@@ -252,4 +251,44 @@ test("aborting the writable closes the connection", async () => {
   await h.stream.writable.getWriter().abort(new Error("done"));
   const again = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
   await again.close();
+});
+
+test("proxy.headers go to the proxy origin and to no other provider origin", async () => {
+  const direct = await fakeModel([{ text: "hello" }]);
+  const h = await harness({
+    config: userConfig(direct.url),
+    proxy: { baseURL: "http://127.0.0.1:1", headers: { "x-proxy-token": "secret" } },
+  });
+  try {
+    const c = acpClient(h);
+    assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
+    const [request] = await direct.requests();
+    assert.equal(request.headers["x-proxy-token"], undefined);
+  } finally {
+    await h.close();
+    direct.close();
+  }
+});
+
+test("an aborted signal does not run the page tool", async () => {
+  const posted = [];
+  const bridge = workerBridge((m) => posted.push(m));
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(bridge.callTool("js_echo", {}, ac.signal));
+  assert.deepEqual(posted, []);
+});
+
+test("a failed Worker releases the store directory before close", async () => {
+  const dir = tempDir();
+  const { captured, restore } = captureWorker();
+  const h = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  restore();
+  const c = acpClient(h);
+  const ended = c.done.catch(() => {});
+  await captured.worker.terminate();
+  await ended;
+  const again = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  await again.close();
+  await h.close();
 });

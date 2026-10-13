@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"syscall/js"
 
 	"github.com/majorcontext/harness"
@@ -90,6 +91,15 @@ func readConfig(c js.Value) (*config.Config, error) {
 	return config.Parse("the config of harnessConnect", []byte(text))
 }
 
+// proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
+func (o *options) proxyOrigin() string {
+	u, err := url.Parse(o.proxyBase)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // runtimes builds the Runtimes of the connection: one Runtime for each work
 // directory over one store and one local owner.
 func (o *options) runtimes() *cwdruntimes.Runtimes {
@@ -111,11 +121,13 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			}
 			return store.NewDiskStore(o.storeDir), harness.NewLocalOwner(1), nil
 		},
-		Version:        "wasm",
-		Getenv:         func(k string) string { return o.env[k] },
-		Logger:         o.logger,
-		ModelTransport: func(string) http.RoundTripper { return jshost.FetchRT{Headers: o.proxyHeaders} },
-		Tools:          o.tools,
+		Version: "wasm",
+		Getenv:  func(k string) string { return o.env[k] },
+		Logger:  o.logger,
+		ModelTransport: func(string) http.RoundTripper {
+			return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}
+		},
+		Tools: o.tools,
 	})
 }
 

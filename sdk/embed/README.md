@@ -25,4 +25,4 @@ await h.close();
 - A write after `close()` rejects, and aborting the writable closes the connection. Cancelling the readable closes it too.
 - `run` returns a string, `{text, isError}`, or a promise of either. The signal aborts when the turn is canceled.
 
-Test: build the module with `GOOS=js GOARCH=wasm go build -o harness.wasm ./cmd/harness-wasm`, then run `HARNESS_WASM=harness.wasm HARNESS_WASM_EXEC=wasm_exec.js node --test sdk/embed/test/*.test.mjs`.
+Test: build the module with `GOOS=js GOARCH=wasm go build -o harness.wasm ./cmd/harness-wasm`, build the scripted model server with `go build -o embedfake ./internal/embedfake`, then run `HARNESS_EMBEDFAKE=embedfake HARNESS_WASM=harness.wasm HARNESS_WASM_EXEC=wasm_exec.js node --test sdk/embed/test/*.test.mjs`.

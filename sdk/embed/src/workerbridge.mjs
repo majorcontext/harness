@@ -25,6 +25,10 @@ export function workerBridge(post) {
   function callTool(name, args, signal) {
     const tid = ++next;
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason ?? abortError());
+        return;
+      }
       tools.set(tid, { resolve, reject });
       signal?.addEventListener(
         "abort",
