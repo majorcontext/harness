@@ -97,7 +97,7 @@ const (
 	specSameBody       = "| Same id, same body | `200` with the original receipt |"
 	specOtherBody      = "| Same id, other body | `409 input_conflict` |"
 	specTurnMismatch   = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
-	specRetryable      = "`ErrRetryable` (a 429 with `Retry-After`, a 5xx that outlasted the request retries, a transport error, a truncated stream, a content filter) calls the model again"
+	specRetryable      = "`ErrRetryable` (a 429 with `Retry-After`, a 5xx that outlasted the request retries, a transport error except one that declares itself permanent, a truncated stream, a content filter) calls the model again"
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
 	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."

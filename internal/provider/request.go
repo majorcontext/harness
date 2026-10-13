@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -30,11 +31,23 @@ func ParseRetryAfter(h http.Header, now time.Time) (d time.Duration, ok bool) {
 	return 0, false
 }
 
+// permanentDeclarer is implemented by a transport error that no retry can
+// resolve. errors.As stops at the first error in the chain that has a
+// Permanent method, so a wrapper that has one decides for the whole chain.
+type permanentDeclarer interface{ Permanent() bool }
+
+func declaresPermanent(err error) bool {
+	var p permanentDeclarer
+	return errors.As(err, &p) && p.Permanent()
+}
+
 // Do sends req on hc. It sends the request again, at most retries times, after
 // a 5xx status or a transport error, and waits backoff.Delay. A 429 is not sent
 // again, and neither is a 5xx with a Retry-After header: the turn waits for that
 // advice. The last response or error is the result. A transport error that is
-// not the end of ctx is retryable with class RetryableConnectionFailed. req
+// not the end of ctx is retryable with class RetryableConnectionFailed, unless
+// the error declares itself permanent through a Permanent() bool method that
+// reports true: Do returns it at once, marked with MarkPermanent. req
 // needs a GetBody for a body.
 func Do(ctx context.Context, hc *http.Client, req *http.Request, retries int) (*http.Response, error) {
 	for n := 1; ; n++ {
@@ -42,6 +55,8 @@ func Do(ctx context.Context, hc *http.Client, req *http.Request, retries int) (*
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return nil, err
+		case err != nil && declaresPermanent(err):
+			return nil, MarkPermanent(err)
 		case err != nil && n > retries:
 			return nil, MarkRetryable(err, RetryableConnectionFailed)
 		case err == nil && (resp.StatusCode < 500 || n > retries || advised(resp)):
