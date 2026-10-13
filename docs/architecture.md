@@ -11,6 +11,8 @@ Goals:
 - A public Go API small enough to read in one sitting.
 - One HTTP contract, built from the same Go types as the Go API.
 - Pluggable storage and ownership, so a session survives process loss.
+- An ACP (Agent Client Protocol) adapter over the Go API, so an editor or a JavaScript host drives a session.
+- A core that builds for WebAssembly and runs in a browser and in Node. The host runs the module; harness embeds no JavaScript engine.
 
 Non-goals:
 
