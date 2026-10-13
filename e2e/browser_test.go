@@ -2,9 +2,7 @@ package e2e
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -208,18 +206,24 @@ func runBrowser(t *testing.T, node, embed, origin, modulePath string, rows []map
 	if err := os.WriteFile(optsPath, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, node, filepath.Join(embed, "test", "browser.mjs"), optsPath)
+	cmd := exec.Command(node, filepath.Join(embed, "test", "browser.mjs"), optsPath)
 	cmd.Dir = embed
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == browserMissingExit {
+	g := startGroup(t, cmd)
+	timer := time.NewTimer(2 * time.Minute)
+	defer timer.Stop()
+	select {
+	case <-g.exited:
+	case <-timer.C:
+		g.kill()
+		t.Fatalf("browser.mjs did not end in 2 minutes\n%s", stderr.String())
+	}
+	if !cmd.ProcessState.Success() {
+		if cmd.ProcessState.ExitCode() == browserMissingExit {
 			t.Fatalf("Chromium is not installed: run npx playwright install chromium\n%s", stderr.String())
 		}
-		t.Fatalf("browser.mjs: %v\n%s", err, stderr.String())
+		t.Fatalf("browser.mjs ended with %s\n%s", cmd.ProcessState, stderr.String())
 	}
 	var out struct {
 		Rows map[string]browserResult `json:"rows"`
