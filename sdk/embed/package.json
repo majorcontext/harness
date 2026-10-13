@@ -1,0 +1,20 @@
+{
+  "name": "@majorcontext/harness-embed",
+  "version": "0.0.0",
+  "description": "Runs the harness WebAssembly module in a Worker and speaks ACP to it.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./worker": "./src/worker.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT"
+}

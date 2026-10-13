@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { acquireStoreLock } from "./storelock.mjs";
+import { acquireStoreLock } from "../../../sdk/embed/src/storelock.mjs";
 
 const [wasmPath, execPath, optionsPath] = process.argv.slice(2);
 const options = JSON.parse(fs.readFileSync(optionsPath, "utf8"));
