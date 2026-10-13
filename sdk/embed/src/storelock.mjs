@@ -1,6 +1,10 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+// Only Node loads this module, and it loads the built-ins by dynamic import, so
+// a browser bundler never resolves them.
+const [{ default: crypto }, { default: fs }, { default: path }] = await Promise.all([
+  import("node:crypto"),
+  import("node:fs"),
+  import("node:path"),
+]);
 
 function alive(pid) {
   try {

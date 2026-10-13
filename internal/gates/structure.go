@@ -21,14 +21,14 @@ const modulePath = "github.com/majorcontext/harness"
 var publicAllow = map[string]string{}
 
 // providerOwners lists the places where a provider name is data: the functions
-// of config that validate the provider entries and map an entry with no type
+// of config that validate the provider entries, set the proxy base of the native providers, and map an entry with no type
 // by its key, the router functions that build a backend for each provider of
 // the registry, the tables of modelmeta, which are keyed by provider, and the
 // provider wires (spec: Four rules, 3; Model API backend; Contract source).
 var providerOwners = []string{
 	"config/load.go#validateAppendSystemPromptArgs",
 	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
-	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders",
+	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders", "config/provider.go#WithProxyBase",
 	"internal/backend/router.go#New", "internal/backend/router.go#client",
 	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models",
 	"internal/modelmeta/internal/genctx/main.go#",

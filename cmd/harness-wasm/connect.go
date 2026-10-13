@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"syscall/js"
 
 	"github.com/majorcontext/harness"
@@ -28,11 +29,12 @@ type options struct {
 	builtinTools []string
 	tools        []harness.Tool
 	proxyHeaders map[string]string
+	proxyBase    string
 	onFrame      js.Value
 	logger       *slog.Logger
 }
 
-// readOptions reads {config, storeDir, env, tools, builtinTools, proxy: {headers},
+// readOptions reads {config, storeDir, env, tools, builtinTools, proxy: {headers, baseURL},
 // onFrame, onLog}. Every option that is present must have its type. A bad value
 // does not throw: the first error fails the first session/new as an invalid
 // request.
@@ -59,6 +61,10 @@ func readOptions(o js.Value) *options {
 	} else {
 		opts.proxyHeaders, err = jshost.StringMap("proxy.headers", jshost.Object(proxy, "headers"))
 		keep(err)
+		if proxy.Type() == js.TypeObject {
+			opts.proxyBase, err = jshost.StringField(proxy, "baseURL")
+			keep(err)
+		}
 	}
 	if fn := o.Get("onLog"); fn.Type() == js.TypeFunction {
 		opts.logger = slog.New(slog.NewJSONHandler(jshost.LogWriter{Fn: fn}, nil))
@@ -85,6 +91,15 @@ func readConfig(c js.Value) (*config.Config, error) {
 	return config.Parse("the config of harnessConnect", []byte(text))
 }
 
+// proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
+func (o *options) proxyOrigin() string {
+	u, err := url.Parse(o.proxyBase)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // runtimes builds the Runtimes of the connection: one Runtime for each work
 // directory over one store and one local owner.
 func (o *options) runtimes() *cwdruntimes.Runtimes {
@@ -93,7 +108,12 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			if o.err != nil {
 				return nil, o.err
 			}
-			return config.MergeProject(o.user, "the config of harnessConnect", cwd)
+			cfg, err := config.MergeProject(o.user, "the config of harnessConnect", cwd)
+			if err != nil {
+				return nil, err
+			}
+			out := cfg.WithProxyBase(o.proxyBase)
+			return &out, nil
 		},
 		Shared: func(*config.Config) (harness.Store, harness.Owner, error) {
 			if o.storeDir == "" {
@@ -101,11 +121,13 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			}
 			return store.NewDiskStore(o.storeDir), harness.NewLocalOwner(1), nil
 		},
-		Version:        "wasm",
-		Getenv:         func(k string) string { return o.env[k] },
-		Logger:         o.logger,
-		ModelTransport: func(string) http.RoundTripper { return jshost.FetchRT{Headers: o.proxyHeaders} },
-		Tools:          o.tools,
+		Version: "wasm",
+		Getenv:  func(k string) string { return o.env[k] },
+		Logger:  o.logger,
+		ModelTransport: func(string) http.RoundTripper {
+			return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}
+		},
+		Tools: o.tools,
 	})
 }
 

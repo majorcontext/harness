@@ -34,9 +34,14 @@ func (e *FetchError) Error() string {
 func (e *FetchError) Permanent() bool { return e.Online }
 
 // FetchRT is the http.RoundTripper of the model transport. It calls the fetch
-// of the global scope, so the Worker or Node supplies the network. headers go
-// on every request unless the request sets them.
-type FetchRT struct{ Headers map[string]string }
+// of the global scope, so the Worker or Node supplies the network. Headers go
+// on a request only when its scheme and host equal Origin and the request does
+// not set them, so a proxy credential never reaches another origin. An empty
+// Origin sends no header.
+type FetchRT struct {
+	Headers map[string]string
+	Origin  string
+}
 
 func online() bool {
 	nav := js.Global().Get("navigator")
@@ -53,9 +58,11 @@ func (f FetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	opt := js.Global().Get("Object").New()
 	opt.Set("method", req.Method)
 	h := js.Global().Get("Object").New()
-	for k, v := range f.Headers {
-		if req.Header.Get(k) == "" {
-			h.Set(k, v)
+	if f.Origin != "" && req.URL.Scheme+"://"+req.URL.Host == f.Origin {
+		for k, v := range f.Headers {
+			if req.Header.Get(k) == "" {
+				h.Set(k, v)
+			}
 		}
 	}
 	for k, vs := range req.Header {

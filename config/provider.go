@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -21,6 +22,32 @@ const TypeClaudeCodeCLI = "claude-code-cli"
 var nativeProviderKeys = map[string]bool{
 	"anthropic": true,
 	"openai":    true,
+}
+
+// WithProxyBase returns a copy of c in which every request goes to base: the native providers and each
+// providers entry that sets no BaseURL get it. A Claude Code CLI entry keeps no base URL. An empty base
+// returns c unchanged.
+func (c Config) WithProxyBase(base string) Config {
+	if base == "" {
+		return c
+	}
+	providers := maps.Clone(c.Providers)
+	if providers == nil {
+		providers = map[string]Provider{}
+	}
+	for name := range nativeProviderKeys {
+		if _, ok := providers[name]; !ok {
+			providers[name] = Provider{}
+		}
+	}
+	for name, p := range providers {
+		if p.BaseURL == "" && p.Type != TypeClaudeCodeCLI {
+			p.BaseURL = base
+			providers[name] = p
+		}
+	}
+	c.Providers = providers
+	return c
 }
 
 // Provider is per-family provider configuration.

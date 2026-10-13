@@ -1,6 +1,10 @@
 # SDK
 
-Read the root AGENTS.md. Read `internal/plugin/AGENTS.md` and `internal/plugin/PROTOCOL.md` before a protocol change.
+Read the root AGENTS.md. `sdk/embed` has its own AGENTS.md. `sdk/typescript` has none: its rules are the section below.
+
+## sdk/typescript
+
+The rules below bind `sdk/typescript` only. Read `internal/plugin/AGENTS.md` and `internal/plugin/PROTOCOL.md` before a protocol change.
 
 - The TypeScript SDK and the Go plugin host speak the same versioned NDJSON protocol.
 - Keep method names, field names, hook behavior, tool results, and shutdown in parity.

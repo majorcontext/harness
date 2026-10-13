@@ -316,7 +316,7 @@ func TestNodeStoreLockTakeoverHasOneWinner(t *testing.T) {
 	skipShort(t)
 	node := nodePath(t)
 	t.Parallel()
-	lock, err := filepath.Abs(filepath.Join("..", "cmd", "harness-wasm", "node", "storelock.mjs"))
+	lock, err := filepath.Abs(filepath.Join("..", "sdk", "embed", "src", "storelock.mjs"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,4 +376,29 @@ try {
 	if _, err := os.Stat(filepath.Join(dir, ".embed.lock")); !os.IsNotExist(err) {
 		t.Errorf("the lock file stays after the release: %v", err)
 	}
+}
+
+// TestNodeWasmProxyBaseURLRoutesModelTraffic pins the sentence of the
+// WebAssembly section on proxy.baseURL: with no provider in the config, the
+// model request goes to the proxy base.
+func TestNodeWasmProxyBaseURLRoutesModelTraffic(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"model":"anthropic/claude-fable-5"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := acpEnv{configPath: cfgPath, sessDir: t.TempDir()}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{ConfigPath: cfgPath, StoreDir: env.sessDir,
+		Env:     map[string]string{"ANTHROPIC_API_KEY": acpDummyKey},
+		Connect: map[string]any{"proxy": map[string]any{"baseURL": fake.URL()}}})
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a"}.run(t, c)
+	acpPrompt{as: "a", text: "go", stop: "end_turn"}.run(t, c)
+	acpRequests(t, c, 1)
+	c.finish(stop)
 }
