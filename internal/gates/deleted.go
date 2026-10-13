@@ -19,6 +19,18 @@ var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server
 	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|skill|command|process|imageclamp|migrate|provider)\b|` +
 	`\bharness-migrate\b`)
 
+var deletedLiterals = []string{"engine", "server/", "provider/claudecode", "majorcontext/harness/", "harness-migrate"}
+
+// mayNameDeletedPath is a cheap superset test: deletedPathRE needs one of deletedLiterals.
+func mayNameDeletedPath(s string) bool {
+	for _, lit := range deletedLiterals {
+		if strings.Contains(s, lit) {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckDeletedReferences fails each Go file, in code or in a comment, that
 // names a deleted package path (spec: Internal packages), except the
 // files of allow. The gate package is out of scope: it holds the pattern.
@@ -42,8 +54,12 @@ func CheckDeletedReferences(fsys fs.FS, allow map[string]string) ([]Violation, e
 		if err != nil {
 			return err
 		}
-		for i, line := range strings.Split(string(data), "\n") {
-			if deletedPathRE.MatchString(line) {
+		text := string(data)
+		if !mayNameDeletedPath(text) {
+			return nil
+		}
+		for i, line := range strings.Split(text, "\n") {
+			if mayNameDeletedPath(line) && deletedPathRE.MatchString(line) {
 				hit[p] = true
 				if _, listed := allow[p]; !listed {
 					out = append(out, Violation{Path: p, Rule: "deleted_reference", Detail: fmt.Sprintf("line %d names a deleted package path: %s", i+1, strings.TrimSpace(line))})
