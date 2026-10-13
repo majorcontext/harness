@@ -85,12 +85,14 @@ var changeRows = []struct {
 	scope string
 	// at names the repository dir; dir is the dir that Changes gets, and
 	// relative passes root relative to the working directory.
-	at, dir, files string
+	at, dir  string
+	relative bool
 	// serial marks a row that sets process state, which parallel rows share.
-	relative, serial bool
-	setup            func(t *testing.T, dir string)
-	patch            []string
-	check            func(t *testing.T, dir string, c protocol.WorkspaceChanges)
+	serial bool
+	setup  func(t *testing.T, dir string)
+	files  string
+	patch  []string
+	check  func(t *testing.T, dir string, c protocol.WorkspaceChanges)
 }{
 	{name: "a rename keeps the old path", scope: protocol.ScopeUncommitted,
 		setup: func(t *testing.T, dir string) { git(t, dir, "mv", "seed.txt", "moved.txt") },
