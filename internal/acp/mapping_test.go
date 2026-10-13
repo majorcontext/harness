@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"regexp"
 	"slices"
 	"testing"
@@ -180,7 +181,7 @@ func (n *noRuntimes) For(context.Context, string) (Runtime, error) {
 	return nil, errors.New("unexpected")
 }
 func (n *noRuntimes) Close(context.Context) error { return nil }
-func (n *noRuntimes) Blob(context.Context, string, string) (io.ReadCloser, error) {
+func (n *noRuntimes) ToolImage(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("unexpected")
 }
 
@@ -268,5 +269,35 @@ func TestDescribeCallMapsKindLocationAndDiff(t *testing.T) {
 		if got.Status != "in_progress" {
 			t.Errorf("describeCall(%s).Status = %q, want in_progress", r.name, got.Status)
 		}
+	}
+}
+
+func toolResultEvents(blobs ...protocol.LogPart) iter.Seq2[protocol.Event, error] {
+	msg := protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{{Type: protocol.LogPartToolResult, CallID: "c", Blobs: blobs}}}
+	data, _ := json.Marshal(protocol.ItemCompleted{ItemID: "i", TurnID: "t", Message: msg})
+	return func(yield func(protocol.Event, error) bool) {
+		yield(protocol.Event{Kind: protocol.KindItemCompleted, Data: data}, nil)
+	}
+}
+
+func TestFindToolImageAcceptsOnlyAToolResultImageOfTheLog(t *testing.T) {
+	events := func() iter.Seq2[protocol.Event, error] {
+		return toolResultEvents(
+			protocol.LogPart{Type: protocol.LogPartBlob, MediaType: "image/png", BlobKey: "toolblob-img"},
+			protocol.LogPart{Type: protocol.LogPartBlob, MediaType: "audio/wav", BlobKey: "toolblob-audio"})
+	}
+	for key, want := range map[string]bool{
+		"toolblob-img":   true,
+		"toolblob-audio": false,
+		"backend-state":  false,
+		"toolblob-other": false,
+	} {
+		got, err := FindToolImage(events(), key)
+		if err != nil || got != want {
+			t.Errorf("FindToolImage(%q) = %v, %v, want %v", key, got, err, want)
+		}
+	}
+	if got, _ := FindToolImage(toolResultEvents(), "toolblob-img"); got {
+		t.Error("a key that the log of another session names was accepted")
 	}
 }

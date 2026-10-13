@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"iter"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -231,10 +232,41 @@ func (h *held) images(ctx context.Context, part protocol.LogPart) []any {
 }
 
 func (h *held) readBlob(ctx context.Context, key string) ([]byte, error) {
-	r, err := h.blob(ctx, key)
+	r, err := h.toolImage(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
+}
+
+// FindToolImage reports whether events, the events of one session, hold an
+// item.completed record whose tool result names key as an image blob. A host
+// implements Runtimes.ToolImage with it, so a key that the log of the session
+// does not name as a tool-result image is never read.
+func FindToolImage(events iter.Seq2[protocol.Event, error], key string) (bool, error) {
+	for e, err := range events {
+		if err != nil {
+			return false, err
+		}
+		if e.Kind != protocol.KindItemCompleted {
+			continue
+		}
+		p, err := e.Payload()
+		if err != nil {
+			continue
+		}
+		done, ok := p.(*protocol.ItemCompleted)
+		if !ok || done.Message.Role != protocol.RoleTool {
+			continue
+		}
+		for _, part := range done.Message.Parts {
+			for _, b := range part.Blobs {
+				if b.BlobKey == key && strings.HasPrefix(b.MediaType, "image/") {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }

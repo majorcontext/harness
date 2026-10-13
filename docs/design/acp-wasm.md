@@ -104,7 +104,7 @@ Recommendation: C. The test client validates every frame against the pinned `sch
 | `cmd/harness-wasm` | The wasm entry and its JS glue (build tag `js`): `fetchRT`, JS tools, the frame channel | `harness`, `internal/acp` |
 | `sdk/embed` | The JS package: one client API, two transports (section 5.8). It also owns the store lock (5.5). | the official ACP TypeScript SDK |
 
-`internal/acp` declares the interfaces that it needs in its own package, so a double and the real types both satisfy them (rule 3): `Runtimes` (`For(ctx, cwd) (Runtime, error)`) and `Runtime` (`Create`, `Open`, `Read`, `List`, `Models`, `Commands`). `internal/acp/cwdruntimes` implements `Runtimes`, and the e2e in-process host uses it too; `internal/acp` never builds a `Runtime` or loads config. `Runtimes` also has `Close(ctx)`.
+`internal/acp` declares the interfaces that it needs in its own package, so a double and the real types both satisfy them (rule 3): `Runtimes` (`For(ctx, cwd) (Runtime, error)`, `ToolImage(ctx, sessionID, key) (io.ReadCloser, error)`) and `Runtime` (`Create`, `Open`, `Read`, `List`, `Models`, `Commands`). `internal/acp/cwdruntimes` implements `Runtimes`, and the e2e in-process host uses it too; `internal/acp` never builds a `Runtime` or loads config. `Runtimes` also has `Close(ctx)`. `ToolImage` returns the bytes of a tool-result image, and only for a key that an `item.completed` record of that session names as an `image/*` blob of a tool result; any other key, including a `backend.state` chunk and a key of another session, fails with `blob_not_found`. The HTTP blobs route stays 404 for tool-result images (`docs/architecture.md`, the blobs route), so the adapter reads them through this method, which a host implements over its own `Store`.
 
 ## 4. The capability seam
 
@@ -412,7 +412,7 @@ The v1 `PromptRequest` is `{sessionId, prompt, _meta}` and `PromptResponse` is `
 - assistant `tool_call` part: `tool_call`; the following tool message: `tool_call_update` with `completed` or `failed`;
 - `engine_context` and `task_report` parts: not replayed.
 
-Replay reads one `View` (`Runtime.Read`). A `View` is a snapshot, so its `Snapshot().HeadSeq` is the replay boundary B: every message of the replay is in the log at or before B. The adapter answers `{}` after the last update, then calls `Runtime.Open`, which can resume a running or suspended turn, a queued input, or a goal (`View.Resumable`). The resumed work streams as live updates through the event pump (7.6). A client that wants no resumed work uses `session/resume` only after it knows the state.
+Replay reads one `View` (`Runtime.Read`). A `View` is a snapshot, so its `Snapshot().HeadSeq` is the replay boundary B: every message of the replay is in the log at or before B. Replay must seed the `tool_call` ids and diffs that the event pump keeps for calls that await a result (A3), so that a `tool_call_update` after a load keeps the diff of its call. The adapter answers `{}` after the last update, then calls `Runtime.Open`, which can resume a running or suspended turn, a queued input, or a goal (`View.Resumable`). The resumed work streams as live updates through the event pump (7.6). A client that wants no resumed work uses `session/resume` only after it knows the state.
 
 ### 7.6 Updates
 
@@ -433,7 +433,7 @@ One event pump per held session and connection reads `Session.Events(ctx, after)
 | `compaction_update`, `compaction_summary_chunk` | `compaction.applied` | maps | Only when the client advertises `session.compaction`. Without it, a compaction shows only as a fall of `usage_update.used`. |
 | `notice` | adapter diagnostics, lost ownership | maps | Only with `session.notices`. |
 
-Tool `kind` comes from a table in `internal/acp` keyed by tool name: `read_file` read; `write_file`, `edit_file` edit; `glob`, `grep`, `ls` search; `bash` execute; `task`, `goal`, `model`, MCP tools, plugin tools other; the Claude Code names in the same table; unknown names other. A tool name is not a provider name (rule 3).
+Tool `kind` comes from a table in `internal/acp` keyed by tool name: `read_file` read; `write_file`, `edit_file` edit; `glob`, `grep`, `ls` search; `bash`, `process` execute; `task`, `goal`, `model`, MCP tools, plugin tools other; the Claude Code names in the same table; unknown names other. A tool name is not a provider name (rule 3).
 
 `edit_file` takes `path`, `old_string`, `new_string`, and `replace_all` (`internal/tool/builtin/files.go:202-216`). The v1 layer sends `content:[{type:"diff", path, oldText, newText}]` and `locations:[{path}]`. A `replace_all` edit sends the snippet pair once. `write_file` sends `oldText: null`.
 

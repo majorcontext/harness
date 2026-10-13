@@ -16,12 +16,12 @@ import (
 // held is one session of the connection: its handle, its event pump, and the
 // prompts in flight.
 type held struct {
-	id   string
-	sess *harness.Session
-	cwd  string
-	log  *slog.Logger
-	send func(method string, params any) error
-	blob func(ctx context.Context, key string) (io.ReadCloser, error)
+	id        string
+	sess      *harness.Session
+	cwd       string
+	log       *slog.Logger
+	send      func(method string, params any) error
+	toolImage func(ctx context.Context, key string) (io.ReadCloser, error)
 
 	stop    context.CancelFunc
 	stopped chan struct{}
@@ -42,9 +42,9 @@ type prompt struct {
 
 // newHeld starts the event pump of sess at after, the head of the log when the
 // connection took the session. The pump is the only reader of the events.
-func newHeld(ctx context.Context, sess *harness.Session, cwd string, after uint64, log *slog.Logger, send func(string, any) error, blob func(context.Context, string) (io.ReadCloser, error)) *held {
+func newHeld(ctx context.Context, sess *harness.Session, cwd string, after uint64, log *slog.Logger, send func(string, any) error, toolImage func(context.Context, string) (io.ReadCloser, error)) *held {
 	ctx, stop := context.WithCancel(ctx)
-	h := &held{id: sess.ID(), sess: sess, cwd: cwd, log: log, send: send, blob: blob, stop: stop, stopped: make(chan struct{}),
+	h := &held{id: sess.ID(), sess: sess, cwd: cwd, log: log, send: send, toolImage: toolImage, stop: stop, stopped: make(chan struct{}),
 		wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
 	go h.pump(ctx, after)
 	return h
@@ -99,6 +99,8 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 		}
 		sent[chunkKey{f.ItemID, f.Type}] += f.Text
 		return h.chunk(kind, f.ItemID, f.Text)
+	case protocol.KindTurnEnded:
+		clear(st.diffs)
 	case protocol.KindItemDiscarded:
 		var f protocol.ItemFrame
 		if json.Unmarshal(e.Data, &f) == nil {

@@ -52,7 +52,7 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	}
 	id := sess.ID()
 	h := newHeld(a.base, sess, filepath.Clean(p.CWD), sess.Snapshot().HeadSeq, a.cfg.Logger, a.conn.Notify,
-		func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.Blob(ctx, id, key) })
+		func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.ToolImage(ctx, id, key) })
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
