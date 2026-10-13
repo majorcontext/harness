@@ -120,7 +120,6 @@ func (c *acpConn) read() map[string]any {
 		if !ok || l.err != nil {
 			c.t.Fatalf("the agent closed its output while the test waited for a frame: %v", l.err)
 		}
-		c.t.Logf("DBG %s", l.text)
 		return c.decode(l.text)
 	case <-timer.C:
 		c.t.Fatalf("waited %s for a frame of the agent", waitBound)

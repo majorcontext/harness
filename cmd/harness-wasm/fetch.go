@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"syscall/js"
 )
 
@@ -57,9 +58,7 @@ func (f fetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	for k, vs := range req.Header {
-		for _, v := range vs {
-			h.Set(k, v)
-		}
+		h.Set(k, strings.Join(vs, ", "))
 	}
 	opt.Set("headers", h)
 	if req.Body != nil {
@@ -102,6 +101,8 @@ func (f fetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	var rc io.ReadCloser = http.NoBody
 	if body := res.Get("body"); body.Truthy() {
 		rc = &streamBody{ctx: ctx, r: body.Call("getReader"), stop: stop}
+	} else {
+		stop()
 	}
 	status := res.Get("status").Int()
 	return &http.Response{Status: fmt.Sprintf("%d %s", status, res.Get("statusText").String()),

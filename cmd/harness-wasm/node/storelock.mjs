@@ -12,7 +12,7 @@ function alive(pid) {
 
 // acquireStoreLock makes dir exclusive to this process: it creates
 // <dir>/.embed.lock with O_EXCL and the pid, and refuses when that pid is
-// alive. It returns a function that removes the file.
+// alive. Two processes that find the same stale file can both replace it. It returns a function that removes the file.
 export function acquireStoreLock(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, ".embed.lock");

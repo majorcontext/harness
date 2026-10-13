@@ -86,24 +86,23 @@ type nodeHostOptions struct {
 }
 
 // startACPNode runs the wasm module under Node, with the config, the store
-// directory, and the default tool set of env. Without HARNESS_E2E_NODE=1 a
-// missing Node skips the test; with it, the test fails.
+// directory, and the default tool set of env.
 func startACPNode(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func()) {
 	t.Helper()
 	return startACPNodeOpts(t, nodeHostOptions{ConfigPath: env.configPath, StoreDir: env.sessDir,
 		Env: map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}, BuiltinTools: env.allowed})
 }
 
-// nodePath returns the node binary. A missing node skips the test, unless
-// HARNESS_E2E_NODE=1 says that the job needs it.
+// nodePath returns the node binary. Without HARNESS_E2E_NODE=1 the test skips,
+// because the Node host builds the module; with it, a missing node fails.
 func nodePath(t *testing.T) string {
 	t.Helper()
+	if os.Getenv(nodeEnv) != "1" {
+		t.Skip(nodeEnv + "=1 enables the Node wasm host")
+	}
 	node, err := exec.LookPath("node")
 	if err != nil {
-		if os.Getenv(nodeEnv) == "1" {
-			t.Fatalf("the Node wasm host needs node: %v", err)
-		}
-		t.Skip("node is not installed")
+		t.Fatalf("the Node wasm host needs node: %v", err)
 	}
 	return node
 }

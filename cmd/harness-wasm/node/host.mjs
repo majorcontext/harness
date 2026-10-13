@@ -29,10 +29,11 @@ createRequire(import.meta.url)(execPath);
 const go = new Go();
 go.argv = ["harness-wasm"];
 go.env = { TMPDIR: os.tmpdir() };
-go.exit = (code) => {
+function exit(code) {
   release();
-  process.exit(code);
-};
+  process.stdout.write("", () => process.exit(code));
+}
+go.exit = exit;
 const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject);
 go.run(instance);
 
@@ -61,10 +62,7 @@ const conn = globalThis.harnessConnect({
 
 let closing;
 function close() {
-  closing ??= conn.close().finally(() => {
-    release();
-    process.exit(0);
-  });
+  closing ??= conn.close().finally(() => exit(0));
 }
 
 let pending = "";
