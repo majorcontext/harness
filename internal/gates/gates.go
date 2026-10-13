@@ -32,6 +32,7 @@ const (
 var testGrowthDirs = []string{
 	"e2e",
 	"internal/eventlog",
+	"internal/acp",
 	"config",
 	"internal/message",
 	"internal/gates",

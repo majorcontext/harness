@@ -1,0 +1,431 @@
+package rpc
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"sync"
+)
+
+// MaxLine is the longest line that a connection reads. A longer line is
+// skipped and answered with a parse error.
+const MaxLine = 64 << 20
+
+// Standard JSON-RPC and ACP error codes.
+const (
+	CodeParseError     = -32700
+	CodeInvalidRequest = -32600
+	CodeMethodNotFound = -32601
+	CodeInvalidParams  = -32602
+	CodeInternal       = -32603
+	CodeCancelled      = -32800
+)
+
+// ErrClosed is the error of a call that was pending when the connection ended.
+var ErrClosed = errors.New("rpc: connection closed")
+
+// Error is a JSON-RPC error. A handler returns it to choose the code of its
+// error response; any other error becomes CodeInternal with a fixed message.
+type Error struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
+}
+
+// Error returns the message with its code.
+func (e *Error) Error() string { return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message) }
+
+// Handler serves the messages of one connection. Request runs in its own
+// goroutine for each request; its result or error becomes the response.
+// Notification runs in the reader goroutine, so it must not block.
+type Handler interface {
+	Request(ctx context.Context, method string, params json.RawMessage) (any, error)
+	Notification(ctx context.Context, method string, params json.RawMessage)
+}
+
+// Conn is one newline-delimited JSON-RPC 2.0 connection. One goroutine reads,
+// one goroutine writes, and each request runs in its own goroutine.
+type Conn struct {
+	log     *slog.Logger
+	out     chan []byte
+	r       io.Reader
+	maxLine int
+
+	quit  chan struct{}
+	wdone chan struct{}
+	werr  error
+
+	mu      sync.Mutex
+	running map[string]context.CancelCauseFunc
+	pending map[int64]chan reply
+	nextID  int64
+	closed  bool
+}
+
+type reply struct {
+	result json.RawMessage
+	err    *Error
+}
+
+// New returns a connection that reads r and writes w. A nil logger discards
+// the diagnostics of the connection.
+func New(r io.Reader, w io.Writer, logger *slog.Logger) *Conn {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	c := &Conn{
+		log:     logger,
+		r:       r,
+		maxLine: MaxLine,
+		out:     make(chan []byte, 64),
+		quit:    make(chan struct{}),
+		wdone:   make(chan struct{}),
+		running: map[string]context.CancelCauseFunc{},
+		pending: map[int64]chan reply{},
+	}
+	go c.write(w)
+	return c
+}
+
+func (c *Conn) write(w io.Writer) {
+	defer close(c.wdone)
+	put := func(b []byte) {
+		if c.werr != nil {
+			return
+		}
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			c.werr = err
+		}
+	}
+	for {
+		select {
+		case b := <-c.out:
+			put(b)
+		case <-c.quit:
+			for {
+				select {
+				case b := <-c.out:
+					put(b)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// message is the union of the four JSON-RPC message shapes.
+type message struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  *string         `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Result  json.RawMessage `json:"result"`
+	Error   *Error          `json:"error"`
+}
+
+type wireError struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Error   *Error          `json:"error"`
+}
+
+type wireResult struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result"`
+}
+
+func (c *Conn) send(v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		c.log.Error("rpc: encoding a message failed", "error", err)
+		return
+	}
+	select {
+	case c.out <- b:
+	case <-c.wdone:
+	}
+}
+
+func (c *Conn) sendError(id json.RawMessage, e *Error) {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	c.send(wireError{JSONRPC: "2.0", ID: id, Error: e})
+}
+
+// Notify sends a notification. The message is queued behind every message
+// that the caller sent before, so order is the order of the calls.
+func (c *Conn) Notify(method string, params any) error {
+	return c.sendRequest(nil, method, params)
+}
+
+func (c *Conn) sendRequest(id *int64, method string, params any) error {
+	frame := map[string]any{"jsonrpc": "2.0", "method": method}
+	if id != nil {
+		frame["id"] = *id
+	}
+	if params != nil {
+		frame["params"] = params
+	}
+	b, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-c.wdone:
+		return ErrClosed
+	default:
+	}
+	select {
+	case c.out <- b:
+		return nil
+	case <-c.wdone:
+		return ErrClosed
+	}
+}
+
+// Call sends a request to the peer and waits for its response. A non-nil
+// result receives the decoded result. A peer error returns as *Error.
+func (c *Conn) Call(ctx context.Context, method string, params, result any) error {
+	ch := make(chan reply, 1)
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrClosed
+	}
+	c.nextID++
+	id := c.nextID
+	c.pending[id] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+	}()
+	if err := c.sendRequest(&id, method, params); err != nil {
+		return err
+	}
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return r.err
+		}
+		if result != nil {
+			return json.Unmarshal(r.result, result)
+		}
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+type line struct {
+	text []byte
+	long bool
+	err  error
+}
+
+// readLines splits r into lines. A line over MaxLine is dropped and reported
+// as long. A line is over the bound when it holds more than maxLine bytes. An
+// empty line is skipped.
+func readLines(r io.Reader, maxLine int, out chan<- line) {
+	defer close(out)
+	br := bufio.NewReaderSize(r, 64<<10)
+	var buf []byte
+	long := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if !long {
+			buf = append(buf, chunk...)
+			long = len(buf) > maxLine
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if long {
+			out <- line{long: true}
+		} else if text := trimLine(buf); len(text) > 0 {
+			out <- line{text: text}
+		}
+		buf, long = nil, false
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				out <- line{err: err}
+			}
+			return
+		}
+	}
+}
+
+func trimLine(b []byte) []byte {
+	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r' || b[len(b)-1] == ' ' || b[len(b)-1] == '\t') {
+		b = b[:len(b)-1]
+	}
+	for len(b) > 0 && (b[0] == ' ' || b[0] == '\t') {
+		b = b[1:]
+	}
+	return b
+}
+
+// Serve reads messages until the input ends or ctx ends, calls h for each, and
+// returns after every handler has returned and every response is written. It
+// returns nil at the end of the input and the error of ctx when ctx ends first.
+// Handlers of requests that are running see their context cancelled when ctx
+// ends, and not at the end of the input.
+func (c *Conn) Serve(ctx context.Context, h Handler) error {
+	lines := make(chan line)
+	go readLines(c.r, c.maxLine, lines)
+	var wg sync.WaitGroup
+	err := c.loop(ctx, h, lines, &wg)
+	wg.Wait()
+	c.shutdown()
+	return err
+}
+
+func (c *Conn) loop(ctx context.Context, h Handler, lines <-chan line, wg *sync.WaitGroup) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case l, ok := <-lines:
+			if !ok {
+				return nil
+			}
+			switch {
+			case l.err != nil:
+				return l.err
+			case l.long:
+				c.sendError(nil, &Error{Code: CodeParseError, Message: "line too long"})
+			default:
+				c.dispatch(ctx, h, l.text, wg)
+			}
+		}
+	}
+}
+
+func (c *Conn) shutdown() {
+	c.mu.Lock()
+	c.closed = true
+	for id, ch := range c.pending {
+		ch <- reply{err: &Error{Code: CodeInternal, Message: ErrClosed.Error()}}
+		delete(c.pending, id)
+	}
+	c.mu.Unlock()
+	close(c.quit)
+	<-c.wdone
+}
+
+func (c *Conn) dispatch(ctx context.Context, h Handler, text []byte, wg *sync.WaitGroup) {
+	var m message
+	if err := json.Unmarshal(text, &m); err != nil {
+		code, msg := CodeParseError, "Parse error"
+		if json.Valid(text) {
+			code, msg = CodeInvalidRequest, "Invalid Request"
+		}
+		c.sendError(nil, &Error{Code: code, Message: msg})
+		return
+	}
+	switch {
+	case m.JSONRPC != "2.0":
+		c.sendError(m.ID, &Error{Code: CodeInvalidRequest, Message: "Invalid Request"})
+	case m.Method == nil && m.Result == nil && m.Error == nil:
+		c.sendError(m.ID, &Error{Code: CodeInvalidRequest, Message: "Invalid Request"})
+	case m.Method == nil:
+		c.response(m)
+	case isAbsent(m.ID):
+		if *m.Method == "$/cancel_request" {
+			c.cancelRequest(m.Params)
+			return
+		}
+		h.Notification(ctx, *m.Method, m.Params)
+	default:
+		c.start(ctx, h, m, wg)
+	}
+}
+
+// isAbsent reports whether a message has no id. A null id also marks a
+// notification here, because a request with a null id has no usable response.
+func isAbsent(id json.RawMessage) bool { return len(id) == 0 || string(id) == "null" }
+
+func (c *Conn) response(m message) {
+	var id int64
+	if err := json.Unmarshal(m.ID, &id); err != nil {
+		return
+	}
+	c.mu.Lock()
+	ch := c.pending[id]
+	c.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	ch <- reply{result: m.Result, err: m.Error}
+}
+
+func (c *Conn) cancelRequest(params json.RawMessage) {
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return
+	}
+	c.mu.Lock()
+	cancel := c.running[string(p.RequestID)]
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel(errRequestCancelled)
+	}
+}
+
+var errRequestCancelled = errors.New("rpc: request cancelled by the peer")
+
+func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGroup) {
+	key := string(m.ID)
+	rctx, cancel := context.WithCancelCause(ctx)
+	c.mu.Lock()
+	c.running[key] = cancel
+	c.mu.Unlock()
+	wg.Go(func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.running, key)
+			c.mu.Unlock()
+			cancel(nil)
+		}()
+		result, err := c.invoke(rctx, h, *m.Method, m.Params)
+		switch {
+		case err != nil && errors.Is(context.Cause(rctx), errRequestCancelled):
+			c.sendError(m.ID, &Error{Code: CodeCancelled, Message: "Request cancelled"})
+		case err != nil:
+			c.sendError(m.ID, toError(err))
+		default:
+			if result == nil {
+				result = struct{}{}
+			}
+			c.send(wireResult{JSONRPC: "2.0", ID: m.ID, Result: result})
+		}
+	})
+}
+
+func (c *Conn) invoke(ctx context.Context, h Handler, method string, params json.RawMessage) (result any, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			c.log.Error("rpc: handler panicked", "method", method, "panic", fmt.Sprint(p))
+			err = &Error{Code: CodeInternal, Message: "Internal error"}
+		}
+	}()
+	return h.Request(ctx, method, params)
+}
+
+func toError(err error) *Error {
+	var e *Error
+	if errors.As(err, &e) {
+		return e
+	}
+	return &Error{Code: CodeInternal, Message: "Internal error"}
+}

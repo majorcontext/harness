@@ -52,6 +52,8 @@ func main() {
 		err = serveCmd(os.Args[2:])
 	case "plugin":
 		err = pluginCmd(os.Args[2:])
+	case "acp":
+		err = acpCmd(os.Args[2:])
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "harness: unknown command %q\n", os.Args[1])
 		usage(os.Stderr)
@@ -87,6 +89,7 @@ func usage(w io.Writer) {
                                     1 turn or evaluator failed)
   harness serve [-addr host:port] [-unauthenticated] [--ask-user-question]
                                     serve the HTTP+SSE session API
+  harness acp                       serve ACP v1 over stdin and stdout
   harness plugin probe              probe the configured plugins and print
                                     their hooks
   harness sessions [--json]         list persisted sessions

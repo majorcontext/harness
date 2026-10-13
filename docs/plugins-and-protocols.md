@@ -48,12 +48,13 @@ messages, hook protocol) is ours; these are adapters, never the internal
 representation.
 
 - **ACP (Agent Client Protocol, agentclientprotocol.com)** — the editor ↔ agent
-  standard (Zed, JetBrains, Neovim, Emacs). Harness does not implement an ACP
-  adapter today. If one lands, keep it thin: map the event log to
-  `session/update` notifications and prefer ACP names where our vocabulary is
-  arbitrary. Harness has no permission system, so an adapter must not invent
-  `session/request_permission`. This is Zed's Agent *Client* Protocol, not
-  IBM's former Agent Communication Protocol.
+  standard (Zed, JetBrains, Neovim, Emacs). `harness acp` serves ACP v1 over
+  stdio; the ACP section of `docs/architecture.md` is the spec of the adapter,
+  and `docs/design/acp-wasm.md` is its design. The adapter stays thin: it maps
+  the event log to `session/update` notifications and takes the ACP name where
+  our vocabulary is arbitrary. Harness has no permission system, so the adapter
+  must not invent `session/request_permission`. This is Zed's Agent *Client*
+  Protocol, not IBM's former Agent Communication Protocol.
 - **MCP** — client (consume tool servers) and server (expose sessions/tools)
   modes.
 
