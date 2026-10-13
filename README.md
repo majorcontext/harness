@@ -67,8 +67,9 @@ To change the default, set `model` in a config file (see
 harness run -c -p "Now write a test for each fix"
 ```
 
-The most recent session is the newest one of all your projects, not only the
-current directory's.
+`-c` continues the newest session that you started in the current directory.
+It fails when that directory has none, and never continues a session of another
+project. Use `-r` for any other session.
 
 ### Go back to an older session
 
