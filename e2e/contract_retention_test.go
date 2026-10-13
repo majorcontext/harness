@@ -12,9 +12,11 @@ import (
 // tool result keeps inline.
 const seq5000 = "seq 1 5000"
 
-// bigFile writes 2000 lines of 2000 two-byte runes. read_file returns 8014892
-// bytes of it, which alone exceed the retention budget of a session.
-const bigFile = `l=$(printf 'é%.0s' $(seq 2000)); for i in $(seq 2000); do echo "$l"; done > big.txt`
+// bigFile holds 1100 lines of 2000 two-byte runes. read_file returns 4407692
+// bytes of it, which alone exceed the 4 MiB retention budget of a session. The
+// writeFile action stores it in one write: a shell loop of many small writes
+// stalls on a disk under load.
+var bigFile = strings.Repeat(strings.Repeat("é", 2000)+"\n", 1100)
 
 func readResult(kv ...any) harnesstest.ToolCall { return ftTool("read_tool_result", ftArgs(kv...)) }
 
@@ -35,12 +37,16 @@ func TestContractToolResultRetention(t *testing.T) {
 		{
 			name: "tool_result_over_the_session_budget_keeps_a_preview_with_a_notice",
 			model: toolChain(
-				ftBash(bigFile),
 				ftRead(ftArgs("path", "big.txt")),
 				ftBash(seq5000),
 				ftBash("seq 1 3"),
 			),
-			actions: oneTurn,
+			actions: []action{
+				create{as: "a"},
+				writeFile{path: "big.txt", body: bigFile},
+				submit{as: "a", text: "go"},
+				waitIdle{as: "a"},
+			},
 		},
 		{
 			name: "read_tool_result_bounds_the_default_budget",
