@@ -23,6 +23,8 @@ type acpEnv struct {
 	allowed    []string
 	// afterRead, when set, runs after each Runtime.Read of the in-process host.
 	afterRead func(rt *harness.Runtime, id string)
+	// defaultDir is the work directory of the in-process host process.
+	defaultDir string
 }
 
 const acpDummyKey = "e2e-dummy-key"
@@ -37,8 +39,9 @@ func acpRuntimes(env acpEnv) *cwdruntimes.Runtimes {
 		Shared: func(*config.Config) (harness.Store, harness.Owner, error) {
 			return store.NewDiskStore(env.sessDir), harness.NewLocalOwner(1), nil
 		},
-		Version: "in-process",
-		Getenv:  acpGetenv,
+		Version:    "in-process",
+		Getenv:     acpGetenv,
+		DefaultDir: env.defaultDir,
 	})
 }
 

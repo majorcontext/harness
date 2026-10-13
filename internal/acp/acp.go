@@ -51,7 +51,7 @@ type Runtimes interface {
 	ToolImage(ctx context.Context, session, key string) (io.ReadCloser, error)
 	// Default returns the Runtime that serves a request with no cwd: one that For
 	// built, else the one of the work directory of the host process. It fails with
-	// an error that matches harness.ErrInvalidRequest when the host has none.
+	// a nil Runtime and no error when the host has none.
 	Default(ctx context.Context) (Runtime, error)
 	// Close closes every Runtime that For built.
 	Close(ctx context.Context) error

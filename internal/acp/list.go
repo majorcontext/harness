@@ -14,6 +14,10 @@ import (
 // once.
 const listStep = 50
 
+// listSteps is the most steps that one session/list reads. A call that reaches
+// it with no match answers an empty page and a cursor.
+const listSteps = 4
+
 // sessionInfo is one entry of the answer of session/list. The title is null:
 // harness names no session.
 type sessionInfo struct {
@@ -58,7 +62,10 @@ func (a *agent) listSessions(ctx context.Context, params json.RawMessage) (any, 
 	if p.Cursor != nil {
 		after = *p.Cursor
 	}
-	for {
+	if rt == nil {
+		return res, nil
+	}
+	for range listSteps {
 		page, err := rt.List(ctx, protocol.ListSessions{After: after, Limit: listStep})
 		if err != nil {
 			return nil, rpcError(err)
@@ -74,13 +81,15 @@ func (a *agent) listSessions(ctx context.Context, params json.RawMessage) (any, 
 		}
 		after = page.Next
 		if len(res.Sessions) > 0 {
-			res.NextCursor = &after
-			return res, nil
+			break
 		}
 	}
+	res.NextCursor = &after
+	return res, nil
 }
 
-// listRuntime returns the Runtime that reads the store for a list.
+// listRuntime returns the Runtime that reads the store for a list, or nil when
+// a list with no cwd finds none.
 func (a *agent) listRuntime(ctx context.Context, cwd string) (Runtime, error) {
 	if a.isClosed() {
 		return nil, rpcError(harness.ErrSessionReleased)
@@ -91,7 +100,9 @@ func (a *agent) listRuntime(ctx context.Context, cwd string) (Runtime, error) {
 	var rt Runtime
 	var err error
 	if cwd == "" {
-		rt, err = a.rts.Default(ctx)
+		if rt, err = a.rts.Default(ctx); err == nil && rt == nil {
+			return nil, nil
+		}
 	} else {
 		rt, err = a.rts.For(ctx, cwd)
 	}

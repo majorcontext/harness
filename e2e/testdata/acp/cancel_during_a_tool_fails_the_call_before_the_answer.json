@@ -56,7 +56,7 @@
             "call_id": "toolu#1",
             "name": "bash",
             "arguments": {
-              "command": "sleep 300"
+              "command": "touch started \u0026\u0026 sleep 300"
             }
           }
         ]
@@ -259,11 +259,11 @@
             "kind": "execute",
             "name": "bash",
             "rawInput": {
-              "command": "sleep 300"
+              "command": "touch started \u0026\u0026 sleep 300"
             },
             "sessionUpdate": "tool_call",
             "status": "in_progress",
-            "title": "bash sleep 300",
+            "title": "bash touch started \u0026\u0026 sleep 300",
             "toolCallId": "toolu_1"
           }
         }

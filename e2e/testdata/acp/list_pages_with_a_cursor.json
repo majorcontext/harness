@@ -1,0 +1,554 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [],
+    "s0": [],
+    "s1": [],
+    "s10": [],
+    "s11": [],
+    "s12": [],
+    "s13": [],
+    "s14": [],
+    "s15": [],
+    "s16": [],
+    "s17": [],
+    "s18": [],
+    "s19": [],
+    "s2": [],
+    "s20": [],
+    "s21": [],
+    "s22": [],
+    "s23": [],
+    "s24": [],
+    "s25": [],
+    "s26": [],
+    "s27": [],
+    "s28": [],
+    "s29": [],
+    "s3": [],
+    "s30": [],
+    "s31": [],
+    "s32": [],
+    "s33": [],
+    "s34": [],
+    "s35": [],
+    "s36": [],
+    "s37": [],
+    "s38": [],
+    "s39": [],
+    "s4": [],
+    "s40": [],
+    "s41": [],
+    "s42": [],
+    "s43": [],
+    "s44": [],
+    "s45": [],
+    "s46": [],
+    "s47": [],
+    "s48": [],
+    "s49": [],
+    "s5": [],
+    "s50": [],
+    "s6": [],
+    "s7": [],
+    "s8": [],
+    "s9": []
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "anthropic/claude-fable-5",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "default",
+                  "value": "default"
+                },
+                {
+                  "name": "off",
+                  "value": "off"
+                },
+                {
+                  "name": "minimal",
+                  "value": "minimal"
+                },
+                {
+                  "name": "low",
+                  "value": "low"
+                },
+                {
+                  "name": "medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "high",
+                  "value": "high"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {}
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "nextCursor": "\u003csession:s49\u003e",
+          "sessions": [
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s0\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s1\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s2\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s3\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s4\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s5\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s6\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s7\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s8\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s9\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s10\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s11\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s12\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s13\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s14\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s15\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s16\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s17\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s18\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s19\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s20\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s21\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s22\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s23\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s24\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s25\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s26\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s27\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s28\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s29\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s30\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s31\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s32\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s33\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s34\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s35\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s36\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s37\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s38\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s39\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s40\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s41\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s42\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s43\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s44\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s45\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s46\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s47\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s48\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s49\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {
+          "cursor": "\u003csession:s49\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessions": [
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s50\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:a\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

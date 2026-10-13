@@ -89,7 +89,7 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 	return rt, nil
 }
 
-// Default returns the Runtime that For built first, else the one of DefaultDir.
+// Default returns the Runtime that For built first, else the one of DefaultDir, else nil.
 func (r *Runtimes) Default(ctx context.Context) (acp.Runtime, error) {
 	r.mu.Lock()
 	if len(r.order) > 0 {
@@ -99,7 +99,7 @@ func (r *Runtimes) Default(ctx context.Context) (acp.Runtime, error) {
 	}
 	r.mu.Unlock()
 	if r.opts.DefaultDir == "" {
-		return nil, fmt.Errorf("%w: no work directory", harness.ErrInvalidRequest)
+		return nil, nil
 	}
 	return r.For(ctx, r.opts.DefaultDir)
 }

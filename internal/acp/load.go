@@ -37,12 +37,6 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if err != nil {
 		return nil, err
 	}
-	if h, err := a.held(p.SessionID); err == nil {
-		if h.cwd != cwd {
-			return nil, invalidParams("the session belongs to another cwd")
-		}
-		return setupResult{ConfigOptions: configOptions(h.models, h.sess.Snapshot())}, nil
-	}
 	rt, err := a.runtime(ctx, cwd)
 	if err != nil {
 		return nil, err
@@ -52,8 +46,14 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 		return nil, rpcError(err)
 	}
 	snap := view.Snapshot()
+	if snap.ParentID != "" {
+		return nil, invalidParams("the session is a task child")
+	}
 	if snap.WorkDir != "" && filepath.Clean(snap.WorkDir) != cwd {
 		return nil, invalidParams("the session belongs to another cwd")
+	}
+	if h, err := a.held(p.SessionID); err == nil {
+		return a.heldSetup(ctx, h, view, cwd, len(servers) > 0, replay)
 	}
 	h := a.newHeld(p.SessionID, cwd, rt)
 	st := newPumpState(snap)
@@ -79,4 +79,24 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 		return nil, err
 	}
 	return setupResult{ConfigOptions: configOptions(h.models, snap)}, nil
+}
+
+// heldSetup answers a load or resume of a session that the connection holds.
+// A load replays the conversation of view after the pump has sent every update
+// through the head of view, with a pump state of its own, so the replay does
+// not touch what the live pump keeps. A resume sends nothing.
+func (a *agent) heldSetup(ctx context.Context, h *held, view harness.Reader, cwd string, servers, replay bool) (any, error) {
+	if h.cwd != cwd {
+		return nil, invalidParams("the session belongs to another cwd")
+	}
+	if servers {
+		return nil, invalidParams("a session that the connection holds takes no new mcpServers")
+	}
+	if replay {
+		h.flush(ctx, view.Snapshot().HeadSeq)
+		if err := h.replay(ctx, view, newPumpState(view.Snapshot())); err != nil {
+			return nil, rpcError(err)
+		}
+	}
+	return setupResult{ConfigOptions: configOptions(h.models, h.sess.Snapshot())}, nil
 }

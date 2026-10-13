@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "edit it"
             },
             {
               "kind": "text",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "edit it"
             },
             {
               "kind": "text",
@@ -70,8 +70,15 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "text",
-              "text": "ok"
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "a.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -79,8 +86,10 @@
           "role": "user",
           "parts": [
             {
-              "kind": "text",
-              "text": "two"
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#1"
             }
           ]
         }
@@ -95,7 +104,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "one"
+            "text": "edit it"
           }
         ]
       },
@@ -104,18 +113,26 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "ok"
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "2",
+              "old_string": "two",
+              "path": "a.txt",
+              "replace_all": true
+            }
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "two"
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/a.txt"
           }
         ]
       },
@@ -125,7 +142,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "ok"
+            "text": "done"
           }
         ]
       }
@@ -281,7 +298,7 @@
         "params": {
           "prompt": [
             {
-              "text": "one",
+              "text": "edit it",
               "type": "text"
             }
           ],
@@ -297,12 +314,9 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
-            "content": {
-              "text": "ok",
-              "type": "text"
-            },
-            "messageId": "\u003cmessage:1\u003e",
-            "sessionUpdate": "agent_message_chunk"
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 5
           }
         }
       }
@@ -315,9 +329,73 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
-            "sessionUpdate": "usage_update",
-            "size": 1000000,
-            "used": 5
+            "content": [
+              {
+                "newText": "2",
+                "oldText": "two",
+                "path": "\u003cdir:main\u003e/a.txt",
+                "type": "diff"
+              }
+            ],
+            "kind": "edit",
+            "locations": [
+              {
+                "path": "\u003cdir:main\u003e/a.txt"
+              }
+            ],
+            "name": "edit_file",
+            "rawInput": {
+              "new_string": "2",
+              "old_string": "two",
+              "path": "a.txt",
+              "replace_all": true
+            },
+            "sessionUpdate": "tool_call",
+            "status": "in_progress",
+            "title": "edit_file a.txt",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "newText": "2",
+                "oldText": "two",
+                "path": "\u003cdir:main\u003e/a.txt",
+                "type": "diff"
+              }
+            ],
+            "rawOutput": "replaced 1 occurrence(s) in \u003cdir:main\u003e/a.txt",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "done",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
           }
         }
       }
@@ -356,6 +434,103 @@
           "cwd": "\u003cdir:main\u003e",
           "mcpServers": [],
           "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "edit it",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:2\u003e",
+            "sessionUpdate": "user_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "newText": "2",
+                "oldText": "two",
+                "path": "\u003cdir:main\u003e/a.txt",
+                "type": "diff"
+              }
+            ],
+            "kind": "edit",
+            "locations": [
+              {
+                "path": "\u003cdir:main\u003e/a.txt"
+              }
+            ],
+            "name": "edit_file",
+            "rawInput": {
+              "new_string": "2",
+              "old_string": "two",
+              "path": "a.txt",
+              "replace_all": true
+            },
+            "sessionUpdate": "tool_call",
+            "status": "in_progress",
+            "title": "edit_file a.txt",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "newText": "2",
+                "oldText": "two",
+                "path": "\u003cdir:main\u003e/a.txt",
+                "type": "diff"
+              }
+            ],
+            "rawOutput": "replaced 1 occurrence(s) in \u003cdir:main\u003e/a.txt",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "done",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
         }
       }
     },
@@ -483,65 +658,6 @@
               "type": "select"
             }
           ]
-        }
-      }
-    },
-    {
-      "dir": "client",
-      "frame": {
-        "id": 5,
-        "jsonrpc": "2.0",
-        "method": "session/prompt",
-        "params": {
-          "prompt": [
-            {
-              "text": "two",
-              "type": "text"
-            }
-          ],
-          "sessionId": "\u003csession:a\u003e"
-        }
-      }
-    },
-    {
-      "dir": "agent",
-      "frame": {
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": {
-          "sessionId": "\u003csession:a\u003e",
-          "update": {
-            "content": {
-              "text": "ok",
-              "type": "text"
-            },
-            "messageId": "\u003cmessage:2\u003e",
-            "sessionUpdate": "agent_message_chunk"
-          }
-        }
-      }
-    },
-    {
-      "dir": "agent",
-      "frame": {
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": {
-          "sessionId": "\u003csession:a\u003e",
-          "update": {
-            "sessionUpdate": "session_info_update",
-            "updatedAt": "\u003ctime\u003e"
-          }
-        }
-      }
-    },
-    {
-      "dir": "agent",
-      "frame": {
-        "id": 5,
-        "jsonrpc": "2.0",
-        "result": {
-          "stopReason": "end_turn"
         }
       }
     }

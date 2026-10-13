@@ -44,6 +44,8 @@ type acpScenario struct {
 	// frames interleave by goroutine scheduling, which the single thread of the
 	// wasm module orders differently. The Node wasm host skips all three.
 	needsExec, needsMCP, schedulerOrder bool
+	// needsDefaultDir marks a row that lists with no runtime held, which needs the work directory of the host process. The wasm host has none.
+	needsDefaultDir bool
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -252,7 +254,7 @@ func (sc acpScenario) runsOn(host string) bool {
 	case "binary":
 		return len(sc.allowed) == 0
 	case nodeHostName:
-		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder
+		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder && !sc.needsDefaultDir
 	}
 	return true
 }
@@ -272,13 +274,20 @@ func TestACPScenarios(t *testing.T) {
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
 				t.Parallel()
 				fake := harnesstest.NewAnthropic(t, sc.model...)
-				env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), sc.config), sessDir: t.TempDir(), allowed: sc.allowed}
+				env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), sc.config), sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir()}
 				if sc.afterRead != nil {
 					env.afterRead = func(rt *harness.Runtime, id string) { sc.afterRead(t, rt, id) }
 				}
 				in, out, stop := host.start(t, env)
 				c := newACPConn(t, schema, in, out)
 				c.fake, c.env = fake, env
+				c.reconnect = func() {
+					c.t.Helper()
+					c.drain()
+					stop()
+					in, out, stop = host.start(t, env)
+					c.attach(in, out)
+				}
 				c.dirs["main"] = writeACPDir(t, sc.files)
 				for name, files := range sc.dirs {
 					c.dirs[name] = writeACPDir(t, files)

@@ -2,14 +2,17 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // acpLoad sends session/load, or session/resume when resume is set, for the
@@ -22,6 +25,8 @@ type acpLoad struct {
 	code      int
 	noHistory bool
 	noUpdates bool
+	// mcp adds a stdio server to the request.
+	mcp bool
 }
 
 // acpClose sends session/close and waits for its answer. A non-zero code
@@ -41,11 +46,32 @@ type acpList struct {
 	cwd, rawCWD, cursor string
 	want                []string
 	code                int
+	// more expects a nextCursor, and fromCursor sends the one of the last list.
+	more, fromCursor bool
 }
+
+// acpSeed creates n sessions in the main directory directly in the session
+// store, named prefix0 to prefix(n-1), without any ACP traffic.
+type acpSeed struct {
+	n      int
+	prefix string
+}
+
+// acpLoadChild sends session/load for a task child of the store and expects -32602.
+type acpLoadChild struct{}
+
+// acpReconnect ends the agent process and starts a new one over the same session
+// directory, so the next step talks to a connection that holds no session.
+type acpReconnect struct{}
 
 // acpReplayEquals checks that the updates a load replayed equal the updates the
 // turns sent live, and that the replay holds the user message.
 type acpReplayEquals struct{}
+
+func (acpReconnect) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	c.reconnect()
+}
 
 func (s acpLoad) run(t *testing.T, c *acpConn) {
 	t.Helper()
@@ -54,7 +80,11 @@ func (s acpLoad) run(t *testing.T, c *acpConn) {
 		method, def = "session/resume", "ResumeSessionResponse"
 	}
 	start := len(c.wire)
-	f := c.response(c.request(method, map[string]any{"sessionId": c.session(s.as), "cwd": c.dir(s.cwd), "mcpServers": []any{}}))
+	servers := []any{}
+	if s.mcp {
+		servers = append(servers, map[string]any{"name": "x", "command": "/bin/true", "args": []any{}, "env": []any{}})
+	}
+	f := c.response(c.request(method, map[string]any{"sessionId": c.session(s.as), "cwd": c.dir(s.cwd), "mcpServers": servers}))
 	if s.code != 0 {
 		c.mustBeError(f, s.code)
 		return
@@ -115,15 +145,20 @@ func (s acpList) run(t *testing.T, c *acpConn) {
 	if s.cursor != "" {
 		params["cursor"] = s.cursor
 	}
+	if s.fromCursor {
+		params["cursor"] = c.cursor
+	}
 	f := c.response(c.request("session/list", params))
 	if s.code != 0 {
 		c.mustBeError(f, s.code)
 		return
 	}
 	res := c.mustBeResult(f, "ListSessionsResponse")
-	if _, ok := res["nextCursor"]; ok {
-		t.Errorf("session/list answered nextCursor %v for a store that holds %d sessions", res["nextCursor"], len(s.want))
+	next, hasNext := res["nextCursor"].(string)
+	if hasNext != s.more {
+		t.Errorf("session/list answered nextCursor %q, want one: %v", next, s.more)
 	}
+	c.cursor = next
 	var got, want []string
 	list, _ := res["sessions"].([]any)
 	for _, e := range list {
@@ -146,6 +181,51 @@ func (s acpList) run(t *testing.T, c *acpConn) {
 	if !slices.Equal(got, want) {
 		t.Errorf("session/list answered %v, want %v", got, want)
 	}
+}
+
+func (s acpSeed) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	cfg, err := config.LoadProject(c.env.configPath, c.dir(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := harness.New(harness.Options{Store: store.NewDiskStore(c.env.sessDir), Config: *cfg, WorkDir: c.dir(""), Getenv: acpGetenv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range s.n {
+		sess, err := rt.Create(t.Context(), protocol.CreateSession{Origin: "seed"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.sessions[fmt.Sprintf("%s%d", s.prefix, i)] = sess.ID()
+	}
+	if err := rt.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (acpLoadChild) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	st := store.NewDiskStore(c.env.sessDir)
+	ids, err := st.Sessions(t.Context(), "", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		v, err := harness.OpenView(t.Context(), st, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Snapshot().ParentID == "" {
+			continue
+		}
+		c.sessions["child"] = id
+		f := c.response(c.request("session/load", map[string]any{"sessionId": id, "cwd": c.dir(""), "mcpServers": []any{}}))
+		c.mustBeError(f, acpInvalidParams)
+		return
+	}
+	t.Fatal("the store holds no task child")
 }
 
 // updateKind returns the sessionUpdate of an agent session/update frame, or "".
@@ -224,6 +304,21 @@ func agentMessageIDs(frames []acpFrame) (ids []string) {
 	return ids
 }
 
+func acpAliases(prefix string, from, to int) (out []string) {
+	for i := from; i < to; i++ {
+		out = append(out, fmt.Sprintf("%s%d", prefix, i))
+	}
+	return out
+}
+
+var acpChildModel = []harnesstest.Step{
+	{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"}}}}},
+	{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child done", Block: true}},
+	{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+	{Name: "parent", Match: harnesstest.LastUserText("child done"), Reply: harnesstest.Reply{Text: "parent done"}},
+}
+
 func afterLateTurn(t *testing.T, rt *harness.Runtime, id string) {
 	t.Helper()
 	s, err := rt.Open(t.Context(), id)
@@ -256,16 +351,82 @@ var acpLoadScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "load_of_a_held_session_returns_the_held_session",
-		cite:  "A `session/load` or `session/resume` of a session that the connection holds returns the held session.",
-		model: acpRepeatText("ok"),
+		name:  "load_of_a_held_session_replays_the_conversation",
+		cite:  "A `session/load` of it waits until the event pump has sent every update through the head of a new view, replays that view, sends no command update, and answers.",
+		model: acpToolCall("edit_file", map[string]any{"path": "a.txt", "old_string": "two", "new_string": "2", "replace_all": true}),
+		files: map[string]string{"a.txt": "one\ntwo\nthree\n"},
 		steps: []acpStep{
 			acpNew{as: "a"},
-			acpPrompt{as: "a", text: "one", stop: "end_turn"},
-			acpLoad{as: "a", noUpdates: true},
+			acpPrompt{as: "a", text: "edit it", stop: "end_turn"},
+			acpLoad{as: "a"},
+			acpReplayEquals{},
 			acpLoad{as: "a", resume: true, noUpdates: true},
-			acpPrompt{as: "a", text: "two", stop: "end_turn"},
 			acpCheck(func(t *testing.T, c *acpConn) { acpRequests(t, c, 2) }),
+		},
+	},
+	{
+		name:  "load_from_a_fresh_connection_replays_the_conversation",
+		cite:  "The replay sends a user message as `user_message_chunk` updates, and an assistant message, a tool call, and a tool result as the updates that a turn sends, with the same `messageId` and `toolCallId`.",
+		model: acpToolCall("edit_file", map[string]any{"path": "a.txt", "old_string": "two", "new_string": "2", "replace_all": true}),
+		files: map[string]string{"a.txt": "one\ntwo\nthree\n"},
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "edit it", stop: "end_turn"},
+			acpReconnect{},
+			acpLoad{as: "a"},
+			acpReplayEquals{},
+		},
+	},
+	{
+		name:     "held_session_takes_no_new_mcp_servers",
+		needsMCP: true,
+		cite:     "and so are `mcpServers` in either request, because the held session keeps the servers it has.",
+		model:    acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpLoad{as: "a", resume: true, mcp: true, code: acpInvalidParams},
+		},
+	},
+	{
+		name:  "list_pages_with_a_cursor",
+		cite:  "`nextCursor` is present when more sessions can follow.",
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpSeed{n: 51, prefix: "s"},
+			acpNew{as: "a"},
+			acpList{want: acpAliases("s", 0, 50), more: true},
+			acpList{fromCursor: true, want: []string{"s50", "a"}},
+		},
+	},
+	{
+		name:            "list_with_no_cwd_and_no_runtime_uses_the_process_directory",
+		cite:            "Without a `cwd`, the agent lists through a runtime that it holds, else through the runtime of the work directory of the process.",
+		needsDefaultDir: true,
+		steps: []acpStep{
+			acpSeed{n: 2, prefix: "s"},
+			acpList{want: acpAliases("s", 0, 2)},
+		},
+	},
+	{
+		name:           "list_hides_task_children_and_load_refuses_them",
+		cite:           "A session that has a parent is a task child of another session. `session/load` and `session/resume` of it are `-32602`.",
+		model:          acpChildModel,
+		schedulerOrder: true,
+		wireOnly:       true,
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPromptStart{as: "a", text: "delegate"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if !c.fake.AwaitRequests(3, waitBound) {
+					t.Fatalf("model requests = %d, want 3", len(c.fake.Requests()))
+				}
+				c.fake.Release("child")
+			}),
+			acpResult{id: "a", stop: "end_turn"},
+			acpAwaitText{text: "parent done"},
+			acpAwaitUpdate{kind: "session_info_update"},
+			acpList{want: []string{"a"}},
+			acpLoadChild{},
 		},
 	},
 	{
