@@ -140,6 +140,10 @@ var seen struct {
 	events        []string
 }
 
+// noReply makes serve leave a request unanswered while the read loop still
+// sees shutdown and the end of input.
+var noReply any = new(struct{})
+
 func main() {
 	for {
 		line, err := in.ReadBytes('\n')
@@ -168,6 +172,9 @@ func serve(line []byte) {
 	}
 	resp := response{JSONRPC: "2.0", ID: *req.ID}
 	result, err := handle(req.Method, req.Params)
+	if result == noReply {
+		return
+	}
 	if err != nil {
 		resp.Error = err
 	} else {
@@ -399,7 +406,7 @@ func before(params json.RawMessage) (any, *rpcError) {
 	case "error":
 		return nil, &rpcError{Code: -32000, Message: "fixture before hook failed"}
 	case "hang":
-		time.Sleep(time.Hour)
+		return noReply, nil
 	}
 	switch {
 	case config.Deny != "" && strings.Contains(req.Args.Command, config.Deny):
