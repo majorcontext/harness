@@ -140,12 +140,12 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 
 // awaitSecond reports that the CLI owes a second result. A steer input that
 // no tool result took waits in the queue of the CLI, which runs it as the next
-// turn after this result. A run with a parked question owes none.
+// turn after this result, so the run holds no result until the second one. A run with a parked question owes none.
 func (r *run) awaitSecond() bool {
 	if !r.owed || r.question != nil || r.result.IsError {
 		return false
 	}
-	r.owed, r.waiting = false, true
+	r.owed, r.waiting, r.result = false, true, nil
 	return true
 }
 

@@ -290,6 +290,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_queued_prompt_injected_mid_turn":                                reGolden(specView, specClaudeGauge),
 	"claudecode_steer_held_during_text_joins_at_the_next_tool_boundary":         sameAsServe(),
 	"claudecode_cli_exit_before_answering_a_steer_fails_the_turn":               sameAsServe(),
+	"claudecode_interrupt_while_awaiting_a_steer_answer_interrupts_the_turn":    sameAsServe(),
 	"claudecode_steer_during_final_text_runs_as_the_next_turn":                  sameAsServe(),
 	"claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn":  sameAsServe(),
 	"claudecode_rate_limit_event_reaches_subscription_usage":                    reGolden(specView, specClaudeGauge),

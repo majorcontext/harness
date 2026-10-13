@@ -17,6 +17,7 @@ var stdinModes = map[string]mode{
 	"steer":                steer,
 	"steer_final_text":     steerFinalText,
 	"steer_unanswered":     steerUnanswered,
+	"steer_hang":           steerHang,
 	"steer_untaken":        steerUntaken,
 	"steer_text_then_tool": steerTextThenTool,
 }
@@ -142,4 +143,11 @@ func steerUnanswered(f *fake) {
 	f.emit(assistant(toolUse("toolu_r", "Bash", obj{"command": "sleep 1"})))
 	awaitQueued(f)
 	f.emit(say("tool done"), success("tool done", 5, 5))
+}
+
+// steerHang takes a message, ends the turn with its result, and then hangs
+// as a CLI does while it starts the second turn.
+func steerHang(f *fake) {
+	steerUnanswered(f)
+	hang(f)
 }

@@ -142,6 +142,20 @@ func TestContractClaudeCodeSteer(t *testing.T) {
 			},
 		},
 		{
+			name:   "claudecode_interrupt_while_awaiting_a_steer_answer_interrupts_the_turn",
+			driver: claudeLaneDriver("steer_hang"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitToolCall{as: "a", callID: "toolu_r"},
+				enqueue{as: "a", text: "second"},
+				claudeAwaitText{as: "a", text: "tool done"},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+			},
+		},
+		{
 			name:   "claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn",
 			driver: claudeLaneDriver("steer_untaken"),
 			actions: []action{
