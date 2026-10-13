@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -243,7 +244,12 @@ func startACPProcEnv(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, *proc
 	t.Helper()
 	cmd := exec.Command(harnessBin, "acp")
 	cmd.Dir = t.TempDir()
-	cmd.Env = cleanEnv(map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey})
+	vars := map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey}
+	if env.login != nil {
+		maps.Copy(vars, env.login.procEnv())
+		cmd.Stderr = env.login.sink
+	}
+	cmd.Env = cleanEnv(vars)
 	return startACPCmd(t, cmd)
 }
 
@@ -259,7 +265,12 @@ func startACPCmd(t *testing.T, cmd *exec.Cmd) (io.WriteCloser, io.Reader, *procG
 		t.Fatal(err)
 	}
 	stderr := &lockedBuffer{}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, stderr
+	cmd.Stdin, cmd.Stdout = inR, outW
+	if cmd.Stderr != nil {
+		cmd.Stderr = io.MultiWriter(stderr, cmd.Stderr)
+	} else {
+		cmd.Stderr = stderr
+	}
 	g := startGroup(t, cmd)
 	_ = inR.Close()
 	_ = outW.Close()

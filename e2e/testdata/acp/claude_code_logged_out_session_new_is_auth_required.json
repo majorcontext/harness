@@ -1,0 +1,85 @@
+{
+  "requests": null,
+  "sessions": {},
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "clientCapabilities": {},
+          "clientInfo": {
+            "name": "e2e",
+            "version": "0"
+          },
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
+            "loadSession": true,
+            "mcpCapabilities": {
+              "http": true,
+              "sse": false
+            },
+            "sessionCapabilities": {
+              "close": {},
+              "list": {},
+              "resume": {}
+            }
+          },
+          "agentInfo": {
+            "name": "harness",
+            "title": "Harness",
+            "version": "\u003cversion\u003e"
+          },
+          "authMethods": [
+            {
+              "description": "Sign in with the Claude Code CLI. The CLI opens your browser.",
+              "id": "claude-code",
+              "name": "Log in with Claude Code"
+            }
+          ],
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32000,
+          "data": {
+            "code": "login_required"
+          },
+          "message": "not logged in to Claude Code; run `harness login claude-code`"
+        },
+        "id": 2,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

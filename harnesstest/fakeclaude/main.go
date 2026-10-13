@@ -4,6 +4,8 @@
 // unset or unknown mode prints a turn with text, a tool call, a tool result,
 // usage, and cost.
 //
+// `fakeclaude auth login|logout|status [--json]` answers like the Claude Code CLI; see auth.go.
+//
 // Other environment variables:
 //
 //	FAKE_CLAUDE_LOG        append the argv of each invocation as one JSON line
@@ -186,6 +188,9 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--list-modes" {
 		listModes()
 		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		os.Exit(runAuth(os.Args[2:]))
 	}
 	spawn := spawnNumber()
 	mode := modeOfSpawn(spawn)

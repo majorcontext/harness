@@ -102,6 +102,20 @@ func claudeCodePermissionModes() []string {
 	}
 }
 
+// UsesChatGPTLogin says that the entry signs in with the ChatGPT login of `harness login codex`.
+func (p Provider) UsesChatGPTLogin() bool { return p.Auth == AuthChatGPT }
+
+// UsesClaudeCLI says that the entry runs the Claude Code CLI.
+func (p Provider) UsesClaudeCLI() bool { return p.Type == TypeClaudeCodeCLI }
+
+// CLIBinary is the executable of a claude-code-cli entry: BinaryPath, else claude, resolved through PATH.
+func (p Provider) CLIBinary() string {
+	if p.BinaryPath != "" {
+		return p.BinaryPath
+	}
+	return "claude"
+}
+
 // AuthChatGPT is the value of Provider.Auth for the ChatGPT subscription login of `harness login codex`.
 const AuthChatGPT = "chatgpt"
 

@@ -170,7 +170,7 @@ func failReason(last protocol.TurnEnded) string {
 		return detail
 	case last.ErrorClass == protocol.ErrorTimedOut:
 		return "timed out"
-	case last.ErrorClass == protocol.ErrorPermanent:
+	case last.ErrorClass == protocol.ErrorPermanent, last.ErrorClass == protocol.ErrorLoginRequired:
 		return reasonPermanent + ": " + detail
 	case last.ErrorClass == protocol.ErrorUnrecovered:
 		return reasonUnrecovered + ": " + detail

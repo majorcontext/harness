@@ -50,6 +50,7 @@ linters:
         acp-seam:
           files:
             - "**/internal/acp/**"
+            - "!**/internal/acp/acpauth/**"
           list-mode: strict
           allow:
             - $gostd
@@ -68,6 +69,16 @@ linters:
             - github.com/majorcontext/harness/config
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/cwdruntimes
+        acp-acpauth:
+          files:
+            - "**/internal/acp/acpauth/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness/config
+            - github.com/majorcontext/harness/internal/acp
+            - github.com/majorcontext/harness/internal/acp/acpauth
+            - github.com/majorcontext/harness/internal/codexauth
         acp-rpc-leaf:
           files:
             - "**/internal/acp/rpc/**"

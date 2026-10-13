@@ -26,6 +26,9 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	if err != nil {
 		return nil, err
 	}
+	if err := a.requireLogin(ctx, cwd, "", false); err != nil {
+		return nil, err
+	}
 	rt, err := a.runtime(ctx, cwd)
 	if err != nil {
 		return nil, err

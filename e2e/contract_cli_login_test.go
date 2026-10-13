@@ -259,3 +259,40 @@ func TestContractCLILoginDeviceCodeWaitsUntilTheCodeIsEntered(t *testing.T) {
 		t.Errorf("login stored no file: %v", err)
 	}
 }
+
+func TestContractCLILoginClaudeCodeRunsTheConfiguredCLI(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, map[string]any{
+		"model": "claude-code/sonnet", "goal_evaluator_model": "claude-code/sonnet",
+		"providers": map[string]any{"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath()}},
+	})
+	state, calls := filepath.Join(h.dir, "state"), filepath.Join(h.dir, "calls")
+	h.env = map[string]string{"FAKE_CLAUDE_AUTH": state, "FAKE_CLAUDE_AUTH_LOG": calls}
+	if err := os.WriteFile(state, []byte("out"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, errOut, code := h.run("login", "claude-code", "--status"); code != 1 || !strings.Contains(out, "Not logged in") {
+		t.Errorf("status before login = %d %q %q, want 1 and Not logged in", code, out, errOut)
+	}
+	if _, errOut, code := h.run("login", "claude-code", "--console", "--sso"); code != 0 {
+		t.Fatalf("login = %d\n%s", code, errOut)
+	}
+	if out, _, code := h.run("login", "claude-code", "--status"); code != 0 || !strings.Contains(out, "Logged in") {
+		t.Errorf("status after login = %d %q, want 0 and Logged in", code, out)
+	}
+	if _, errOut, code := h.run("logout", "claude-code"); code != 0 {
+		t.Fatalf("logout = %d\n%s", code, errOut)
+	}
+	b, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "status --text\nlogin --console --sso\nstatus --text\nlogout\n"
+	if string(b) != want {
+		t.Errorf("CLI calls:\n%s\nwant:\n%s", b, want)
+	}
+	if s, _ := os.ReadFile(state); strings.TrimSpace(string(s)) != "out" {
+		t.Errorf("login state = %q, want out", s)
+	}
+}

@@ -40,6 +40,8 @@ type Config struct {
 	// List says that the host has a work directory for a session/list with no
 	// cwd, so the agent advertises and answers session/list.
 	List bool
+	// Auth is the login that the agent offers. Nil offers none.
+	Auth Auth
 }
 
 // Runtimes gives the adapter the Runtime of a work directory. The host builds
@@ -91,7 +93,8 @@ type agent struct {
 	base   context.Context
 	cancel context.CancelFunc
 
-	notices atomic.Bool
+	notices      atomic.Bool
+	terminalAuth atomic.Bool
 
 	mu       sync.Mutex
 	sessions map[string]*held
@@ -121,6 +124,14 @@ func (a *agent) Request(ctx context.Context, method string, params json.RawMessa
 		return a.prompt(ctx, params)
 	case "session/set_config_option":
 		return a.setConfigOption(ctx, params)
+	case "authenticate":
+		if a.cfg.Auth != nil {
+			return a.authenticate(ctx, params)
+		}
+	case "logout":
+		if a.cfg.Auth != nil {
+			return a.logout(ctx)
+		}
 	}
 	return nil, &rpc.Error{Code: rpc.CodeMethodNotFound, Message: "Method not found", Data: map[string]string{"method": method}}
 }
@@ -186,22 +197,31 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 			Session struct {
 				Notices json.RawMessage `json:"notices"`
 			} `json:"session"`
+			Auth struct {
+				Terminal bool `json:"terminal"`
+			} `json:"auth"`
 		} `json:"clientCapabilities"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.ProtocolVersion == nil || *p.ProtocolVersion < 0 || *p.ProtocolVersion > 65535 {
 		return nil, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "Invalid params", Data: map[string]string{"reason": "protocolVersion must be an integer from 0 to 65535"}}
 	}
+	a.terminalAuth.Store(p.ClientCapabilities.Auth.Terminal)
 	a.notices.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Notices), []byte("{")))
 	version := LatestVersion
+	caps := map[string]any{
+		"loadSession":         true,
+		"mcpCapabilities":     map[string]any{"http": a.cfg.MCP, "sse": false},
+		"sessionCapabilities": a.sessionCapabilities(),
+	}
+	methods := a.methods()
+	if auth := authCapabilities(methods); auth != nil {
+		caps["auth"] = auth
+	}
 	return map[string]any{
-		"protocolVersion": version,
-		"agentInfo":       map[string]any{"name": "harness", "title": "Harness", "version": a.cfg.Version},
-		"agentCapabilities": map[string]any{
-			"loadSession":         true,
-			"mcpCapabilities":     map[string]any{"http": a.cfg.MCP, "sse": false},
-			"sessionCapabilities": a.sessionCapabilities(),
-		},
-		"authMethods": []any{},
+		"protocolVersion":   version,
+		"agentInfo":         map[string]any{"name": "harness", "title": "Harness", "version": a.cfg.Version},
+		"agentCapabilities": caps,
+		"authMethods":       authMethods(methods),
 	}, nil
 }
 

@@ -332,6 +332,8 @@ func withError(e protocol.TurnEnded, msg string) protocol.TurnEnded {
 func errorClass(err error) protocol.ErrorClass {
 	class, retryable := provider.AsRetryable(err)
 	switch {
+	case provider.AsLoginRequired(err):
+		return protocol.ErrorLoginRequired
 	case errors.Is(err, context.DeadlineExceeded):
 		return protocol.ErrorTimedOut
 	case retryable && class == provider.RetryableRateLimited:

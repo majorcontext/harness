@@ -71,6 +71,8 @@ const (
 	ErrorTimedOut    ErrorClass = "timed_out"
 	ErrorRateLimited ErrorClass = "rate_limited"
 	ErrorUnrecovered ErrorClass = "unrecovered"
+	// ErrorLoginRequired types a failure that only a new login of the user resolves.
+	ErrorLoginRequired ErrorClass = "login_required"
 )
 
 // ResolutionKind says how a request closed.

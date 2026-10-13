@@ -100,6 +100,9 @@ func usage(w io.Writer) {
                                     sign in with a ChatGPT subscription, or
                                     print the stored login
   harness logout codex              delete the stored Codex login
+  harness login claude-code [--console] [--sso] [--status]
+                                    run claude auth login, or print its status
+  harness logout claude-code        run claude auth logout
   harness sessions [--json]         list persisted sessions
   harness version                   print version
 
