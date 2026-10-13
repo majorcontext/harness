@@ -1,0 +1,35 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_login.a": {
+      "status": 200,
+      "body": {
+        "error_says_login": true,
+        "refreshes": 0,
+        "secret_in_error_or_log": false,
+        "turn#1": null,
+        "turn#2": "failed"
+      }
+    },
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": null
+      }
+    }
+  }
+}

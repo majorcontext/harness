@@ -169,6 +169,9 @@ func overlayProvider(ex, v Provider) Provider {
 	if v.APIKeyEnv != "" {
 		ex.APIKeyEnv = v.APIKeyEnv
 	}
+	if v.Auth != "" {
+		ex.Auth = v.Auth
+	}
 	if v.BaseURL != "" {
 		ex.BaseURL = v.BaseURL
 	}

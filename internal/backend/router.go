@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/backend/modelapi"
+	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
@@ -46,6 +48,10 @@ type Env struct {
 	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
+	// CodexAuthFile is the file of the Codex login, read at the first request of a provider with auth "chatgpt".
+	CodexAuthFile string
+	// CodexIssuer is the OAuth issuer of that login. Empty: the issuer of the Codex CLI.
+	CodexIssuer string
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
@@ -63,10 +69,13 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			cfg.Providers[name] = config.Provider{}
 		}
 	}
+	codex := sync.OnceValue(func() *codexauth.Source {
+		return codexauth.NewSource(codexauth.SourceOptions{Path: env.CodexAuthFile, Issuer: env.CodexIssuer, Log: env.Log})
+	})
 	for name, p := range cfg.Providers {
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
-		} else if c := client(name, p, transport, env, cfg.RequestMaxRetriesValue()); c != nil {
+		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			backends[name] = modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 		}
 	}
@@ -76,12 +85,15 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 // client returns the model API client of entry name, or nil for an entry
 // that names no model API. An entry keyed by a native family may leave Type
 // empty. A transport may supply the credentials, so the key variable may be unset.
-func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, retries int) provider.Provider {
+func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, codex func() *codexauth.Source, retries int) provider.Provider {
 	var hc *http.Client
 	if transport != nil {
 		if rt := transport(name); rt != nil {
 			hc = &http.Client{Transport: rt}
 		}
+	}
+	if p.Auth == config.AuthChatGPT {
+		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath))
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
@@ -99,6 +111,16 @@ func client(name string, p config.Provider, transport func(provider string) http
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
+}
+
+// codexClient wraps hc so that the Codex login reaches the Responses endpoint of the entry and no other URL.
+func codexClient(hc *http.Client, src *codexauth.Source, endpoint string) *http.Client {
+	out := &http.Client{}
+	if hc != nil {
+		out = &http.Client{Transport: hc.Transport, CheckRedirect: hc.CheckRedirect, Jar: hc.Jar, Timeout: hc.Timeout}
+	}
+	out.Transport = codexauth.NewTransport(src, out.Transport, endpoint)
+	return out
 }
 
 // key returns the API key in variable name, and why it is empty for the error of an empty key.

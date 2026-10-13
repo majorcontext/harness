@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
+	"net"
+	"net/url"
 	"slices"
 )
 
@@ -56,6 +59,8 @@ type Provider struct {
 	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// Auth names the credential source of the entry instead of an API key: AuthChatGPT, the ChatGPT subscription login of `harness login codex`. Valid only on an entry that builds the OpenAI Responses adapter, and not with APIKeyEnv.
+	Auth string `json:"auth,omitempty"`
 	// BaseURL overrides the provider's default API base URL when non-empty.
 	BaseURL string `json:"base_url,omitempty"`
 	// Family overrides the ProviderData tag / wire-quirk key the openaicompat adapter uses (some
@@ -96,6 +101,9 @@ func claudeCodePermissionModes() []string {
 		"plan",
 	}
 }
+
+// AuthChatGPT is the value of Provider.Auth for the ChatGPT subscription login of `harness login codex`.
+const AuthChatGPT = "chatgpt"
 
 // Cache TTL values accepted by Provider.CacheTTL.
 const (
@@ -147,6 +155,9 @@ func validateProviders(providers map[string]Provider) error {
 		if p.NoPromptCacheKey && p.Type != TypeOpenAICompat {
 			return fmt.Errorf("providers.%s: no_prompt_cache_key is only valid on a %q entry (only the openaicompat adapter reads it)", name, TypeOpenAICompat)
 		}
+		if err := validateAuth(name, p); err != nil {
+			return err
+		}
 		if err := validateResponsesPath(name, p); err != nil {
 			return err
 		}
@@ -197,6 +208,44 @@ func buildsResponsesAdapter(name string, p Provider) bool {
 		return true
 	}
 	return p.Type == "" && name == "openai"
+}
+
+// validateAuth rejects an unknown auth, auth on an entry that does not build the Responses adapter,
+// auth with api_key_env, and a base_url that would send the login over plain HTTP to a remote host.
+func validateAuth(name string, p Provider) error {
+	if p.Auth == "" {
+		return nil
+	}
+	switch {
+	case p.Auth != AuthChatGPT:
+		return fmt.Errorf("providers.%s: unknown auth %q (valid value: %q)", name, p.Auth, AuthChatGPT)
+	case !buildsResponsesAdapter(name, p):
+		return fmt.Errorf("providers.%s: auth is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
+	case p.APIKeyEnv != "":
+		return fmt.Errorf("providers.%s: auth and api_key_env are mutually exclusive", name)
+	}
+	if err := validateSecureURL(p.BaseURL); err != nil {
+		return fmt.Errorf("providers.%s: base_url with auth %q: %w", name, p.Auth, err)
+	}
+	return nil
+}
+
+// validateSecureURL accepts an empty URL, an https URL, and an http URL on a loopback host.
+func validateSecureURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return errors.New("the URL must be absolute and carry no user information")
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if ip := net.ParseIP(u.Hostname()); u.Scheme == "http" && (ip != nil && ip.IsLoopback() || u.Hostname() == "localhost") {
+		return nil
+	}
+	return errors.New("the URL must be https, or http on a loopback host")
 }
 
 // validateResponsesPath rejects responses_path on an entry that does not build the Responses adapter.

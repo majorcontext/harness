@@ -77,6 +77,7 @@ type run struct {
 	calls   []recordedCall
 	keys    map[string]int
 	fx      map[string]any
+	codex   *codexAuthRun
 }
 
 // recordedCall is the outcome of one action that reports a result. Its key is

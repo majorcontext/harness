@@ -246,6 +246,9 @@ func (c *Client) codexSubscriptionUsage(h http.Header) *message.SubscriptionUsag
 	return codexSubscriptionUsageFromHeaders(h)
 }
 
+// ResponsesURL is the URL of the Responses request of an entry with the base URL and the path.
+func ResponsesURL(base, path string) string { return responsesURL(base, path) }
+
 // responsesURL joins a base URL and a request path with exactly one slash.
 // The join is string-level, not url.JoinPath, which re-encodes segments. A
 // path without a leading slash would otherwise aim at a different host.

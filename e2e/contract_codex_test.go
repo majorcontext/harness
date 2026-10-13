@@ -31,6 +31,8 @@ type codexScenario struct {
 	bareKey bool
 	// alsoOpenAI configures the endpoint under provider "openai" as well as "codex".
 	alsoOpenAI bool
+	// auth, when set, replaces the API key of the codex entry with the stored Codex login.
+	auth *codexAuth
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -121,6 +123,11 @@ func bareOpenAIKey(cfg map[string]any) map[string]any {
 func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	t.Helper()
 	sc.opts.APIKey = codexAPIKey
+	var ca *codexAuthRun
+	if sc.auth != nil {
+		ca = startCodexAuth(t, *sc.auth)
+		sc.opts.Credentials, sc.opts.AccountID = ca.accepts, codexAccount
+	}
 	o := harnesstest.NewOpenAI(t, sc.opts, sc.model...)
 	extra := maps.Clone(sc.config)
 	if sc.mcpSchema != "" {
@@ -138,7 +145,11 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 		providers := cfg["providers"].(map[string]any)
 		providers["openai"] = providers["codex"]
 	}
+	if ca != nil {
+		ca.configure(cfg)
+	}
 	r := &run{
+		codex:  ca,
 		drv:    h.newDriver(t, o.URL(), cfg),
 		fake:   o.Server,
 		ids:    map[string]string{},
@@ -165,7 +176,11 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 			t.Errorf("journal: %s", v)
 		}
 	}
-	return normalizeRun(o.Requests(), sessions, r.calls, r.ids, r.drv.Workdir())
+	reqs := o.Requests()
+	if sc.concurrent {
+		slices.SortStableFunc(reqs, func(a, b harnesstest.Request) int { return strings.Compare(a.LastUserText(), b.LastUserText()) })
+	}
+	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runCodexScenarios(t *testing.T, table []codexScenario) {
@@ -218,7 +233,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexNoToolCallRows(), codexPluginRows(t)))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexNoToolCallRows(), codexPluginRows(t)))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
