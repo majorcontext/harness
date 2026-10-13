@@ -28,6 +28,7 @@ type mcpServerDef struct {
 	stdio, sse  bool
 	failInit    int
 	down        bool
+	holdRetry   bool // the first initialize fails and every later one blocks, so no background retry ends
 	dir         bool // a stdio server starts in a directory named "stubdir"
 	toolLoading string
 }
@@ -51,6 +52,10 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 				srv.RequireAuthorization(mcpToken)
 				srv.FailInitialize(d.failInit)
 				srv.SetAvailable(!d.down)
+				if d.holdRetry {
+					srv.FailInitialize(1)
+					srv.HoldInitialize()
+				}
 				if d.sse {
 					srv.UseSSE()
 				}
@@ -651,7 +656,7 @@ func TestContractMCPRuntime(t *testing.T) {
 			name: "mcp_status_reports_connected_and_unavailable_servers",
 			setup: mcpSetup(nil,
 				mcpServerDef{name: "weather", spec: mcpWeather("")},
-				mcpServerDef{name: "docs", spec: mcpDocs(), down: true}),
+				mcpServerDef{name: "docs", spec: mcpDocs(), holdRetry: true}),
 			model: toolChain(mcpAction("action", "status")),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}},
 				expectSystem{req: 2, sameAs: 1}),

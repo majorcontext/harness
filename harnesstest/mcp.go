@@ -344,6 +344,7 @@ type MCPServer struct {
 	mu       sync.Mutex
 	down     bool
 	failInit int
+	holdInit bool
 	sse      bool
 	wantAuth string
 	ready    bool
@@ -415,6 +416,15 @@ func (s *MCPServer) SetAvailable(up bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.down = !up
+}
+
+// HoldInitialize makes each initialize request that FailInitialize does not
+// fail block until its client gives up, so a retry after the failed first
+// connect never ends while the server runs.
+func (s *MCPServer) HoldInitialize() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holdInit = true
 }
 
 // FailInitialize makes the next n initialize requests fail with HTTP 503.
@@ -541,6 +551,10 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, status)
 		return
 	}
+	if req.Method == "initialize" && s.holdsInitialize() {
+		<-r.Context().Done()
+		return
+	}
 	if req.Method == "tools/call" && !s.hold(r.Context(), req.Params) {
 		return
 	}
@@ -562,6 +576,12 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(resp)
+}
+
+func (s *MCPServer) holdsInitialize() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.holdInit
 }
 
 // reject returns the HTTP status and message that refuse a request, or a
