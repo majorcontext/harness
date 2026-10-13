@@ -90,14 +90,14 @@ type pumpState struct {
 	sent  map[chunkKey]string
 	diffs map[string][]any
 	last  lastSent
-	// owners maps a running turn to the prompt that waits for its answer.
-	owners map[string]*prompt
+	// owners maps a running turn to the prompts that wait for their answers.
+	owners map[string][]*prompt
 }
 
 // newPumpState returns the state of a pump that starts at the head of the log
 // that snap describes.
 func newPumpState(snap protocol.Session) *pumpState {
-	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap), owners: map[string]*prompt{}}
+	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap), owners: map[string][]*prompt{}}
 }
 
 func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
@@ -114,11 +114,11 @@ func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 		if err := h.forward(ctx, e, st); err != nil {
 			return
 		}
-		owner := h.turnOwner(e, st)
+		owners := h.turnOwner(e, st)
 		if !e.Ephemeral {
-			h.advance(e.Seq, owner)
+			h.advance(e.Seq, owners)
 		}
-		if owner != nil {
+		for _, owner := range owners {
 			select {
 			case <-owner.free:
 			case <-ctx.Done():
@@ -255,12 +255,12 @@ func (h *held) chunk(kind, itemID, text string) error {
 	})
 }
 
-// advance records that the pump sent every update through seq. owner is the
-// prompt whose turn ended at seq, if any.
-func (h *held) advance(seq uint64, owner *prompt) {
+// advance records that the pump sent every update through seq. owners are the
+// prompts whose last event is seq, if any.
+func (h *held) advance(seq uint64, owners []*prompt) {
 	h.mu.Lock()
 	h.done = seq
-	if owner != nil {
+	for _, owner := range owners {
 		owner.reached = true
 	}
 	close(h.wake)

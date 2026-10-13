@@ -61,8 +61,17 @@ func promptParts(blocks []json.RawMessage) ([]protocol.Part, error) {
 
 func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error) {
 	var p promptParams
+	pr, _ := ctx.Value(promptKey{}).(*prompt)
+	reject := func(err error) (any, error) {
+		if pr != nil {
+			if h, herr := a.held(p.SessionID); herr == nil {
+				h.end(pr)
+			}
+		}
+		return nil, err
+	}
 	if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" || p.Prompt == nil {
-		return nil, invalidParams("sessionId and prompt are required")
+		return reject(invalidParams("sessionId and prompt are required"))
 	}
 	h, err := a.held(p.SessionID)
 	if err != nil {
@@ -70,9 +79,8 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	}
 	parts, err := promptParts(p.Prompt)
 	if err != nil {
-		return nil, err
+		return reject(err)
 	}
-	pr, _ := ctx.Value(promptKey{}).(*prompt)
 	if pr == nil {
 		pr = h.begin()
 	}
@@ -96,22 +104,19 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	}
 	res, err := turn.Wait(ctx)
 	if ctx.Err() != nil {
-		h.release(pr)
-		h.interrupt(ctx, turn)
-		return nil, ctx.Err()
+		return h.interrupt(ctx, pr, turn)
 	}
 	if err = waitFailure(err, h.cancelled(pr)); err != nil {
 		h.release(pr)
 		return nil, h.failure(ctx, err)
 	}
-	if res.TurnID == "" {
-		h.flush(ctx, h.sess.Snapshot().HeadSeq)
-	} else {
-		h.reached(ctx, pr)
+	h.reached(ctx, pr)
+	if ctx.Err() != nil {
+		return h.interrupt(ctx, pr, turn)
 	}
 	v, err := answer(ctx, res, h.cancelled(pr))
-	if ctx.Err() != nil {
-		return nil, err
+	if cerr := ctx.Err(); cerr != nil {
+		return h.handOff(pr, nil, cerr)
 	}
 	return h.handOff(pr, v, err)
 }
@@ -141,11 +146,14 @@ func (h *held) failure(ctx context.Context, err error) error {
 }
 
 // interrupt ends the turn of a prompt whose request ended before the turn did.
-func (h *held) interrupt(ctx context.Context, t *harness.Turn) {
+// It waits until the pump has sent the updates of the turn, then hands the
+// error of the request to the rpc layer, so the pump holds until the response is queued.
+func (h *held) interrupt(ctx context.Context, p *prompt, t *harness.Turn) (any, error) {
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptBudget)
 	defer cancel()
 	h.cancelTurn(bg, t)
-	h.flush(bg, h.sess.Snapshot().HeadSeq)
+	h.reached(bg, p)
+	return h.handOff(p, nil, ctx.Err())
 }
 
 // waitFailure returns the error of Turn.Wait to report. After a session/cancel

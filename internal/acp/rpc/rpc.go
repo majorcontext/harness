@@ -62,8 +62,8 @@ type Admitter interface {
 }
 
 // Follower is an optional interface of a result or of an error. Serve calls
-// AfterSent once, in the goroutine of the request, after it queued the response. A message that
-// AfterSent queues reaches the peer after the response.
+// AfterSent once, in the goroutine of the request, after it queued the
+// response. A message that AfterSent queues reaches the peer after the response.
 type Follower interface{ AfterSent() }
 
 // Conn is one newline-delimited JSON-RPC 2.0 connection. One goroutine reads,

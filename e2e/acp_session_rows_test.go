@@ -92,7 +92,7 @@ var acpSessionScenarios = []acpScenario{
 	},
 	{
 		name:  "prompt_answer_precedes_the_updates_of_a_later_turn",
-		cite:  "A prompt's answer follows every update of its turn and precedes every update of a later turn.",
+		cite:  "A prompt's answer follows every update of its turn and precedes every update of a later turn",
 		model: []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Text: "first turn", Block: true}}, {Name: "next", Reply: harnesstest.Reply{Text: "second turn"}}},
 		steps: []acpStep{
 			acpNew{as: "a"},
@@ -101,6 +101,20 @@ var acpSessionScenarios = []acpScenario{
 			acpPromptStart{as: "a", id: "b", text: "two"},
 			acpCheck(func(t *testing.T, c *acpConn) { c.fake.Release("slow") }),
 			acpResult{id: "a", stop: "end_turn"},
+			acpResult{id: "b", stop: "end_turn"},
+		},
+	},
+	{
+		name:  "cancelled_prompt_answers_before_the_updates_of_a_queued_prompt",
+		cite:  "A prompt's answer follows every update of its turn and precedes every update of a later turn",
+		model: []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Text: "first turn", Block: true}}, {Name: "next", Reply: harnesstest.Reply{Text: "second turn"}}},
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPromptStart{as: "a", text: "one"},
+			acpAwaitText{text: "first"},
+			acpPromptStart{as: "a", id: "b", text: "two"},
+			acpCancelRequest{id: "a"},
+			acpResult{id: "a", code: acpRequestCanceled},
 			acpResult{id: "b", stop: "end_turn"},
 		},
 	},

@@ -3,15 +3,19 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/majorcontext/harness/protocol"
 )
 
-// turnOwner tracks which prompt waits for each running turn. It returns the
-// prompt whose turn e ends, or nil. The pump calls it for every event, in order.
-func (h *held) turnOwner(e protocol.Event, st *pumpState) *prompt {
+// turnOwner tracks which prompts wait for each running turn. It returns the
+// prompts whose last event e is: the end of their turn, the final status of
+// their command, or the withdrawal of their input. The pump calls it for every
+// event, in order.
+func (h *held) turnOwner(e protocol.Event, st *pumpState) []*prompt {
 	switch e.Kind {
-	case protocol.KindTurnStarted, protocol.KindInputPromoted, protocol.KindTurnEnded:
+	case protocol.KindTurnStarted, protocol.KindInputPromoted, protocol.KindTurnEnded,
+		protocol.KindCommandRecorded, protocol.KindInputWithdrawn:
 	default:
 		return nil
 	}
@@ -22,20 +26,37 @@ func (h *held) turnOwner(e protocol.Event, st *pumpState) *prompt {
 	switch p := p.(type) {
 	case *protocol.TurnStarted:
 		for _, id := range p.InputIDs {
-			if pr := h.byInput(id); pr != nil {
-				st.owners[p.TurnID] = pr
-			}
+			st.own(p.TurnID, h.byInput(id))
 		}
 	case *protocol.InputPromoted:
-		if pr := h.byInput(p.InputID); pr != nil {
-			st.owners[p.TurnID] = pr
-		}
+		st.own(p.TurnID, h.byInput(p.InputID))
 	case *protocol.TurnEnded:
-		pr := st.owners[p.TurnID]
+		owners := st.owners[p.TurnID]
 		delete(st.owners, p.TurnID)
-		return pr
+		return owners
+	case *protocol.CommandRecorded:
+		if p.Status != protocol.CommandAccepted {
+			return one(h.byInput(p.InputID))
+		}
+	case *protocol.InputWithdrawn:
+		return one(h.byInput(p.InputID))
 	}
 	return nil
+}
+
+func one(p *prompt) []*prompt {
+	if p == nil {
+		return nil
+	}
+	return []*prompt{p}
+}
+
+// own records that p waits for the turn. A turn can take several inputs, so a
+// turn can have several prompts; p joins them once.
+func (st *pumpState) own(turn string, p *prompt) {
+	if p != nil && !slices.Contains(st.owners[turn], p) {
+		st.owners[turn] = append(st.owners[turn], p)
+	}
 }
 
 func (h *held) byInput(id string) *prompt {
@@ -104,7 +125,10 @@ type sentError struct {
 	release func()
 }
 
+// Error returns the text of the wrapped error.
 func (e *sentError) Error() string { return e.err.Error() }
+
+// Unwrap returns the wrapped error.
 func (e *sentError) Unwrap() error { return e.err }
 
 // AfterSent releases the pump and ends the prompt.

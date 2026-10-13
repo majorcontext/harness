@@ -38,7 +38,9 @@ type acpScenario struct {
 	files map[string]string
 	// wireOnly leaves the requests, the sessions, and the usage_update and session_info_update frames out of the golden, for a row whose turn depends on timing.
 	wireOnly bool
-	steps    []acpStep
+	// liveAfterLoad compares the frames after the available_commands_update of the last load without their order: the pump starts before the load answers, so a live update can come before or after the answer.
+	liveAfterLoad bool
+	steps         []acpStep
 	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
 	// one that passes an mcpServers entry. The Node wasm host skips both.
 	needsExec, needsMCP bool
@@ -294,6 +296,9 @@ func TestACPScenarios(t *testing.T) {
 				c.finish(stop)
 				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process")
 				got := acpGoldenOf(t, c, sc.wireOnly)
+				if sc.liveAfterLoad {
+					got.Wire = acpOrderFreeTail(got.Wire)
+				}
 				if host.name == nodeHostName {
 					got = alignNodeGolden(t, got)
 				}
@@ -362,4 +367,21 @@ func TestACPRows(t *testing.T) {
 	if len(acpScenarios) == 0 || !slices.ContainsFunc(acpScenarios, func(s acpScenario) bool { return len(s.steps) > 0 }) {
 		t.Error("the ACP table has no row with a step")
 	}
+}
+
+// acpOrderFreeTail sorts the frames after the last available_commands_update, so
+// a golden does not fix the order of a live update and an answer.
+func acpOrderFreeTail(wire []acpFrame) []acpFrame {
+	cut := -1
+	for i, f := range wire {
+		if updateKind(f) == "available_commands_update" {
+			cut = i + 1
+		}
+	}
+	if cut < 0 {
+		return wire
+	}
+	out := slices.Clone(wire)
+	slices.SortFunc(out[cut:], func(a, b acpFrame) int { return strings.Compare(string(a.Frame), string(b.Frame)) })
+	return out
 }

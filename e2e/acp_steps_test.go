@@ -153,7 +153,7 @@ func (s acpAwaitText) run(t *testing.T, c *acpConn) {
 	t.Helper()
 	var got strings.Builder
 	for !strings.Contains(got.String(), s.text) {
-		f := c.read()
+		f := c.awaitFrame()
 		if f["method"] != "session/update" {
 			t.Fatalf("waiting for text %q, got %v", s.text, f)
 		}
@@ -170,7 +170,7 @@ func (s acpAwaitText) run(t *testing.T, c *acpConn) {
 func (s acpAwaitUpdate) run(t *testing.T, c *acpConn) {
 	t.Helper()
 	for {
-		f := c.read()
+		f := c.awaitFrame()
 		if f["method"] != "session/update" {
 			t.Fatalf("waiting for a %s update, got %v", s.kind, f)
 		}
@@ -323,4 +323,28 @@ func chunkOf(f acpFrame) (acpChunk, bool) {
 		return acpChunk{}, false
 	}
 	return acpChunk{key: []string{m.Params.SessionID, u.Kind, u.MessageID}, text: u.Content.Text}, true
+}
+
+// awaitFrame returns the next update for an await step. It first returns the
+// updates that a response wait already read since the last request of the
+// client, because the agent can send a live update before the response. Then it
+// reads the connection.
+func (c *acpConn) awaitFrame() map[string]any {
+	c.t.Helper()
+	last := -1
+	for i, f := range c.wire {
+		if f.Dir == "client" {
+			last = i
+		}
+	}
+	for i := max(c.scanned, last+1); i < len(c.wire); i++ {
+		var m map[string]any
+		if json.Unmarshal(c.wire[i].Frame, &m) == nil && m["method"] == "session/update" {
+			c.scanned = i + 1
+			return m
+		}
+	}
+	f := c.read()
+	c.scanned = len(c.wire)
+	return f
 }
