@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +265,37 @@ func citeErrors(row runtimeRow, spec string, reasons map[string]string) []string
 	return errs
 }
 
+// testStringLiterals holds each row-name string literal of the e2e test files
+// except the dispositions. A row name also reaches a table through a helper
+// call, so no composite literal check finds every name.
+func testStringLiterals(t *testing.T) map[string]bool {
+	t.Helper()
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, file := range files {
+		if file == "runtime_rows_test.go" {
+			continue
+		}
+		f, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+				if s, err := strconv.Unquote(bl.Value); err == nil && rowNamePattern.MatchString(s) {
+					out[s] = true
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
 func goldenNames(t *testing.T, dir string) []string {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join("testdata", dir, "*.golden.json"))
@@ -274,8 +309,9 @@ func goldenNames(t *testing.T, dir string) []string {
 	return names
 }
 
-// TestRuntimeRows checks that each contract golden has one disposition, that
-// each re-golden row has a runtime golden, and that each citation holds.
+// TestRuntimeRows checks that each golden has one disposition, that a same or
+// pending row has a contract golden, that a re-golden row has a runtime golden
+// only, that a deleted row has no golden, and that each citation holds.
 func TestRuntimeRows(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
@@ -286,17 +322,29 @@ func TestRuntimeRows(t *testing.T) {
 	reasons := loadReasons(t)
 	used := map[string]bool{}
 	serve, runtime := goldenNames(t, "contract"), goldenNames(t, "runtime")
+	scenarios := testStringLiterals(t)
 	for _, name := range serve {
 		if _, ok := runtimeRows[name]; !ok {
 			t.Errorf("golden %s has no runtime disposition", name)
 		}
 	}
 	for name, row := range runtimeRows {
+		if _, ok := scenarios[name]; !ok {
+			t.Errorf("row %s names no scenario", name)
+		}
+		hasServe, hasRuntime := slices.Contains(serve, name), slices.Contains(runtime, name)
+		wantServe := row.kind == rowSame || row.kind == rowPending
 		switch {
-		case !slices.Contains(serve, name):
-			t.Errorf("disposition %s names no golden", name)
-		case row.kind == rowRegolden != slices.Contains(runtime, name):
-			t.Errorf("row %s is %s, and a runtime golden exists = %t", name, row, slices.Contains(runtime, name))
+		case wantServe && !hasServe:
+			t.Errorf("row %s is %s and needs a contract golden", name, row)
+		case !wantServe && hasServe:
+			t.Errorf("row %s is %s and has a contract golden that it does not use", name, row)
+		}
+		switch {
+		case row.kind == rowRegolden && !hasRuntime:
+			t.Errorf("row %s is %s and needs a runtime golden", name, row)
+		case row.kind != rowRegolden && hasRuntime:
+			t.Errorf("row %s is %s and has a runtime golden that it does not use", name, row)
 		}
 		for _, c := range row.cites {
 			used[c] = true
