@@ -76,8 +76,8 @@ const (
 func (s *Source) unavailable() string {
 	var down []string
 	for _, name := range s.names {
-		h := s.health[name]
-		if s.servers[name].up() {
+		up, h := s.state(name)
+		if up {
 			continue
 		}
 		if h.parked {
@@ -91,6 +91,17 @@ func (s *Source) unavailable() string {
 	}
 	return "[mcp: unavailable — " + strings.Join(down, ", ") +
 		". Tools from these servers are temporarily absent and may return later in this session.]"
+}
+
+// state returns whether server is connected and what its connects left behind. The caller holds s.mu.
+// A server of the parent is read under the lock of the parent.
+func (s *Source) state(server string) (bool, health) {
+	if !s.owns(server) && s.parent != nil {
+		s.parent.mu.Lock()
+		defer s.parent.mu.Unlock()
+		return s.parent.servers[server].up(), *s.parent.health[server]
+	}
+	return s.servers[server].up(), *s.health[server]
 }
 
 // serverStatus is one server in the result of the status action.
@@ -108,8 +119,8 @@ func (s *Source) status() []serverStatus {
 	defer s.mu.Unlock()
 	out := make([]serverStatus, 0, len(s.names))
 	for _, name := range s.names {
-		h := s.health[name]
-		out = append(out, serverStatus{Name: name, Connected: s.servers[name].up(), Attempts: h.attempts, Parked: h.parked, Reason: h.reason})
+		up, h := s.state(name)
+		out = append(out, serverStatus{Name: name, Connected: up, Attempts: h.attempts, Parked: h.parked, Reason: h.reason})
 	}
 	return out
 }

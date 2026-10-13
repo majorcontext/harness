@@ -152,8 +152,9 @@ type Runtime struct {
 	tree    *tree.Tree
 	// procs is nil without a WorkDir.
 	procs *process.Manager
-	// mcp is nil without MCP servers.
-	mcp *mcpsrc.Source
+	// mcp is nil without MCP servers. mcpCfg is the config of the runtime source.
+	mcp    *mcpsrc.Source
+	mcpCfg config.Config
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
@@ -249,6 +250,7 @@ func New(opts Options) (*Runtime, error) {
 		}
 	}
 	r.mcp = mcpsrc.New(opts.Config, r.log)
+	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log})
 	for _, t := range tools {
@@ -288,10 +290,14 @@ func positive[T int | float64](v, def T) T {
 }
 
 // Create creates a session and runs it. An empty model is Config.Model, or
-// config.DefaultModel.
-func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Session, error) {
+// config.DefaultModel. A SessionOption applies to this session only.
+func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts ...SessionOption) (*Session, error) {
 	if req.Model == "" {
 		req.Model = r.resolve("")
+	}
+	so, err := r.sessionOptions(opts)
+	if err != nil {
+		return nil, err
 	}
 	if err := r.startPlugins(ctx, false); err != nil {
 		return nil, err
@@ -302,14 +308,14 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	}
 	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin,
 		Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
-	return r.create(ctx, id, launch{created: &created})
+	return r.create(ctx, id, launch{created: &created, mcp: so.mcp})
 }
 
 func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, error) {
 	if r.workDir != "" {
 		l.created.WorkDir = r.workDir
 	}
-	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
+	if err := r.checkModel(l.created.Model, l.created.AllowedTools, len(l.mcp) > 0); err != nil {
 		return nil, err
 	}
 	return r.load(ctx, id, l)
@@ -319,11 +325,15 @@ func newSuffix() string { return strings.ToLower(rand.Text()) }
 
 // Open acquires a session, fences earlier owners, replays its log, and runs
 // it. A session that this runtime already runs is returned as is.
-func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
+func (r *Runtime) Open(ctx context.Context, id string, opts ...SessionOption) (*Session, error) {
 	if err := storecheck.Name(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return r.load(ctx, id, launch{})
+	so, err := r.sessionOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	return r.load(ctx, id, launch{mcp: so.mcp})
 }
 
 // launch is how a load starts a session that this runtime does not run yet.
@@ -335,13 +345,15 @@ type launch struct {
 	// profile is the agent profile of the session, when the caller has read
 	// it.
 	profile *prompt.Profile
+	// mcp holds the session MCP servers of WithSessionMCP.
+	mcp map[string]config.MCPServerSpec
 }
 
 func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	if err := r.startPlugins(ctx, false); err != nil {
+	if err := cmp.Or(r.startPlugins(ctx, false), r.checkSessionTools(l.mcp)); err != nil {
 		return nil, err
 	}
 	if err := r.yieldCatchUp(ctx, id); err != nil {
@@ -370,11 +382,9 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		return nil, err
 	}
 	profile := r.profile(c.Agent, l.profile)
-	var plug *pluginsrc.Session
-	if r.plugins != nil {
-		plug = r.plugins.Session(id)
-	}
+	plug := r.pluginSession(id)
 	sp := selftool.NewPrompt(r.prompt(), c.Agent, profile, r.procs, r.workDir)
+	sm := r.sessionSource(l.mcp)
 	var a *session.Actor
 	cfg := session.Config{
 		ID:              id,
@@ -385,7 +395,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp),
+		MCPServers:      l.mcp,
+		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
 		Retain:          r.workDir != "",
 		Prompt:          sp.System,
 		Appended:        r.appended(id, plug),
@@ -402,9 +413,10 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 			if a != nil && a.Rejected() {
 				r.syncStopped.Store(true)
 			}
+			sm.Close()
 			r.forget(id, e, closeDone)
 		},
-		Check: r.changeModel,
+		Check: r.changeModel(len(l.mcp) > 0),
 	}
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
@@ -412,9 +424,17 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		a, err = session.Open(ctx, cfg)
 	}
 	if err != nil {
+		sm.Close()
 		return nil, err
 	}
 	return &Session{a: a, r: r, id: id, root: root, depth: depth, recovered: make(chan struct{})}, nil
+}
+
+func (r *Runtime) pluginSession(id string) *pluginsrc.Session {
+	if r.plugins == nil {
+		return nil
+	}
+	return r.plugins.Session(id)
 }
 
 // profile returns the agent profile of a session: read, or read from the

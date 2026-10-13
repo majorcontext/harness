@@ -14,6 +14,16 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// MCPServer is an MCP server that one session adds. Command is the argv of a stdio server and URL the
+// endpoint of an HTTP server.
+type MCPServer struct {
+	Command []string
+	Env     []string
+	Dir     string
+	URL     string
+	Headers map[string]string
+}
+
 // ErrRetryable marks a backend error that a new attempt of the turn can fix.
 var ErrRetryable = errors.New("turn: retryable backend error")
 
@@ -87,6 +97,8 @@ type Request struct {
 	// Steered receives a value when a steer input waits for Sink.Steer. It
 	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
+	// MCPServers are the session MCP servers, for a backend that owns MCP. Never log their env or headers.
+	MCPServers map[string]MCPServer
 	// Questions reports that the backend may ask the user a question.
 	Questions bool
 	// Foreign reports History messages that another provider recorded.

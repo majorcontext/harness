@@ -152,6 +152,19 @@ func (p *Plugins) Has(name string) bool {
 	return h != nil && slices.ContainsFunc(h.Tools(), func(d pub.ToolDef) bool { return d.Name == name })
 }
 
+// Names returns the tool names of the started plugins. A nil Plugins has none.
+func (p *Plugins) Names() []string {
+	if p == nil || p.host.Load() == nil {
+		return nil
+	}
+	h := p.host.Load()
+	var out []string
+	for _, d := range h.Tools() {
+		out = append(out, d.Name)
+	}
+	return out
+}
+
 // Session returns the plugins of session id. Call it after Start.
 func (p *Plugins) Session(id string) *Session {
 	host := p.host.Load()
