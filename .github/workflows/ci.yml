@@ -126,5 +126,7 @@ jobs:
 
       - name: Runtime contract
         # Runs the contract rows on harness.Runtime in process by their
-        # dispositions in e2e/runtime_rows_test.go.
-        run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$'
+        # dispositions in e2e/runtime_rows_test.go. A test that has no runtime
+        # subtest runs its whole body under -run, so -skip drops the tests of
+        # the serve binary and the CLI, which the Contract job runs.
+        run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)'

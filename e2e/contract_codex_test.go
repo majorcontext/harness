@@ -172,7 +172,7 @@ func runCodexScenarios(t *testing.T, table []codexScenario) {
 	t.Helper()
 	skipShort(t)
 	for _, h := range []host{serveHost, runtimeHost} {
-		onHost(t, h, table, func(sc codexScenario) (string, bool) { return sc.name, false },
+		onHost(t, h, table, func(sc codexScenario) string { return sc.name },
 			func(t *testing.T, sc codexScenario) observation { return runCodexScenario(t, sc, h) })
 	}
 }

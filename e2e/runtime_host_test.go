@@ -55,14 +55,11 @@ var (
 	serveHost = host{openIn: func(t *testing.T, configPath, workDir string, env map[string]string, args ...string) laneHost {
 		return newServeDriverIn(t, configPath, env, workDir, args...)
 	}}
-	// runtimeHost sets env in the process, so a row that passes env runs alone.
+	// runtimeHost reads env through the Getenv of its runtime, not the process.
 	runtimeHost = host{runtime: true, openIn: func(t *testing.T, configPath, workDir string, env map[string]string, args ...string) laneHost {
 		ask := slices.Contains(args, "--ask-user-question")
 		if len(args) > 1 || len(args) == 1 && !ask {
 			t.Fatalf("the runtime takes only the serve flag --ask-user-question: %q", args)
-		}
-		for k, v := range env {
-			t.Setenv(k, v)
 		}
 		return newRuntimeDriverIn(t, configPath, ask, workDir, env)
 	}}
@@ -107,15 +104,15 @@ const runtimeEnv = "HARNESS_E2E_RUNTIME"
 
 // onHost runs each row of table on h by its disposition. The runtime host
 // runs only with runtimeEnv, and not under -update, which the serve host
-// writes. A serial row sets the process environment, so it runs alone.
-func onHost[S any](t *testing.T, h host, table []S, key func(S) (name string, serial bool), run func(*testing.T, S) observation) {
+// writes. Every row owns its environment, so every row runs in parallel.
+func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func(*testing.T, S) observation) {
 	t.Helper()
 	if h.runtime && (os.Getenv(runtimeEnv) == "" || *updateGoldens) {
 		return
 	}
 	t.Run(h.name(), func(t *testing.T) {
 		for _, sc := range table {
-			name, serial := key(sc)
+			name := key(sc)
 			t.Run(name, func(t *testing.T) {
 				row, ok := runtimeRows[name]
 				if !ok {
@@ -129,7 +126,7 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) (name string, se
 					expectPendingFailure(t, row)
 					return
 				}
-				if (!serial || !h.runtime) && !pending {
+				if !pending {
 					t.Parallel()
 				}
 				obs := run(t, sc)
