@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/imageclamp"
@@ -109,15 +108,11 @@ type apiFunction struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// wireIDPattern is what the chat-completions wire accepts for client-supplied
-// tool_call ids across the family of servers speaking this protocol.
-var wireIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-
 // wireCallID preserves the canonical CallID when it is already wire-safe
 // (true for calls that originated on a server speaking this wire, keeping
 // the prompt cache warm) and derives a deterministic compliant ID otherwise.
 func wireCallID(id string) string {
-	if wireIDPattern.MatchString(id) {
+	if message.WireSafeCallID(id, 64) {
 		return id
 	}
 	return message.ProviderCallID("call_", id, 64)

@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -195,14 +194,11 @@ func cacheControl(ttl string) *apiCacheControl {
 	return &apiCacheControl{Type: "ephemeral"}
 }
 
-// wireIDPattern is what the API accepts for client-supplied tool_use IDs.
-var wireIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-
 // wireCallID preserves the canonical CallID when it is already wire-safe
 // (true for calls that originated on Anthropic, keeping the prompt cache
 // warm) and derives a deterministic compliant ID otherwise.
 func wireCallID(id string) string {
-	if wireIDPattern.MatchString(id) {
+	if message.WireSafeCallID(id, 64) {
 		return id
 	}
 	return message.ProviderCallID("toolu_", id, 64)
