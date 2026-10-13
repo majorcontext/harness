@@ -9,7 +9,7 @@
 #
 # Package        slowest CI run  budget
 # e2e (Contract)         51 s      77 s
-# e2e@runtime            24 s      36 s
+# e2e@runtime            27 s      41 s (its slowest row took 27 s)
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
 # gates                 24 s       36 s (cold build of the fake CLI)
@@ -18,7 +18,7 @@
 leaf 10
 package default 10
 package e2e 77
-package e2e@runtime 36
+package e2e@runtime 41
 package internal/backend/claudecode 21
 package internal/imageclamp 13
 package internal/gates 36
@@ -29,8 +29,8 @@ test internal/gates TestRepository 12
 
 # The first test of the package to start a runtime builds the fake CLI (12 s on CI, budget 1.5 times).
 test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
-# Each row restarts a runtime over a CLI-backed session and replays a large saved state (16 s on CI).
-test e2e TestContractRuntimeClaudeCodeStateChunks 24
+# Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 8 s alone and 16-27 s on CI, where it runs beside the whole parallel package.
+test e2e TestContractRuntimeClaudeCodeStateChunks 40
 # Rows that build a large transcript for a goal evaluator (7-12 s on CI).
 test e2e TestContractGoalEvaluatorTranscript 18
 # Rows that wait for a real hook timeout (6 s on CI).
