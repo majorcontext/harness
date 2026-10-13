@@ -362,6 +362,7 @@ Free to change.
 | `internal/wirescrub` | Replaces ids, tokens, emails, home and temporary paths, and socket and pid paths in a recording with stable placeholders, and lists what a recording still holds |
 | `internal/acptck` | The program that runs the ACP Test Compatibility Kit against `harness acp` with a scripted model and judges the report against `testdata/acp-tck-allow.txt` |
 | `internal/wasmsize` | The program that builds `cmd/harness-wasm` for `GOOS=js` and compares the module size with `testdata/wasm-size-budget.txt` |
+| `internal/testtime` | The program that reads `go test -json`, prints the test log, and fails a test or package over `testdata/test-time-budget.txt` |
 | `internal/gates` | The repository checks of "CI gates" |
 | `internal/testpoll` | Polling for cross-process waits in tests |
 
@@ -1313,7 +1314,8 @@ Unit tests cover pure code only: `Apply`, `internal/acp`, wire transcoders (`int
 | Routes and errors | `internal/gates` reads the route list, the read routes, the Errors table, and the Public packages table of this document, and compares them with the code (see Contract source and Errors) |
 | Wire doubles | `internal/gates` fails when a test double emits a kind, a field, or a JSON type that `testdata/wire` lacks, or a parser reads a field that no recording holds, unless `testdata/wire/allowed.txt` lists it with a reason; it fails on a listed exception that no check needs, and on a recording that holds text that `internal/wirescrub` would replace |
 | Wire clients | `internal/gates` fails when a file of `e2e/` makes an HTTP client that does not come from `wireClient`, `wireClientFor`, or `wireClientReadOnly`; the last also requires the refusals of the read-only host (405 for a route that changes something, 404 for a GET it does not serve) |
-| WebAssembly size | The Static job runs `go run ./internal/wasmsize`. The build of `cmd/harness-wasm` for `GOOS=js GOARCH=wasm` must pass, and the module must stay at or below the raw and `gzip -9` sizes of `testdata/wasm-size-budget.txt` (see WebAssembly) |
+| WebAssembly size | The WebAssembly job runs `go run ./internal/wasmsize`. The build of `cmd/harness-wasm` for `GOOS=js GOARCH=wasm` must pass, and the module must stay at or below the raw and `gzip -9` sizes of `testdata/wasm-size-budget.txt` (see WebAssembly) |
+| Test time | The Unit, Contract, and Runtime contract jobs pipe `go test -json` into `go run ./internal/testtime`. It fails when a test with no subtests, or a package, takes longer than its number in `testdata/test-time-budget.txt`, and it lists the slowest tests in the job summary. Each number is about 2 times the slowest CI run, with a floor. A change that makes a test slower raises its number in the same diff, and its PR body gives the reason |
 | Lint | `govet`, `staticcheck`, `errcheck`, `unused`, `revive` |
 
 The size and test gates compare a branch with its merge base. The route, structure, wire-client, and wire-double gates check the whole tree, with a dated allow list. The protocol drift gate regenerates `protocol/` and fails on a diff.

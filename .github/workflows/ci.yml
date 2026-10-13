@@ -82,9 +82,21 @@ jobs:
           echo "best-of-5 time to initialize: ${best}ms (budget: 50ms)"
           [ "$best" -le 50 ]
 
-      - name: WebAssembly build and size budget
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and size budget
         # Builds cmd/harness-wasm for GOOS=js GOARCH=wasm and fails when the
-        # module is larger than testdata/wasm-size-budget.txt.
+        # module is larger than testdata/wasm-size-budget.txt. The steps that
+        # run the module in a JavaScript host belong in this job.
         run: go run ./internal/wasmsize
 
   unit:
@@ -106,7 +118,12 @@ jobs:
 
       - name: Unit tests
         # The e2e package runs in its own jobs.
-        run: go test -race -count=1 -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$')
+        # testtime prints the test log, fails a test or a package over
+        # testdata/test-time-budget.txt, and lists the slowest tests in the
+        # step summary.
+        run: |
+          set -o pipefail
+          go test -race -count=1 -json -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$') | go run ./internal/testtime -title Unit
 
   contract:
     name: Contract
@@ -126,7 +143,9 @@ jobs:
         # Only the e2e package reads HARNESS_E2E_COVER.
         env:
           HARNESS_E2E_COVER: '1'
-        run: go test -race -count=1 ./e2e/
+        run: |
+          set -o pipefail
+          go test -race -count=1 -json ./e2e/ | go run ./internal/testtime -title Contract
 
   runtime:
     name: Runtime contract
@@ -146,7 +165,9 @@ jobs:
         # dispositions in e2e/runtime_rows_test.go. A test that has no runtime
         # subtest runs its whole body under -run, so -skip drops the tests of
         # the serve binary and the CLI, which the Contract job runs.
-        run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)'
+        run: |
+          set -o pipefail
+          HARNESS_E2E_RUNTIME=1 go test -race -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract'
 
   node-wasm:
     name: Node wasm

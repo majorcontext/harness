@@ -1,0 +1,12 @@
+# Time budgets for go test, read by internal/testtime.
+#   leaf SECONDS                  a test that has no subtests
+#   package PATH|default SECONDS  wall time of one package
+#   test PATH NAME SECONDS        tests of PATH whose name starts with NAME
+# Each number is about 2 times the slowest CI run seen, with a floor, so runner noise does not fail a
+# build and a test that grows several times over does. A change that makes a test slower raises its
+# number in the same diff and states why.
+leaf 45
+package default 45
+package e2e 150
+package internal/workspace 90
+test internal/workspace TestChangesRefusals 75
