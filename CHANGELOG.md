@@ -14,6 +14,7 @@ First tagged release.
 
 ### Added
 
+- **Blocked goal** (`protocol`, `harness`) — a new goal state `blocked` marks an `active` goal that nothing drives: no run, no open turn, no queued goal input, and no turn left to judge. One check moves such a goal to `blocked` with reason `no_driver` at `Open`, after each run settles, after `SetGoal` on a held queue, and after a cancel of an idle session. The check starts no turn and calls no model. Any input, `SetGoal`, or `AdjustGoal` makes the goal `active` again. A blocked goal does not make a session resumable, so a host can let the session sleep. `CancelForEnd` now ends the goal of the session with state `cleared` and reason `ended`, so an ended child starts no further goal turn.
 - **Plugin failure log line** (`harness`) — a plugin hook that fails open writes one `plugin: hook failed` Warn line through the runtime logger, with the plugin name, the hook, and the error text with secrets masked.
 - **Guardrail example** (`examples/guardrail`) — one `plugin.Plugin` value that denies a force push, `rm -rf` on a broad target, and a `read_file` call on a `.env` file. `go run ./examples/guardrail` runs it in the host process, and `examples/guardrail/cmd/guardrail-plugin` serves it as a plugin process.
 - **TypeScript plugin SDK flags** (`sdk/typescript`) — `createPlugin` takes `denyOnFailure: ['toolExecuteBefore']` and `hookTimeouts: { <hookKey>: ms }`, and writes `deny_on_failure` and `hook_timeouts` to the manifest. It throws for a value the host would reject.

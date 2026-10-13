@@ -408,9 +408,26 @@ func (a *Actor) cancel(ctx context.Context, why error) error {
 				return
 			}
 		}
+		if err := a.stopIdleGoal(why); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
 		a.interrupt("", why, reply)
 	})
 	return err
+}
+
+// stopIdleGoal settles the goal of a session that runs nothing after a cancel
+// withdrew its queue: the end of the session ends the goal, and any other
+// cancel blocks an active goal that nothing drives.
+func (a *Actor) stopIdleGoal(why error) error {
+	if a.run != nil {
+		return nil
+	}
+	if g, _ := a.state.Goal(); errors.Is(why, errEndTurn) && liveGoal(g.State) {
+		return a.append(protocol.GoalChanged{State: protocol.GoalCleared, Reason: goalEnded})
+	}
+	return a.blockUndriven()
 }
 
 func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error)) {
@@ -433,19 +450,24 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	}
 }
 
-// goalStopped reports whether a stop for why ends an active goal.
+// goalStopped reports whether a stop for why ends an active goal: a user stop
+// or the end of the session.
 func (a *Actor) goalStopped(why error) bool {
 	g, _ := a.state.Goal()
-	return errors.Is(why, errStopTurn) && g.State == protocol.GoalActive
+	return (errors.Is(why, errStopTurn) || errors.Is(why, errEndTurn)) && g.State == protocol.GoalActive
 }
 
-// endGoal clears an active goal when a user stop ends the run of the actor,
+// endGoal clears an active goal when a user stop or the end of the session ends the run of the actor,
 // and withdraws the queued goal inputs, so no goal turn starts after the stop.
 func (a *Actor) endGoal(why error) error {
 	if !a.goalStopped(why) {
 		return nil
 	}
-	return a.append(append(a.withdrawGoal(), protocol.GoalChanged{State: protocol.GoalCleared, Reason: goalInterrupted})...)
+	reason := goalInterrupted
+	if errors.Is(why, errEndTurn) {
+		reason = goalEnded
+	}
+	return a.append(append(a.withdrawGoal(), protocol.GoalChanged{State: protocol.GoalCleared, Reason: reason})...)
 }
 
 // Release hands the session off: it suspends the running turn at an item

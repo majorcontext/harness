@@ -59,7 +59,11 @@ func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, 
 		}
 		got := protocol.Resolved{Seq: a.state.Head() + 1, Status: protocol.ResolvedDismissed}
 		if dismiss {
-			reply(got, a.append(ev))
+			err := a.append(ev)
+			if err == nil {
+				err = a.blockUndriven()
+			}
+			reply(got, err)
 			return
 		}
 		if a.run != nil {

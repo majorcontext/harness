@@ -537,6 +537,7 @@
             "enum": [
               "active",
               "paused",
+              "blocked",
               "achieved",
               "failed",
               "exhausted",
@@ -610,6 +611,7 @@
             "enum": [
               "active",
               "paused",
+              "blocked",
               "achieved",
               "failed",
               "exhausted",

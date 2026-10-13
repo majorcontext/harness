@@ -159,9 +159,9 @@ type Goal struct {
 	MaxTurns  int    `json:"max_turns,omitempty"`
 }
 
-// GoalView is the goal of a session. State is active, paused, achieved,
-// failed, exhausted, or cleared. Turns counts the judged turns; Verdict is the
-// last verdict; Pauses, the pauses since the last verdict. A paused goal runs again at RetryAt or at an input.
+// GoalView is the goal of a session. State is active, paused, blocked,
+// achieved, failed, exhausted, or cleared. Turns counts the judged turns;
+// Verdict is the last verdict; Pauses, those since it. A paused goal runs again at RetryAt or an input.
 type GoalView struct {
 	Goal
 	State   GoalState `json:"state"`

@@ -158,7 +158,7 @@ export interface Goal {
 }
 
 export interface GoalChanged {
-  state: "active" | "paused" | "achieved" | "failed" | "exhausted" | "cleared";
+  state: "active" | "paused" | "blocked" | "achieved" | "failed" | "exhausted" | "cleared";
   reason?: string;
   retry_at?: string;
 }
@@ -178,7 +178,7 @@ export interface GoalSet {
 export interface GoalView {
   condition: string;
   max_turns?: number;
-  state: "active" | "paused" | "achieved" | "failed" | "exhausted" | "cleared";
+  state: "active" | "paused" | "blocked" | "achieved" | "failed" | "exhausted" | "cleared";
   turns: number;
   pauses?: number;
   verdict?: "met" | "not_met" | "impossible";

@@ -315,6 +315,9 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	case !a.waitsForInput():
 		err = a.settle(true)
 	}
+	if err == nil {
+		err = a.blockUndriven()
+	}
 	return a, err
 }
 

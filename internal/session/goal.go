@@ -39,6 +39,8 @@ const (
 	goalMaxPauses        = 6
 	goalRetriesExhausted = "retries_exhausted"
 	goalInterrupted      = "interrupted"
+	goalEnded            = "ended"
+	goalNoDriver         = "no_driver"
 	// partBytes bounds one part of the transcript of the evaluator, which
 	// keeps the newest messages within a share of the window of the evaluator
 	// model: transcriptShare of the window less transcriptReserve tokens, at
@@ -109,7 +111,7 @@ func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error)) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		g, _ := a.state.Goal()
-		gs, post, err := set(g, g.State == protocol.GoalActive || g.State == protocol.GoalPaused)
+		gs, post, err := set(g, liveGoal(g.State))
 		if err != nil || gs == nil {
 			reply(struct{}{}, err)
 			return
@@ -124,9 +126,18 @@ func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool
 		if err == nil && idle && a.run == nil {
 			err = a.next(true)
 		}
+		if err == nil {
+			err = a.blockUndriven()
+		}
 		reply(struct{}{}, err)
 	})
 	return err
+}
+
+// liveGoal reports whether a goal in state s still pursues its condition,
+// or waits for an input to pursue it.
+func liveGoal(s protocol.GoalState) bool {
+	return s == protocol.GoalActive || s == protocol.GoalPaused || s == protocol.GoalBlocked
 }
 
 // ClearGoal clears the goal and withdraws its queued inputs. A running goal
@@ -168,9 +179,10 @@ func (a *Actor) withdrawGoal() []protocol.Payload {
 	return events
 }
 
-// resumed returns the goal change of an input: any input resumes a paused goal.
+// resumed returns the goal change of an input: any input resumes a paused or
+// blocked goal.
 func (a *Actor) resumed() []protocol.Payload {
-	if g, _ := a.state.Goal(); g.State == protocol.GoalPaused {
+	if g, _ := a.state.Goal(); g.State == protocol.GoalPaused || g.State == protocol.GoalBlocked {
 		return []protocol.Payload{protocol.GoalChanged{State: protocol.GoalActive}}
 	}
 	return nil
@@ -194,7 +206,28 @@ func (a *Actor) settle(check bool) error {
 		a.judge(g)
 		return nil
 	}
-	return a.next(check)
+	if err := a.next(check); err != nil {
+		return err
+	}
+	return a.blockUndriven()
+}
+
+// blockUndriven blocks an active goal that nothing drives: no run, no open
+// turn or request, no queued goal input, no queued input that starts, and no
+// turn left to judge. It starts no turn and calls no model.
+func (a *Actor) blockUndriven() error {
+	g, _ := a.state.Goal()
+	if g.State != protocol.GoalActive || a.run != nil || len(a.releasing) > 0 || len(a.state.Requests()) > 0 || a.judgeable() {
+		return nil
+	}
+	if _, busy := a.state.Turn(); busy {
+		return nil
+	}
+	q := a.state.Queue()
+	if slices.ContainsFunc(q, func(in protocol.InputAdmitted) bool { return in.Source == sourceGoal }) || len(q) > 0 && !a.waitsForInput() {
+		return nil
+	}
+	return a.append(protocol.GoalChanged{State: protocol.GoalBlocked, Reason: goalNoDriver})
 }
 
 // judge runs the evaluator on the session history as the run of the actor.
