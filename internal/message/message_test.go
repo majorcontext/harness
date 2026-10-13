@@ -169,6 +169,27 @@ func TestProviderCallID(t *testing.T) {
 	}
 }
 
+func TestWireSafeCallID(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"toolu_01AbC-xyz", true},
+		{"call_9", true},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{"", false},
+		{"tc.1", false},
+		{"tc 1", false},
+		{"tc:1", false},
+		{"tcé", false},
+	} {
+		if got := WireSafeCallID(tc.id, 64); got != tc.want {
+			t.Errorf("WireSafeCallID(%q, 64) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
 // TestToolCallEmptyArgumentsMarshal is the regression guard for the
 // json.RawMessage footgun where a worker turn's json.Marshal fails with
 // "json: error calling MarshalJSON for type json.RawMessage: unexpected

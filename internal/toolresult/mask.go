@@ -3,6 +3,7 @@ package toolresult
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // secretKeys match as a substring of the key, so AWS_SECRET_ACCESS_KEY
@@ -16,14 +17,18 @@ const secretValue = `[A-Za-z0-9_\-./+=]`
 
 // secretPattern has five shapes: env or YAML, quoted JSON, Bearer, and an
 // unquoted key with a double- or a single-quoted value. RE2 has no
-// backreferences, so each quote has its own alternative.
-var secretPattern = regexp.MustCompile(
-	`(?i)(` + secretKeys + `)(=|:[ \t]+)(` + secretValue + `{8,1000})` +
-		`|("[^"]*(?:` + secretKeys + `)[^"]*")(\s*:\s*)"[^"]*"` +
-		`|(Authorization:\s*Bearer\s+)(` + secretValue + `{8,1000})` +
-		`|(` + secretKeys + `)(=|:[ \t]+)"[^"]{0,1000}"` +
-		`|(` + secretKeys + `)(=|:[ \t]+)'[^']{0,1000}'`,
-)
+// backreferences, so each quote has its own alternative. RE2 unrolls each
+// bounded repeat, so the compile costs milliseconds; it runs on first use,
+// not at process start.
+var secretPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?i)(` + secretKeys + `)(=|:[ \t]+)(` + secretValue + `{8,1000})` +
+			`|("[^"]*(?:` + secretKeys + `)[^"]*")(\s*:\s*)"[^"]*"` +
+			`|(Authorization:\s*Bearer\s+)(` + secretValue + `{8,1000})` +
+			`|(` + secretKeys + `)(=|:[ \t]+)"[^"]{0,1000}"` +
+			`|(` + secretKeys + `)(=|:[ \t]+)'[^']{0,1000}'`,
+	)
+})
 
 var secretKeywords = []string{
 	"secret", "token", "password",
@@ -96,7 +101,7 @@ func groups(lines []string) []string {
 }
 
 func maskSpan(text string) string {
-	matches := secretPattern.FindAllStringSubmatchIndex(text, -1)
+	matches := secretPattern().FindAllStringSubmatchIndex(text, -1)
 	if matches == nil {
 		return text
 	}

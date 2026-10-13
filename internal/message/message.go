@@ -648,6 +648,21 @@ func unmarshalPart(raw json.RawMessage) (Part, error) {
 // actually produced.
 const SyntheticOrphanResultText = "synthesized: no tool_result was found in history for this tool_use; injected to keep the request protocol-valid"
 
+// WireSafeCallID reports whether id is 1 to maxLen bytes of [A-Za-z0-9_-],
+// the tool-call ID shape every provider wire accepts as is.
+func WireSafeCallID(id string, maxLen int) bool {
+	if id == "" || len(id) > maxLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // ProviderCallID derives a deterministic, provider-safe tool-call ID from a
 // canonical CallID. The same input always yields the same output, so
 // retranscoding an unchanged history produces identical wire requests —
