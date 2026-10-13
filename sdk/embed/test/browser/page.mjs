@@ -89,8 +89,9 @@ const rows = {
     await c.notify("session/cancel", { sessionId });
     const done = await turn;
     const endedMs = performance.now() - canceled;
+    const serverSawClose = (await (await fetch("/await-canceled?row=" + encodeURIComponent(row.awaitRow))).text()) === "true";
     await h.close();
-    return { stopReason: done.result?.stopReason, error: done.error, endedMs };
+    return { stopReason: done.result?.stopReason, error: done.error, endedMs, serverSawClose };
   },
 
   // offline leaves the network after the module booted. The driver returns it

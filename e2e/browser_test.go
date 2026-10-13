@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +37,6 @@ type browserSeen struct {
 	method string
 	host   string
 	header http.Header
-	size   int
 }
 
 // browserFront is a fake model origin: the scripted Anthropic server of
@@ -65,7 +65,7 @@ func newBrowserFront(t *testing.T, allow func(requested string) string, steps ..
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		f.mu.Lock()
-		f.seen = append(f.seen, browserSeen{method: r.Method, host: r.Host, header: r.Header.Clone(), size: len(body)})
+		f.seen = append(f.seen, browserSeen{method: r.Method, host: r.Host, header: r.Header.Clone()})
 		f.mu.Unlock()
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
@@ -114,6 +114,11 @@ type browserResult struct {
 	Text       string  `json:"text"`
 	BootMs     float64 `json:"bootMs"`
 	EndedMs    float64 `json:"endedMs"`
+	// ServerSawClose is the answer of the fake origin, asked by the page
+	// before it closes the harness.
+	ServerSawClose bool `json:"serverSawClose"`
+	// BrotliBytes is the size of the module under brotli, from Node's zlib.
+	BrotliBytes int `json:"brotliBytes"`
 	// OfflineFailures counts the model requests that failed while the page was offline.
 	OfflineFailures int      `json:"offlineFailures"`
 	Console         []string `json:"console"`
@@ -126,7 +131,7 @@ type browserResult struct {
 // browserPage serves the page, the sdk/embed sources, the module, and wasm_exec.js
 // on one origin. The page lives under /app, so the relative module and
 // wasm_exec.js URLs of page.mjs must resolve against it.
-func browserPage(t *testing.T, wasm, execJS string) *httptest.Server {
+func browserPage(t *testing.T, wasm, execJS string, awaits *sync.Map) *httptest.Server {
 	t.Helper()
 	root := filepath.Dir(mustGetwd(t))
 	mux := http.NewServeMux()
@@ -144,6 +149,14 @@ func browserPage(t *testing.T, wasm, execJS string) *httptest.Server {
 	file("/app/wasm_exec.js", execJS, "text/javascript")
 	file("/page/page.mjs", filepath.Join(root, "sdk", "embed", "test", "browser", "page.mjs"), "text/javascript")
 	embed := filepath.Join(root, "sdk", "embed")
+	mux.HandleFunc("/await-canceled", func(w http.ResponseWriter, r *http.Request) {
+		wait, ok := awaits.Load(r.URL.Query().Get("row"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, strconv.FormatBool(wait.(func() bool)()))
+	})
 	file("/page/fsstub.mjs", filepath.Join(embed, "test", "browser", "fsstub.mjs"), "text/javascript")
 	file("/embed/worker-impl.mjs", filepath.Join(embed, "src", "worker.mjs"), "text/javascript")
 	mux.HandleFunc("/embed/worker.mjs", func(w http.ResponseWriter, r *http.Request) {
@@ -185,9 +198,9 @@ func browserTools(t *testing.T) (node, embed string) {
 }
 
 // runBrowser runs sdk/embed/test/browser.mjs on the rows and returns the results by row name.
-func runBrowser(t *testing.T, node, embed, origin string, rows []map[string]any) map[string]browserResult {
+func runBrowser(t *testing.T, node, embed, origin, modulePath string, rows []map[string]any) map[string]browserResult {
 	t.Helper()
-	b, err := json.Marshal(map[string]any{"origin": origin, "rows": rows})
+	b, err := json.Marshal(map[string]any{"origin": origin, "modulePath": modulePath, "rows": rows})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +243,9 @@ type browserKit struct {
 	t    *testing.T
 	wasm string
 	rows []browserRow
+	// awaits maps a row name to a function that the page calls, before any
+	// teardown, to learn whether the model server saw the connection close.
+	awaits sync.Map
 }
 
 func (k *browserKit) add(name string, spec map[string]any, check func(t *testing.T, res browserResult, page string)) {
@@ -309,13 +325,18 @@ func (k *browserKit) streamRows() {
 	text, add, noFailure := k.text, k.add, k.noFailure
 	{
 		f := newBrowserFront(t, nil, harnesstest.Step{Name: "hold", Reply: harnesstest.Reply{Text: "partial", Block: true}})
-		add("cancel mid-stream closes the model connection", map[string]any{"kind": "cancel", "baseURL": f.URL}, func(t *testing.T, res browserResult, _ string) {
+		const name = "cancel mid-stream closes the model connection"
+		k.awaits.Store(name, func() bool { return f.fake.AwaitCanceled("hold", 2*time.Second) })
+		add(name, map[string]any{"kind": "cancel", "baseURL": f.URL, "awaitRow": name}, func(t *testing.T, res browserResult, _ string) {
 			noFailure(t, res)
 			if res.StopReason != "cancelled" {
 				t.Errorf("stopReason = %q, error %+v", res.StopReason, res.Error)
 			}
-			if !f.fake.AwaitCanceled("hold", 5*time.Second) {
-				t.Error("the model server did not see the connection close")
+			if !res.ServerSawClose {
+				t.Error("the model server did not see the connection close before the page tore anything down")
+			}
+			if res.EndedMs > 2000 {
+				t.Errorf("the turn ended %.0f ms after the cancel, want under 2000", res.EndedMs)
 			}
 		})
 	}
@@ -327,7 +348,7 @@ func (k *browserKit) streamRows() {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("module %d bytes, boot %.0f ms at 50 Mbps and 40 ms", info.Size(), res.BootMs)
+			t.Logf("module %d bytes raw, %d bytes brotli (information only), boot %.0f ms at 50 Mbps and 40 ms", info.Size(), res.BrotliBytes, res.BootMs)
 			if res.StopReason != "end_turn" {
 				t.Errorf("stopReason = %q, error %+v", res.StopReason, res.Error)
 			}
@@ -410,8 +431,8 @@ func (k *browserKit) headerRows() {
 			if p.header.Get("Cookie") != "" {
 				t.Errorf("Cookie = %q, want none", p.header.Get("Cookie"))
 			}
-			if p.size == 5 {
-				t.Error("Content-Length 5 reached the server")
+			if got := p.header.Get("Connection"); got == "close" {
+				t.Errorf("Connection = %q, want the browser value", got)
 			}
 			if got := p.header.Get("X-Custom"); got != "kept" {
 				t.Errorf("X-Custom = %q, want kept", got)
@@ -465,8 +486,8 @@ func TestBrowserRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := browserPage(t, wasm, execJS)
 	k := &browserKit{t: t, wasm: wasm}
+	page := browserPage(t, wasm, execJS, &k.awaits)
 	k.turnRows()
 	k.streamRows()
 	k.failureRows()
@@ -475,7 +496,7 @@ func TestBrowserRows(t *testing.T) {
 	for i, r := range k.rows {
 		specs[i] = r.spec
 	}
-	results := runBrowser(t, node, embed, page.URL, specs)
+	results := runBrowser(t, node, embed, page.URL, wasm, specs)
 	for _, r := range k.rows {
 		t.Run(r.name, func(t *testing.T) {
 			res, ok := results[r.name]

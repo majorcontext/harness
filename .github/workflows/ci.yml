@@ -363,6 +363,8 @@ jobs:
   browser:
     name: Browser
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
 
@@ -391,7 +393,7 @@ jobs:
       - name: Install Playwright
         # The lock file pins Playwright.
         working-directory: sdk/embed
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Cache the Chromium download
         uses: actions/cache@v4

@@ -1,7 +1,8 @@
-// A file system for the Worker of the browser job: every path is absent and
-// nothing can be created (the root directory exists), so the module finds no project config and no
-// AGENTS.md. It stands in for the ZenFS shim, which the module does not have
-// yet. fd 1 and 2 go to the console. It must load before wasm_exec.js.
+// A file system for the Worker of the browser job: the root directory exists
+// and every other path is absent, so the module finds no project config and no
+// AGENTS.md, and nothing can be created. It stands in for the ZenFS shim, which
+// the module does not have yet. fd 1 and 2 go to the console. It must load
+// before wasm_exec.js.
 const absent = () => Object.assign(new Error("no such file or directory"), { code: "ENOENT" });
 const decoder = new TextDecoder("utf-8");
 let pending = "";
@@ -18,7 +19,10 @@ function write(buf) {
 
 const fail = (callback) => callback(absent());
 
-const root = { dev: 0, ino: 1, mode: 0o40755, nlink: 1, uid: 0, gid: 0, rdev: 0, size: 0, blksize: 4096, blocks: 0, atimeMs: 0, mtimeMs: 0, ctimeMs: 0, isDirectory: () => true, isFile: () => false };
+const root = {
+  dev: 0, ino: 1, mode: 0o40755, nlink: 1, uid: 0, gid: 0, rdev: 0, size: 0, blksize: 4096, blocks: 0,
+  atimeMs: 0, mtimeMs: 0, ctimeMs: 0, isDirectory: () => true, isFile: () => false,
+};
 const stat = (path, callback) => (path === "/" ? callback(null, root) : fail(callback));
 
 globalThis.fs = {

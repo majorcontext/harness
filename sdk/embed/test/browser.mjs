@@ -6,9 +6,10 @@
 // options: {origin, rows: [{name, kind, ...}]}. A row with throttle runs with
 // the network of a 50 Mbps link and 40 ms round trip.
 import fs from "node:fs";
+import zlib from "node:zlib";
 import { chromium } from "playwright";
 
-const { origin, rows } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const { origin, rows, modulePath } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 
 async function runRow(browser, row) {
   const context = await browser.newContext();
@@ -45,7 +46,9 @@ async function runRow(browser, row) {
   const result = await Promise.race([page.evaluate(async (r) => (await import("/page/page.mjs")).runRow(r), row), deadline]);
   clearTimeout(timer);
   await context.close();
-  return { ...result, offlineFailures, console: console_ };
+  const out = { ...result, offlineFailures, console: console_ };
+  if (row.throttle && modulePath) out.brotliBytes = zlib.brotliCompressSync(fs.readFileSync(modulePath)).length;
+  return out;
 }
 
 let browser;
