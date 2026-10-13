@@ -6,6 +6,7 @@ import (
 
 	"github.com/majorcontext/harness/protocol"
 
+	"github.com/majorcontext/harness/internal/selftool"
 	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
@@ -38,7 +39,7 @@ func (r *Runtime) owns(name string) bool {
 
 // builtin reports whether name is a built-in tool of the WorkDir.
 func (r *Runtime) builtin(name string) bool {
-	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == sessionInfoName)
+	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == selftool.SessionInfoName)
 }
 
 // source returns the tools of session id for each model call: the runtime
@@ -46,20 +47,20 @@ func (r *Runtime) builtin(name string) bool {
 // them. A session tool binds to the session or drops out. Each session has
 // its own file tools, because the write_file guard belongs to one session,
 // and its own session_info tool, which reads what sp recorded of the session.
-func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
+func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc.Session, sp *selftool.Prompt) turn.Source {
 	var static, loopOnly []turn.Tool
-	var model *modelTool
+	var model *selftool.Model
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
 			if t = b.Bind(id, child, depth); t == nil {
 				continue
 			}
 		}
-		if m, ok := t.(modelTool); ok {
+		if m, ok := t.(selftool.Model); ok {
 			model = &m
 			continue
 		}
-		if _, ok := t.(goalTool); ok {
+		if _, ok := t.(selftool.Goal); ok {
 			loopOnly = append(loopOnly, t)
 			continue
 		}
@@ -76,9 +77,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		}})
 	}
 	if model != nil {
-		list := *model
-		list.listOnly = true
-		full, listed := turn.Fixed{*model}, turn.Fixed{list}
+		full, listed := turn.Fixed{*model}, turn.Fixed{model.ListOnly()}
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
 			if c.OwnsLoop {
 				return listed
@@ -91,7 +90,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		if plug != nil {
 			env = plug.ShellEnv
 		}
-		files := turn.Fixed(append(builtin.Tools(r.workDir, env), &sessionInfoTool{r: r, session: id, prompt: sp}))
+		files := turn.Fixed(append(builtin.Tools(r.workDir, env), selftool.NewSessionInfo(toolHost{r}, id, sp)))
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
 			if c.OwnsLoop {
 				return nil
@@ -115,7 +114,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			return plug
 		}})
 	}
-	return sp.recording(srcs)
+	return sp.Recording(srcs)
 }
 
 // perModel gives each model call the Source that pick chooses for the

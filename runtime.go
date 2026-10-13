@@ -22,6 +22,7 @@ import (
 	"github.com/majorcontext/harness/internal/listing"
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/prompt"
+	"github.com/majorcontext/harness/internal/selftool"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/storecheck"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
@@ -210,25 +211,26 @@ func New(opts Options) (*Runtime, error) {
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
 	r.base, r.cancel = context.WithCancel(context.Background())
 	r.closing, r.closeStart = context.WithCancel(r.base)
+	catalog := selftool.Catalog{Aliases: r.aliases, Providers: func() []string { return r.models.Providers() }}
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },
-		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix, Log: r.log})
+		Resolve: opts.Config.ResolveModel, CheckModel: catalog.CheckChild, Suffix: newSuffix, Log: r.log})
 	tools := make([]turn.Tool, len(opts.Tools))
 	for i, t := range opts.Tools {
 		tools[i] = embedded{t}
 	}
-	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == modelToolName }) {
-		return nil, fmt.Errorf("harness: tool name %q is reserved", modelToolName)
+	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == selftool.ModelName }) {
+		return nil, fmt.Errorf("harness: tool name %q is reserved", selftool.ModelName)
 	}
 	if r.evaluator != "" {
-		tools = append(slices.Clip(tools), goalTool{r: r})
+		tools = append(slices.Clip(tools), selftool.NewGoal(toolHost{r}))
 	}
 	if opts.WorkDir != "" {
 		r.procs, r.workDir = proc.NewManager(opts.WorkDir, opts.Config.Processes), opts.WorkDir
 		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
 		if opts.Config.ModelToolEnabled() {
-			tools = append(tools, modelTool{r: r})
+			tools = append(tools, selftool.NewModel(toolHost{r}, catalog))
 		}
 	}
 	r.mcp = mcpsrc.New(opts.Config, r.log)
@@ -351,7 +353,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if r.plugins != nil {
 		plug = r.plugins.Session(id)
 	}
-	sp := r.newSessionPrompt(c.Agent, profile)
+	sp := selftool.NewPrompt(r.prompt(), c.Agent, profile, r.procs, r.workDir)
 	var a *session.Actor
 	cfg := session.Config{
 		ID:              id,
@@ -364,7 +366,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Evaluator:       r.evaluator,
 		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp),
 		Retain:          r.workDir != "",
-		Prompt:          sp.system,
+		Prompt:          sp.System,
 		Appended:        r.appended(id, plug),
 		Params:          chatParams(plug),
 		Sync:            r.sync,
