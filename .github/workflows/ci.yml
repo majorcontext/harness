@@ -70,6 +70,11 @@ jobs:
           echo "best-of-5 startup: ${best}ms (budget: 50ms)"
           [ "$best" -le 50 ]
 
+      - name: WebAssembly build and size budget
+        # Builds cmd/harness-wasm for GOOS=js GOARCH=wasm and fails when the
+        # module is larger than testdata/wasm-size-budget.txt.
+        run: go run ./internal/wasmsize
+
   unit:
     name: Unit
     runs-on: ubuntu-latest

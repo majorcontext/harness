@@ -353,6 +353,7 @@ Free to change.
 | `internal/mcp`, `plugin`, `skill`, `command`, `process`, `imageclamp` | The MCP client and server roles, the plugin host (`internal/plugin`, with the JSON-RPC transport in `internal/plugin/wire`), skill discovery, the slash-command registry, the process manager, and image clamping |
 | `internal/wirerecord` | The program that records the real wire streams of `testdata/wire` and scrubs them. It makes real model calls only with `HARNESS_RECORD_WIRE=1` and reads keys from the environment |
 | `internal/wirescrub` | Replaces ids, tokens, emails, home and temporary paths, and socket and pid paths in a recording with stable placeholders, and lists what a recording still holds |
+| `internal/wasmsize` | The program that builds `cmd/harness-wasm` for `GOOS=js` and compares the module size with `testdata/wasm-size-budget.txt` |
 | `internal/gates` | The repository checks of "CI gates" |
 | `internal/testpoll` | Polling for cross-process waits in tests |
 
@@ -1136,6 +1137,27 @@ One `Config` struct. `Defaults` is the one defaults table, and each accessor rea
 
 The package imports only the standard library. The `config-leaf` depguard rule enforces it.
 
+## WebAssembly
+
+The root package and the packages it imports build for `GOOS=js GOARCH=wasm`. `cmd/harness-wasm` is the entry of the module. It has the build tag `js`, so a build for another target skips it. A JavaScript host runs the module: a browser page, a Worker, or Node with the `wasm_exec.js` of the same Go version. Harness embeds no JavaScript engine. `GOOS=js` is the only wasm target. The Go scheduler runs on the event loop of the host, so `time` and timers work with no extra interface.
+
+Every capability that the host supplies is a field of `harness.Options`. The module adds no seam.
+
+| Seam | Declared in | On `GOOS=js` |
+| --- | --- | --- |
+| Model transport | `Options.ModelTransport` | The host sets it. The default `net/http` transport on js cannot cancel a response body, and under Node it is off. |
+| Store | `harness.Store` | `store.DiskStore` on the `fs` object of the host, or `store.MemStore`. |
+| Owner | `Options.Owner` | `NewLocalOwner`. `flock` does not exist on js, so the store does not fence two instances (see Store). The host gives one writer to each store. |
+| Tools | `Options.Tools`, `CreateSession.AllowedTools` | The built-in file and search tools run on the `fs` object. `bash`, `process`, and `WorkspaceChanges` fail with `exec: executable file not found`. A host hides them with `AllowedTools` and adds its own tools in `Options.Tools`. |
+| Logger | `Options.Logger` | Any `slog.Logger`. |
+| Getenv and config | `Options.Getenv`, `Options.Config` | Host closures and a `config.Config` value. |
+
+The Codex websocket transport cannot dial on js, because a browser `WebSocket` cannot set request headers. The build tag of `ws_dial.go` and `ws_dial_js.go` in `internal/provider/openai` separates the dial. On js the dial fails, and the request goes over HTTP.
+
+### Size budget
+
+`go run ./internal/wasmsize`, from the repository root, builds `cmd/harness-wasm` with `-trimpath -ldflags="-s -w"` and measures the module raw and with `gzip -9`. It fails when either size is above its number in `testdata/wasm-size-budget.txt`. Each number is the measured size plus 3%, rounded up to 50,000 bytes. A change that grows the module raises the number in the same diff, and its PR body gives the reason.
+
 ## Tests and guardrails
 
 ### Contract suite
@@ -1171,6 +1193,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders (`internal/provider/*
 | Routes and errors | `internal/gates` reads the route list, the read routes, the Errors table, and the Public packages table of this document, and compares them with the code (see Contract source and Errors) |
 | Wire doubles | `internal/gates` fails when a test double emits a kind, a field, or a JSON type that `testdata/wire` lacks, or a parser reads a field that no recording holds, unless `testdata/wire/allowed.txt` lists it with a reason; it fails on a listed exception that no check needs, and on a recording that holds text that `internal/wirescrub` would replace |
 | Wire clients | `internal/gates` fails when a file of `e2e/` makes an HTTP client that does not come from `wireClient`, `wireClientFor`, or `wireClientReadOnly`; the last also requires the refusals of the read-only host (405 for a route that changes something, 404 for a GET it does not serve) |
+| WebAssembly size | The Static job runs `go run ./internal/wasmsize`. The build of `cmd/harness-wasm` for `GOOS=js GOARCH=wasm` must pass, and the module must stay at or below the raw and `gzip -9` sizes of `testdata/wasm-size-budget.txt` (see WebAssembly) |
 | Lint | `govet`, `staticcheck`, `errcheck`, `unused`, `revive` |
 
 The size and test gates compare a branch with its merge base. The route, structure, wire-client, and wire-double gates check the whole tree, with a dated allow list. The protocol drift gate regenerates `protocol/` and fails on a diff.
