@@ -60,6 +60,8 @@ func TestContractModels(t *testing.T) {
 				"model":                "codex/gpt-6-sol",
 				"goal_evaluator_model": "",
 				"providers": map[string]any{
+					"anthropic":   key(nil),
+					"openai":      key(map[string]any{"api_key_env": "OPENAI_API_KEY"}),
 					"codex":       key(map[string]any{"type": "openai", "base_url": "https://codex.test"}),
 					"claude-code": map[string]any{"type": "claude-code-cli"},
 					"work":        key(map[string]any{"type": "openai", "base_url": "https://work.test"}),

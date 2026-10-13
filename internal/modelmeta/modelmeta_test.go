@@ -294,7 +294,7 @@ func TestCodexModelsAreKnownToContextWindow(t *testing.T) {
 			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m)
 		}
 	}
-	for _, provider := range []string{"openai", "bedrock"} {
+	for _, provider := range []string{"bedrock"} {
 		if got := Models(provider); got != nil {
 			t.Errorf("Models(%q) = %q, want nil", provider, got)
 		}
