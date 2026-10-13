@@ -147,7 +147,7 @@ func TestContractCLIRunFailsClearlyWhenAnotherProcessTakesOverTheSession(t *test
 func TestContractCLIRunContinueTakesTheNewestSessionOfTheWorkDir(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	h := newCLIHost(t, nil, replyText("one"), replyText("two"), replyText("three"), replyText("four"), replyText("five"))
+	h := newCLIHost(t, nil, replyText("one"), replyText("two"), replyText("three"), replyText("four"), replyText("five"), replyText("six"))
 	dirA, dirB := h.work, t.TempDir()
 	ids := map[string]string{}
 	for _, dir := range []string{dirA, dirB} {
@@ -158,6 +158,12 @@ func TestContractCLIRunContinueTakesTheNewestSessionOfTheWorkDir(t *testing.T) {
 		}
 		ids[dir] = sessionID(t, errOut)
 	}
+	h.work = dirA
+	_, errOut, code := h.run("run", "-p", "newer")
+	if code != 0 || sessionID(t, errOut) == ids[dirA] {
+		t.Fatalf("second run in %s = %d, want a new session\n%s", dirA, code, errOut)
+	}
+	ids[dirA] = sessionID(t, errOut)
 	for _, dir := range []string{dirA, dirB, dirA} {
 		h.work = dir
 		if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != ids[dir] {
@@ -174,8 +180,8 @@ func TestContractCLIRunContinueTakesTheNewestSessionOfTheWorkDir(t *testing.T) {
 		t.Errorf("model requests = %d, want %d: a failed -c must call no model", got, requests)
 	}
 	list, _, _ := h.run("sessions")
-	if got := strings.Count(strings.TrimSpace(list), "\n") + 1; got != 2 {
-		t.Errorf("sessions = %q, want the 2 sessions of the two directories", list)
+	if got := strings.Count(strings.TrimSpace(list), "\n") + 1; got != 3 {
+		t.Errorf("sessions = %q, want the 3 sessions of the two directories", list)
 	}
 }
 

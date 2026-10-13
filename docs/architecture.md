@@ -121,7 +121,8 @@ type Options struct {
 	// WorkDir is the directory of a coding agent. Each session gets the
 	// built-in tools, bash among them, so it grants command execution.
 	// Empty: no file is read, no process runs, no built-in tool exists,
-	// and the system prompt is append_system_prompt alone.
+	// and the system prompt is append_system_prompt alone. New makes a
+	// relative path absolute, and fails when it cannot.
 	WorkDir string
 	// Version is the build version that the banner names. Empty: no banner.
 	Version string
@@ -536,7 +537,7 @@ type Ownership interface {
 }
 ```
 
-`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`. A `Create` waits for an `Open` of the same ID that is in flight, and creates the session when that `Open` fails, so an `Open` that races a spawn never fails the spawn. An empty `model` is `Config.Model`, or `config.DefaultModel` when that is empty, after one alias lookup. An explicit model gets no alias lookup. Every session that the runtime creates, a child too, records the cleaned `WorkDir` of the runtime as `work_dir` in `session.created`; `protocol.Session.work_dir` shows it. It is empty without a `WorkDir`, and for a session whose log has no `work_dir`.
+`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`. A `Create` waits for an `Open` of the same ID that is in flight, and creates the session when that `Open` fails, so an `Open` that races a spawn never fails the spawn. An empty `model` is `Config.Model`, or `config.DefaultModel` when that is empty, after one alias lookup. An explicit model gets no alias lookup. Every session that the runtime creates, a child too, records the absolute, cleaned `WorkDir` of the runtime as `work_dir` in `session.created`; `protocol.Session.work_dir` shows it. It is empty without a `WorkDir`, and for a session whose log has no `work_dir`.
 
 Start-up order of `Open` after `Acquire`:
 
