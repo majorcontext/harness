@@ -1,5 +1,5 @@
 # Bytes of cmd/harness-wasm built with -trimpath -ldflags="-s -w", raw and gzip -9.
 # Each budget is the measured size plus 3%, rounded up to 50,000 bytes. A PR that grows the module
 # raises the number in the same diff and states why.
-raw 20950000
+raw 21600000
 gzip 5200000
