@@ -108,8 +108,8 @@ func TestLoadRejectsAKeyThatIsNotAField(t *testing.T) {
 
 // Provider validation runs once, on the merged config (see mergeAndValidate
 // and LoadProject) — never per file (see Load) — so a single incomplete
-// layer is not itself rejected; only the merged, defaulted result is
-// judged. Tests below exercise validation through mergeAndValidate,
+// layer is not itself rejected; only the merged result is judged. Tests
+// below exercise validation through mergeAndValidate,
 // merging the config under test against a zero-value override (equivalent
 // to "no project file"), which is exactly what LoadProject does when
 // .harness.json is absent.
@@ -127,13 +127,8 @@ func TestLoadProviderUnknownTypeFails(t *testing.T) {
 	}
 }
 
-// TestLoadProviderEmptyTypeOnUnknownKeyFails guards against the
-// suppress-but-register-nothing bug: an entry with a missing or typo'd
-// type used to silently disable a zero-config default the moment the key
-// was present at all, while never itself registering a client. A partial
-// entry for a key with no built-in default (see Defaults().Providers)
-// must still fail loudly, naming the key and the valid types, even though
-// validation now runs post-merge.
+// An entry with no type under a key other than anthropic or openai fails on
+// the merged config, and the error names the key and the valid types.
 func TestLoadProviderEmptyTypeOnUnknownKeyFails(t *testing.T) {
 	c := &Config{Providers: map[string]Provider{
 		"mycompat": {BaseURL: "http://x"},
