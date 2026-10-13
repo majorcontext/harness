@@ -54,19 +54,17 @@ func notOwned(cause string) *protocol.Error {
 }
 
 type takeover struct {
-	lost     *protocol.Error
+	id       string
 	conflict error
 }
 
-func (t *takeover) Error() string   { return t.lost.Message }
-func (t *takeover) Unwrap() []error { return []error{t.lost, t.conflict} }
-
-// takenOver returns the ownership-lost error of a session whose append conflicted with a later owner. It still matches ErrConflict.
-func takenOver(id string, conflict error) error {
-	lost := *ErrOwnershipLost
-	lost.Message = "harness: session not owned: another process took over session " + id
-	return &takeover{lost: &lost, conflict: conflict}
+func (t *takeover) Error() string {
+	return "harness: session not owned: another process took over session " + t.id
 }
+func (t *takeover) Unwrap() []error { return []error{ErrOwnershipLost, t.conflict} }
+
+// takenOver returns the stop cause of a session whose append conflicted with a later owner. It matches ErrOwnershipLost and ErrConflict.
+func takenOver(id string, conflict error) error { return &takeover{id: id, conflict: conflict} }
 
 // Log is the record log of one session. Append fails with an error that
 // matches ErrConflict when expectedSeq is not the head.
