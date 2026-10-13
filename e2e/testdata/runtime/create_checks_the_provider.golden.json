@@ -31,7 +31,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "create.anthropic/no-such-model": {
@@ -54,7 +55,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "create.bifrost/fireworks/accounts/fireworks/routers/firerouter": {
@@ -76,7 +78,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "create.codex/gpt-5": {
@@ -98,7 +101,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "create.codex/no-such-model": {
@@ -121,7 +125,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "create.fast": {
@@ -173,7 +178,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

@@ -387,7 +387,8 @@
         "usage": {
           "input_tokens": 1815,
           "output_tokens": 7
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

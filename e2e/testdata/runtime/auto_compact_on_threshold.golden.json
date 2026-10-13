@@ -369,7 +369,8 @@
         "usage": {
           "input_tokens": 905,
           "output_tokens": 4
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -396,7 +397,8 @@
         "usage": {
           "input_tokens": 915,
           "output_tokens": 10
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#3": {
@@ -423,7 +425,8 @@
         "usage": {
           "input_tokens": 920,
           "output_tokens": 13
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

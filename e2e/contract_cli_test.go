@@ -45,7 +45,7 @@ func (h *cliHost) start(args ...string) (wait func() (stdout, stderr string, cod
 	ctx, cancel := context.WithTimeout(h.t.Context(), waitBound)
 	cmd := exec.CommandContext(ctx, harnessBin, args...)
 	cmd.Dir = h.work
-	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
+	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key", "PWD": h.work})
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Start(); err != nil {
@@ -141,6 +141,82 @@ func TestContractCLIRunFailsClearlyWhenAnotherProcessTakesOverTheSession(t *test
 	}
 	if strings.Contains(errOut, "harness: harness:") {
 		t.Errorf("stderr doubles the prefix:\n%s", errOut)
+	}
+}
+
+func TestContractCLIRunContinueTakesTheNewestSessionOfTheWorkDir(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, replyText("one"), replyText("two"), replyText("three"), replyText("four"), replyText("five"), replyText("six"))
+	dirA, dirB := h.work, t.TempDir()
+	ids := map[string]string{}
+	for _, dir := range []string{dirA, dirB} {
+		h.work = dir
+		_, errOut, code := h.run("run", "-p", "hi")
+		if code != 0 {
+			t.Fatalf("run in %s = %d\n%s", dir, code, errOut)
+		}
+		ids[dir] = sessionID(t, errOut)
+	}
+	h.work = dirA
+	_, errOut, code := h.run("run", "-p", "newer")
+	if code != 0 || sessionID(t, errOut) == ids[dirA] {
+		t.Fatalf("second run in %s = %d, want a new session\n%s", dirA, code, errOut)
+	}
+	ids[dirA] = sessionID(t, errOut)
+	for _, dir := range []string{dirA, dirB, dirA} {
+		h.work = dir
+		if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != ids[dir] {
+			t.Fatalf("run -c in %s = %d, want session %s\n%s", dir, code, ids[dir], errOut)
+		}
+	}
+
+	requests := len(h.fake.Requests())
+	h.work = t.TempDir()
+	if _, errOut, code := h.run("run", "-c", "-p", "again"); code == 0 || !strings.Contains(errOut, "no sessions to continue") {
+		t.Errorf("run -c in a directory with no session = %d %q, want a failure that names the missing session", code, errOut)
+	}
+	if got := len(h.fake.Requests()); got != requests {
+		t.Errorf("model requests = %d, want %d: a failed -c must call no model", got, requests)
+	}
+	list, _, _ := h.run("sessions")
+	if got := strings.Count(strings.TrimSpace(list), "\n") + 1; got != 3 {
+		t.Errorf("sessions = %q, want the 3 sessions of the two directories", list)
+	}
+}
+
+func TestContractCLIRunContinueSkipsTheChildrenOfTheWorkDir(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
+	_, errOut, code := h.run("run", "-p", "delegate")
+	if code != 0 {
+		t.Fatalf("run with a task child = %d\n%s", code, errOut)
+	}
+	root := sessionID(t, errOut)
+	if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != root {
+		t.Errorf("run -c = %d, want the root session %s and not its child\n%s", code, root, errOut)
+	}
+}
+
+func TestContractCLIRunContinueMatchesTheWorkDirThroughASymlink(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, replyText("one"), replyText("two"))
+	real := h.work
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	h.work = link
+	_, errOut, code := h.run("run", "-p", "hi")
+	if code != 0 {
+		t.Fatalf("run through the link = %d\n%s", code, errOut)
+	}
+	id := sessionID(t, errOut)
+	h.work = real
+	if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != id {
+		t.Errorf("run -c from the resolved path = %d, want session %s\n%s", code, id, errOut)
 	}
 }
 

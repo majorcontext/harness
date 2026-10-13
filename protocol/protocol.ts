@@ -426,6 +426,7 @@ export interface Session {
   parent_id?: string;
   agent?: string;
   origin: string;
+  work_dir?: string;
   model: string;
   effort?: string;
   service_tier?: string;
@@ -451,6 +452,7 @@ export interface SessionCreated {
   model: string;
   settings: Settings;
   origin: string;
+  work_dir?: string;
   allowed_tools?: string[];
 }
 

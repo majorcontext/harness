@@ -200,6 +200,8 @@ type SessionCreated struct {
 	Model    string   `json:"model"`
 	Settings Settings `json:"settings"`
 	Origin   string   `json:"origin"`
+	// WorkDir is the work directory of the runtime that created the session.
+	WorkDir string `json:"work_dir,omitempty"`
 	// AllowedTools names the tools of the session: those of the embedder, the
 	// runtime, plugins, and MCP, and its model. nil allows every tool.
 	AllowedTools []string `json:"allowed_tools,omitzero"`

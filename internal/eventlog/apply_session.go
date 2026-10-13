@@ -16,6 +16,7 @@ func (s *State) applyCreated(e protocol.SessionCreated, t time.Time) error {
 	}
 	s.created = true
 	s.parentID, s.agent, s.origin, s.model, s.settings, s.allowed = e.ParentID, e.Agent, e.Origin, e.Model, e.Settings, e.AllowedTools
+	s.workDir = e.WorkDir
 	s.createdAt = t
 	s.inputs = map[string]input{}
 	s.requests = map[string]pendingRequest{}

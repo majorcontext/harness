@@ -455,7 +455,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -481,7 +482,8 @@
         "usage": {
           "input_tokens": 15,
           "output_tokens": 9
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.kid": {
@@ -510,7 +512,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.kid#2": {
@@ -539,7 +542,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

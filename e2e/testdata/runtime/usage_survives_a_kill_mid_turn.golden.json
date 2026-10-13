@@ -167,7 +167,8 @@
         "usage": {
           "input_tokens": 100,
           "output_tokens": 10
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

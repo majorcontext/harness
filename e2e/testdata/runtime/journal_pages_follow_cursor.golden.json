@@ -230,7 +230,8 @@
             "d": {
               "model": "anthropic/claude-fable-5",
               "origin": "",
-              "settings": {}
+              "settings": {},
+              "work_dir": "\u003cworkdir\u003e"
             },
             "k": "session.created",
             "seq": 1,

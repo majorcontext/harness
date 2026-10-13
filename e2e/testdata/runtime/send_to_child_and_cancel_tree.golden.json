@@ -273,7 +273,8 @@
         "usage": {
           "input_tokens": 10,
           "output_tokens": 6
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.kid": {
@@ -302,7 +303,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.kid#2": {
@@ -330,7 +332,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "send.kid": {

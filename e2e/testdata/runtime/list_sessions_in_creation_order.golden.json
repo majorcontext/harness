@@ -30,7 +30,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -49,7 +50,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -68,7 +70,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -87,7 +90,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -106,7 +110,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -125,7 +130,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }
@@ -151,7 +157,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -170,7 +177,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -189,7 +197,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -208,7 +217,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -227,7 +237,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -246,7 +257,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }

@@ -760,7 +760,8 @@
         "usage": {
           "input_tokens": 30,
           "output_tokens": 18
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

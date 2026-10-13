@@ -212,7 +212,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -246,7 +247,8 @@
           "cache_write_tokens": 5,
           "input_tokens": 106,
           "output_tokens": 47
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

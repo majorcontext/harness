@@ -61,14 +61,15 @@ To change the default, set `model` in a config file (see
 
 ### Continue the session
 
-`-c` continues the most recent session, so the model knows what it did:
+`-c` continues the newest session that you started in the current directory, so the model knows what it did. A session from another directory is never chosen, and `-c` fails when the current directory has no session:
 
 ```bash
 harness run -c -p "Now write a test for each fix"
 ```
 
-The most recent session is the newest one of all your projects, not only the
-current directory's.
+`-c` continues the newest session that you started in the current directory.
+It fails when that directory has none, and never continues a session of another
+project. Use `-r` for any other session.
 
 ### Go back to an older session
 

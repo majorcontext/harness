@@ -133,7 +133,8 @@
           "cache_write_tokens": 5753,
           "input_tokens": 6,
           "output_tokens": 187
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -168,7 +169,8 @@
           "cache_write_tokens": 5753,
           "input_tokens": 6,
           "output_tokens": 187
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

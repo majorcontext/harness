@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -110,6 +111,7 @@ type Options struct {
 	// command execution. Empty: the system prompt is
 	// Config.AppendSystemPrompt alone, no file is read, no process runs, no
 	// built-in tool exists, and no session has the task tool.
+	// New makes a relative path absolute, and fails when it cannot.
 	WorkDir string
 	// AskUserQuestion declares that the embedder renders a question of a
 	// backend that owns its loop, such as AskUserQuestion of Claude Code, and
@@ -200,6 +202,13 @@ func New(opts Options) (*Runtime, error) {
 	if opts.RunToken != "" && opts.ServeURL == "" {
 		return nil, errors.New("harness: Options.RunToken needs Options.ServeURL")
 	}
+	if opts.WorkDir != "" {
+		abs, err := filepath.Abs(opts.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("harness: Options.WorkDir: %w", err)
+		}
+		opts.WorkDir = abs
+	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
@@ -232,7 +241,8 @@ func New(opts Options) (*Runtime, error) {
 		tools = append(slices.Clip(tools), selftool.NewGoal(toolHost{r}))
 	}
 	if opts.WorkDir != "" {
-		r.procs, r.workDir = proc.NewManager(opts.WorkDir, opts.Config.Processes), opts.WorkDir
+		r.workDir = opts.WorkDir
+		r.procs = proc.NewManager(opts.WorkDir, opts.Config.Processes)
 		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
 		if opts.Config.ModelToolEnabled() {
 			tools = append(tools, selftool.NewModel(toolHost{r}, catalog))
@@ -296,6 +306,9 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 }
 
 func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, error) {
+	if r.workDir != "" {
+		l.created.WorkDir = r.workDir
+	}
 	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
 		return nil, err
 	}
