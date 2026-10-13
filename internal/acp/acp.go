@@ -51,7 +51,6 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 		"agentInfo":       map[string]any{"name": "harness", "title": "Harness", "version": a.cfg.Version},
 		"agentCapabilities": map[string]any{
 			"loadSession":         false,
-			"promptCapabilities":  map[string]any{"image": true, "embeddedContext": true},
 			"mcpCapabilities":     map[string]any{"http": false, "sse": false},
 			"sessionCapabilities": map[string]any{},
 		},

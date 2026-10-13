@@ -838,7 +838,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
 - `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-c` names the newest root session whose `work_dir` equals the cleaned current directory, and fails with `no sessions to continue in <dir>` when none does; a session from another directory, and a session with no `work_dir`, is never chosen. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Prompt` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, when the goal evaluator failed (the goal is `paused`, or `failed` with a verdict other than `impossible`; stderr names the error), or when a typed command did not succeed. It exits 3 when the evaluator judged the `-goal` not met, or `impossible`, and no turn failed. It prints `session: <id>` on stderr when it saved the session. A command that fails prints its error on stderr with the prefix `harness: `, once: an error that already starts with that prefix is not prefixed again. A run whose session another process opened later fails with the takeover error of `Ownership` and exits 1.
 - `-h` and `--help` on any command (`version` included), and `help` at the top level and after `plugin`, print the usage to stdout and exit 0. A missing command prints the usage to stderr. An unknown command prints `harness: unknown command "<x>"`, a missing or unknown `plugin` subcommand prints `harness: plugin: missing subcommand` or `harness: plugin: unknown subcommand "<x>"`, and a flag error or a positional argument that a command does not take (for example `serve help` or `sessions extra`) prints `harness: <error>`, each followed by the usage on stderr. All of these exit 2, and the command does not start. One parse function in `cmd/harness` handles the flags of every command.
-- `acp` serves ACP over stdin and stdout (see ACP). It takes no flag. It reads no config file, makes no network call, and builds no runtime before it answers `initialize`; it builds none yet. A `SIGINT` or `SIGTERM` ends it.
+- `acp` serves ACP over stdin and stdout (see ACP). It takes no flag. It reads no config file, makes no network call, and builds no runtime. A `SIGINT` or `SIGTERM` ends it with status 0.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins`, which probes each plugin again and refreshes the manifest cache, and prints each plugin with its hooks.
 - `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline; a session whose tool ignores the cancel then keeps its lease until the lease expires. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
@@ -849,7 +849,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 ### Schema
 
-- The schema is `schema.json` of the release `schema-v1.25.0` of `github.com/agentclientprotocol/agent-client-protocol`, with sha256 `4bcd1d2051ff7ed379bd9b234fb9b09c5ab9245478698e9fab805bd9b52a33a6`. The repository keeps it at `e2e/testdata/acp/schema.json`.
+- The schema is `schema.json` of the release `schema-v1.25.0` of `github.com/agentclientprotocol/agent-client-protocol`, with sha256 `4bcd1d2051ff7ed379bd9b234fb9b09c5ab9245478698e9fab805bd9b52a33a6`. The repository keeps it at `e2e/testdata/acp/schema/schema.json`.
 - A test fails when the file does not match the digest.
 - The test client checks each frame in both directions against the schema. The validator implements each keyword that the schema uses. A schema that uses another keyword fails at load, in a test.
 - One protocol version holds for each connection. Version 1 is the only version.
@@ -860,11 +860,13 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - One goroutine reads the lines, one goroutine writes, and each request runs in its own goroutine. The messages of one goroutine reach stdout in the order of its writes.
 - A blank line is skipped. A line of more than 64 MiB is skipped and answered with `-32700`.
 - A line that is not JSON is answered with `-32700` and a null id, and the connection stays open.
-- A line that is JSON but not a request, a notification, or a response is answered with `-32600`.
+- A line that is JSON but not a request, a notification, or a response is answered with `-32600` and a null id. An `id` that is not a string, a number, or null is the same error.
+- A request with a null `id` is a request and is answered. A message with no `id` is a notification.
+- Two numbers that are equal name one id, so `1` and `1.0` are the same id. A request whose id names a request that still runs is answered with `-32600`.
 - A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.
 - `$/cancel_request` cancels the context of the request that `requestId` names. If that request then fails, the answer is `-32800`. A `requestId` that names no running request is ignored.
 - A handler that fails with an error that is not a JSON-RPC error is answered with `-32603` and the text `Internal error`. The error text never reaches the client.
-- At the end of the input, the process writes the responses of the requests that run, and then exits with status 0.
+- At the end of the input, the process writes the responses of the requests that run, and then exits with status 0. After `SIGINT` or `SIGTERM` it cancels the requests that run, writes their responses, and exits with status 0. It exits with status 1 when it cannot read its input.
 
 ### Methods
 
@@ -880,7 +882,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - The agent info is `name` `harness`, `title` `Harness`, and the harness version.
 - When the client version is not 1, the answer is version 1, the latest version of the agent. When it is 1, the answer is 1.
 - `initialize` without a `protocolVersion` that is an integer from 0 to 65535 is `-32602`.
-- The agent capabilities are `loadSession` false, `promptCapabilities` with `image` and `embeddedContext` true, `mcpCapabilities` with `http` and `sse` false, and no `sessionCapabilities`.
+- The agent capabilities are `loadSession` false, `mcpCapabilities` with `http` and `sse` false, and empty `sessionCapabilities`. They hold no `promptCapabilities`: the agent advertises a capability only when the method that uses it works.
 - The agent never sends `session/request_permission`: harness has no permission system.
 
 ## turn and backend

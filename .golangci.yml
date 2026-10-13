@@ -49,7 +49,7 @@ linters:
               desc: backends and tools sit below the HTTP mapping
         acp-seam:
           files:
-            - "**/internal/acp/*.go"
+            - "**/internal/acp/**"
           list-mode: strict
           allow:
             - $gostd

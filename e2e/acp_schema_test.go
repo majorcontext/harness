@@ -17,7 +17,7 @@ import (
 	"unicode/utf8"
 )
 
-// acpSchemaDigest is the sha256 of testdata/acp/schema.json, the schema.json
+// acpSchemaDigest is the sha256 of testdata/acp/schema/schema.json, the schema.json
 // asset of the schema-v1.25.0 release of agentclientprotocol/agent-client-protocol.
 const acpSchemaDigest = "4bcd1d2051ff7ed379bd9b234fb9b09c5ab9245478698e9fab805bd9b52a33a6"
 
@@ -41,13 +41,13 @@ type acpSchema struct {
 // keyword that the validator does not implement.
 func loadACPSchema(t *testing.T) *acpSchema {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "acp", "schema.json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "acp", "schema", "schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw)
 	if got := hex.EncodeToString(sum[:]); got != acpSchemaDigest {
-		t.Fatalf("testdata/acp/schema.json has sha256 %s, want the pinned %s", got, acpSchemaDigest)
+		t.Fatalf("testdata/acp/schema/schema.json has sha256 %s, want the pinned %s", got, acpSchemaDigest)
 	}
 	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -118,12 +118,18 @@ func (s *acpSchema) def(name string, v any) []string {
 
 // frame validates one JSON-RPC message against the whole-protocol schema. The
 // first branch of the root describes what an agent sends, the second what a
-// client sends.
+// client sends, and the third the protocol-level notifications whose method
+// starts with "$/".
 func (s *acpSchema) frame(fromAgent bool, v any) []string {
 	branches, _ := s.root["anyOf"].([]any)
 	i := 1
 	if fromAgent {
 		i = 0
+	}
+	if m, ok := v.(map[string]any); ok {
+		if method, _ := m["method"].(string); strings.HasPrefix(method, "$/") {
+			i = 2
+		}
 	}
 	return s.validate(branches[i], v, "frame")
 }
@@ -437,6 +443,9 @@ func TestACPPinnedSchemaChecksFrames(t *testing.T) {
 		{"initialize response", true, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}`, true},
 		{"error response", true, `{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}`, true},
 		{"error response with a code the protocol lacks", true, `{"jsonrpc":"2.0","id":1,"error":{"code":"x","message":"m"}}`, false},
+		{"cancel request from the client", false, `{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":1}}`, true},
+		{"cancel request from the agent", true, `{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"a"}}`, true},
+		{"cancel request with a bad id", false, `{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":{}}}`, false},
 		{"response with neither result nor error", true, `{"jsonrpc":"2.0","id":1}`, false},
 	}
 	for _, tc := range cases {

@@ -28,10 +28,6 @@
               "http": false,
               "sse": false
             },
-            "promptCapabilities": {
-              "embeddedContext": true,
-              "image": true
-            },
             "sessionCapabilities": {}
           },
           "agentInfo": {
@@ -71,10 +67,6 @@
             "mcpCapabilities": {
               "http": false,
               "sse": false
-            },
-            "promptCapabilities": {
-              "embeddedContext": true,
-              "image": true
             },
             "sessionCapabilities": {}
           },

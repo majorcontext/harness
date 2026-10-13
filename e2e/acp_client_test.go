@@ -193,8 +193,8 @@ func (c *acpConn) finish(stop func()) {
 	stop()
 }
 
-// startACPBinary runs `harness acp` in its own process group.
-func startACPBinary(t *testing.T) (io.WriteCloser, io.Reader, func()) {
+// startACPProc runs `harness acp` in its own process group.
+func startACPProc(t *testing.T) (io.WriteCloser, io.Reader, *procGroup, *lockedBuffer) {
 	t.Helper()
 	inR, inW, err := os.Pipe()
 	if err != nil {
@@ -212,22 +212,32 @@ func startACPBinary(t *testing.T) (io.WriteCloser, io.Reader, func()) {
 	g := startGroup(t, cmd)
 	_ = inR.Close()
 	_ = outW.Close()
-	stop := func() {
-		t.Helper()
-		timer := time.NewTimer(waitBound)
-		defer timer.Stop()
-		select {
-		case <-g.exited:
-		case <-timer.C:
-			g.kill()
-			t.Errorf("harness acp did not end after its input closed\nstderr:\n%s", stderr.String())
-			return
-		}
-		if !cmd.ProcessState.Success() {
-			t.Errorf("harness acp ended with %s\nstderr:\n%s", cmd.ProcessState, stderr.String())
-		}
+	return inW, outR, g, stderr
+}
+
+// waitACPExit waits for the process to end and fails the test on a bad exit.
+func waitACPExit(t *testing.T, g *procGroup, stderr *lockedBuffer) {
+	t.Helper()
+	timer := time.NewTimer(waitBound)
+	defer timer.Stop()
+	select {
+	case <-g.exited:
+	case <-timer.C:
+		g.kill()
+		t.Errorf("harness acp did not end\nstderr:\n%s", stderr.String())
+		return
 	}
-	return inW, outR, stop
+	if !g.cmd.ProcessState.Success() {
+		t.Errorf("harness acp ended with %s\nstderr:\n%s", g.cmd.ProcessState, stderr.String())
+	}
+}
+
+// startACPBinary runs `harness acp` and returns a stop function that waits for
+// it to end after its input closes.
+func startACPBinary(t *testing.T) (io.WriteCloser, io.Reader, func()) {
+	t.Helper()
+	in, out, g, stderr := startACPProc(t)
+	return in, out, func() { t.Helper(); waitACPExit(t, g, stderr) }
 }
 
 func (c *acpConn) mustBeError(f map[string]any, code int) {

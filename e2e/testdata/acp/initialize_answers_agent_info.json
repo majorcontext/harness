@@ -28,10 +28,6 @@
               "http": false,
               "sse": false
             },
-            "promptCapabilities": {
-              "embeddedContext": true,
-              "image": true
-            },
             "sessionCapabilities": {}
           },
           "agentInfo": {

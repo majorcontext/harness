@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"os"
@@ -12,7 +13,7 @@ import (
 )
 
 // acpCmd serves ACP over stdin and stdout. stdout holds ACP frames only; the
-// logger writes to stderr. It reads no config before it answers initialize.
+// logger writes to stderr. It reads no config before it answers initialize. SIGINT and SIGTERM end it with status 0.
 func acpCmd(args []string) error {
 	fs := flag.NewFlagSet("acp", flag.ContinueOnError)
 	if err := parseFlags(fs, args); err != nil {
@@ -22,5 +23,9 @@ func acpCmd(args []string) error {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return acp.Serve(ctx, os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger})
+	err := acp.Serve(ctx, os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger})
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return nil
+	}
+	return err
 }

@@ -123,6 +123,22 @@ var acpScenarios = []acpScenario{
 		},
 	},
 	{
+		name: "id_of_other_type_is_invalid",
+		cite: "An `id` that is not a string, a number, or null is the same error.",
+		steps: []acpStep{
+			acpRaw{line: `{"jsonrpc":"2.0","id":true,"method":"initialize","params":{"protocolVersion":1}}`, code: acpInvalidRequest},
+			acpRaw{line: `{"jsonrpc":"2.0","id":{"a":1},"method":"initialize","params":{"protocolVersion":1}}`, code: acpInvalidRequest},
+			acpInit{version: 1, want: 1},
+		},
+	},
+	{
+		name: "request_with_null_id_is_answered",
+		cite: "A request with a null `id` is a request and is answered.",
+		steps: []acpStep{
+			acpRaw{line: `{"jsonrpc":"2.0","id":null,"method":"bogus/method"}`, code: acpMethodNotFound},
+		},
+	},
+	{
 		name: "unknown_method_is_not_found",
 		cite: "A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.",
 		steps: []acpStep{
@@ -219,7 +235,7 @@ func TestACPRows(t *testing.T) {
 	}
 	for _, g := range goldens {
 		name := strings.TrimSuffix(filepath.Base(g), ".json")
-		if name != "schema" && !names[name] {
+		if !names[name] {
 			t.Errorf("golden %s has no ACP row", g)
 		}
 	}

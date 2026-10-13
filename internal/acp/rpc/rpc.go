@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"strconv"
 	"sync"
 )
 
@@ -313,12 +315,39 @@ func (c *Conn) shutdown() {
 	c.mu.Lock()
 	c.closed = true
 	for id, ch := range c.pending {
-		ch <- reply{err: &Error{Code: CodeInternal, Message: ErrClosed.Error()}}
+		deliver(ch, reply{err: &Error{Code: CodeInternal, Message: ErrClosed.Error()}})
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
 	close(c.quit)
 	<-c.wdone
+}
+
+// deliver hands r to the call that waits on ch. The channel holds one reply, so
+// a second reply to the same call is dropped and never blocks the reader.
+func deliver(ch chan<- reply, r reply) {
+	select {
+	case ch <- r:
+	default:
+	}
+}
+
+// idKey returns a key that is equal for equal ids, so 1 and 1.0 match. An id
+// is a string, a number, or null; anything else reports false.
+func idKey(raw json.RawMessage) (string, bool) {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", false
+	}
+	switch x := v.(type) {
+	case nil:
+		return "null", true
+	case string:
+		return "s:" + x, true
+	case float64:
+		return "n:" + strconv.FormatFloat(x, 'g', -1, 64), true
+	}
+	return "", false
 }
 
 func (c *Conn) dispatch(ctx context.Context, h Handler, text []byte, wg *sync.WaitGroup) {
@@ -331,6 +360,10 @@ func (c *Conn) dispatch(ctx context.Context, h Handler, text []byte, wg *sync.Wa
 		c.sendError(nil, &Error{Code: code, Message: msg})
 		return
 	}
+	if _, ok := idKey(m.ID); len(m.ID) > 0 && !ok {
+		c.sendError(nil, &Error{Code: CodeInvalidRequest, Message: "Invalid Request"})
+		return
+	}
 	switch {
 	case m.JSONRPC != "2.0":
 		c.sendError(m.ID, &Error{Code: CodeInvalidRequest, Message: "Invalid Request"})
@@ -338,7 +371,7 @@ func (c *Conn) dispatch(ctx context.Context, h Handler, text []byte, wg *sync.Wa
 		c.sendError(m.ID, &Error{Code: CodeInvalidRequest, Message: "Invalid Request"})
 	case m.Method == nil:
 		c.response(m)
-	case isAbsent(m.ID):
+	case len(m.ID) == 0:
 		if *m.Method == "$/cancel_request" {
 			c.cancelRequest(m.Params)
 			return
@@ -349,22 +382,19 @@ func (c *Conn) dispatch(ctx context.Context, h Handler, text []byte, wg *sync.Wa
 	}
 }
 
-// isAbsent reports whether a message has no id. A null id also marks a
-// notification here, because a request with a null id has no usable response.
-func isAbsent(id json.RawMessage) bool { return len(id) == 0 || string(id) == "null" }
-
 func (c *Conn) response(m message) {
-	var id int64
-	if err := json.Unmarshal(m.ID, &id); err != nil {
+	var f float64
+	if err := json.Unmarshal(m.ID, &f); err != nil || f != math.Trunc(f) {
 		return
 	}
+	id := int64(f)
 	c.mu.Lock()
 	ch := c.pending[id]
+	delete(c.pending, id)
 	c.mu.Unlock()
-	if ch == nil {
-		return
+	if ch != nil {
+		deliver(ch, reply{result: m.Result, err: m.Error})
 	}
-	ch <- reply{result: m.Result, err: m.Error}
 }
 
 func (c *Conn) cancelRequest(params json.RawMessage) {
@@ -374,8 +404,12 @@ func (c *Conn) cancelRequest(params json.RawMessage) {
 	if json.Unmarshal(params, &p) != nil {
 		return
 	}
+	key, ok := idKey(p.RequestID)
+	if !ok {
+		return
+	}
 	c.mu.Lock()
-	cancel := c.running[string(p.RequestID)]
+	cancel := c.running[key]
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel(errRequestCancelled)
@@ -385,9 +419,15 @@ func (c *Conn) cancelRequest(params json.RawMessage) {
 var errRequestCancelled = errors.New("rpc: request cancelled by the peer")
 
 func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGroup) {
-	key := string(m.ID)
+	key, _ := idKey(m.ID)
 	rctx, cancel := context.WithCancelCause(ctx)
 	c.mu.Lock()
+	if _, busy := c.running[key]; busy {
+		c.mu.Unlock()
+		cancel(nil)
+		c.sendError(m.ID, &Error{Code: CodeInvalidRequest, Message: "Invalid Request", Data: "a request with this id is running"})
+		return
+	}
 	c.running[key] = cancel
 	c.mu.Unlock()
 	wg.Go(func() {
