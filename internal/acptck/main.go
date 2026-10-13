@@ -37,7 +37,7 @@ func main() {
 	}
 }
 
-func run(harness, tck, allowFile, reportPath string) error {
+func run(harness, tck, allowFile, reportPath string) (err error) {
 	allowed, err := readAllow(allowFile)
 	if err != nil {
 		return err
@@ -54,10 +54,15 @@ func run(harness, tck, allowFile, reportPath string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(work)
+	defer func() { _ = os.RemoveAll(work) }()
 
 	var t scriptTB
-	defer t.close()
+	defer func() {
+		t.close()
+		if err == nil && len(t.errs) > 0 {
+			err = fmt.Errorf("the scripted model saw unexpected requests: %v", t.errs)
+		}
+	}()
 	model := harnesstest.NewAnthropic(&t,
 		harnesstest.Step{Name: "hold", Match: harnesstest.LastUserText(cancelPrompt), Reply: harnesstest.Reply{Text: "working", Block: true}, Repeat: true},
 		harnesstest.Step{Name: "answer", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
@@ -72,6 +77,9 @@ func run(harness, tck, allowFile, reportPath string) error {
 		return err
 	}
 
+	if err := os.Remove(reportPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	cmd := exec.Command("uv", "--project", tck, "run", "--frozen", "acp-tck",
 		"--agent-cwd", agentCwd,
 		"--agent-env", "HARNESS_CONFIG="+cfgPath,
@@ -96,7 +104,7 @@ func run(harness, tck, allowFile, reportPath string) error {
 	ok := judge(&buf, rep, allowed)
 	_, _ = os.Stdout.Write(buf.Bytes())
 	if !ok {
-		return fmt.Errorf("the MANDATORY tier does not match %s", allowFile)
+		return fmt.Errorf("the MANDATORY and CAPABILITY tiers do not match %s", allowFile)
 	}
 	return nil
 }
@@ -122,13 +130,14 @@ func writeConfig(dir, baseURL string) (string, error) {
 type scriptTB struct {
 	testing.TB
 	cleanups []func()
+	errs     []string
 }
 
 func (t *scriptTB) Helper()          {}
 func (t *scriptTB) Failed() bool     { return false }
 func (t *scriptTB) Cleanup(f func()) { t.cleanups = append(t.cleanups, f) }
 func (t *scriptTB) Errorf(f string, a ...any) {
-	fmt.Fprintf(os.Stderr, "acptck: "+f+"\n", a...)
+	t.errs = append(t.errs, fmt.Sprintf(f, a...))
 }
 
 func (t *scriptTB) close() {

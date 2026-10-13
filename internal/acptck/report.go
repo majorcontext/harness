@@ -26,7 +26,7 @@ func readAllow(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	allowed := map[string]string{}
 	sc := bufio.NewScanner(f)
 	for n := 1; sc.Scan(); n++ {
@@ -45,7 +45,7 @@ func readAllow(path string) (map[string]string, error) {
 
 func failing(r requirement) bool { return r.Status == "FAIL" || r.Status == "NOT_TESTED" }
 
-// judge prints the tier table and reports whether every failing MANDATORY
+// judge prints the tier table and reports whether every failing MANDATORY or CAPABILITY
 // requirement is on the allow-list. An allow-list entry for a requirement that passes is
 // stale and fails the judgement.
 func judge(w io.Writer, rep report, allowed map[string]string) bool {
@@ -60,14 +60,14 @@ func judge(w io.Writer, rep report, allowed map[string]string) bool {
 				rows = append(rows, r)
 			}
 		}
-		fmt.Fprintf(w, "\n%s: %v\n", tier, counts)
+		_, _ = fmt.Fprintf(w, "\n%s: %v\n", tier, counts)
 		slices.SortFunc(rows, func(a, b requirement) int { return strings.Compare(a.ID, b.ID) })
 		for _, r := range rows {
 			if !failing(r) {
 				continue
 			}
 			note := ""
-			if tier == "MANDATORY" {
+			if tier == "MANDATORY" || tier == "CAPABILITY" {
 				if reason, listed := allowed[r.ID]; listed {
 					note = "  allowed: " + reason
 					seen[r.ID] = true
@@ -76,12 +76,12 @@ func judge(w io.Writer, rep report, allowed map[string]string) bool {
 					ok = false
 				}
 			}
-			fmt.Fprintf(w, "  %-12s %s%s\n", r.Status, r.ID, note)
+			_, _ = fmt.Fprintf(w, "  %-12s %s%s\n", r.Status, r.ID, note)
 		}
 	}
 	for id := range allowed {
 		if !seen[id] {
-			fmt.Fprintf(w, "\nstale allow-list entry: %s passes or is not MANDATORY\n", id)
+			_, _ = fmt.Fprintf(w, "\nstale allow-list entry: %s passes or is in another tier\n", id)
 			ok = false
 		}
 	}

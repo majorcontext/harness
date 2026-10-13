@@ -18,6 +18,9 @@ on:
       - "testdata/acp-tck-allow.txt"
       - ".github/workflows/acp-tck.yml"
 
+permissions:
+  contents: read
+
 jobs:
   tck:
     name: TCK
@@ -27,16 +30,20 @@ jobs:
     env:
       # Exact commit of github.com/agentclientprotocol/acp-tck (Apache-2.0).
       # The TCK is third-party Python code: it runs here and nowhere else.
+      UV_PYTHON: "3.14.5"
       TCK_COMMIT: fa00ccdc13dfaa4b288a91877c1f3e468af4aa7d
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: astral-sh/setup-uv@v6
+      # v6.8.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
         with:
           version: "0.12.13"
 
