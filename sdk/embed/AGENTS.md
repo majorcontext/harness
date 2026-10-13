@@ -11,3 +11,4 @@ Read the root AGENTS.md and `sdk/AGENTS.md`. The rules of `sdk/typescript` do no
 - Tests start the real module in a Worker against a scripted model server. The model is `internal/embedfake`, the scripted server of `harnesstest`; a test double of its own would escape the wire gate. The tests need `HARNESS_WASM`, `HARNESS_WASM_EXEC`, and `HARNESS_EMBEDFAKE`, and a missing variable fails the test.
 - Keep `src/index.d.ts` equal to the exported API of `src/index.mjs`.
 - Run `node --test sdk/embed/test/*.test.mjs`.
+- `test/browser.mjs`, `test/browser/page.mjs`, and `test/browser/fsstub.mjs` are the fixture of `e2e/browser_test.go` (headless Chromium). Run it with `npm ci` in this directory, `npx playwright install chromium`, and `HARNESS_E2E_BROWSER=1 go test -race ./e2e/ -run TestBrowserRows`. `playwright` is a dev dependency, pinned in `package.json` and the lock file; the package has no runtime dependency.

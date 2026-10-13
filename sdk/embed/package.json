@@ -19,5 +19,8 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "1.64.0"
+  }
 }

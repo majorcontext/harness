@@ -11,3 +11,4 @@ __pycache__/
 # root, since a slash inside a gitignore pattern anchors it to the
 # .gitignore's own directory.
 **/testdata/rapid/
+sdk/embed/node_modules/
