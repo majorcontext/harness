@@ -30,3 +30,4 @@ internal/imageclamp/imageclamp_test.go each test encodes large PNG fixtures, and
 plugin/example_test.go the package examples are documentation that pkg.go.dev renders; only the Manifest example runs, and it checks pure encoding that no contract row isolates
 harnesstest/mcp_test.go the port of the MCP fixture and its refusal after Close are properties of the fixture itself, which no serve scenario observes
 protocol/rev_test.go Rev is a pure text type; a serve binary cannot send a revision text that it refuses
+internal/acptck/report_test.go judge is pure and fails closed on reports that a conforming TCK never writes, so no real TCK run reaches those branches
