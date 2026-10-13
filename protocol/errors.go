@@ -23,6 +23,7 @@ const (
 	CodeDraining            Code = "draining"
 	CodeInternal            Code = "internal"
 	CodeNotAGitRepo         Code = "not_a_git_repo"
+	CodeNotARepo            Code = "not_a_repo"
 	CodeNoBase              Code = "no_base"
 	CodeTooManyChanges      Code = "too_many_changes"
 	CodeProcessNotFound     Code = "process_not_found"
@@ -87,6 +88,7 @@ var statuses = map[Code]int{
 	CodePayloadTooLarge:     http.StatusRequestEntityTooLarge,
 	CodeDraining:            http.StatusServiceUnavailable,
 	CodeNotAGitRepo:         http.StatusConflict,
+	CodeNotARepo:            http.StatusConflict,
 	CodeNoBase:              http.StatusConflict,
 	CodeTooManyChanges:      http.StatusConflict,
 	CodeProcessNotFound:     http.StatusNotFound,

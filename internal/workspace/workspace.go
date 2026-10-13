@@ -128,7 +128,11 @@ func changes(ctx context.Context, root, dir, real, ceiling, scope string, explic
 	if b, err := gitOut(ctx, repoRoot, nil, "symbolic-ref", "-q", "--short", "HEAD"); err == nil {
 		branch = strings.TrimSpace(b)
 	}
-	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Branch: branch, Head: head}
+	//nolint:staticcheck // the deprecated fields keep their values for clients that read them
+	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: "git", Branch: branch, Head: head}
+	if head != "" {
+		c.HeadRev = protocol.Rev{Kind: protocol.RevCommit, ID: head}
+	}
 	base, err := baseOf(ctx, repoRoot, &c)
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err
@@ -159,8 +163,10 @@ func baseOf(ctx context.Context, repoRoot string, c *protocol.WorkspaceChanges) 
 			}
 			return "", err
 		}
-		c.Base = &protocol.BaseRef{Ref: display, SHA: strings.TrimSpace(mb)}
-		return c.Base.SHA, nil
+		sha := strings.TrimSpace(mb)
+		//nolint:staticcheck // the deprecated field keeps its value for clients that read it
+		c.Base = &protocol.BaseRef{Ref: display, SHA: sha, Rev: protocol.Rev{Kind: protocol.RevCommit, ID: sha}}
+		return sha, nil
 	case c.Head == "":
 		return emptyTree(ctx, repoRoot)
 	}

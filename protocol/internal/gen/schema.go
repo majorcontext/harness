@@ -109,6 +109,9 @@ func mapper(t reflect.Type) *jsonschema.Schema {
 	if t == reflect.TypeFor[json.RawMessage]() {
 		return &jsonschema.Schema{}
 	}
+	if t == reflect.TypeFor[protocol.Rev]() {
+		return &jsonschema.Schema{Type: "string"}
+	}
 	if t.Kind() == reflect.String && t.PkgPath() == reflect.TypeFor[protocol.Error]().PkgPath() {
 		if values, err := enumValues(); err == nil && len(values[t.Name()]) > 0 {
 			s := &jsonschema.Schema{Type: "string"}
@@ -229,7 +232,7 @@ func collectStructs(t reflect.Type, into map[string]reflect.Type) error {
 	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
 		return collectStructs(t.Elem(), into)
 	case reflect.Struct:
-		if t == reflect.TypeFor[time.Time]() {
+		if t == reflect.TypeFor[time.Time]() || t == reflect.TypeFor[protocol.Rev]() {
 			return nil
 		}
 		if t.Name() == "" {

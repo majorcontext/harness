@@ -6,24 +6,30 @@ const (
 	ScopeUncommitted = "uncommitted"
 )
 
-// WorkspaceChanges is the diff of a git work tree. Files is complete. Patch
-// ends at the last whole file that fits its cap, and Truncated reports a cut.
-// Head is empty on a branch with no commit.
+// WorkspaceChanges is the diff of a work tree. Files is complete. Patch ends at
+// the last whole file that fits its cap, and Truncated reports a cut. HeadRev is
+// the zero Rev, which JSON omits, when the head has no commit.
 type WorkspaceChanges struct {
-	Dir       string        `json:"dir"`
-	Scope     string        `json:"scope"`
-	Branch    string        `json:"branch"`
+	Dir    string `json:"dir"`
+	Scope  string `json:"scope"`
+	Engine string `json:"engine"`
+	// Deprecated: use HeadRev.
+	Branch string `json:"branch"`
+	// Deprecated: use HeadRev.
 	Head      string        `json:"head"`
+	HeadRev   Rev           `json:"head_rev,omitzero"`
 	Base      *BaseRef      `json:"base,omitempty"`
 	Files     []ChangedFile `json:"files"`
 	Patch     string        `json:"patch"`
 	Truncated bool          `json:"truncated"`
 }
 
-// BaseRef is the merge base of the branch scope: the default branch and the commit.
+// BaseRef is the merge base of the branch scope: the default branch and the revision.
 type BaseRef struct {
 	Ref string `json:"ref"`
+	// Deprecated: use Rev.
 	SHA string `json:"sha"`
+	Rev Rev    `json:"rev,omitzero"`
 }
 
 // ChangedFile is one file of a diff. Status is added, deleted, modified, or
