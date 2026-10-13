@@ -23,7 +23,7 @@ const pluginUsage = "usage: harness plugin probe"
 // pluginCmd dispatches `harness plugin <subcommand>`.
 func pluginCmd(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, pluginUsage)
+		_, _ = fmt.Fprintf(os.Stderr, "harness: plugin: missing subcommand\n%s\n", pluginUsage)
 		return errUsage
 	}
 	switch args[0] {
@@ -33,7 +33,7 @@ func pluginCmd(args []string) error {
 		fmt.Println(pluginUsage)
 		return errHelp
 	default:
-		fmt.Fprintf(os.Stderr, "harness: unknown plugin subcommand %q\n%s\n", args[0], pluginUsage)
+		_, _ = fmt.Fprintf(os.Stderr, "harness: plugin: unknown subcommand %q\n%s\n", args[0], pluginUsage)
 		return errUsage
 	}
 }

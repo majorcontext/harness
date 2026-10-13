@@ -49,6 +49,7 @@ func main() {
 	case "plugin":
 		err = pluginCmd(os.Args[2:])
 	default:
+		_, _ = fmt.Fprintf(os.Stderr, "harness: unknown command %q\n", os.Args[1])
 		usage(os.Stderr)
 		os.Exit(2)
 	}

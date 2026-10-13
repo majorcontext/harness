@@ -35,7 +35,7 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 }
 
 func usageError(fs *flag.FlagSet, err error) error {
-	fmt.Fprintln(os.Stderr, "harness:", err)
+	_, _ = fmt.Fprintln(os.Stderr, "harness:", err)
 	printFlagUsage(fs, os.Stderr)
 	return errUsage
 }
