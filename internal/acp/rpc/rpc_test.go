@@ -106,7 +106,7 @@ func TestInvalidRequestShapesGetInvalidRequest(t *testing.T) {
 	p := startPeer(t, handlerFunc(echo))
 	for _, line := range []string{`[1]`, `"x"`, `{"id":3,"method":"m"}`, `{"jsonrpc":"2.0","id":4}`} {
 		p.send(line)
-		if got := p.next(); code(got) != CodeInvalidRequest && code(got) != 0 {
+		if got := p.next(); code(got) != CodeInvalidRequest {
 			t.Errorf("%s answer = %v, want -32600", line, got)
 		}
 	}

@@ -70,7 +70,7 @@ type Conn struct {
 
 type reply struct {
 	result json.RawMessage
-	err    *Error
+	err    error
 }
 
 // New returns a connection that reads r and writes w. A nil logger discards
@@ -236,8 +236,16 @@ type line struct {
 // readLines splits r into lines. A line over MaxLine is dropped and reported
 // as long. A line is over the bound when it holds more than maxLine bytes. An
 // empty line is skipped.
-func readLines(r io.Reader, maxLine int, out chan<- line) {
+func readLines(r io.Reader, maxLine int, stop <-chan struct{}, out chan<- line) {
 	defer close(out)
+	emit := func(l line) bool {
+		select {
+		case out <- l:
+			return true
+		case <-stop:
+			return false
+		}
+	}
 	br := bufio.NewReaderSize(r, 64<<10)
 	var buf []byte
 	long := false
@@ -251,14 +259,18 @@ func readLines(r io.Reader, maxLine int, out chan<- line) {
 			continue
 		}
 		if long {
-			out <- line{long: true}
+			if !emit(line{long: true}) {
+				return
+			}
 		} else if text := trimLine(buf); len(text) > 0 {
-			out <- line{text: text}
+			if !emit(line{text: text}) {
+				return
+			}
 		}
 		buf, long = nil, false
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				out <- line{err: err}
+				emit(line{err: err})
 			}
 			return
 		}
@@ -277,16 +289,22 @@ func trimLine(b []byte) []byte {
 
 // Serve reads messages until the input ends or ctx ends, calls h for each, and
 // returns after every handler has returned and every response is written. It
-// returns nil at the end of the input and the error of ctx when ctx ends first.
+// returns nil at the end of the input, the error of ctx when ctx ends first, and
+// the write error when the output failed and nothing else did.
 // Handlers of requests that are running see their context cancelled when ctx
 // ends, and not at the end of the input.
 func (c *Conn) Serve(ctx context.Context, h Handler) error {
 	lines := make(chan line)
-	go readLines(c.r, c.maxLine, lines)
+	stop := make(chan struct{})
+	go readLines(c.r, c.maxLine, stop, lines)
 	var wg sync.WaitGroup
 	err := c.loop(ctx, h, lines, &wg)
+	close(stop)
 	wg.Wait()
 	c.shutdown()
+	if err == nil {
+		err = c.werr
+	}
 	return err
 }
 
@@ -315,7 +333,7 @@ func (c *Conn) shutdown() {
 	c.mu.Lock()
 	c.closed = true
 	for id, ch := range c.pending {
-		deliver(ch, reply{err: &Error{Code: CodeInternal, Message: ErrClosed.Error()}})
+		deliver(ch, reply{err: ErrClosed})
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
@@ -393,7 +411,11 @@ func (c *Conn) response(m message) {
 	delete(c.pending, id)
 	c.mu.Unlock()
 	if ch != nil {
-		deliver(ch, reply{result: m.Result, err: m.Error})
+		r := reply{result: m.Result}
+		if m.Error != nil {
+			r.err = m.Error
+		}
+		deliver(ch, r)
 	}
 }
 

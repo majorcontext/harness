@@ -350,7 +350,7 @@ func acpScalar(k string, arg, v any, at string) []string {
 	if name != "uri" {
 		return []string{at + ": unknown format " + name}
 	}
-	if _, err := url.Parse(s); isStr && (err != nil || s == "") {
+	if u, err := url.Parse(s); isStr && (err != nil || s == "" || !u.IsAbs()) {
 		return []string{at + ": not a URI: " + s}
 	}
 	return nil
@@ -392,6 +392,8 @@ func TestACPSchemaValidatorKeywords(t *testing.T) {
 		{"minLength counts characters", `{"minLength":2}`, `"é"`, false},
 		{"format uint16 rejects 65536", `{"format":"uint16"}`, `65536`, false},
 		{"format int32 admits a negative", `{"format":"int32"}`, `-32700`, true},
+		{"format uri rejects a relative reference", `{"format":"uri"}`, `"a/b"`, false},
+		{"format uri admits an absolute URI", `{"format":"uri"}`, `"https://example.com/a"`, true},
 		{"format uri rejects an empty string", `{"format":"uri"}`, `""`, false},
 		{"format ignores null", `{"type":["integer","null"],"format":"uint32"}`, `null`, true},
 		{"unknown format fails", `{"format":"date"}`, `"x"`, false},

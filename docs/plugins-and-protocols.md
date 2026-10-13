@@ -51,10 +51,9 @@ representation.
   standard (Zed, JetBrains, Neovim, Emacs). `harness acp` serves ACP v1 over
   stdio and answers `initialize` only; the ACP section of
   `docs/architecture.md` is the spec of what it does, and
-  `docs/design/acp-wasm.md` is the design of the rest. Later steps map the
-  event log to `session/update` notifications and take the ACP name where our
-  vocabulary is arbitrary. Harness has no permission system, so the adapter
-  must not invent `session/request_permission`. This is Zed's Agent *Client*
+  `docs/design/acp-wasm.md` is the design of the rest. Take the ACP name
+  where our vocabulary is arbitrary. Harness has no permission system, so the
+  adapter must not invent `session/request_permission`. This is Zed's Agent *Client*
   Protocol, not IBM's former Agent Communication Protocol.
 - **MCP** — client (consume tool servers) and server (expose sessions/tools)
   modes.
