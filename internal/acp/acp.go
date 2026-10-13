@@ -58,20 +58,24 @@ func Serve(ctx context.Context, rts Runtimes, r io.Reader, w io.Writer, cfg Conf
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	conn := rpc.New(r, w, cfg.Logger)
-	a := &agent{cfg: cfg, rts: rts, conn: conn, base: ctx, sessions: map[string]*held{}}
+	a := &agent{cfg: cfg, rts: rts, conn: conn, base: ctx, cancel: cancel, sessions: map[string]*held{}}
 	err := conn.Serve(ctx, a)
 	return errors.Join(err, a.closeErr)
 }
 
 type agent struct {
-	cfg  Config
-	rts  Runtimes
-	conn *rpc.Conn
-	base context.Context
+	cfg    Config
+	rts    Runtimes
+	conn   *rpc.Conn
+	base   context.Context
+	cancel context.CancelFunc
 
 	mu       sync.Mutex
 	sessions map[string]*held
+	closed   bool
 	closeErr error
 }
 
@@ -114,12 +118,17 @@ func (a *agent) held(id string) (*held, error) {
 
 // EndOfInput releases every held session, which ends the turns that run, then
 // closes the runtimes, within shutdownBudget, also after the base context ended.
-func (a *agent) EndOfInput() { a.closeErr = a.shutdown(a.base) }
+func (a *agent) EndOfInput() {
+	a.closeErr = a.shutdown(a.base)
+	// A request that outlives the release gets shutdownBudget more, then its context ends.
+	time.AfterFunc(shutdownBudget, a.cancel)
+}
 
 func (a *agent) shutdown(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
 	defer cancel()
 	a.mu.Lock()
+	a.closed = true
 	sessions := a.sessions
 	a.sessions = map[string]*held{}
 	a.mu.Unlock()

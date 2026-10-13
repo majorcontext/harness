@@ -31,6 +31,9 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	if len(servers) > 0 && !a.cfg.MCP {
 		return nil, invalidParams("mcp unavailable on this host")
 	}
+	if a.isClosed() {
+		return nil, rpcError(harness.ErrSessionReleased)
+	}
 	if a.rts == nil {
 		return nil, rpcError(errors.New("acp: no runtimes"))
 	}
@@ -48,7 +51,23 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	}
 	h := newHeld(a.base, sess, sess.Snapshot().HeadSeq, a.cfg.Logger, a.conn.Notify)
 	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		h.close()
+		bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
+		defer cancel()
+		if err := sess.Release(bg); err != nil {
+			a.cfg.Logger.Warn("acp: release after shutdown", "session", h.id, "error", err.Error())
+		}
+		return nil, rpcError(harness.ErrSessionReleased)
+	}
 	a.sessions[h.id] = h
 	a.mu.Unlock()
 	return map[string]string{"sessionId": h.id}, nil
+}
+
+func (a *agent) isClosed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.closed
 }

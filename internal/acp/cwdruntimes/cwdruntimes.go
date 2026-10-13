@@ -1,7 +1,7 @@
 // Package cwdruntimes builds one harness.Runtime for each work directory, over
 // one Store and one Owner, for the Runtimes interface of internal/acp. The host
 // injects how a directory loads its config and where the shared Store and Owner
-// come from, so the package reads no file and no environment variable.
+// come from, so the package reads no config file and no environment variable.
 package cwdruntimes
 
 import (
@@ -37,6 +37,7 @@ type Runtimes struct {
 	store harness.Store
 	owner harness.Owner
 	rts   map[string]*harness.Runtime
+	shut  bool
 }
 
 // New returns Runtimes that build a Runtime at the first request for a directory.
@@ -44,10 +45,13 @@ func New(opts Options) *Runtimes {
 	return &Runtimes{opts: opts, rts: map[string]*harness.Runtime{}}
 }
 
-// For returns the Runtime of cwd. A directory that does not exist, and a config that does not load, fail with harness.ErrInvalidRequest.
+// For returns the Runtime of cwd. After Close it fails with harness.ErrDraining. A directory that does not exist, and a config that does not load, fail with harness.ErrInvalidRequest.
 func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.shut {
+		return nil, harness.ErrDraining
+	}
 	if rt, ok := r.rts[cwd]; ok {
 		return rt, nil
 	}
@@ -79,6 +83,7 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 func (r *Runtimes) Close(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.shut = true
 	var errs []error
 	for _, rt := range r.rts {
 		errs = append(errs, rt.Close(ctx))

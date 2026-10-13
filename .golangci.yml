@@ -58,6 +58,16 @@ linters:
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/rpc
             - github.com/majorcontext/harness/protocol
+        acp-cwdruntimes:
+          files:
+            - "**/internal/acp/cwdruntimes/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness
+            - github.com/majorcontext/harness/config
+            - github.com/majorcontext/harness/internal/acp
+            - github.com/majorcontext/harness/internal/acp/cwdruntimes
         acp-rpc-leaf:
           files:
             - "**/internal/acp/rpc/**"

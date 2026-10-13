@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,5 +169,27 @@ func TestPromptResultAfterACancelIsCancelled(t *testing.T) {
 	}
 	if got := waitFailure(harness.ErrOwnershipLost, true); got == nil {
 		t.Error("lost ownership after a cancel must stay an error")
+	}
+}
+
+type noRuntimes struct{ calls int }
+
+func (n *noRuntimes) For(context.Context, string) (Runtime, error) {
+	n.calls++
+	return nil, errors.New("unexpected")
+}
+func (n *noRuntimes) Close(context.Context) error { return nil }
+
+func TestSessionNewAfterShutdownIsRefusedWithoutBuildingARuntime(t *testing.T) {
+	rts := &noRuntimes{}
+	a := &agent{rts: rts, base: t.Context(), sessions: map[string]*held{}}
+	a.EndOfInput()
+	_, err := a.newSession(t.Context(), json.RawMessage(`{"cwd":"/","mcpServers":[]}`))
+	e, ok := err.(*rpc.Error)
+	if !ok || e.Code != rpc.CodeInternal || e.Data.(map[string]any)["code"] != "session_not_owned" {
+		t.Errorf("err = %v, want -32603 session_not_owned", err)
+	}
+	if rts.calls != 0 || len(a.sessions) != 0 {
+		t.Errorf("For calls = %d, sessions = %d, want none", rts.calls, len(a.sessions))
 	}
 }
