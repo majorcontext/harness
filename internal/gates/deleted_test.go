@@ -1,6 +1,8 @@
 package gates
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -42,6 +44,14 @@ func TestDeletedReferencesReportTheFirstHitLine(t *testing.T) {
 	for p, d := range want {
 		if got[p] != d {
 			t.Errorf("%s: detail = %q, want %q", p, got[p], d)
+		}
+	}
+}
+
+func TestDeletedRulesHoldTheirLiteral(t *testing.T) {
+	for _, r := range deletedRules {
+		if !strings.Contains(r.re.String(), regexp.QuoteMeta(r.literal)) {
+			t.Errorf("pattern %q does not contain its literal %q", r.re, r.literal)
 		}
 	}
 }
