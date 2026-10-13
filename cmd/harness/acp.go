@@ -18,7 +18,7 @@ import (
 )
 
 // acpCmd serves ACP over stdin and stdout. stdout holds ACP frames only; the
-// logger writes to stderr. It reads no config before the first session/new. SIGINT and SIGTERM end it with status 0.
+// logger writes to stderr. `initialize` reads the user config to find the logins to offer; no runtime exists before the first session request. SIGINT and SIGTERM end it with status 0.
 func acpCmd(args []string) error {
 	if len(args) > 0 && (args[0] == "login" || args[0] == "logout") {
 		// A client that runs a terminal auth method appends its args to `harness acp`.
@@ -56,11 +56,7 @@ func acpLogin() acp.Auth {
 			if err != nil {
 				return nil, err
 			}
-			if err := cfg.ApplyEnv(os.Getenv); err != nil {
-				return nil, err
-			}
-			defaultCodexAuth(cfg)
-			return cfg, nil
+			return cfg, applyOverrides(cfg, false, nil, nil)
 		},
 		Open: openBrowser,
 		Out:  os.Stderr,

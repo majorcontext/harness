@@ -1,7 +1,18 @@
 {
   "requests": null,
   "sessions": {
-    "a": []
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
   },
   "wire": [
     {
@@ -27,9 +38,6 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
-            "auth": {
-              "logout": {}
-            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": true,
@@ -202,23 +210,6 @@
       "frame": {
         "id": 3,
         "jsonrpc": "2.0",
-        "method": "logout",
-        "params": {}
-      }
-    },
-    {
-      "dir": "agent",
-      "frame": {
-        "id": 3,
-        "jsonrpc": "2.0",
-        "result": {}
-      }
-    },
-    {
-      "dir": "client",
-      "frame": {
-        "id": 4,
-        "jsonrpc": "2.0",
         "method": "session/prompt",
         "params": {
           "prompt": [
@@ -234,6 +225,20 @@
     {
       "dir": "agent",
       "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
         "error": {
           "code": -32000,
           "data": {
@@ -241,7 +246,7 @@
           },
           "message": "not logged in to Claude Code; run `harness login claude-code`"
         },
-        "id": 4,
+        "id": 3,
         "jsonrpc": "2.0"
       }
     }

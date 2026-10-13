@@ -5,13 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"syscall"
 	"time"
 
@@ -63,17 +61,9 @@ func target(targets map[string]func(args []string) error, args []string) error {
 
 // claudeBinary is the CLI of the first claude-code-cli entry of the user config, else claude.
 func claudeBinary() string {
-	cfg, err := config.Load(userConfigPath())
-	if err != nil {
-		return config.Provider{}.CLIBinary()
-	}
-	return claudeBinaryOf(cfg)
-}
-
-func claudeBinaryOf(cfg *config.Config) string {
-	for _, name := range slices.Sorted(maps.Keys(cfg.Providers)) {
-		if p := cfg.Providers[name]; p.UsesClaudeCLI() {
-			return p.CLIBinary()
+	if cfg, err := config.Load(userConfigPath()); err == nil {
+		if bin, ok := cfg.ClaudeCLI(); ok {
+			return bin
 		}
 	}
 	return config.Provider{}.CLIBinary()

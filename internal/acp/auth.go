@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 
 	"github.com/majorcontext/harness/internal/acp/rpc"
 )
@@ -14,6 +16,8 @@ type Method struct {
 	// Terminal makes the client run the agent program with Args, in an interactive terminal.
 	Terminal bool
 	Args     []string
+	// Logout says that the logout method ends the login of this method, so the agent advertises logout.
+	Logout bool
 }
 
 // Auth is the login that the host offers through ACP. The adapter calls it on first use and never at startup.
@@ -22,7 +26,7 @@ type Auth interface {
 	Methods(terminal bool) []Method
 	// Authenticate runs the login of the agent method id. It stops when ctx ends.
 	Authenticate(ctx context.Context, id string) error
-	// Logout ends every login that Methods offers.
+	// Logout ends the logins of the methods with Logout set.
 	Logout(ctx context.Context) error
 	// Check fails with an *AuthRequiredError when a session of the work directory cwd needs a login that does not exist.
 	// An empty model is the default model of cwd. fresh asks for a check that no cache answers.
@@ -59,10 +63,14 @@ func authMethods(methods []Method) []any {
 }
 
 func authCapabilities(methods []Method) map[string]any {
-	if len(methods) == 0 {
+	if !logoutOffered(methods) {
 		return nil
 	}
 	return map[string]any{"logout": map[string]any{}}
+}
+
+func logoutOffered(methods []Method) bool {
+	return slices.ContainsFunc(methods, func(m Method) bool { return m.Logout })
 }
 
 func notOffered(method string) error {
@@ -83,8 +91,13 @@ func (a *agent) authenticate(ctx context.Context, params json.RawMessage) (any, 
 		return nil, invalidParams("methodId names no method of the agent type")
 	}
 	if err := a.cfg.Auth.Authenticate(ctx, *p.MethodID); err != nil {
-		if ctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
 			return nil, ctx.Err()
+		case errors.Is(err, context.Canceled):
+			return nil, &rpc.Error{Code: rpc.CodeCancelled, Message: "Request cancelled"}
+		case errors.Is(err, context.DeadlineExceeded):
+			return nil, &rpc.Error{Code: rpc.CodeInternal, Message: "The sign-in timed out"}
 		}
 		return nil, &rpc.Error{Code: rpc.CodeInternal, Message: err.Error()}
 	}
@@ -102,7 +115,7 @@ func (a *agent) agentMethod(id string) bool {
 }
 
 func (a *agent) logout(ctx context.Context) (any, error) {
-	if len(a.methods()) == 0 {
+	if !logoutOffered(a.methods()) {
 		return nil, notOffered("logout")
 	}
 	if err := a.cfg.Auth.Logout(ctx); err != nil {
@@ -126,5 +139,11 @@ func (a *agent) requireLogin(ctx context.Context, cwd, model string, fresh bool)
 }
 
 func authRequired(msg string) error {
+	// The error text of a turn starts with the class of the failure in brackets; a client shows the rest.
+	if rest, ok := strings.CutPrefix(msg, "["); ok {
+		if _, text, ok := strings.Cut(rest, "] "); ok {
+			msg = text
+		}
+	}
 	return &rpc.Error{Code: codeAuthRequired, Message: msg, Data: map[string]string{"code": "login_required"}}
 }

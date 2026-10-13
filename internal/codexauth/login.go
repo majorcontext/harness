@@ -172,7 +172,7 @@ func waitForCallback(ctx context.Context, ln net.Listener, state string) (string
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
-		// Shutdown before Serve registers the listener leaves it open.
+		// A cancel that comes before Serve registers the listener can leave it open after Shutdown.
 		_ = ln.Close()
 	}()
 	select {

@@ -2,13 +2,17 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/acpauth"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // acpLoginSpec scripts the logins of an ACP row.
@@ -25,6 +30,8 @@ type acpLoginSpec struct {
 	chatgpt, stored, refreshRejected bool
 	// claude adds the provider entry "claude-code" over fakeclaude. claudeOut makes fakeclaude report no login.
 	claude, claudeOut bool
+	// claudeHold makes `claude auth login` start a child and wait, as a login that waits for a browser does.
+	claudeHold bool
 }
 
 // acpLoginRun is a started acpLoginSpec.
@@ -34,11 +41,12 @@ type acpLoginRun struct {
 	fake  *harnesstest.Server
 	cfg   map[string]any
 	// sink receives the sign-in text of the host, which is what the host writes to stderr.
-	sink                   *signInSink
-	claudeState, claudeLog string
-	emptyPath              string
-	signIn                 *url.URL
-	opened                 chan string
+	sink                               *signInSink
+	claudeState, claudeLog, claudeHold string
+	emptyPath                          string
+	signIn                             *url.URL
+	opened                             chan string
+	heldPIDs                           []int
 }
 
 // signInSink keeps everything the host wrote to stderr, and sends each line that is a sign-in URL to urls.
@@ -104,12 +112,15 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 		if err := os.Mkdir(l.emptyPath, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		if spec.claudeHold {
+			l.claudeHold = filepath.Join(dir, "hold")
+		}
 		if spec.claudeOut {
 			if err := os.WriteFile(l.claudeState, []byte("out"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
-		l.cfg["providers"].(map[string]any)["claude-code"] = map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath()}
+		l.cfg["providers"].(map[string]any)["claude-code"] = map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "extra_args": []string{"--fake-env=FAKE_CLAUDE_AUTH=" + l.claudeState}}
 	}
 	if l.emptyPath == "" {
 		l.emptyPath = t.TempDir()
@@ -132,12 +143,12 @@ func (l *acpLoginRun) register(c *acpConn) {
 func (l *acpLoginRun) config() map[string]any { return l.cfg }
 
 func (l *acpLoginRun) claudeEnv() []string {
-	return []string{"FAKE_CLAUDE_AUTH=" + l.claudeState, "FAKE_CLAUDE_AUTH_LOG=" + l.claudeLog}
+	return []string{"FAKE_CLAUDE_AUTH=" + l.claudeState, "FAKE_CLAUDE_AUTH_LOG=" + l.claudeLog, "FAKE_CLAUDE_AUTH_HOLD=" + l.claudeHold}
 }
 
 // procEnv is the environment of the binary host. A PATH with no program makes the system opener of the browser fail, so no row opens a browser.
 func (l *acpLoginRun) procEnv() map[string]string {
-	return map[string]string{"FAKE_CLAUDE_AUTH": l.claudeState, "FAKE_CLAUDE_AUTH_LOG": l.claudeLog, "PATH": l.emptyPath}
+	return map[string]string{"FAKE_CLAUDE_AUTH": l.claudeState, "FAKE_CLAUDE_AUTH_LOG": l.claudeLog, "FAKE_CLAUDE_AUTH_HOLD": l.claudeHold, "PATH": l.emptyPath}
 }
 
 // auth builds the login of the in-process host, with the opener replaced by one that opens nothing.
@@ -174,8 +185,8 @@ func checkACPAuthMethods(t *testing.T, res map[string]any, want []string) {
 	}
 	caps, _ := res["agentCapabilities"].(map[string]any)
 	_, hasAuth := caps["auth"]
-	if hasAuth != (len(want) > 0) {
-		t.Errorf("agentCapabilities.auth present = %v with %d methods", hasAuth, len(want))
+	if wantLogout := slices.Contains(want, "chatgpt"); hasAuth != wantLogout {
+		t.Errorf("agentCapabilities.auth present = %v with the methods %v", hasAuth, want)
 	}
 }
 
@@ -277,16 +288,27 @@ func acpLoginFile(t *testing.T, c *acpConn) (string, bool) {
 	return string(b), true
 }
 
-// acpListenerClosed fails when the callback listener of the last sign-in still accepts a connection.
+// acpListenerClosed fails when the callback of the last sign-in still completes it. A closed listener refuses the
+// connection. Another test can own the port by then, so a connection is not a failure by itself: the valid callback
+// of the stopped sign-in must complete nothing.
 func acpListenerClosed(t *testing.T, c *acpConn) {
 	t.Helper()
-	redirect, err := url.Parse(c.env.login.signIn.Query().Get("redirect_uri"))
+	l := c.env.login
+	redirect, err := url.Parse(l.signIn.Query().Get("redirect_uri"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if conn, err := net.Dial("tcp", redirect.Host); err == nil {
-		_ = conn.Close()
-		t.Errorf("the callback listener at %s still accepts", redirect.Host)
+	conn, err := net.DialTimeout("tcp", redirect.Host, time.Second)
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	q := url.Values{"code": {harnesstest.CodexAuthCode}, "state": {l.signIn.Query().Get("state")}}
+	_, _ = fmt.Fprintf(conn, "GET %s?%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", redirect.Path, q.Encode(), redirect.Host)
+	_, _ = io.Copy(io.Discard, conn)
+	if n := l.codex.issuer.Exchanges(); n != 0 {
+		t.Errorf("the callback of the stopped sign-in completed it: %d code exchanges", n)
 	}
 }
 
@@ -385,7 +407,7 @@ var acpAuthScenarios = []acpScenario{
 	},
 	{
 		name:  "rejected_refresh_during_a_turn_answers_auth_required",
-		cite:  "A turn that fails with the error class `login_required`, because the refresh token of the ChatGPT login was rejected, answers `session/prompt` with `-32000`, `data.code` `login_required`, and the error of the turn as the message.",
+		cite:  "A turn that fails with the error class `login_required`, because the refresh token of the ChatGPT login was rejected, answers `session/prompt` with `-32000`, `data.code` `login_required`, and the error of the turn as the message, without its leading `[class]` tag.",
 		login: &acpLoginSpec{chatgpt: true, refreshRejected: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
@@ -396,7 +418,7 @@ var acpAuthScenarios = []acpScenario{
 	},
 	{
 		name:  "logout_removes_the_chatgpt_login",
-		cite:  "`logout` ends every login that the config offers: it removes the stored ChatGPT login under its lock, as `harness logout codex` does, and runs `claude auth logout`.",
+		cite:  "`logout` removes the stored ChatGPT login under its lock, as `harness logout codex` does.",
 		login: &acpLoginSpec{chatgpt: true, stored: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
@@ -411,7 +433,7 @@ var acpAuthScenarios = []acpScenario{
 	},
 	{
 		name:  "cancel_request_during_authenticate_stops_the_listener",
-		cite:  "`$/cancel_request` stops the sign-in, closes the listener or kills the child, and answers `-32800`.",
+		cite:  "`$/cancel_request` stops the sign-in, closes the listener or kills the process group of the child, and answers `-32800`.",
 		login: &acpLoginSpec{chatgpt: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
@@ -443,19 +465,23 @@ var acpAuthScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "claude_code_prompt_after_logout_is_auth_required",
-		cite:  "The result of the CLI is cached for 30 s and read again after `authenticate`, after `logout`, and after a failed turn.",
+		name:  "claude_code_failed_turn_with_no_login_is_auth_required",
+		cite:  "The result of the CLI is cached for 30 s and read again after `authenticate` and after a failed turn.",
 		login: &acpLoginSpec{claude: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
 			acpNew{as: "a"},
-			acpLogout{},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if err := os.WriteFile(c.env.login.claudeState, []byte("out"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}),
 			acpPrompt{as: "a", text: "hello", code: acpAuthRequired, dataCode: "login_required"},
 		},
 	},
 	{
 		name:  "authenticate_claude_code_runs_the_cli_login_then_prompt_succeeds",
-		cite:  "The `claude-code` method runs `claude auth login` as a child with no terminal, which opens the browser itself, and answers `{}` when the CLI exits with status 0 and `claude auth status --json` does not report `loggedIn` false.",
+		cite:  "The `claude-code` method runs `claude auth login` as a child with no terminal, which opens the browser itself",
 		login: &acpLoginSpec{claude: true, claudeOut: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
@@ -472,8 +498,8 @@ var acpAuthScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "logout_ends_the_chatgpt_and_the_claude_code_login",
-		cite:  "A logout of the CLI ends the login of every program that uses it.",
+		name:  "logout_ends_the_chatgpt_login_and_leaves_the_claude_code_login",
+		cite:  "`logout` removes the stored ChatGPT login under its lock, as `harness logout codex` does. It never runs `claude auth logout`: the CLI owns its login, and `harness logout claude-code` ends it.",
 		login: &acpLoginSpec{chatgpt: true, stored: true, claude: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
@@ -482,16 +508,103 @@ var acpAuthScenarios = []acpScenario{
 				if _, ok := acpLoginFile(t, c); ok {
 					t.Error("logout left the ChatGPT login")
 				}
-				b, _ := os.ReadFile(c.env.login.claudeState)
-				if strings.TrimSpace(string(b)) != "out" {
-					t.Errorf("the CLI login state = %q, want out", b)
-				}
-				if calls := acpClaudeCalls(c); !slices.Contains(calls, "logout") {
-					t.Errorf("the CLI calls = %q, want auth logout", calls)
+				if calls := acpClaudeCalls(c); len(calls) != 0 {
+					t.Errorf("the CLI calls = %q, want none", calls)
 				}
 			}),
 		},
 	},
+	{
+		name:  "logout_is_not_offered_for_a_claude_code_provider_alone",
+		cite:  "`agentCapabilities.auth.logout` is `{}` when the method `chatgpt` is offered, and absent otherwise.",
+		login: &acpLoginSpec{claude: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpCall{method: "logout", params: map[string]any{}, code: acpMethodNotFound},
+		},
+	},
+	{
+		name:  "cancel_request_during_claude_authenticate_kills_the_login_process_tree",
+		cite:  "`$/cancel_request` stops the sign-in, closes the listener or kills the process group of the child, and answers `-32800`.",
+		login: &acpLoginSpec{claude: true, claudeOut: true, claudeHold: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpAuthStart{id: "auth", method: "claude-code"},
+			acpHoldPIDs{},
+			acpCancelRequest{id: "auth"},
+			acpAuthDone{id: "auth", code: acpRequestCanceled},
+			acpCheck(acpHeldGone),
+		},
+	},
+	{
+		name:  "second_authenticate_cancels_the_one_in_flight",
+		cite:  "A new `authenticate` cancels the one in flight, whatever the method, and answers `-32800` to it. Sign-ins run one at a time.",
+		login: &acpLoginSpec{chatgpt: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
+			acpAuthStart{id: "first", method: "chatgpt"},
+			acpAuthURL{},
+			acpAuthStart{id: "second", method: "chatgpt"},
+			acpAuthDone{id: "first", code: acpRequestCanceled},
+			acpCheck(acpListenerClosed),
+			acpAuthCallback{},
+			acpAuthDone{id: "second"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if _, ok := acpLoginFile(t, c); !ok {
+					t.Error("the second sign-in stored no login")
+				}
+			}),
+		},
+	},
+	{
+		name:  "chatgpt_authenticate_cancels_a_claude_login_in_flight",
+		cite:  "A new `authenticate` cancels the one in flight, whatever the method, and answers `-32800` to it. Sign-ins run one at a time.",
+		login: &acpLoginSpec{chatgpt: true, claude: true, claudeOut: true, claudeHold: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
+			acpAuthStart{id: "claude", method: "claude-code"},
+			acpHoldPIDs{},
+			acpAuthStart{id: "chatgpt", method: "chatgpt"},
+			acpAuthDone{id: "claude", code: acpRequestCanceled},
+			acpCheck(acpHeldGone),
+			acpAuthCallback{},
+			acpAuthDone{id: "chatgpt"},
+		},
+	},
+}
+
+// acpHoldPIDs waits until the held login of fakeclaude has written the pids of its process and its child.
+type acpHoldPIDs struct{}
+
+func (acpHoldPIDs) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	l := c.env.login
+	testpoll.Until(t, waitBound, "the held login did not start", func() bool {
+		b, err := os.ReadFile(l.claudeHold)
+		if err != nil || !bytes.HasSuffix(b, []byte("\n")) {
+			return false
+		}
+		l.heldPIDs = nil
+		for _, f := range strings.Fields(string(b)) {
+			pid, err := strconv.Atoi(f)
+			if err != nil {
+				return false
+			}
+			l.heldPIDs = append(l.heldPIDs, pid)
+		}
+		return len(l.heldPIDs) == 2
+	})
+}
+
+// acpHeldGone fails when the held login or its child still runs.
+func acpHeldGone(t *testing.T, c *acpConn) {
+	t.Helper()
+	for _, pid := range c.env.login.heldPIDs {
+		pid := pid
+		testpoll.Until(t, waitBound, fmt.Sprintf("process %d still runs", pid), func() bool {
+			return syscall.Kill(pid, 0) != nil
+		})
+	}
 }
 
 func readFileOrEmpty(path string) string {

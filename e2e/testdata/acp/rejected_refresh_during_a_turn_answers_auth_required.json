@@ -247,7 +247,7 @@
           "data": {
             "code": "login_required"
           },
-          "message": "[permanent] Post \"\u003cmodel-server\u003e/backend-api/codex/responses\": not logged in to Codex; run `harness login codex` (the refresh token was rejected, HTTP 400)"
+          "message": "Post \"\u003cmodel-server\u003e/backend-api/codex/responses\": not logged in to Codex; run `harness login codex` (the refresh token was rejected, HTTP 400)"
         },
         "id": 3,
         "jsonrpc": "2.0"

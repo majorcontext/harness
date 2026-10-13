@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,16 +19,24 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/codexauth"
+	"github.com/majorcontext/harness/internal/process"
 )
 
 // Method ids.
 const (
-	chatGPT      = "chatgpt"
-	chatGPTTerm  = "chatgpt-terminal"
-	claudeCode   = "claude-code"
-	claudeTerm   = "claude-code-terminal"
+	chatGPT     = "chatgpt"
+	chatGPTTerm = "chatgpt-terminal"
+	claudeCode  = "claude-code"
+	claudeTerm  = "claude-code-terminal"
+)
+
+const (
 	statusTTL    = 30 * time.Second
 	statusBudget = 15 * time.Second
+	// loginBudget bounds a sign-in, as the browser sign-in of codexauth bounds itself.
+	loginBudget = 10 * time.Minute
+	// killGrace is the time that a killed child gets to close its pipes.
+	killGrace = 2 * time.Second
 )
 
 // Options holds what the host injects.
@@ -50,6 +57,10 @@ type Auth struct {
 
 	mu     sync.Mutex
 	status map[string]claudeStatus
+	gen    int
+	stop   context.CancelFunc
+	// running serializes the sign-ins.
+	running sync.Mutex
 }
 
 type claudeStatus struct {
@@ -71,20 +82,12 @@ type target struct {
 	claude  string // the CLI binary, empty when no entry uses the CLI
 }
 
-func (a *Auth) targets(cfg *config.Config) target {
+func targets(cfg *config.Config) target {
 	var t target
-	names := make([]string, 0, len(cfg.Providers))
-	for name := range cfg.Providers {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		p := cfg.Providers[name]
+	for _, p := range cfg.Providers {
 		t.chatgpt = t.chatgpt || p.UsesChatGPTLogin()
-		if p.UsesClaudeCLI() && t.claude == "" {
-			t.claude = p.CLIBinary()
-		}
 	}
+	t.claude, _ = cfg.ClaudeCLI()
 	return t
 }
 
@@ -93,7 +96,7 @@ func (a *Auth) userTargets() target {
 	if err != nil || cfg == nil {
 		return target{}
 	}
-	return a.targets(cfg)
+	return targets(cfg)
 }
 
 // Methods implements acp.Auth.
@@ -101,7 +104,7 @@ func (a *Auth) Methods(terminal bool) []acp.Method {
 	t := a.userTargets()
 	var out []acp.Method
 	if t.chatgpt {
-		out = append(out, acp.Method{ID: chatGPT, Name: "Log in with ChatGPT", Description: "Open your browser and sign in with your ChatGPT subscription."})
+		out = append(out, acp.Method{ID: chatGPT, Name: "Log in with ChatGPT", Description: "Open your browser and sign in with your ChatGPT subscription.", Logout: true})
 		if terminal {
 			out = append(out, acp.Method{ID: chatGPTTerm, Name: "Log in with ChatGPT in a terminal", Description: "Run harness login codex in a terminal.", Terminal: true, Args: strings.Fields("login codex")})
 		}
@@ -115,7 +118,7 @@ func (a *Auth) Methods(terminal bool) []acp.Method {
 	return out
 }
 
-func (a *Auth) store(cfg *config.Config) codexauth.Store {
+func store(cfg *config.Config) codexauth.Store {
 	return codexauth.Store{Path: cfg.CodexAuthFile}
 }
 
@@ -125,7 +128,8 @@ var logins = map[string]func(a *Auth, ctx context.Context, cfg *config.Config) e
 	claudeCode: (*Auth).claudeLogin,
 }
 
-// Authenticate implements acp.Auth.
+// Authenticate implements acp.Auth. A newer call cancels the one that runs, whatever its method, and waits for it to end.
+// The cancelled call fails with context.Canceled.
 func (a *Auth) Authenticate(ctx context.Context, id string) error {
 	login, ok := logins[id]
 	if !ok {
@@ -135,19 +139,48 @@ func (a *Auth) Authenticate(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
+	a.gen++
+	gen := a.gen
+	if a.stop != nil {
+		a.stop()
+	}
+	a.mu.Unlock()
+	a.running.Lock()
+	defer a.running.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, loginBudget)
+	defer cancel()
+	a.mu.Lock()
+	if a.gen != gen {
+		a.mu.Unlock()
+		return context.Canceled
+	}
+	a.stop = cancel
+	a.mu.Unlock()
 	return login(a, ctx, cfg)
 }
 
 func (a *Auth) chatGPTLogin(ctx context.Context, cfg *config.Config) error {
-	return codexauth.LoginBrowser(ctx, codexauth.LoginOptions{Store: a.store(cfg), Issuer: cfg.CodexIssuer, Out: a.opts.Out, Open: a.opts.Open})
+	return codexauth.LoginBrowser(ctx, codexauth.LoginOptions{Store: store(cfg), Issuer: cfg.CodexIssuer, Out: a.opts.Out, Open: a.opts.Open})
+}
+
+// claudeCmd returns a command of the CLI whose whole process group ends with ctx.
+func (a *Auth) claudeCmd(ctx context.Context, bin string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator config
+	cmd.Env = a.opts.Env
+	process.KillOnCancel(cmd, killGrace)
+	return cmd
 }
 
 func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config) error {
-	bin := a.targets(cfg).claude
-	cmd := exec.CommandContext(ctx, bin, "auth", "login") //nolint:gosec // operator config
-	cmd.Env, cmd.Stdout, cmd.Stderr = a.opts.Env, a.opts.Out, a.opts.Out
+	bin := targets(cfg).claude
+	cmd := a.claudeCmd(ctx, bin, "auth", "login")
+	cmd.Stdout, cmd.Stderr = a.opts.Out, a.opts.Out
 	err := cmd.Run()
 	a.forget(bin)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil {
 		return fmt.Errorf("claude auth login: %w", err)
 	}
@@ -157,26 +190,13 @@ func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-// Logout implements acp.Auth. It ends the ChatGPT login and the login of the Claude Code CLI, for each one that the user config offers.
+// Logout implements acp.Auth. It ends the ChatGPT login only. The Claude Code CLI owns its login.
 func (a *Auth) Logout(ctx context.Context) error {
 	cfg, err := a.opts.Config("")
 	if err != nil {
 		return err
 	}
-	t := a.targets(cfg)
-	var errs []error
-	if t.chatgpt {
-		errs = append(errs, a.store(cfg).Remove(ctx))
-	}
-	if t.claude != "" {
-		cmd := exec.CommandContext(ctx, t.claude, "auth", "logout") //nolint:gosec // operator config
-		cmd.Env, cmd.Stdout, cmd.Stderr = a.opts.Env, a.opts.Out, a.opts.Out
-		if err := cmd.Run(); err != nil {
-			errs = append(errs, errors.New("claude auth logout failed"))
-		}
-		a.forget(t.claude)
-	}
-	return errors.Join(errs...)
+	return store(cfg).Remove(ctx)
 }
 
 // Check implements acp.Auth.
@@ -191,7 +211,7 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 	case !ok:
 		return nil
 	case p.UsesChatGPTLogin():
-		if _, err := a.store(cfg).Load(); codexauth.IsLoginRequired(err) {
+		if _, err := store(cfg).Load(); codexauth.IsLoginRequired(err) {
 			return &acp.AuthRequiredError{Message: err.Error()}
 		}
 	case p.UsesClaudeCLI():
@@ -220,8 +240,8 @@ func (a *Auth) loggedIn(ctx context.Context, bin string, fresh bool) (ok, known 
 	ctx, cancel := context.WithTimeout(ctx, statusBudget)
 	defer cancel()
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin, "auth", "status", "--json") //nolint:gosec // operator config
-	cmd.Env, cmd.Stdout = a.opts.Env, &out
+	cmd := a.claudeCmd(ctx, bin, "auth", "status", "--json")
+	cmd.Stdout = &out
 	_ = cmd.Run() // the CLI may exit non-zero when logged out and still print the status
 	var st struct {
 		LoggedIn *bool `json:"loggedIn"`
