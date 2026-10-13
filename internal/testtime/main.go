@@ -79,6 +79,7 @@ func consume(in io.Reader, out io.Writer) *report {
 			_, _ = fmt.Fprintln(out, line)
 			continue
 		}
+		rep.markParent(ev)
 		key := ev.Package + "\x00" + ev.Test
 		switch ev.Action {
 		case "output":
@@ -108,18 +109,28 @@ func consume(in io.Reader, out io.Writer) *report {
 }
 
 func (r *report) record(ev event) {
-	pkg := strings.TrimPrefix(strings.TrimPrefix(ev.Package, modulePath), "/")
-	if pkg == "" {
-		pkg = "."
-	}
+	pkg := shortPackage(ev.Package)
 	if ev.Test == "" {
 		r.packages = append(r.packages, result{pkg: pkg, elapsed: ev.Elapsed})
 		return
 	}
 	r.tests = append(r.tests, result{pkg: pkg, name: ev.Test, elapsed: ev.Elapsed})
+}
+
+// markParent records the parent of a nested test on any event, so a parent
+// whose subtests all skip is still not a leaf.
+func (r *report) markParent(ev event) {
 	if i := strings.LastIndex(ev.Test, "/"); i >= 0 {
-		r.parents[pkg+"\x00"+ev.Test[:i]] = true
+		r.parents[shortPackage(ev.Package)+"\x00"+ev.Test[:i]] = true
 	}
+}
+
+func shortPackage(pkg string) string {
+	pkg = strings.TrimPrefix(strings.TrimPrefix(pkg, modulePath), "/")
+	if pkg == "" {
+		return "."
+	}
+	return pkg
 }
 
 // check compares every leaf test and every package with its budget. A test
@@ -147,9 +158,11 @@ func appendFile(path, text string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	_, err = f.WriteString(text)
-	return err
+	if _, err := f.WriteString(text); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func summary(title string, r *report, over []string) string {
