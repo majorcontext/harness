@@ -34,7 +34,7 @@ type acpScenario struct {
 	allowed []string
 	// files are the files of the "main" directory.
 	files map[string]string
-	// wireOnly leaves the requests and the sessions out of the golden, for a row whose model traffic depends on timing.
+	// wireOnly leaves the requests, the sessions, and the usage_update and session_info_update frames out of the golden, for a row whose turn depends on timing.
 	wireOnly bool
 	steps    []acpStep
 	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
@@ -45,8 +45,11 @@ type acpScenario struct {
 }
 
 // acpInit sends initialize with the client protocol version and expects the
-// agent to answer version want.
-type acpInit struct{ version, want int }
+// agent to answer version want. notices adds the client capability session.notices.
+type acpInit struct {
+	version, want int
+	notices       bool
+}
 
 // acpRaw writes one line as it is. A non-zero code expects an error response
 // with a null id.
@@ -67,9 +70,13 @@ type acpNotify struct{ method string }
 
 func (s acpInit) run(t *testing.T, c *acpConn) {
 	t.Helper()
+	caps := map[string]any{}
+	if s.notices {
+		caps["session"] = map[string]any{"notices": map[string]any{}}
+	}
 	id := c.request("initialize", map[string]any{
 		"protocolVersion":    s.version,
-		"clientCapabilities": map[string]any{},
+		"clientCapabilities": caps,
 		"clientInfo":         map[string]any{"name": "e2e", "version": "0"},
 	})
 	res := c.mustBeResult(c.response(id), "InitializeResponse")
@@ -108,7 +115,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
@@ -212,7 +219,7 @@ func acpObserve(t *testing.T, c *acpConn) acpGolden {
 func acpGoldenOf(t *testing.T, c *acpConn, wireOnly bool) acpGolden {
 	t.Helper()
 	if wireOnly {
-		return acpGolden{Wire: c.goldenWire()}
+		return acpGolden{Wire: acpWithoutTurnUpdates(c.goldenWire())}
 	}
 	return acpObserve(t, c)
 }

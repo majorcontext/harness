@@ -101,6 +101,7 @@ var acpSessionScenarios = []acpScenario{
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "go", stop: "end_turn"},
 			acpAwaitText{text: "goal turn text"},
+			acpAwaitUpdate{kind: "session_info_update"},
 			acpCheck(func(t *testing.T, c *acpConn) {
 				if !c.fake.AwaitRequests(4, waitBound) {
 					t.Fatalf("model requests = %d, want 4: the turn, its answer, the goal turn, and the evaluator", len(c.fake.Requests()))

@@ -115,6 +115,8 @@ func writeConfig(dir, baseURL string) (string, error) {
 		"session_dir": filepath.Join(dir, "sessions"),
 		"providers": map[string]any{
 			"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": baseURL},
+			// Its curated model list gives the model option a second value to switch to. No run sends it a request.
+			"codex": map[string]any{"type": "openai", "api_key_env": "ANTHROPIC_API_KEY", "base_url": baseURL},
 		},
 	}
 	b, err := json.Marshal(cfg)

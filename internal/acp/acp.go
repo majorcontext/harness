@@ -3,12 +3,14 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness"
@@ -54,6 +56,8 @@ type Runtimes interface {
 // Runtime is what the adapter uses of a harness.Runtime.
 type Runtime interface {
 	Create(ctx context.Context, req protocol.CreateSession, opts ...harness.SessionOption) (*harness.Session, error)
+	Models() []protocol.Model
+	Commands(ctx context.Context) (protocol.Commands, error)
 }
 
 // Serve answers ACP requests from r on w until r ends or ctx ends. Then it
@@ -77,6 +81,8 @@ type agent struct {
 	base   context.Context
 	cancel context.CancelFunc
 
+	notices atomic.Bool
+
 	mu       sync.Mutex
 	sessions map[string]*held
 	closed   bool
@@ -91,6 +97,8 @@ func (a *agent) Request(ctx context.Context, method string, params json.RawMessa
 		return a.newSession(ctx, params)
 	case "session/prompt":
 		return a.prompt(ctx, params)
+	case "session/set_config_option":
+		return a.setConfigOption(ctx, params)
 	}
 	return nil, &rpc.Error{Code: rpc.CodeMethodNotFound, Message: "Method not found", Data: map[string]string{"method": method}}
 }
@@ -151,11 +159,17 @@ func (a *agent) shutdown(ctx context.Context) error {
 
 func (a *agent) initialize(params json.RawMessage) (any, error) {
 	var p struct {
-		ProtocolVersion *int `json:"protocolVersion"`
+		ProtocolVersion    *int `json:"protocolVersion"`
+		ClientCapabilities struct {
+			Session struct {
+				Notices json.RawMessage `json:"notices"`
+			} `json:"session"`
+		} `json:"clientCapabilities"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.ProtocolVersion == nil || *p.ProtocolVersion < 0 || *p.ProtocolVersion > 65535 {
 		return nil, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "Invalid params", Data: map[string]string{"reason": "protocolVersion must be an integer from 0 to 65535"}}
 	}
+	a.notices.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Notices), []byte("{")))
 	version := LatestVersion
 	return map[string]any{
 		"protocolVersion": version,

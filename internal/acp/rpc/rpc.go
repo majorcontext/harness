@@ -61,6 +61,11 @@ type Admitter interface {
 	Admit(ctx context.Context, method string, params json.RawMessage) context.Context
 }
 
+// Follower is an optional interface of a result. Serve calls AfterSent once,
+// in the goroutine of the request, after it queued the response. A message that
+// AfterSent queues reaches the peer after the response.
+type Follower interface{ AfterSent() }
+
 // Conn is one newline-delimited JSON-RPC 2.0 connection. One goroutine reads,
 // one goroutine writes, and each request runs in its own goroutine.
 type Conn struct {
@@ -488,6 +493,9 @@ func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGro
 				result = struct{}{}
 			}
 			c.send(wireResult{JSONRPC: "2.0", ID: m.ID, Result: result})
+			if f, ok := result.(Follower); ok {
+				f.AfterSent()
+			}
 		}
 	})
 }
