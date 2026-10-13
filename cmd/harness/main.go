@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness"
@@ -48,7 +49,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "harness:", err)
+		fmt.Fprintln(os.Stderr, errorLine(err))
 		os.Exit(1)
 	}
 }
@@ -136,4 +137,12 @@ func closeRuntime(rt *harness.Runtime) error {
 	ctx, cancel := context.WithTimeout(context.Background(), closeBudget)
 	defer cancel()
 	return rt.Close(ctx)
+}
+
+// errorLine returns the text that main prints for err. A runtime error already starts with "harness: ".
+func errorLine(err error) string {
+	if msg := err.Error(); strings.HasPrefix(msg, "harness: ") {
+		return msg
+	}
+	return "harness: " + err.Error()
 }
