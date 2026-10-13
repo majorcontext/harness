@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +30,7 @@ import (
 type runtimeDriver struct {
 	store, workDir string
 	ask            bool
+	getenv         func(string) string
 	cfg            config.Config
 	rt             *harness.Runtime
 	srv            *httptest.Server
@@ -51,9 +51,19 @@ type runtimeDriver struct {
 // runtimeVersion is the build version that serve reports in its engine banner.
 const runtimeVersion = "0.1.0-dev"
 
-// runtimeKey gives the in-process runtime the model key that startServeIn
-// gives serve.
-var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codexAPIKey) })
+// getenv is the environment of the in-process runtime: env, then the model key
+// that startServeIn gives serve, then the process.
+func getenv(env map[string]string) func(string) string {
+	return func(k string) string {
+		if v, ok := env[k]; ok {
+			return v
+		}
+		if k == "ANTHROPIC_API_KEY" {
+			return codexAPIKey
+		}
+		return os.Getenv(k)
+	}
+}
 
 // newRuntimeDriverIn runs the runtime in workDir. An empty workDir gives it no WorkDir.
 // A .harness.json in workDir joins the config as the project layer, as an
@@ -61,7 +71,6 @@ var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codex
 // ApplyEnv sees, so a variable of the test shell cannot change a row.
 func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir string, env map[string]string) *runtimeDriver {
 	t.Helper()
-	runtimeKey()
 	c, err := config.Load(configPath)
 	if _, statErr := os.Stat(filepath.Join(workDir, ".harness.json")); workDir != "" && statErr == nil {
 		c, err = config.LoadProject(configPath, workDir)
@@ -72,7 +81,7 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 	if err := c.ApplyEnv(func(k string) string { return env[k] }); err != nil {
 		t.Fatalf("apply env: %v", err)
 	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -102,7 +111,7 @@ func (d *runtimeDriver) start(t *testing.T) {
 		d.startProc(t)
 		return
 	}
-	rt, err := newWired(harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, AskUserQuestion: d.ask})
+	rt, err := newWired(harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}

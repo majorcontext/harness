@@ -479,11 +479,9 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 func runScenarios(t *testing.T, table []scenario) {
 	t.Helper()
 	skipShort(t)
-	if os.Getenv(runtimeEnv) == "" {
-		t.Parallel()
-	}
+	t.Parallel()
 	for _, h := range []host{serveHost, runtimeHost} {
-		onHost(t, h, table, func(sc scenario) (string, bool) { return sc.name, sc.driver != nil },
+		onHost(t, h, table, func(sc scenario) string { return sc.name },
 			func(t *testing.T, sc scenario) observation { return runScenario(t, sc, h) })
 	}
 }

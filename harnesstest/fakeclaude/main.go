@@ -162,7 +162,27 @@ func listModes() {
 	}
 }
 
+// fakeEnvFlag is the prefix of an argument that sets a variable of this
+// process and then leaves its argv, so a host sets the environment of one
+// spawn through its config without touching its own environment.
+const fakeEnvFlag = "--fake-env="
+
+func applyFakeEnv() {
+	args := os.Args[:1]
+	for _, a := range os.Args[1:] {
+		kv, ok := strings.CutPrefix(a, fakeEnvFlag)
+		if !ok {
+			args = append(args, a)
+			continue
+		}
+		k, v, _ := strings.Cut(kv, "=")
+		_ = os.Setenv(k, v)
+	}
+	os.Args = args
+}
+
 func main() {
+	applyFakeEnv()
 	if len(os.Args) == 2 && os.Args[1] == "--list-modes" {
 		listModes()
 		return

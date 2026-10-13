@@ -27,6 +27,7 @@ const (
 
 func TestContractRuntimeClaudeCodeStateChunks(t *testing.T) {
 	skipShort(t)
+	t.Parallel()
 	rows := []struct {
 		name string
 		run  func(t *testing.T)
@@ -39,7 +40,10 @@ func TestContractRuntimeClaudeCodeStateChunks(t *testing.T) {
 		{"claude_code_state_keeps_mirror_frames_that_arrive_before_the_init_frame", rowCCStateKeepsEarlyMirrors},
 	}
 	for _, row := range rows {
-		t.Run(row.name, row.run)
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			row.run(t)
+		})
 	}
 }
 
@@ -115,21 +119,20 @@ type ccLane struct {
 	seen  string
 	argv  string
 	epoch int
+	// fakeEnv sets the environment of each fakeclaude spawn of the lane.
+	fakeEnv []string
 }
 
 // newCCLane starts a lane whose spawns replay fixtures in order, the last
 // one for each later spawn. hangAfter is the FAKE_CLAUDE_MIRROR_HANG_AFTER list.
 func newCCLane(t *testing.T, hangAfter string, fixtures ...string) *ccLane {
 	t.Helper()
-	t.Setenv("HARNESS_E2E_KEY", "k")
 	dir := t.TempDir()
 	l := &ccLane{t: t, st: store.NewMemStore(), rcv: newSyncReceiver(t, nil), seen: filepath.Join(dir, "seen.jsonl"), argv: filepath.Join(dir, "argv.jsonl")}
-	for k, v := range map[string]string{
+	l.fakeEnv = fakeEnvArgs(map[string]string{
 		"FAKE_CLAUDE_MODE": "mirror", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"), "FAKE_CLAUDE_MIRROR_FIXTURE": strings.Join(fixtures, ","),
 		"FAKE_CLAUDE_MIRROR_SEEN": l.seen, "FAKE_CLAUDE_LOG": l.argv, "FAKE_CLAUDE_MIRROR_HANG_AFTER": hangAfter,
-	} {
-		t.Setenv(k, v)
-	}
+	})
 	return l
 }
 
@@ -139,9 +142,9 @@ func (l *ccLane) runtime() *harness.Runtime {
 	cfg := syncConfig(l.t, l.epoch, l.rcv, "http://127.0.0.1:1", map[string]any{
 		"model": "claude-code/sonnet",
 		"providers": map[string]any{"claude-code": map[string]any{
-			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true}},
+			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true, "extra_args": l.fakeEnv}},
 	})
-	r, err := newWired(harness.Options{Store: l.st, Config: cfg})
+	r, err := newWired(harness.Options{Store: l.st, Config: cfg, Getenv: getenv(map[string]string{"HARNESS_E2E_KEY": "k"})})
 	if err != nil {
 		l.t.Fatal(err)
 	}

@@ -65,6 +65,16 @@ type claudeLogs struct {
 	argvLog, stdinLog, mcpLog, toolLog, cwdLog, seenLog, signalLog, stateDir string
 }
 
+// fakeEnvArgs is the extra_args of a claude-code provider that set env in each
+// fakeclaude spawn, so the environment of the test process stays unchanged.
+func fakeEnvArgs(env map[string]string) []string {
+	var args []string
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		args = append(args, "--fake-env="+k+"="+env[k])
+	}
+	return args
+}
+
 func (l claudeLogs) env(lane claudeLane) map[string]string {
 	env := map[string]string{
 		"FAKE_CLAUDE_MODE":           lane.mode,
@@ -128,7 +138,8 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	if l.ask {
 		args = append(args, "--ask-user-question")
 	}
-	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l), args...), claudeLogs: logs}
+	cfg["providers"].(map[string]any)["claude-code"].(map[string]any)["extra_args"] = fakeEnvArgs(logs.env(l))
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), nil, args...), claudeLogs: logs}
 }
 
 func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
