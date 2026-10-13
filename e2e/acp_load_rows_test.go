@@ -491,11 +491,10 @@ var acpLoadScenarios = []acpScenario{
 		},
 	},
 	{
-		name:           "list_hides_task_children_and_load_refuses_them",
-		cite:           "A session that has a parent is a task child of another session. `session/load` and `session/resume` of it are `-32602`.",
-		model:          acpChildModel,
-		schedulerOrder: true,
-		wireOnly:       true,
+		name:     "list_hides_task_children_and_load_refuses_them",
+		cite:     "A session that has a parent is a task child of another session. `session/load` and `session/resume` of it are `-32602`.",
+		model:    acpChildModel,
+		wireOnly: true,
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPromptStart{as: "a", text: "delegate"},
@@ -591,10 +590,11 @@ var acpLoadScenarios = []acpScenario{
 		},
 	},
 	{
-		name:      "a_record_appended_between_replay_and_open_arrives_once",
-		cite:      "so a record that the log gains between the read and the open reaches the client once, as a live update.",
-		model:     []harnesstest.Step{{Name: "first", Reply: harnesstest.Reply{Text: "first reply"}}, {Name: "late", Reply: harnesstest.Reply{Text: "late reply"}}},
-		afterRead: afterLateTurn,
+		name:          "a_record_appended_between_replay_and_open_arrives_once",
+		cite:          "so a record that the log gains between the read and the open reaches the client once, as a live update.",
+		model:         []harnesstest.Step{{Name: "first", Reply: harnesstest.Reply{Text: "first reply"}}, {Name: "late", Reply: harnesstest.Reply{Text: "late reply"}}},
+		afterRead:     afterLateTurn,
+		liveAfterLoad: true,
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "one", stop: "end_turn"},

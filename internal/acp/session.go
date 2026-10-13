@@ -40,6 +40,11 @@ type held struct {
 type prompt struct {
 	turn      *harness.Turn
 	cancelled bool
+	input     string
+	reached   bool
+	handed    bool
+	free      chan struct{}
+	freeOnce  sync.Once
 }
 
 // heldConfig is what the connection knows of a session it took. models is the
@@ -85,12 +90,14 @@ type pumpState struct {
 	sent  map[chunkKey]string
 	diffs map[string][]any
 	last  lastSent
+	// owners maps a running turn to the prompts that wait for their answers.
+	owners map[string][]*prompt
 }
 
 // newPumpState returns the state of a pump that starts at the head of the log
 // that snap describes.
 func newPumpState(snap protocol.Session) *pumpState {
-	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap)}
+	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap), owners: map[string][]*prompt{}}
 }
 
 func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
@@ -107,8 +114,16 @@ func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 		if err := h.forward(ctx, e, st); err != nil {
 			return
 		}
+		owners := h.turnOwner(e, st)
 		if !e.Ephemeral {
-			h.advance(e.Seq)
+			h.advance(e.Seq, owners)
+		}
+		for _, owner := range owners {
+			select {
+			case <-owner.free:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }
@@ -240,10 +255,14 @@ func (h *held) chunk(kind, itemID, text string) error {
 	})
 }
 
-// advance records that the pump sent every update through seq.
-func (h *held) advance(seq uint64) {
+// advance records that the pump sent every update through seq. owners are the
+// prompts whose last event is seq, if any.
+func (h *held) advance(seq uint64, owners []*prompt) {
 	h.mu.Lock()
 	h.done = seq
+	for _, owner := range owners {
+		owner.reached = true
+	}
 	close(h.wake)
 	h.wake = make(chan struct{})
 	h.mu.Unlock()
@@ -276,7 +295,7 @@ func (h *held) flush(ctx context.Context, seq uint64) {
 
 // begin registers a prompt before it is admitted.
 func (h *held) begin() *prompt {
-	p := &prompt{}
+	p := &prompt{free: make(chan struct{})}
 	h.mu.Lock()
 	h.prompts[p] = struct{}{}
 	h.mu.Unlock()
@@ -292,7 +311,19 @@ func (h *held) admitted(p *prompt, t *harness.Turn) (cancelled bool) {
 	return p.cancelled
 }
 
+// end drops p, unless its answer is handed to the rpc layer: AfterSent drops
+// it, so idle waits for the answer to be queued.
 func (h *held) end(p *prompt) {
+	h.mu.Lock()
+	handed := p.handed
+	h.mu.Unlock()
+	if !handed {
+		h.release(p)
+		h.drop(p)
+	}
+}
+
+func (h *held) drop(p *prompt) {
 	h.mu.Lock()
 	delete(h.prompts, p)
 	close(h.wake)

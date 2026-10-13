@@ -43,6 +43,8 @@ type acpConn struct {
 	env      acpEnv
 	// reconnect ends the agent process and starts a new one over the same session directory.
 	reconnect func()
+	// scanned is the index in wire up to which await steps have taken frames.
+	scanned int
 	// cursor is the nextCursor of the last session/list.
 	cursor string
 }
