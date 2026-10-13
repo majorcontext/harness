@@ -319,6 +319,7 @@ export interface MessagePart {
 export interface Model {
   id: string;
   provider: string;
+  provider_name?: string;
   name?: string;
   description?: string;
   efforts?: string[];

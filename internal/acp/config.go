@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -19,9 +21,8 @@ const (
 // effortNames are the labels of the effort values.
 var effortNames = map[string]string{effortDefault: "Default", "off": "Off", "minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High"}
 
-// providerLabels are the group labels of providers whose key is not a plain
-// capitalized word.
-var providerLabels = map[string]string{"openai": "OpenAI"}
+// allEfforts are the levels of a model that the model list does not hold.
+var allEfforts = []string{"off", "minimal", "low", "medium", "high"}
 
 // otherGroup is the group of a current model whose provider lists no model.
 const otherGroup = "Other"
@@ -51,33 +52,36 @@ type configOption struct {
 	Options any `json:"options"`
 }
 
-// providerLabel is the label of a provider group: the key with each word
-// capitalized, unless providerLabels names it.
+// providerLabel is the label of a provider group whose models name no
+// provider: the key with each word capitalized.
 func providerLabel(key string) string {
-	if l, ok := providerLabels[key]; ok {
-		return l
-	}
 	words := strings.FieldsFunc(key, func(r rune) bool { return r == '-' || r == '_' })
 	for i, w := range words {
-		words[i] = strings.ToUpper(w[:1]) + w[1:]
+		r, n := utf8.DecodeRuneInString(w)
+		words[i] = string(unicode.ToUpper(r)) + w[n:]
 	}
 	return strings.Join(words, " ")
 }
 
-// shortDescription is the first sentence of d, cut at descriptionLimit.
+// shortDescription is the first sentence of d, cut at descriptionLimit
+// characters at a word boundary.
 func shortDescription(d string) string {
 	if i := strings.Index(d, ". "); i >= 0 {
 		d = d[:i]
 	}
 	d = strings.TrimSuffix(d, ".")
-	if len(d) <= descriptionLimit {
+	if utf8.RuneCountInString(d) <= descriptionLimit {
 		return d
 	}
-	cut := strings.LastIndexByte(d[:descriptionLimit], ' ')
-	if cut <= 0 {
-		cut = descriptionLimit
+	runes := []rune(d)
+	end := descriptionLimit
+	for end > 0 && runes[end-1] != ' ' {
+		end--
 	}
-	return d[:cut] + "…"
+	if end == 0 {
+		end = descriptionLimit
+	}
+	return strings.TrimRight(string(runes[:end]), " ") + "…"
 }
 
 // modelValues returns the models as options grouped by provider, in the order
@@ -104,7 +108,11 @@ func modelValues(models []protocol.Model, s protocol.Session) []configGroup {
 		if d := shortDescription(m.Description); d != "" {
 			desc += " · " + d
 		}
-		add(m.Provider, providerLabel(m.Provider), configValue{Value: m.ID, Name: name, Description: desc})
+		label := m.ProviderName
+		if label == "" {
+			label = providerLabel(m.Provider)
+		}
+		add(m.Provider, label, configValue{Value: m.ID, Name: name, Description: desc})
 	}
 	if !slices.ContainsFunc(models, func(m protocol.Model) bool { return m.ID == s.Model }) {
 		key := otherGroup
@@ -124,16 +132,17 @@ func modelValues(models []protocol.Model, s protocol.Session) []configGroup {
 
 // effortChoices returns the effort values that the model of s offers: the
 // default, the levels of the model, and the current effort, so that the
-// current value is always one of them.
+// current value is always one of them. A model that the list does not hold
+// offers every level, as the backend decides what it takes.
 func effortChoices(models []protocol.Model, s protocol.Session) []string {
+	levels := allEfforts
+	if i := slices.IndexFunc(models, func(m protocol.Model) bool { return m.ID == s.Model }); i >= 0 {
+		levels = models[i].Efforts
+	}
 	out := []string{effortDefault}
-	for _, m := range models {
-		if m.ID == s.Model {
-			for _, e := range m.Efforts {
-				if _, known := effortNames[e]; known && !slices.Contains(out, e) {
-					out = append(out, e)
-				}
-			}
+	for _, e := range levels {
+		if _, known := effortNames[e]; known && !slices.Contains(out, e) {
+			out = append(out, e)
 		}
 	}
 	if cur := effortValue(s.Effort); !slices.Contains(out, cur) {

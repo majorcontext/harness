@@ -1101,6 +1101,9 @@
           "provider": {
             "type": "string"
           },
+          "provider_name": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },

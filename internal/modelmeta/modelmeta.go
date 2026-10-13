@@ -41,9 +41,8 @@ func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 		// the model ID proper; the direct-vendor form (e.g.
 		// "claude-fable-5") never does. The dotted prefix marks a ref
 		// that is SERVED through Bedrock, so it must honor the Bedrock
-		// window where the two tables diverge (today only
-		// claude-sonnet-4-5-20250929: 200k on Bedrock vs 1M first-party
-		// — see bedrockAnthropicContextWindows's doc comment).
+		// window where the two tables diverge (see
+		// bedrockAnthropicContextWindows's doc comment).
 		// Over-reporting here arms compaction above the route's real
 		// limit and re-creates the overflow this package exists to
 		// prevent.
@@ -55,9 +54,7 @@ func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 		// family the bedrock snapshot doesn't key resolves as unknown
 		// (the backend applies its default window) rather than
 		// borrowing the first-party window, which would silently un-do the
-		// divergence for any form not keyed exactly (e.g. the undated
-		// "anthropic.claude-sonnet-4-5" borrowing 1M where Bedrock's real
-		// window is 200k).
+		// divergence for any form not keyed exactly.
 		if suffix, isBedrockStyle := stripBedrockAnthropicPrefix(model); isBedrockStyle {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 			return tokens, ok
@@ -98,11 +95,14 @@ var codexModels = []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-lun
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves,
 // with the name that a client shows for each.
 var claudeCodeModels = []Model{
-	{ID: "fable", Name: "Claude Fable (Claude Code)"},
-	{ID: "haiku", Name: "Claude Haiku (Claude Code)"},
-	{ID: "opus", Name: "Claude Opus (Claude Code)"},
-	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)"},
+	{ID: "fable", Name: "Claude Fable (Claude Code)", Efforts: allEfforts},
+	{ID: "haiku", Name: "Claude Haiku (Claude Code)", Efforts: allEfforts},
+	{ID: "opus", Name: "Claude Opus (Claude Code)", Efforts: allEfforts},
+	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: allEfforts},
 }
+
+// allEfforts are the levels of a model whose backend decides what it takes.
+var allEfforts = []string{"off", "minimal", "low", "medium", "high"}
 
 // modelInfo holds the models.dev facts of one chat model. A model that is not
 // listed is deprecated or cannot call tools.
@@ -121,7 +121,7 @@ type Model struct {
 	// Description is one line about the model, or empty when unknown.
 	Description string
 	// Efforts are the effort levels that the model supports, from off to
-	// high. It is empty for a model without a reasoning control.
+	// high. It is empty for a model that has no reasoning control.
 	Efforts []string
 }
 
@@ -146,10 +146,18 @@ func Models(provider string) []Model {
 	case codexProvider:
 		return listed(codexModels, openaiInfo)
 	case claudeCodeProvider:
-		return slices.Clone(claudeCodeModels)
+		out := slices.Clone(claudeCodeModels)
+		for i := range out {
+			out[i].Efforts = slices.Clone(out[i].Efforts)
+		}
+		return out
 	}
 	return nil
 }
+
+// ProviderName returns the display name of a provider from models.dev, or
+// an empty string when it has none.
+func ProviderName(provider string) string { return providerNames[provider] }
 
 // listed returns the models of ids that info lists, ordered by release date
 // with the newest first and then by name.

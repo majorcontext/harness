@@ -98,6 +98,26 @@
                 {
                   "name": "Default",
                   "value": "default"
+                },
+                {
+                  "name": "Off",
+                  "value": "off"
+                },
+                {
+                  "name": "Minimal",
+                  "value": "minimal"
+                },
+                {
+                  "name": "Low",
+                  "value": "low"
+                },
+                {
+                  "name": "Medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "High",
+                  "value": "high"
                 }
               ],
               "type": "select"

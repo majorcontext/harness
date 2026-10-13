@@ -110,6 +110,13 @@ func acpEffortValues(option any) []string {
 	return out
 }
 
+// acpLastEffortValues returns the effort values of the last config_option_update, joined by commas.
+func acpLastEffortValues(c *acpConn) string {
+	ups := acpUpdatesOf(c, "config_option_update")
+	last, _ := ups[len(ups)-1]["configOptions"].([]any)
+	return strings.Join(acpEffortValues(last[1]), ",")
+}
+
 func acpOptionValue(options any, id string) any {
 	list, _ := options.([]any)
 	for _, o := range list {
@@ -254,8 +261,12 @@ var acpConfigScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "effort_option_offers_the_levels_of_the_model",
-		cite:  "It is a flat list of `default` and the effort levels that the current model supports",
+		name: "effort_option_offers_the_levels_of_the_model",
+		cite: "It is a flat list of `default` and the effort levels of the current model",
+		config: map[string]any{"providers": map[string]any{
+			"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+			"openai":    map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+		}},
 		model: acpRepeatText("ok"),
 		steps: []acpStep{
 			acpNew{as: "a"},
@@ -265,14 +276,44 @@ var acpConfigScenarios = []acpScenario{
 				}
 			}),
 			acpSetConfig{as: "a", id: "effort", value: "high"},
-			acpSetConfig{as: "a", id: "model", value: "anthropic/claude-haiku-4-5"},
+			acpSetConfig{as: "a", id: "model", value: "openai/gpt-4.1"},
 			acpCheck(func(t *testing.T, c *acpConn) {
-				ups := acpUpdatesOf(c, "config_option_update")
-				last, _ := ups[len(ups)-1]["configOptions"].([]any)
-				if got := acpEffortValues(last[1]); strings.Join(got, ",") != "default,high" {
-					t.Errorf("effort values of claude-haiku-4-5 = %v, want default and the current effort", got)
+				if got := acpLastEffortValues(c); got != "default,high" {
+					t.Errorf("effort values of gpt-4.1 = %v, want default and the current effort", got)
 				}
 			}),
+			acpPrompt{as: "a", text: "/model anthropic/claude-haiku-4-5", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,off,minimal,low,medium,high" {
+					t.Errorf("effort values of claude-haiku-4-5 after /model = %v, want every level", got)
+				}
+			}),
+		},
+	},
+	{
+		name: "effort_option_offers_every_level_for_an_unlisted_model",
+		cite: "A model that `Runtime.Models` does not hold offers every level.",
+		config: map[string]any{
+			"model":                 "gateway/vendor/model",
+			"context_window_tokens": 1000,
+			"providers": map[string]any{
+				"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+				"gateway":   map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+			},
+		},
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				opts := acpNewOptions(c)
+				if got := acpEffortValues(opts[1]); strings.Join(got, ",") != "default,off,minimal,low,medium,high" {
+					t.Errorf("effort values of an unlisted model = %v, want every level", got)
+				}
+				other, ok := acpGroups(t, opts[0])["Other"]
+				if !ok || other.name != "Other" || len(other.order) != 1 || other.order[0] != "gateway/vendor/model" {
+					t.Errorf("the model option has no Other group with the current model: %v", opts[0])
+				}
+			}),
+			acpSetConfig{as: "a", id: "effort", value: "high"},
 		},
 	},
 	{

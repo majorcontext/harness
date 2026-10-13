@@ -204,7 +204,7 @@ func (m *Router) List() []protocol.Model {
 		be := m.backends[name]
 		for _, mm := range modelmeta.Models(name) {
 			ref := name + "/" + mm.ID
-			out = append(out, protocol.Model{ID: ref, Provider: name, Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: be.Capabilities(ref).ContextWindow})
+			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: be.Capabilities(ref).ContextWindow})
 		}
 	}
 	return out
