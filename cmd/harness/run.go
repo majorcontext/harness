@@ -141,7 +141,7 @@ func runCmd(args []string) error {
 	if out.printedText {
 		fmt.Println()
 	}
-	if !opts.noSave && (runErr == nil || errors.Is(runErr, errGoalNotAchieved)) {
+	if !opts.noSave {
 		fmt.Fprintln(os.Stderr, "session:", s.Snapshot().ID)
 	}
 	return errors.Join(runErr, closeRuntime(rt))

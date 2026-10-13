@@ -284,7 +284,7 @@ func TestContractCLIRunGoalExitCodes(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h := newCLIHost(t, nil, c.steps...)
 			_, errOut, code := h.run(append([]string{"run", "-goal", "say done"}, c.extra...)...)
-			if code != c.code || !strings.Contains(errOut, c.want) || (c.deny != "" && strings.Contains(errOut, c.deny)) {
+			if code != c.code || !strings.Contains(errOut, "session: ses_") || !strings.Contains(errOut, c.want) || (c.deny != "" && strings.Contains(errOut, c.deny)) {
 				t.Errorf("run -goal = %d, want %d and %q without %q\n%s", code, c.code, c.want, c.deny, errOut)
 			}
 		})
@@ -405,7 +405,7 @@ func TestContractCLIRunGoalExitsOneWhenATurnFails(t *testing.T) {
 	t.Parallel()
 	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
 	out, errOut, code := h.run("run", "-goal", "say done")
-	if code != 1 || !strings.Contains(errOut, "bad request body") || strings.Contains(errOut, "goal not achieved") {
+	if code != 1 || !strings.Contains(errOut, "bad request body") || !strings.Contains(errOut, "session: ses_") || strings.Contains(errOut, "goal not achieved") {
 		t.Errorf("run -goal with a failed turn = %d, want 1 and the error\nstdout: %s\nstderr: %s", code, out, errOut)
 	}
 }
