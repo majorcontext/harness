@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 // acpFrame is one line of the wire. dir is "client" for a line the test wrote
@@ -31,6 +33,14 @@ type acpConn struct {
 	lines  chan acpLine
 	wire   []acpFrame
 	nextID int
+	// sessions maps a scenario alias to a session ID, dirs a name to a
+	// directory, and pending a name to the ID of a request without a response.
+	sessions map[string]string
+	dirs     map[string]string
+	pending  map[string]int
+	paths    map[string]string
+	fake     *harnesstest.Server
+	env      acpEnv
 }
 
 type acpLine struct {
@@ -42,12 +52,13 @@ type acpLine struct {
 // and a stop function that closes the input and waits for the agent to end.
 type acpHost struct {
 	name  string
-	start func(t *testing.T) (in io.WriteCloser, out io.Reader, stop func())
+	start func(t *testing.T, env acpEnv) (in io.WriteCloser, out io.Reader, stop func())
 }
 
 func newACPConn(t *testing.T, schema *acpSchema, in io.Writer, out io.Reader) *acpConn {
 	t.Helper()
-	c := &acpConn{t: t, schema: schema, in: in, lines: make(chan acpLine, 64)}
+	c := &acpConn{t: t, schema: schema, in: in, lines: make(chan acpLine, 64),
+		sessions: map[string]string{}, dirs: map[string]string{}, pending: map[string]int{}, paths: map[string]string{}}
 	go func() {
 		r := bufio.NewReader(out)
 		for {
@@ -196,6 +207,12 @@ func (c *acpConn) finish(stop func()) {
 // startACPProc runs `harness acp` in its own process group.
 func startACPProc(t *testing.T) (io.WriteCloser, io.Reader, *procGroup, *lockedBuffer) {
 	t.Helper()
+	return startACPProcEnv(t, acpEnv{configPath: "/nonexistent/harness-config.json", sessDir: t.TempDir()})
+}
+
+// startACPProcEnv is startACPProc with the config and session directory of env.
+func startACPProcEnv(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, *procGroup, *lockedBuffer) {
+	t.Helper()
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +223,7 @@ func startACPProc(t *testing.T) (io.WriteCloser, io.Reader, *procGroup, *lockedB
 	}
 	cmd := exec.Command(harnessBin, "acp")
 	cmd.Dir = t.TempDir()
-	cmd.Env = cleanEnv(map[string]string{"HARNESS_SESSION_DIR": t.TempDir(), "HARNESS_CONFIG": "/nonexistent/harness-config.json"})
+	cmd.Env = cleanEnv(map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey})
 	stderr := &lockedBuffer{}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, stderr
 	g := startGroup(t, cmd)
@@ -234,9 +251,9 @@ func waitACPExit(t *testing.T, g *procGroup, stderr *lockedBuffer) {
 
 // startACPBinary runs `harness acp` and returns a stop function that waits for
 // it to end after its input closes.
-func startACPBinary(t *testing.T) (io.WriteCloser, io.Reader, func()) {
+func startACPBinary(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func()) {
 	t.Helper()
-	in, out, g, stderr := startACPProc(t)
+	in, out, g, stderr := startACPProcEnv(t, env)
 	return in, out, func() { t.Helper(); waitACPExit(t, g, stderr) }
 }
 

@@ -73,7 +73,7 @@
           "agentCapabilities": {
             "loadSession": false,
             "mcpCapabilities": {
-              "http": false,
+              "http": true,
               "sse": false
             },
             "sessionCapabilities": {}

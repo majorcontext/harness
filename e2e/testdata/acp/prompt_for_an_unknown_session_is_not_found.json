@@ -1,0 +1,35 @@
+{
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "hi",
+              "type": "text"
+            }
+          ],
+          "sessionId": "ses_unknown"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32002,
+          "data": {
+            "code": "session_not_found"
+          },
+          "message": "harness: session not found"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

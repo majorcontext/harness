@@ -1,0 +1,127 @@
+package acp
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"slices"
+	"testing"
+
+	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/internal/acp/rpc"
+	"github.com/majorcontext/harness/protocol"
+)
+
+func TestRPCErrorMapsEachCode(t *testing.T) {
+	rows := []struct {
+		err  error
+		code int
+		text string
+	}{
+		{harness.ErrInvalidRequest, rpc.CodeInvalidParams, ""},
+		{harness.ErrInputConflict, rpc.CodeInvalidParams, ""},
+		{harness.ErrRequestNotPending, rpc.CodeInvalidParams, ""},
+		{harness.ErrSessionNotFound, codeNotFound, ""},
+		{harness.ErrBlobNotFound, codeNotFound, ""},
+		{harness.ErrSessionNotOwned, rpc.CodeInternal, ""},
+		{harness.ErrOwnershipLost, rpc.CodeInternal, ""},
+		{harness.ErrSessionHeld, rpc.CodeInternal, ""},
+		{harness.ErrSessionBusy, rpc.CodeInternal, ""},
+		{harness.ErrTurnMismatch, rpc.CodeInternal, ""},
+		{harness.ErrSessionExists, rpc.CodeInternal, ""},
+		{harness.ErrDraining, rpc.CodeInternal, ""},
+		{&protocol.Error{Code: protocol.CodeModelUnavailable, Message: "no model"}, rpc.CodeInternal, ""},
+		{harness.ErrUnreplayable, rpc.CodeInternal, "Internal error"},
+		{&protocol.Error{Code: protocol.CodeInternal, Message: "secret detail"}, rpc.CodeInternal, "Internal error"},
+		{errors.New("secret detail"), rpc.CodeInternal, "Internal error"},
+	}
+	for _, r := range rows {
+		got, ok := rpcError(r.err).(*rpc.Error)
+		if !ok {
+			t.Fatalf("rpcError(%v) is not an *rpc.Error", r.err)
+		}
+		if got.Code != r.code {
+			t.Errorf("rpcError(%v).Code = %d, want %d", r.err, got.Code, r.code)
+		}
+		if r.text != "" && got.Message != r.text {
+			t.Errorf("rpcError(%v).Message = %q, want %q", r.err, got.Message, r.text)
+		}
+		if data, _ := got.Data.(map[string]any); data["code"] != string(protocol.CodeOf(r.err)) {
+			t.Errorf("rpcError(%v).Data = %v, want the protocol code", r.err, got.Data)
+		}
+	}
+}
+
+func TestRPCErrorKeepsTheStopCause(t *testing.T) {
+	got := rpcError(harness.ErrOwnershipLost).(*rpc.Error)
+	if data, _ := got.Data.(map[string]any); data["cause"] != "ownership lost" {
+		t.Errorf("Data = %v, want the cause ownership lost", got.Data)
+	}
+}
+
+func TestSessionServersConvertsBothTransports(t *testing.T) {
+	raw := []json.RawMessage{
+		json.RawMessage(`{"name":"a","command":"/bin/a","args":["-x"],"env":[{"name":"K","value":"V"}]}`),
+		json.RawMessage(`{"type":"http","name":"b","url":"https://h/mcp","headers":[{"name":"Authorization","value":"t"}]}`),
+	}
+	got, err := sessionServers(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := got["a"]; !slices.Equal(a.Command, []string{"/bin/a", "-x"}) || !slices.Equal(a.Env, []string{"K=V"}) {
+		t.Errorf("stdio server = %+v", a)
+	}
+	if b := got["b"]; b.URL != "https://h/mcp" || b.Headers["Authorization"] != "t" {
+		t.Errorf("http server = %+v", b)
+	}
+}
+
+func TestSessionServersRefusesWhatItCannotRun(t *testing.T) {
+	for name, raw := range map[string]string{
+		"a repeated name":    `{"name":"a","command":"/bin/a","args":[],"env":[]}`,
+		"an sse server":      `{"type":"sse","name":"s","url":"https://h","headers":[]}`,
+		"a nameless server":  `{"command":"/bin/a","args":[],"env":[]}`,
+		"a repeated header":  `{"type":"http","name":"h","url":"https://h","headers":[{"name":"X","value":"1"},{"name":"X","value":"2"}]}`,
+		"a stdio no command": `{"name":"c","args":[],"env":[]}`,
+	} {
+		list := []json.RawMessage{json.RawMessage(`{"name":"a","command":"/bin/a","args":[],"env":[]}`), json.RawMessage(raw)}
+		_, err := sessionServers(list)
+		if e, ok := err.(*rpc.Error); !ok || e.Code != rpc.CodeInvalidParams {
+			t.Errorf("%s: err = %v, want -32602", name, err)
+		}
+	}
+}
+
+func TestPromptPartsTakeTheBaselineBlocks(t *testing.T) {
+	parts, err := promptParts([]json.RawMessage{
+		json.RawMessage(`{"type":"text","text":"hello"}`),
+		json.RawMessage(`{"type":"resource_link","name":"doc","uri":"file:///doc"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 || parts[0].Text != "hello" || parts[1].Text != "doc (file:///doc)" {
+		t.Errorf("parts = %+v", parts)
+	}
+	for _, bad := range []string{`{"type":"image","data":"","mimeType":"image/png"}`, `[]`, `7`} {
+		if _, err := promptParts([]json.RawMessage{json.RawMessage(bad)}); err == nil {
+			t.Errorf("promptParts accepted %s", bad)
+		}
+	}
+	if _, err := promptParts(nil); err == nil {
+		t.Error("promptParts accepted no block")
+	}
+}
+
+func TestNewULIDHasTheULIDShape(t *testing.T) {
+	re := regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+	seen := map[string]bool{}
+	for range 100 {
+		id := newULID()
+		if !re.MatchString(id) || seen[id] {
+			t.Fatalf("newULID() = %q: bad shape or repeated (%s)", id, fmt.Sprint(len(seen)))
+		}
+		seen[id] = true
+	}
+}

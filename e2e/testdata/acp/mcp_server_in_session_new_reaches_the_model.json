@@ -1,0 +1,83 @@
+{
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": [
+            {
+              "args": [],
+              "command": "\u003cmcp-stub\u003e",
+              "env": [
+                {
+                  "name": "HARNESSTEST_MCP_SPEC",
+                  "value": "{\"Name\":\"weather\",\"Instructions\":\"\",\"Tools\":[{\"Name\":\"forecast\",\"Description\":\"Get the weather forecast for a city\",\"InputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}},\"Result\":{\"Content\":[{\"Type\":\"text\",\"Text\":\"Oslo: 3C, snow\",\"Data\":\"\",\"MimeType\":\"\",\"URI\":\"\",\"Name\":\"\",\"Resource\":null}],\"IsError\":false},\"Echo\":false,\"Cwd\":false,\"RPCError\":null,\"Gated\":false},{\"Name\":\"alerts\",\"Description\":\"List active weather alerts\",\"InputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}},\"Result\":{\"Content\":[{\"Type\":\"text\",\"Text\":\"no active alerts\",\"Data\":\"\",\"MimeType\":\"\",\"URI\":\"\",\"Name\":\"\",\"Resource\":null}],\"IsError\":false},\"Echo\":false,\"Cwd\":false,\"RPCError\":null,\"Gated\":false},{\"Name\":\"echo\",\"Description\":\"Return the call arguments\",\"InputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}},\"Result\":{\"Content\":null,\"IsError\":false},\"Echo\":true,\"Cwd\":false,\"RPCError\":null,\"Gated\":false},{\"Name\":\"flaky\",\"Description\":\"Always reports a tool error\",\"InputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}},\"Result\":{\"Content\":[{\"Type\":\"text\",\"Text\":\"upstream timeout\",\"Data\":\"\",\"MimeType\":\"\",\"URI\":\"\",\"Name\":\"\",\"Resource\":null}],\"IsError\":true},\"Echo\":false,\"Cwd\":false,\"RPCError\":null,\"Gated\":false},{\"Name\":\"strict\",\"Description\":\"Always fails with a JSON-RPC error\",\"InputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}},\"Result\":{\"Content\":null,\"IsError\":false},\"Echo\":false,\"Cwd\":false,\"RPCError\":{\"Code\":-32602,\"Message\":\"city is required\"},\"Gated\":false}],\"Resources\":null,\"PageSize\":0}"
+                }
+              ],
+              "name": "weather"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "forecast",
+              "type": "text"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "ok",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}

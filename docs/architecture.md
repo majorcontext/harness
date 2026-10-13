@@ -832,13 +832,13 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 ### Command
 
-`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds the `Owner` and `Sync` that `owner_epoch` and `sync` name, builds one `harness.Runtime`, and holds no runtime behavior. It passes `os.Getenv` as `Options.Getenv` and its JSON `slog` logger as `Options.Logger`.
+`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds the `Owner` and `Sync` that `owner_epoch` and `sync` name, builds one `harness.Runtime` (`acp` builds one for each `cwd`), and holds no runtime behavior. It passes `os.Getenv` as `Options.Getenv` and its JSON `slog` logger as `Options.Logger`.
 
 - `serve` applies the `HARNESS_*` variables with `config.ApplyEnv`, then the flags `-no-instructions`, `-skills-dir`, and `-agent-def-dir`, so a flag wins. It keeps the sessions in a `DiskStore` at `HARNESS_SESSION_DIR`, else `session_dir`, else `~/.harness/sessions`. It serves `httpapi.Handler` behind the bearer token of `HARNESS_RUN_TOKEN`; `GET /health` needs no token, a request without the token gets 401 with the error code `unauthorized`, and an empty token is allowed only on a loopback bind or with `-unauthenticated` or `HARNESS_UNAUTHENTICATED`. With `-cors-origin` it adds the CORS headers, and a preflight skips the token. It binds `-addr` before it builds the runtime and takes `Options.ServeURL` from the bound address, so `-addr 127.0.0.1:0` serves on a free port that the `addr` field of the `serve start` log line names. Then it calls `CatchUp` and opens each session that has work to resume, and a failure of either is logged and never stops `serve`.
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
 - `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-c` names the newest root session whose `work_dir` equals the cleaned current directory, and fails with `no sessions to continue in <dir>` when none does; a session from another directory, and a session with no `work_dir`, is never chosen. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Prompt` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, when the goal evaluator failed (the goal is `paused`, or `failed` with a verdict other than `impossible`; stderr names the error), or when a typed command did not succeed. It exits 3 when the evaluator judged the `-goal` not met, or `impossible`, and no turn failed. It prints `session: <id>` on stderr when it saved the session. A command that fails prints its error on stderr with the prefix `harness: `, once: an error that already starts with that prefix is not prefixed again. A run whose session another process opened later fails with the takeover error of `Ownership` and exits 1.
 - `-h` and `--help` on any command (`version` included), and `help` at the top level and after `plugin`, print the usage to stdout and exit 0. A missing command prints the usage to stderr. An unknown command prints `harness: unknown command "<x>"`, a missing or unknown `plugin` subcommand prints `harness: plugin: missing subcommand` or `harness: plugin: unknown subcommand "<x>"`, and a flag error or a positional argument that a command does not take (for example `serve help` or `sessions extra`) prints `harness: <error>`, each followed by the usage on stderr. All of these exit 2, and the command does not start. One parse function in `cmd/harness` handles the flags of every command.
-- `acp` serves ACP over stdin and stdout (see ACP). It takes no flag. It reads no config file, makes no network call, and builds no runtime. A `SIGINT` or `SIGTERM` ends it with status 0.
+- `acp` serves ACP over stdin and stdout (see ACP). It takes no flag. It reads no config file, makes no network call, and builds no runtime until the first `session/new`. Then it builds one `harness.Runtime` for each `cwd` that a `session/new` names, with `config.LoadProject` of the user config and that `cwd` and `WorkDir` set to that `cwd`, over one `DiskStore` and one `NewLocalOwner`. It takes the session directory and the owner epoch from the config of the first `cwd`. It sets no `Sync`. A `cwd` that is not a directory is `-32602`. A `SIGINT` or `SIGTERM` ends it with status 0.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins`, which probes each plugin again and refreshes the manifest cache, and prints each plugin with its hooks.
 - `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline; a session whose tool ignores the cancel then keeps its lease until the lease expires. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
@@ -873,6 +873,9 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 | Method | Status |
 | --- | --- |
 | `initialize` | Answered |
+| `session/new` | Creates a session on the runtime of `cwd` |
+| `session/prompt` | Runs one turn |
+| `session/cancel` | Notification. Cancels the prompts of a session |
 | `authenticate`, `logout` | `-32601`. The agent advertises no authentication |
 | Any other method | `-32601` |
 
@@ -882,8 +885,41 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - The agent info is `name` `harness`, `title` `Harness`, and the harness version.
 - When the client version is not 1, the answer is version 1, the latest version of the agent. When it is 1, the answer is 1.
 - `initialize` without a `protocolVersion` that is an integer from 0 to 65535 is `-32602`.
-- The agent capabilities are `loadSession` false, `mcpCapabilities` with `http` and `sse` false, and empty `sessionCapabilities`. They hold no `promptCapabilities`: the agent advertises a capability only when the method that uses it works.
+- The agent capabilities are `loadSession` false, `mcpCapabilities` with `http` true and `sse` false on a host that starts MCP servers (`harness acp` is one), and empty `sessionCapabilities`. They hold no `promptCapabilities`: the agent advertises a capability only when the method that uses it works. A prompt takes the baseline content: `text` and `resource_link`.
 - The agent never sends `session/request_permission`: harness has no permission system.
+
+### Sessions
+
+- `session/new` takes `cwd` and `mcpServers`. A `cwd` that is not an absolute path of a directory is `-32602`. A `session/new` with another `cwd` runs on another runtime, which uses the project config of that `cwd`. The session has the origin `acp`. `additionalDirectories` is ignored and not advertised.
+- The `mcpServers` of `session/new` are the MCP servers of that session only. `harness.WithSessionMCP` receives them: a stdio entry as the command and its arguments, and an `http` entry as the URL and its headers. They are not stored. A name that two `mcpServers` entries share is `-32602`. So is an `sse` entry. On a host that starts no MCP server, any entry is `-32602`.
+- `Config.AllowedTools`, when set, is the `allowed_tools` of every session that `session/new` creates. `harness acp` leaves `Config.AllowedTools` unset, so a session has every tool.
+- The connection holds each session that it created. Its event pump is the only reader of the events of the session. It starts at the head of the log when `session/new` returns, and it ends when the connection ends.
+
+### Prompts
+
+- `session/prompt` runs one turn and sends the text of the model as `agent_message_chunk` updates before it answers `end_turn`. The reasoning of the model is `agent_thought_chunk` updates. A text delta is a chunk; the rest of an item that the deltas did not cover, because a slow reader missed them, is one more chunk when the item completes. The `messageId` of a message chunk is `msg_` and the item ID, and that of a thought chunk is `thought_` and the item ID.
+- The agent mints the ID of the input, and sends the input with the delivery `queue`: a prompt that arrives during a turn waits for the next turn. A prompt block other than `text` and `resource_link` is `-32602`. So is a prompt with no block. A `resource_link` is the text of its name and URI.
+- A prompt for a session that the connection does not hold answers `-32002`.
+- The updates of a turn reach the client before the answer: the answer waits until the event pump has sent every update through the end of the turn.
+- A turn that starts with no `session/prompt` open, such as a goal turn, sends its updates as notifications.
+- The stop reasons are: `completed` and `awaiting_input` are `end_turn`; `interrupted` is `cancelled`. After `session/cancel`, the prompt that runs answers `cancelled`, after every update that it has pending. A prompt that a cancel withdraws before a turn takes it answers `cancelled`.
+- A turn that fails answers `-32603` with `data.code` `internal` and `data.error_class`; the message is the masked error of the turn.
+- `$/cancel_request` for a prompt also interrupts its turn.
+- A tool call shows in no update. Only the text and the reasoning of the model do.
+- A prompt for a session that another owner took answers `-32603` with `data.code` `session_not_owned`. When another owner takes the session, the prompt that runs answers the same error. So does each later prompt.
+
+### Error mapping
+
+One function maps a harness error to a JSON-RPC error by its `protocol` code. `data.code` is that code, and `data.cause` is the stop cause of a `session_not_owned` error.
+
+| Code | JSON-RPC |
+| --- | --- |
+| `invalid_request`, `input_conflict`, `request_not_pending` | `-32602` |
+| `session_not_found`, `blob_not_found` | `-32002` |
+| `session_not_owned`, `session_busy`, `turn_mismatch`, `session_exists`, `draining`, `model_unavailable` | `-32603` |
+| `session_unreplayable`, `internal`, and an error with no code | `-32603` with the message `Internal error` |
+
+`model_unavailable` is not `-32000`: the agent advertises no authentication.
 
 ## turn and backend
 
