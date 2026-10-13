@@ -75,10 +75,7 @@ func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header
 	// stripping it keeps the outgoing header set honest.
 	hdr.Del("Content-Length")
 
-	conn, resp, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
-		HTTPClient: httpClient,
-		HTTPHeader: hdr,
-	})
+	conn, resp, err := dialSocket(dialCtx, url, hdr, httpClient)
 	if err != nil {
 		return nil, resp, fmt.Errorf("openai: websocket dial: %w", err)
 	}
