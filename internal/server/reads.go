@@ -55,7 +55,7 @@ var staticCodes = []struct {
 	{errInvalid, protocol.CodeInvalidRequest},
 	{process.ErrUnknownProcess, protocol.CodeProcessNotFound},
 	{workspace.ErrInvalid, protocol.CodeInvalidRequest},
-	{workspace.ErrNotRepo, protocol.CodeNotAGitRepo},
+	{workspace.ErrNotRepo, protocol.CodeNotARepo},
 	{workspace.ErrNoBase, protocol.CodeNoBase},
 	{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges},
 }

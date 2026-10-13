@@ -29,7 +29,7 @@ Rules for agents that edit harness. Also read the AGENTS.md in each directory yo
 
 ## Gates (`internal/gates`, `docs/architecture.md` `CI gates`)
 - Routes: the route table, its read routes, and the mounts of `httpapi.Handler` and `httpapi.ReadHandler` equal the spec's route list.
-- Errors: every code is a `protocol` constant, a `protocol.HTTPStatus` entry, a row of the spec `Errors` table with the same status, and a value of the `openapi.json` `Error.code` enum. `internal`, `payload_too_large`, `unauthorized`, and `not_a_repo` need no sentinel error (`docs/architecture.md` `Errors`).
+- Errors: every code is a `protocol` constant, a `protocol.HTTPStatus` entry, a row of the spec `Errors` table with the same status, and a value of the `openapi.json` `Error.code` enum. `internal`, `payload_too_large`, `unauthorized`, and `not_a_git_repo` need no sentinel error (`docs/architecture.md` `Errors`).
 - Structure: `internal/gates/structure.go` lists the one owner of each concept (for example the context window, `Store.Append`, `State.Apply`, `message.EngineContext`) and bans provider-name branches outside `config`, the router, and provider wires. An allow-list entry carries a date and a reason; a stale entry fails.
 - Wire: a test double emits only what `testdata/wire` holds; a recording holds no secret or id. `testdata/wire/allowed.txt` lists exceptions with reasons; `HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire` refreshes recordings with real model calls. Every `e2e/` HTTP client comes from `wireClient`.
 

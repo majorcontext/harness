@@ -395,7 +395,7 @@ func TestChangesRefusals(t *testing.T) {
 		msg                    string
 	}{
 		{"symlink out of the root", root, "escape", "", nil, workspace.ErrInvalid, `invalid request: dir "` + root + `/escape" escapes every allowed workspace root`},
-		{"a colon in the root does not reach an outer repository", inner, inner, protocol.ScopeUncommitted, nil, workspace.ErrNotRepo, `not_a_git_repo: "` + inner + `" is not a git work tree`},
+		{"a colon in the root does not reach an outer repository", inner, inner, protocol.ScopeUncommitted, nil, workspace.ErrNotRepo, `not_a_repo: "` + inner + `" is not a git work tree`},
 		{"branch scope with no common ancestor", root, "unrelated", "", nil, workspace.ErrNoBase, "no_base: HEAD and origin/main share no common ancestor"},
 		{"an ended deadline", filters, "", protocol.ScopeUncommitted, canceled, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
 		{"a flood of filter drivers", filters, "", protocol.ScopeUncommitted, nil, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},

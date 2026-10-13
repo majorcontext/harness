@@ -19,7 +19,7 @@ var (
 	// ErrInvalid reports a bad scope or a dir outside the root.
 	ErrInvalid = errors.New("invalid request")
 	// ErrNotRepo reports a dir that is not in a git work tree.
-	ErrNotRepo = errors.New("not_a_git_repo")
+	ErrNotRepo = errors.New("not_a_repo")
 	// ErrNoBase reports a branch scope with no merge base.
 	ErrNoBase = errors.New("no_base")
 	// ErrTooManyChanges reports a diff that exceeds its time or size bound.

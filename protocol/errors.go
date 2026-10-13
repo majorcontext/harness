@@ -22,8 +22,11 @@ const (
 	CodePayloadTooLarge   Code = "payload_too_large"
 	CodeDraining          Code = "draining"
 	CodeInternal          Code = "internal"
-	CodeNotAGitRepo       Code = "not_a_git_repo"
-	// CodeNotARepo is the engine-neutral name that replaces CodeNotAGitRepo; the server sends CodeNotAGitRepo.
+	// CodeNotAGitRepo is a deprecated name of CodeNotARepo.
+	//
+	// Deprecated: the server sends CodeNotARepo.
+	CodeNotAGitRepo Code = "not_a_git_repo"
+	// CodeNotARepo reports a directory outside a repository.
 	CodeNotARepo            Code = "not_a_repo"
 	CodeNoBase              Code = "no_base"
 	CodeTooManyChanges      Code = "too_many_changes"

@@ -56,9 +56,9 @@
       "status": 409,
       "body": {
         "error": {
-          "code": "not_a_git_repo",
+          "code": "not_a_repo",
           "details": {},
-          "message": "not_a_git_repo: \"\u003cworkdir\u003e/plain\" is not a git work tree"
+          "message": "not_a_repo: \"\u003cworkdir\u003e/plain\" is not a git work tree"
         }
       }
     }
