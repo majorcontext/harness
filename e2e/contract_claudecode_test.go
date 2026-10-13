@@ -64,7 +64,7 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 			name:   "claudecode_compact_reads_post_tokens",
 			driver: claudeLaneDriver("compact_after_tokens"),
 			actions: []action{
-				create{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
+				create{as: "a"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
 				claudeSession{as: "a"},
 				compact{as: "a"},
 				claudeSession{as: "a"},
@@ -298,6 +298,7 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 		row("claudecode_queued_notification_result_does_not_end_the_turn", "queued_empty_result", session),
 		row("claudecode_compact_refuses_keep_turns", "normal", claudeCompactKeeping{as: "a", keep: 1}, session),
 		row("claudecode_cli_compaction_is_logged", "compact_boundary", claudeJournalEvents{as: "a", prefix: "compaction."}, session),
+		row("claudecode_compact_post_tokens_yields_to_assistant_usage", "compact_boundary_post_tokens", session),
 		row("claudecode_error_result_fails_turn", "error", session, claudeInvocations{as: "a"}),
 		row("claudecode_cli_exit_runs_once", "crash", session, claudeInvocations{as: "a"}),
 		goalRow("claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors", "error"),

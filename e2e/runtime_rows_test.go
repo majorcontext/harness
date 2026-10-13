@@ -279,6 +279,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_configured_mcp_servers_reach_the_cli":                           sameAsServe(),
 	"claudecode_context_window_from_model_usage":                                reGolden(specView, specClaudeGauge),
 	"claudecode_compact_reads_post_tokens":                                      reGolden(specView, specClaudeGauge),
+	"claudecode_compact_post_tokens_yields_to_assistant_usage":                  reGolden(specView, specClaudeGauge),
 	"claudecode_compact_keeps_the_window":                                       reGolden(specView, specClaudeGauge),
 	"claudecode_cli_exit_runs_once":                                             reGolden(specView, specClaudeOnce),
 	"claudecode_error_result_fails_turn":                                        reGolden(specView, specClaudeOnce, specClaudeGauge),
