@@ -355,7 +355,8 @@
           "cache_write_tokens": 5,
           "input_tokens": 101,
           "output_tokens": 42
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_model.a#2": {
@@ -389,7 +390,8 @@
           "cache_write_tokens": 5,
           "input_tokens": 106,
           "output_tokens": 45
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

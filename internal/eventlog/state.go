@@ -54,6 +54,7 @@ type OpenToolCall struct {
 type Summary struct {
 	ParentID  string
 	Origin    string
+	WorkDir   string
 	Model     string
 	Status    protocol.Status
 	Goal      protocol.GoalState
@@ -89,6 +90,7 @@ type State struct {
 	parentID  string
 	agent     string
 	origin    string
+	workDir   string
 	model     string
 	settings  protocol.Settings
 	allowed   []string
@@ -340,6 +342,7 @@ func (s *State) Summary() Summary {
 	return Summary{
 		ParentID:  s.parentID,
 		Origin:    s.origin,
+		WorkDir:   s.workDir,
 		Model:     s.model,
 		Status:    s.Status(),
 		Goal:      s.goalState(),

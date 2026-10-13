@@ -109,7 +109,8 @@
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           "status": "succeeded",
           "text": "/thinking succeeded"
@@ -376,7 +377,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

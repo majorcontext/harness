@@ -383,7 +383,8 @@
         "usage": {
           "input_tokens": 1405,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -410,7 +411,8 @@
         "usage": {
           "input_tokens": 1415,
           "output_tokens": 7
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

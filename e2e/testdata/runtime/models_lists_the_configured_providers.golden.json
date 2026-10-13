@@ -21,7 +21,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "create.codex/gpt-6-luna": {
@@ -43,7 +44,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "models": {

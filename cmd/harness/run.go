@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -199,16 +200,20 @@ func runSession(ctx context.Context, rt *harness.Runtime, store harness.Store, c
 	return s, nil
 }
 
-// lastSession returns the ID of the newest session of the store.
+// lastSession returns the ID of the newest root session that the runtime
+// created in its work directory.
 func lastSession(ctx context.Context, rt *harness.Runtime) (string, error) {
+	dir := filepath.Clean(rt.WorkDir())
 	last := ""
 	for after := ""; ; {
 		page, err := rt.List(ctx, protocol.ListSessions{After: after})
 		if err != nil {
 			return "", err
 		}
-		if n := len(page.Sessions); n > 0 {
-			last = page.Sessions[n-1].ID
+		for _, s := range page.Sessions {
+			if s.ParentID == "" && s.WorkDir == dir {
+				last = s.ID
+			}
 		}
 		if page.Next == "" {
 			break
@@ -216,7 +221,7 @@ func lastSession(ctx context.Context, rt *harness.Runtime) (string, error) {
 		after = page.Next
 	}
 	if last == "" {
-		return "", fmt.Errorf("no sessions to continue")
+		return "", fmt.Errorf("no sessions to continue in %s", dir)
 	}
 	return last, nil
 }

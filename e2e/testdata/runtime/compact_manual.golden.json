@@ -284,7 +284,8 @@
         "usage": {
           "input_tokens": 15,
           "output_tokens": 9
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "messages_page.a": {

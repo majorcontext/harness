@@ -61,7 +61,8 @@
         "usage": {
           "input_tokens": 7,
           "output_tokens": 2
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

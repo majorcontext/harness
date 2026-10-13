@@ -139,7 +139,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "list_sessions": {
@@ -167,7 +168,8 @@
             "usage": {
               "input_tokens": 5,
               "output_tokens": 3
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           },
           {
             "context": {
@@ -190,7 +192,8 @@
             "usage": {
               "input_tokens": 5,
               "output_tokens": 3
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }

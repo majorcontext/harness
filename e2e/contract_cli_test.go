@@ -144,6 +144,41 @@ func TestContractCLIRunFailsClearlyWhenAnotherProcessTakesOverTheSession(t *test
 	}
 }
 
+func TestContractCLIRunContinueTakesTheNewestSessionOfTheWorkDir(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, replyText("one"), replyText("two"), replyText("three"), replyText("four"), replyText("five"))
+	dirA, dirB := h.work, t.TempDir()
+	ids := map[string]string{}
+	for _, dir := range []string{dirA, dirB} {
+		h.work = dir
+		_, errOut, code := h.run("run", "-p", "hi")
+		if code != 0 {
+			t.Fatalf("run in %s = %d\n%s", dir, code, errOut)
+		}
+		ids[dir] = sessionID(t, errOut)
+	}
+	for _, dir := range []string{dirA, dirB, dirA} {
+		h.work = dir
+		if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != ids[dir] {
+			t.Fatalf("run -c in %s = %d, want session %s\n%s", dir, code, ids[dir], errOut)
+		}
+	}
+
+	requests := len(h.fake.Requests())
+	h.work = t.TempDir()
+	if _, errOut, code := h.run("run", "-c", "-p", "again"); code == 0 || !strings.Contains(errOut, "no sessions to continue") {
+		t.Errorf("run -c in a directory with no session = %d %q, want a failure that names the missing session", code, errOut)
+	}
+	if got := len(h.fake.Requests()); got != requests {
+		t.Errorf("model requests = %d, want %d: a failed -c must call no model", got, requests)
+	}
+	list, _, _ := h.run("sessions")
+	if got := strings.Count(strings.TrimSpace(list), "\n") + 1; got != 2 {
+		t.Errorf("sessions = %q, want the 2 sessions of the two directories", list)
+	}
+}
+
 func TestContractCLIRunNoSaveWritesNothing(t *testing.T) {
 	skipShort(t)
 	t.Parallel()

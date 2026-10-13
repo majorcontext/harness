@@ -65,7 +65,8 @@
         "usage": {
           "input_tokens": 12,
           "output_tokens": 6
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "journal_events.a": {

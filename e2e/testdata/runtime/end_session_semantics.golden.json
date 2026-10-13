@@ -181,7 +181,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -208,7 +209,8 @@
         "usage": {
           "input_tokens": 10,
           "output_tokens": 6
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "list_sessions": {
@@ -236,7 +238,8 @@
             "usage": {
               "input_tokens": 5,
               "output_tokens": 3
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }
@@ -268,7 +271,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_thinking.a": {
@@ -295,7 +299,8 @@
         "usage": {
           "input_tokens": 10,
           "output_tokens": 6
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

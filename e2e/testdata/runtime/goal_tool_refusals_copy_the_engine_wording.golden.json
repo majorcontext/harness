@@ -420,7 +420,8 @@
         "usage": {
           "input_tokens": 20,
           "output_tokens": 12
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

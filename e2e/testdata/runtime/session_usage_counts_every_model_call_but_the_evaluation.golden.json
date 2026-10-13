@@ -306,7 +306,8 @@
         "usage": {
           "input_tokens": 23,
           "output_tokens": 23
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

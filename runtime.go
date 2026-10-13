@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -296,6 +297,9 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 }
 
 func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, error) {
+	if r.workDir != "" {
+		l.created.WorkDir = filepath.Clean(r.workDir)
+	}
 	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
 		return nil, err
 	}

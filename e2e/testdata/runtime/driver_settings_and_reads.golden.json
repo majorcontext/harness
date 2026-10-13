@@ -107,7 +107,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "journal_page.a": {
@@ -181,7 +182,8 @@
             "usage": {
               "input_tokens": 5,
               "output_tokens": 3
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }
@@ -239,7 +241,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_model.a#2": {
@@ -277,7 +280,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_thinking.a": {
@@ -304,7 +308,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

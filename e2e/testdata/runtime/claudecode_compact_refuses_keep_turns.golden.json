@@ -101,7 +101,8 @@
           "cache_write_tokens": 5,
           "input_tokens": 101,
           "output_tokens": 42
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

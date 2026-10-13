@@ -155,7 +155,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -183,7 +184,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#3": {
@@ -209,7 +211,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_model.a": {
@@ -232,7 +235,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_model.a#2": {
@@ -274,7 +278,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_service_tier.a": {
@@ -298,7 +303,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_service_tier.a#2": {
@@ -322,7 +328,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_service_tier.a#3": {
@@ -348,7 +355,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_thinking.a": {
@@ -381,7 +389,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_thinking.a#3": {
@@ -404,7 +413,8 @@
         "usage": {
           "input_tokens": 0,
           "output_tokens": 0
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "set_thinking.a#4": {
@@ -431,7 +441,8 @@
         "usage": {
           "input_tokens": 5,
           "output_tokens": 3
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     }
   }

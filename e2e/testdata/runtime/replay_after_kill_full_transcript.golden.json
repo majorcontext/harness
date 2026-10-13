@@ -396,7 +396,8 @@
         "usage": {
           "input_tokens": 10,
           "output_tokens": 6
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "get_session.a#2": {
@@ -423,7 +424,8 @@
         "usage": {
           "input_tokens": 10,
           "output_tokens": 6
-        }
+        },
+        "work_dir": "\u003cworkdir\u003e"
       }
     },
     "journal_page.a": {
@@ -434,7 +436,8 @@
             "d": {
               "model": "anthropic/claude-fable-5",
               "origin": "",
-              "settings": {}
+              "settings": {},
+              "work_dir": "\u003cworkdir\u003e"
             },
             "k": "session.created",
             "seq": 1,
@@ -584,7 +587,8 @@
             "d": {
               "model": "anthropic/claude-fable-5",
               "origin": "",
-              "settings": {}
+              "settings": {},
+              "work_dir": "\u003cworkdir\u003e"
             },
             "k": "session.created",
             "seq": 1,
@@ -815,7 +819,8 @@
             "usage": {
               "input_tokens": 10,
               "output_tokens": 6
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }
@@ -846,7 +851,8 @@
             "usage": {
               "input_tokens": 10,
               "output_tokens": 6
-            }
+            },
+            "work_dir": "\u003cworkdir\u003e"
           }
         ]
       }

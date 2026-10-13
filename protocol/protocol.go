@@ -123,6 +123,7 @@ type Session struct {
 	ParentID          string             `json:"parent_id,omitempty"`
 	Agent             string             `json:"agent,omitempty"`
 	Origin            string             `json:"origin"`
+	WorkDir           string             `json:"work_dir,omitempty"`
 	Model             string             `json:"model"`
 	Effort            string             `json:"effort,omitempty"`
 	ServiceTier       string             `json:"service_tier,omitempty"`

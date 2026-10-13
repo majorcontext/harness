@@ -47,7 +47,7 @@
 {"v":1,"seq":16,"t":"2026-10-02T12:00:00Z","k":"request.resolved","d":{"request_id":"RequestID","resolution":"Resolution","answer":{"a":1}}}
 {"v":1,"seq":16,"t":"2026-10-02T12:00:00Z","k":"request.resolved","d":{"request_id":"","resolution":""}}
 {"v":1,"seq":17,"t":"2026-10-02T12:00:00Z","k":"session.created","d":{"model":"","settings":{},"origin":""}}
-{"v":1,"seq":17,"t":"2026-10-02T12:00:00Z","k":"session.created","d":{"parent_id":"ParentID","agent":"Agent","model":"Model","settings":{"effort":"Effort","service_tier":"ServiceTier"},"origin":"Origin","allowed_tools":["AllowedTools"]}}
+{"v":1,"seq":17,"t":"2026-10-02T12:00:00Z","k":"session.created","d":{"parent_id":"ParentID","agent":"Agent","model":"Model","settings":{"effort":"Effort","service_tier":"ServiceTier"},"origin":"Origin","work_dir":"WorkDir","allowed_tools":["AllowedTools"]}}
 {"v":1,"seq":17,"t":"2026-10-02T12:00:00Z","k":"session.created","d":{"model":"","settings":{},"origin":"","allowed_tools":[]}}
 {"v":1,"seq":18,"t":"2026-10-02T12:00:00Z","k":"settings.changed","d":{}}
 {"v":1,"seq":18,"t":"2026-10-02T12:00:00Z","k":"settings.changed","d":{"model":"Model","effort":"Effort","service_tier":"ServiceTier"}}
