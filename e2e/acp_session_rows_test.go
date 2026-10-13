@@ -91,8 +91,9 @@ var acpSessionScenarios = []acpScenario{
 		},
 	},
 	{
-		name: "goal_turn_without_a_prompt_sends_updates",
-		cite: "A turn that starts with no `session/prompt` open, such as a goal turn, sends its updates as notifications.",
+		name:           "goal_turn_without_a_prompt_sends_updates",
+		schedulerOrder: true,
+		cite:           "A turn that starts with no `session/prompt` open, such as a goal turn, sends its updates as notifications.",
 		model: append([]harnesstest.Step{evaluatorStep("judge", "MET: ok", true)}, append(goalChain(
 			ftArgs("action", "set", "condition", "say done"),
 		), agentStep("condition", "goal turn text", true))...),
@@ -161,8 +162,9 @@ var acpSessionScenarios = []acpScenario{
 		},
 	},
 	{
-		name: "mcp_server_in_session_new_reaches_the_model",
-		cite: "The `mcpServers` of `session/new` are the MCP servers of that session only.",
+		name:     "mcp_server_in_session_new_reaches_the_model",
+		needsMCP: true,
+		cite:     "The `mcpServers` of `session/new` are the MCP servers of that session only.",
 		model: []harnesstest.Step{
 			{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "mcp__weather__forecast", Input: map[string]any{"city": "Oslo"}}}}},
 			{Name: "done", Reply: harnesstest.Reply{Text: "ok"}},
@@ -182,8 +184,9 @@ var acpSessionScenarios = []acpScenario{
 		},
 	},
 	{
-		name: "repeated_mcp_server_name_is_invalid",
-		cite: "A name that two `mcpServers` entries share is `-32602`.",
+		name:     "repeated_mcp_server_name_is_invalid",
+		needsMCP: true,
+		cite:     "A name that two `mcpServers` entries share is `-32602`.",
 		steps: []acpStep{
 			acpNew{as: "a", code: acpInvalidParams, mcp: []map[string]any{
 				{"name": "x", "command": "/bin/true", "args": []any{}, "env": []any{}},

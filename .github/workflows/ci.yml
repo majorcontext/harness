@@ -147,3 +147,24 @@ jobs:
         # subtest runs its whole body under -run, so -skip drops the tests of
         # the serve binary and the CLI, which the Contract job runs.
         run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)'
+
+  node-wasm:
+    name: Node wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: ACP scenarios on the wasm module
+        # HARNESS_E2E_NODE=1 makes a missing node fail the test, not skip it.
+        env:
+          HARNESS_E2E_NODE: '1'
+        run: go test -race -count=1 ./e2e/ -run '^(TestACPScenarios|TestNodeWasm.*)$' -skip '^TestACPScenarios/[^/]+/(binary|in-process)$'
