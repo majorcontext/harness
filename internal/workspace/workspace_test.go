@@ -285,7 +285,7 @@ var changeRows = []struct {
 		},
 		files: "root.txt added +1 -0; sub/f.txt modified +1 -0",
 		patch: []string{"+more", "+root"}},
-	{name: "a relative root takes a relative dir", scope: protocol.ScopeUncommitted, dir: "sub", relative: true,
+	{name: "a relative root takes a relative dir", scope: protocol.ScopeUncommitted, dir: "sub", relative: true, serial: true,
 		setup: func(t *testing.T, dir string) { write(t, dir, "sub/f.txt", "f\n") },
 		files: "sub/f.txt added +1 -0"},
 	{name: "a detached HEAD has no branch", scope: protocol.ScopeUncommitted,
@@ -301,7 +301,7 @@ var changeRows = []struct {
 func TestChanges(t *testing.T) {
 	for _, row := range changeRows {
 		t.Run(row.name, func(t *testing.T) {
-			parallelUnless(t, row.relative || row.serial)
+			parallelUnless(t, row.serial)
 			dir := repo(t)
 			if row.at != "" {
 				dir = repoAt(t, filepath.Join(t.TempDir(), row.at))
