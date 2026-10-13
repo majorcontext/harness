@@ -290,8 +290,8 @@ func TestCodexModelsAreKnownToContextWindow(t *testing.T) {
 		t.Error(`Models("codex") is empty`)
 	}
 	for _, m := range models {
-		if _, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: m}); !ok {
-			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m)
+		if _, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: m.ID}); !ok {
+			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m.ID)
 		}
 	}
 	for _, provider := range []string{"bedrock"} {

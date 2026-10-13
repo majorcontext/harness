@@ -1101,6 +1101,18 @@
           "provider": {
             "type": "string"
           },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "efforts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "context_window": {
             "type": "integer"
           }

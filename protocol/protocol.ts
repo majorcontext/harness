@@ -319,6 +319,9 @@ export interface MessagePart {
 export interface Model {
   id: string;
   provider: string;
+  name?: string;
+  description?: string;
+  efforts?: string[];
   context_window: number;
 }
 

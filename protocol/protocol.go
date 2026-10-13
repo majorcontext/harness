@@ -340,10 +340,13 @@ type SessionPage struct {
 	Next     string    `json:"next,omitempty"`
 }
 
-// Model is a model that a configured provider serves.
+// Model is a model that a configured provider serves. Name is a human label, Description is one line, and Efforts are the effort levels the model supports; each is empty when unknown.
 type Model struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
+	ID          string   `json:"id"`
+	Provider    string   `json:"provider"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Efforts     []string `json:"efforts,omitempty"`
 	// ContextWindow is 0 when the backend reports the window during a turn.
 	ContextWindow int `json:"context_window"`
 }
