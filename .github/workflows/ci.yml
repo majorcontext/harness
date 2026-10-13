@@ -359,3 +359,67 @@ jobs:
             /home/runner/go/pkg/mod
             /home/runner/.cache/go-build
           key: go-node-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/go/pkg/mod
+            /home/runner/.cache/go-build
+          key: go-browser-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-browser-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/embed/package-lock.json
+
+      - name: Install Playwright
+        # The lock file pins Playwright.
+        working-directory: sdk/embed
+        run: npm ci --ignore-scripts
+
+      - name: Cache the Chromium download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: chromium-${{ runner.os }}-${{ hashFiles('sdk/embed/package-lock.json') }}
+
+      - name: Install Chromium
+        # A cache hit skips the download; --with-deps always installs the
+        # system libraries.
+        working-directory: sdk/embed
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Browser rows
+        # HARNESS_E2E_BROWSER=1 makes a missing node, Playwright, or Chromium
+        # fail the test, not skip it.
+        env:
+          HARNESS_E2E_BROWSER: '1'
+        run: go test -race -count=1 ./e2e/ -run '^TestBrowserRows$'
+
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/runner/go/pkg/mod
+            /home/runner/.cache/go-build
+          key: go-browser-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
