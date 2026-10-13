@@ -333,3 +333,22 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 	}
 	return b
 }
+
+type followed struct{ conn *Conn }
+
+func (f followed) AfterSent() { _ = f.conn.Notify("after", nil) }
+
+func TestFollowerMessageReachesThePeerAfterTheResponse(t *testing.T) {
+	var p *peer
+	p = startPeer(t, handlerFunc(func(context.Context, string, json.RawMessage) (any, error) {
+		return followed{conn: p.conn}, nil
+	}))
+	p.send(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)
+	if got := p.next(); got["id"] != float64(1) {
+		t.Errorf("first message = %v, want the response", got)
+	}
+	if got := p.next(); got["method"] != "after" {
+		t.Errorf("second message = %v, want the follower notification", got)
+	}
+	p.finish()
+}

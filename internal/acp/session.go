@@ -19,6 +19,8 @@ type held struct {
 	id        string
 	sess      *harness.Session
 	cwd       string
+	models    []protocol.Model
+	notices   bool
 	log       *slog.Logger
 	send      func(method string, params any) error
 	toolImage func(ctx context.Context, key string) (io.ReadCloser, error)
@@ -40,13 +42,26 @@ type prompt struct {
 	cancelled bool
 }
 
-// newHeld starts the event pump of sess at after, the head of the log when the
-// connection took the session. The pump is the only reader of the events.
-func newHeld(ctx context.Context, sess *harness.Session, cwd string, after uint64, log *slog.Logger, send func(string, any) error, toolImage func(context.Context, string) (io.ReadCloser, error)) *held {
+// heldConfig is what the connection knows of a session it took. snap is the
+// state of the session at the head of the log, where the pump starts, and models
+// is the model list of its runtime. notices says that the client takes notices.
+type heldConfig struct {
+	cwd       string
+	snap      protocol.Session
+	models    []protocol.Model
+	notices   bool
+	log       *slog.Logger
+	send      func(string, any) error
+	toolImage func(context.Context, string) (io.ReadCloser, error)
+}
+
+// newHeld starts the event pump of sess at the head of its log, which is
+// c.snap.HeadSeq. The pump is the only reader of the events.
+func newHeld(ctx context.Context, sess *harness.Session, c heldConfig) *held {
 	ctx, stop := context.WithCancel(ctx)
-	h := &held{id: sess.ID(), sess: sess, cwd: cwd, log: log, send: send, toolImage: toolImage, stop: stop, stopped: make(chan struct{}),
-		wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
-	go h.pump(ctx, after)
+	h := &held{id: sess.ID(), sess: sess, cwd: c.cwd, models: c.models, notices: c.notices, log: c.log, send: c.send, toolImage: c.toolImage,
+		stop: stop, stopped: make(chan struct{}), wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
+	go h.pump(ctx, c.snap)
 	return h
 }
 
@@ -63,16 +78,18 @@ type chunkKey struct{ item, kind string }
 type pumpState struct {
 	sent  map[chunkKey]string
 	diffs map[string][]any
+	last  lastSent
 }
 
-func (h *held) pump(ctx context.Context, after uint64) {
+func (h *held) pump(ctx context.Context, snap protocol.Session) {
 	defer close(h.stopped)
 	defer h.finish()
-	st := &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}}
-	for e, err := range h.sess.Events(ctx, after) {
+	st := &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap)}
+	for e, err := range h.sess.Events(ctx, snap.HeadSeq) {
 		if err != nil {
 			if ctx.Err() == nil {
 				h.log.Info("acp: event stream ended", "session", h.id, "error", err.Error())
+				h.lostOwnership(err)
 			}
 			return
 		}
@@ -99,8 +116,18 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 		}
 		sent[chunkKey{f.ItemID, f.Type}] += f.Text
 		return h.chunk(kind, f.ItemID, f.Text)
+	case protocol.KindSettingsChanged:
+		return h.configUpdate(st)
+	case protocol.KindContextMeasured, protocol.KindCompactionApplied:
+		return h.usageUpdate(st)
+	case protocol.KindCommandRecorded:
+		return h.commandStatus(e)
 	case protocol.KindTurnEnded:
 		clear(st.diffs)
+		if err := h.usageUpdate(st); err != nil {
+			return err
+		}
+		return h.sessionInfo()
 	case protocol.KindItemDiscarded:
 		var f protocol.ItemFrame
 		if json.Unmarshal(e.Data, &f) == nil {

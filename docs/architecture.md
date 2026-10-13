@@ -880,6 +880,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 | `session/new` | Creates a session on the runtime of `cwd` |
 | `session/prompt` | Runs one turn |
 | `session/cancel` | Notification. Cancels the prompts of a session |
+| `session/set_config_option` | Sets the model or the effort of a session |
 | `authenticate`, `logout` | `-32601`. The agent advertises no authentication |
 | Any other method | `-32601` |
 
@@ -891,6 +892,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - `initialize` without a `protocolVersion` that is an integer from 0 to 65535 is `-32602`.
 - The agent capabilities are `loadSession` false, `mcpCapabilities` with `http` true and `sse` false on a host that starts MCP servers (`harness acp` is one), and empty `sessionCapabilities`. They hold no `promptCapabilities`: the agent advertises a capability only when the method that uses it works. A prompt takes the baseline content: `text` and `resource_link`.
 - The agent never sends `session/request_permission`: harness has no permission system.
+- The agent reads one client capability, `session.notices`. A `notices` that is an object turns on the lost-ownership `notice` (Notices). Any other value, and a missing `session`, leave it off.
 
 ### Sessions
 
@@ -919,6 +921,26 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - A tool call that the cancel of a turn cut short has an error result in the log, so its update is `failed`, and it reaches the client before the `cancelled` answer.
 - At the end of the input, the agent releases its sessions first, so a prompt that runs answers `-32603` with `data.code` `session_not_owned`. Then it closes its runtimes, within 5 s, and writes the responses.
 - A prompt for a session that another owner took answers `-32603` with `data.code` `session_not_owned`. When another owner takes the session, the prompt that runs answers the same error. So does each later prompt.
+
+### Config options
+
+- `session/new` answers `configOptions` with two `select` options. `model` has the category `model`. Its values are the `provider/model` references that `Runtime.Models` lists, and its current value is the model of the session. A model of the session that `Runtime.Models` does not list is added to the values. `effort` has the category `thought_level`. Its values are `default`, `off`, `minimal`, `low`, `medium`, and `high`. `default` is an effort that is not set.
+- `session/set_config_option` takes a `configId` and a string `value`. It changes the setting of the session and answers the complete list of options. A `configId` other than `model` and `effort`, a `value` that the option does not list, and a boolean `value` are `-32602`.
+- When the model or the effort of the session changes, the agent sends a `config_option_update` with the complete list of options. A `settings.changed` event that leaves both as they were sends none. This includes a change by `/model`, by `/thinking`, and by the `model` tool. The update of a `session/set_config_option` reaches the client before the answer.
+
+### Commands
+
+- After the answer to `session/new`, the agent sends an `available_commands_update`. It lists each command that the runtime can run from a typed line. The `description` is the summary of the command. The `input.hint` is its argument hint, and is omitted when the command has none.
+- A prompt that is exactly one `text` block whose text starts with `/` is typed text. The runtime runs the slash command. The status text of the command is an `agent_message_chunk`, and the prompt answers `end_turn`. A command that the runtime ends as interrupted answers `cancelled`. A line that names no command goes to the model as text. A prompt that has other blocks next to the text is not typed text.
+
+### Usage and session info
+
+- A `usage_update` has `used` and `size` from the context of the session. The agent sends it when `used`, `size`, or the cost changes at a `context.measured`, `compaction.applied`, or `turn.ended` event. It sends none while the context window is not known. The `cost` is the session cost in `USD`, and is omitted when the session reports none.
+- A `session_info_update` with `updatedAt` follows each `turn.ended` event. It has no `title`.
+
+### Notices
+
+- When another owner takes a session from the connection and the client has the capability `session.notices`, the agent sends one `notice` update with the severity `warning` for that session. Without the capability, the agent sends no notice.
 
 ### Error mapping
 

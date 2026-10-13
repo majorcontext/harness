@@ -6,7 +6,9 @@ Harness has no command vocabulary. A frontend that wants to compact a
 session, change the model, or set an effort level must know the HTTP route
 and its body shape. Harness ships no web UI, so every such frontend lives
 outside this repository: the console, the TypeScript SDK, an ACP client.
-Each one repeats that knowledge.
+Each one repeats that knowledge. The ACP adapter (`internal/acp`) is a
+consumer of `Runtime.Commands`: it lists the supported commands to the client
+and sends a typed line to `Session.Prompt` as typed text.
 
 The console is the clearest case. Its command palette
 (`web/src/components/command-palette/`) already holds a vocabulary for BOX

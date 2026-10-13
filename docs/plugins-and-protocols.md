@@ -49,7 +49,7 @@ representation.
 
 - **ACP (Agent Client Protocol, agentclientprotocol.com)** — the editor ↔ agent
   standard (Zed, JetBrains, Neovim, Emacs). `harness acp` serves ACP v1 over
-  stdio and answers `initialize` only; the ACP section of
+  stdio; the ACP section of
   `docs/architecture.md` is the spec of what it does, and
   `docs/design/acp-wasm.md` is the design of the rest. Take the ACP name
   where our vocabulary is arbitrary. Harness has no permission system, so the

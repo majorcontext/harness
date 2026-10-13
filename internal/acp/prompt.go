@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness"
@@ -78,9 +80,13 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if h.cancelled(pr) {
 		return map[string]string{"stopReason": "cancelled"}, nil
 	}
-	turn, err := h.sess.Prompt(ctx, protocol.Input{ID: newULID(), Parts: parts, Delivery: protocol.DeliveryQueue})
+	in := protocol.Input{ID: newULID(), Parts: parts, Delivery: protocol.DeliveryQueue}
+	if isTyped(p.Prompt, parts) {
+		in.Source = protocol.SourceTyped
+	}
+	turn, err := h.sess.Prompt(ctx, in)
 	if err != nil {
-		return nil, rpcError(err)
+		return nil, h.failure(ctx, err)
 	}
 	if h.admitted(pr, turn) {
 		go h.cancelTurn(context.WithoutCancel(ctx), turn)
@@ -91,10 +97,34 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		return nil, ctx.Err()
 	}
 	if err = waitFailure(err, h.cancelled(pr)); err != nil {
-		return nil, rpcError(err)
+		return nil, h.failure(ctx, err)
 	}
 	h.flush(ctx, h.sess.Snapshot().HeadSeq)
 	return answer(ctx, res, h.cancelled(pr))
+}
+
+// isTyped says that a prompt is a typed line: exactly one text block whose text
+// starts with a slash. The runtime then runs a slash command.
+func isTyped(blocks []json.RawMessage, parts []protocol.Part) bool {
+	if len(blocks) != 1 || len(parts) != 1 || !strings.HasPrefix(parts[0].Text, "/") {
+		return false
+	}
+	var b struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(blocks[0], &b) == nil && b.Type == "text"
+}
+
+// failure maps the error of a prompt. When the connection does not own the
+// session, it waits for the pump to end, so that a notice reaches the client before
+// the error does.
+func (h *held) failure(ctx context.Context, err error) error {
+	if errors.Is(err, harness.ErrSessionNotOwned) {
+		bg, cancel := context.WithTimeout(ctx, interruptBudget)
+		defer cancel()
+		h.flush(bg, math.MaxUint64)
+	}
+	return rpcError(err)
 }
 
 // interrupt ends the turn of a prompt whose request ended before the turn did.
@@ -128,6 +158,12 @@ func answer(ctx context.Context, res harness.TurnResult, cancelled bool) (any, e
 func promptResult(res harness.TurnResult, cancelled bool) (any, error) {
 	if res.Withdrawn || (cancelled && (res.StopReason == protocol.StopFailed || res.StopReason == "")) {
 		return map[string]string{"stopReason": "cancelled"}, nil
+	}
+	switch {
+	case res.Command == protocol.CommandInterrupted:
+		return map[string]string{"stopReason": "cancelled"}, nil
+	case res.Command != "":
+		return map[string]string{"stopReason": "end_turn"}, nil
 	}
 	switch res.StopReason {
 	case protocol.StopCompleted, protocol.StopAwaitingInput:

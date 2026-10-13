@@ -103,6 +103,7 @@ func (s acpNew) run(t *testing.T, c *acpConn) {
 		t.Fatalf("session/new answered no session ID: %v", res)
 	}
 	c.sessions[s.as] = id
+	c.expectUpdate(id, "available_commands_update")
 }
 
 func (s acpPromptStart) run(t *testing.T, c *acpConn) {
@@ -250,7 +251,7 @@ func (c *acpConn) goldenWire() []acpFrame {
 	ids := map[string]string{}
 	var out []acpFrame
 	for _, f := range c.wire {
-		text := string(f.Frame)
+		text := acpStableFrame(string(f.Frame))
 		for _, s := range swaps {
 			text = strings.ReplaceAll(text, s.from, s.to)
 		}

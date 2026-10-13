@@ -51,8 +51,10 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 		return nil, rpcError(err)
 	}
 	id := sess.ID()
-	h := newHeld(a.base, sess, filepath.Clean(p.CWD), sess.Snapshot().HeadSeq, a.cfg.Logger, a.conn.Notify,
-		func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.ToolImage(ctx, id, key) })
+	snap := sess.Snapshot()
+	models := rt.Models()
+	h := newHeld(a.base, sess, heldConfig{cwd: filepath.Clean(p.CWD), snap: snap, models: models, notices: a.notices.Load(), log: a.cfg.Logger, send: a.conn.Notify,
+		toolImage: func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.ToolImage(ctx, id, key) }})
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -66,7 +68,17 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	}
 	a.sessions[h.id] = h
 	a.mu.Unlock()
-	return map[string]string{"sessionId": h.id}, nil
+	return sessionResult{SessionID: h.id, ConfigOptions: configOptions(models, snap), after: func() { a.sendCommands(h, rt) }}, nil
+}
+
+// sendCommands sends the available commands of the work directory of rt.
+func (a *agent) sendCommands(h *held, rt Runtime) {
+	cmds, err := rt.Commands(a.base)
+	if err != nil {
+		a.cfg.Logger.Warn("acp: commands", "session", h.id, "error", err.Error())
+		return
+	}
+	_ = h.update(map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": availableCommands(cmds)})
 }
 
 func (a *agent) isClosed() bool {
