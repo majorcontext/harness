@@ -502,9 +502,9 @@ var acpLoadScenarios = []acpScenario{
 				if !c.fake.AwaitRequests(3, waitBound) {
 					t.Fatalf("model requests = %d, want 3", len(c.fake.Requests()))
 				}
-				c.fake.Release("child")
 			}),
 			acpResult{id: "a", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) { c.fake.Release("child") }),
 			acpAwaitText{text: "parent done"},
 			acpAwaitUpdate{kind: "session_info_update"},
 			acpList{want: []string{"a"}},

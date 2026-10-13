@@ -115,6 +115,9 @@ func (e *LoginRequiredError) Error() string {
 // Permanent marks the error for provider.Do: it is not sent again.
 func (e *LoginRequiredError) Permanent() bool { return true }
 
+// LoginRequired marks the error for the turn: only a new login resolves it.
+func (e *LoginRequiredError) LoginRequired() bool { return true }
+
 // IsLoginRequired reports whether err is a LoginRequiredError.
 func IsLoginRequired(err error) bool {
 	var le *LoginRequiredError

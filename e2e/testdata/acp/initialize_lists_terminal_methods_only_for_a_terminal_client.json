@@ -1,0 +1,146 @@
+{
+  "requests": null,
+  "sessions": {},
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "clientCapabilities": {},
+          "clientInfo": {
+            "name": "e2e",
+            "version": "0"
+          },
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
+            "loadSession": true,
+            "mcpCapabilities": {
+              "http": true,
+              "sse": false
+            },
+            "sessionCapabilities": {
+              "close": {},
+              "list": {},
+              "resume": {}
+            }
+          },
+          "agentInfo": {
+            "name": "harness",
+            "title": "Harness",
+            "version": "\u003cversion\u003e"
+          },
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            },
+            {
+              "description": "Sign in with the Claude Code CLI. The CLI opens your browser.",
+              "id": "claude-code",
+              "name": "Log in with Claude Code"
+            }
+          ],
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "clientCapabilities": {
+            "auth": {
+              "terminal": true
+            }
+          },
+          "clientInfo": {
+            "name": "e2e",
+            "version": "0"
+          },
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
+            "loadSession": true,
+            "mcpCapabilities": {
+              "http": true,
+              "sse": false
+            },
+            "sessionCapabilities": {
+              "close": {},
+              "list": {},
+              "resume": {}
+            }
+          },
+          "agentInfo": {
+            "name": "harness",
+            "title": "Harness",
+            "version": "\u003cversion\u003e"
+          },
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            },
+            {
+              "args": [
+                "login",
+                "codex"
+              ],
+              "description": "Run harness login codex in a terminal.",
+              "id": "chatgpt-terminal",
+              "name": "Log in with ChatGPT in a terminal",
+              "type": "terminal"
+            },
+            {
+              "description": "Sign in with the Claude Code CLI. The CLI opens your browser.",
+              "id": "claude-code",
+              "name": "Log in with Claude Code"
+            },
+            {
+              "args": [
+                "login",
+                "claude-code"
+              ],
+              "description": "Run harness login claude-code in a terminal.",
+              "id": "claude-code-terminal",
+              "name": "Log in with Claude Code in a terminal",
+              "type": "terminal"
+            }
+          ],
+          "protocolVersion": 1
+        }
+      }
+    }
+  ]
+}

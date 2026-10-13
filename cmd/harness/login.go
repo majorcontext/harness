@@ -17,7 +17,7 @@ import (
 	"github.com/majorcontext/harness/internal/codexauth"
 )
 
-const loginUsage = "usage: harness login codex [--device] [--no-browser] [--status]\n       harness logout codex"
+const loginUsage = "usage: harness login codex [--device] [--no-browser] [--status]\n       harness login claude-code [--console] [--sso] [--status]\n       harness logout codex\n       harness logout claude-code"
 
 // defaultCodexAuth puts the Codex login beside the user config when no variable or key names it.
 func defaultCodexAuth(cfg *config.Config) {
@@ -40,23 +40,77 @@ func codexSetup() (codexauth.Store, string, error) {
 }
 
 // loginTargets are the names that login and logout take.
-var loginTargets = map[string]bool{"codex": true}
+var loginTargets = map[string]func(args []string) error{"codex": loginCodex, "claude-code": loginClaude}
 
-// codexArg checks the provider argument of login and logout.
-func codexArg(args []string) ([]string, error) {
-	if len(args) == 0 || !loginTargets[args[0]] {
-		_, _ = fmt.Fprintln(os.Stderr, "harness: the provider is codex\n"+loginUsage)
-		return nil, errUsage
+// logoutTargets are the names that logout takes.
+var logoutTargets = map[string]func(args []string) error{"codex": logoutCodex, "claude-code": logoutClaude}
+
+// target runs the command of the provider argument of login and logout with the other arguments.
+func target(targets map[string]func(args []string) error, args []string) error {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(os.Stderr, "harness: the provider is codex or claude-code\n"+loginUsage)
+		return errUsage
 	}
-	return args[1:], nil
+	run, ok := targets[args[0]]
+	if !ok {
+		_, _ = fmt.Fprintln(os.Stderr, "harness: the provider is codex or claude-code\n"+loginUsage)
+		return errUsage
+	}
+	return run(args[1:])
 }
 
-// loginCmd signs in to Codex with a ChatGPT account, or reports the stored login.
-func loginCmd(args []string) error {
-	args, err := codexArg(args)
+// claudeBinary is the CLI of the user config. A config that does not load is an error: no other program runs in its place.
+func claudeBinary() (string, error) {
+	cfg, err := config.Load(userConfigPath())
+	if err != nil {
+		return "", err
+	}
+	if bin, ok := cfg.ClaudeCLI(); ok {
+		return bin, nil
+	}
+	return config.Provider{}.CLIBinary(), nil
+}
+
+// runClaude runs the Claude Code CLI with the terminal of this process. The CLI keeps its own credentials; Harness never reads them.
+func runClaude(args ...string) error {
+	bin, err := claudeBinary()
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator config
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// loginClaude signs in through `claude auth login`, or prints the status of the CLI.
+func loginClaude(args []string) error {
+	fs := flag.NewFlagSet("login claude-code", flag.ContinueOnError)
+	console := fs.Bool("console", false, "bill the API usage of an Anthropic Console account")
+	sso := fs.Bool("sso", false, "force the SSO sign-in")
+	status := fs.Bool("status", false, "print the status of the login")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *status {
+		return runClaude("auth", "status", "--text")
+	}
+	cli := []string{"auth", "login"}
+	if *console {
+		cli = append(cli, "--console")
+	}
+	if *sso {
+		cli = append(cli, "--sso")
+	}
+	return runClaude(cli...)
+}
+
+// loginCmd runs the login of the provider that the first argument names.
+func loginCmd(args []string) error { return target(loginTargets, args) }
+
+// loginCodex signs in to Codex with a ChatGPT account, or reports the stored login.
+func loginCodex(args []string) error {
 	fs := flag.NewFlagSet("login codex", flag.ContinueOnError)
 	device := fs.Bool("device", false, "sign in with a device code, for a machine with no browser")
 	noBrowser := fs.Bool("no-browser", false, "print the sign-in URL and open no browser")
@@ -109,12 +163,19 @@ func loginStatus(store codexauth.Store) error {
 	return nil
 }
 
-// logoutCmd deletes the stored Codex login.
-func logoutCmd(args []string) error {
-	args, err := codexArg(args)
-	if err != nil {
+// logoutCmd runs the logout of the provider that the first argument names.
+func logoutCmd(args []string) error { return target(logoutTargets, args) }
+
+// logoutClaude runs `claude auth logout`.
+func logoutClaude(args []string) error {
+	if err := parseFlags(flag.NewFlagSet("logout claude-code", flag.ContinueOnError), args); err != nil {
 		return err
 	}
+	return runClaude("auth", "logout")
+}
+
+// logoutCodex deletes the stored Codex login.
+func logoutCodex(args []string) error {
 	if err := parseFlags(flag.NewFlagSet("logout codex", flag.ContinueOnError), args); err != nil {
 		return err
 	}

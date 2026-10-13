@@ -88,6 +88,9 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if h.cancelled(pr) {
 		return map[string]string{"stopReason": "cancelled"}, nil
 	}
+	if err := a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, false); err != nil {
+		return nil, err
+	}
 	in := protocol.Input{ID: newULID(), Parts: parts, Delivery: protocol.DeliveryQueue}
 	h.mu.Lock()
 	pr.input = in.ID
@@ -114,11 +117,25 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if ctx.Err() != nil {
 		return h.interrupt(ctx, pr, turn)
 	}
+	if lerr := a.failedLogin(ctx, h, res, h.cancelled(pr)); lerr != nil {
+		return h.handOff(pr, nil, lerr)
+	}
 	v, err := answer(ctx, res, h.cancelled(pr))
 	if cerr := ctx.Err(); cerr != nil {
 		return h.handOff(pr, nil, cerr)
 	}
 	return h.handOff(pr, v, err)
+}
+
+// failedLogin returns the auth-required error when a turn failed because the login is missing or unusable.
+func (a *agent) failedLogin(ctx context.Context, h *held, res harness.TurnResult, cancelled bool) error {
+	if cancelled || res.Command != "" || res.Withdrawn || res.StopReason != protocol.StopFailed || ctx.Err() != nil {
+		return nil
+	}
+	if res.ErrorClass == protocol.ErrorLoginRequired {
+		return authRequired(res.Error)
+	}
+	return a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, true)
 }
 
 // isTyped says that a prompt is a typed line: exactly one text block whose text

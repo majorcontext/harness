@@ -4,8 +4,11 @@
 // unset or unknown mode prints a turn with text, a tool call, a tool result,
 // usage, and cost.
 //
+// `fakeclaude auth login|logout|status [--json]` answers like the Claude Code CLI; see auth.go.
+//
 // Other environment variables:
 //
+//	FAKE_CLAUDE_AUTH_HOLD  makes `auth login` write its pid and a child pid to this file and wait
 //	FAKE_CLAUDE_LOG        append the argv of each invocation as one JSON line
 //	FAKE_CLAUDE_STDIN_LOG  append every input line read
 //	FAKE_CLAUDE_SESSION_ID session id in the init frame (default fake-session-1)
@@ -187,6 +190,9 @@ func main() {
 		listModes()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		os.Exit(runAuth(os.Args[2:]))
+	}
 	spawn := spawnNumber()
 	mode := modeOfSpawn(spawn)
 	if mode == "fast_no_drain" {
@@ -210,6 +216,10 @@ func main() {
 		return
 	}
 
+	if authOut() {
+		f.emit(failed(0, 0, "Not logged in · Please run /login"))
+		return
+	}
 	init := system("init", obj{"session_id": f.sessionID})
 	if mode == "per_call_usage" || mode == "compact_after_window" {
 		init["model"] = "claude-opus-5-5[1m]"

@@ -4,7 +4,6 @@
 package claudecode
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -210,7 +209,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		args = append(args, "--session-mirror")
 		env = append(env, "CLAUDE_CONFIG_DIR="+dir)
 	}
-	cmd := exec.Command(cmp.Or(b.p.BinaryPath, "claude"), append(args, b.p.ExtraArgs...)...) //nolint:gosec // operator config
+	cmd := exec.Command(b.p.CLIBinary(), append(args, b.p.ExtraArgs...)...) //nolint:gosec // operator config
 	cmd.Env = env
 	cmd.Dir = b.workDir
 	return cmd, nil

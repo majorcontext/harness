@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strings"
 )
 
 // TypeOpenAICompat selects the generic OpenAI-compatible chat-completions adapter for a Provider
@@ -100,6 +101,33 @@ func claudeCodePermissionModes() []string {
 		"bypassPermissions",
 		"plan",
 	}
+}
+
+// UsesChatGPTLogin says that the entry signs in with the ChatGPT login of `harness login codex`.
+func (p Provider) UsesChatGPTLogin() bool { return p.Auth == AuthChatGPT }
+
+// UsesClaudeCLI says that the entry runs the Claude Code CLI.
+func (p Provider) UsesClaudeCLI() bool { return p.Type == TypeClaudeCodeCLI }
+
+// ClaudeCLI returns the executable of the Claude Code CLI that the config uses: the entry of the default model when it runs the CLI, else the first such entry in name order. ok is false when no entry runs the CLI.
+func (c *Config) ClaudeCLI() (bin string, ok bool) {
+	if ref, _, _ := strings.Cut(c.ResolveModel(""), "/"); c.Providers[ref].UsesClaudeCLI() {
+		return c.Providers[ref].CLIBinary(), true
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Providers)) {
+		if p := c.Providers[name]; p.UsesClaudeCLI() {
+			return p.CLIBinary(), true
+		}
+	}
+	return "", false
+}
+
+// CLIBinary is the executable of a claude-code-cli entry: BinaryPath, else claude, resolved through PATH.
+func (p Provider) CLIBinary() string {
+	if p.BinaryPath != "" {
+		return p.BinaryPath
+	}
+	return "claude"
 }
 
 // AuthChatGPT is the value of Provider.Auth for the ChatGPT subscription login of `harness login codex`.

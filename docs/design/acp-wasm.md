@@ -349,8 +349,8 @@ Status words: **maps**, **gap** (the Go API lacks it), **non-goal** (the spec ex
 
 | ACP | Harness | Status | Notes |
 | --- | --- | --- | --- |
-| `initialize` | none (answered before a `Runtime` is built) | maps | `agentInfo{name:"harness", title, version}`. `authMethods: []`. `promptCapabilities` by phase: `{image:true, embeddedContext:true}` once the PR that maps image and resource blocks lands. `mcpCapabilities{http:true, sse:false}` once C1 lands, on the native host only (7.4). `sessionCapabilities` by phase. |
-| `authenticate`, `logout` | none | ignore | Not advertised. The overview says `authenticate` applies "if required by the Agent". A call answers a JSON-RPC error (`-32601`). Credentials come from the environment that the editor passes and from config (`Options.Getenv = os.Getenv`). |
+| `initialize` | none (answered before a `Runtime` is built) | maps | `agentInfo{name:"harness", title, version}`. `authMethods: []` unless the host offers a login (decision 21). `promptCapabilities` by phase: `{image:true, embeddedContext:true}` once the PR that maps image and resource blocks lands. `mcpCapabilities{http:true, sse:false}` once C1 lands, on the native host only (7.4). `sessionCapabilities` by phase. |
+| `authenticate`, `logout` | none | ignore | Offered only by the native host, for a login that the user config uses (decision 21). Without one, a call answers `-32601`. Other credentials come from the environment that the editor passes and from config (`Options.Getenv = os.Getenv`). |
 | `session/new {cwd, mcpServers, additionalDirectories}` | `Runtimes.For(cwd)`, then `Runtime.Create(req, WithSessionMCP(servers))` | maps after C1 | 7.4. `additionalDirectories` is not advertised. |
 | `session/load` | `Runtime.Read` for replay, then `Runtime.Open` | maps | 7.5. |
 | `session/resume` | `Runtime.Open` | maps | No replay. |
@@ -640,7 +640,7 @@ Where ACP fits boxes:
 18. Browser CI. Recommendation: Playwright with headless Chromium, run by a Go test; Firefox and WebKit later through the same fixture.
 19. Boxes console. Recommendation: keep HTTP and SSE. ACP serves editors and wasm. A remote ACP transport needs its own authentication, because the peer has operator trust.
 20. `session/delete` and `title`. Recommendation: not advertised and null.
-21. Auth. Recommendation: empty `authMethods`; `authenticate` answers an error; `model_unavailable` maps to `-32603`.
+21. Auth. Andy decided on 2026-10-13: the native `harness acp` advertises the logins that the user config uses, so a client shows a login button. `chatgpt` (agent type) runs the browser sign-in of `harness login codex`; `claude-code` (agent type) runs `claude auth login` as a child, which needs no terminal; a terminal method of each runs `harness acp login codex` or `login claude-code` and is advertised only when the client advertises `auth.terminal`. `agentCapabilities.auth.logout` is `{}`, and `logout` ends every offered login. A missing login answers `-32000` with `data.code` `login_required`. Harness never reads Claude Code credentials. The wasm build offers none. `authMethods` stays empty with no such login, and `model_unavailable` stays `-32603`.
 22. Several processes or tabs over one store. Recommendation: native, the later `Open` wins and the earlier process reports a notice and `session_not_owned`; two windows on one session take it from each other on each `session/load`. Browser, the first holder of the store lock wins and a second tab gets `store_in_use`. Node wasm, one process for each store directory.
 
 ## 13. Risks

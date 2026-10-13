@@ -8,6 +8,11 @@ Harness is pre-1.0. The runtime API, config schema, and plugin protocol may chan
 
 First tagged release.
 
+### Added
+
+- **Log in from ACP** (`internal/acp`, `internal/acp/acpauth`, `cmd/harness`) — `harness acp` advertises `authMethods` when the user config uses a login: "Log in with ChatGPT" for a provider with `auth` `chatgpt`, and "Log in with Claude Code" for a `claude-code-cli` provider. `authenticate` runs the browser sign-in of `harness login codex`, or `claude auth login` as a child; `$/cancel_request` stops it. A client with the `auth.terminal` capability also gets terminal methods that run `harness acp login codex` or `login claude-code`. `agentCapabilities.auth.logout` is `{}` when the ChatGPT method is offered, and `logout` removes the ChatGPT login only. A new `authenticate` cancels the one in flight, and a sign-in ends after 10 minutes. A `session/new` or a `session/prompt` that needs a missing login answers the ACP error `-32000` with `data.code` `login_required`. A turn that fails with the new error class `login_required` (a rejected ChatGPT refresh token) answers the same. The WebAssembly build offers no login.
+- **Claude Code login commands** (`cmd/harness`) — `harness login claude-code [--console] [--sso]` runs `claude auth login`, `--status` runs `claude auth status --text`, and `harness logout claude-code` runs `claude auth logout`, with the `claude` program of the `claude-code-cli` entry. Harness never reads Claude Code credentials.
+
 ### Fixed
 
 - **ACP answer order** (`internal/acp`) — the answer to `session/prompt` follows every update of its turn and precedes every update of a later turn, such as a goal turn that starts at once. The event pump holds at the end of the turn until the answer is queued.

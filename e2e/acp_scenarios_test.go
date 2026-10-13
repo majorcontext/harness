@@ -44,6 +44,8 @@ type acpScenario struct {
 	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
 	// one that passes an mcpServers entry. The Node wasm host skips both.
 	needsExec, needsMCP bool
+	// login scripts the logins that the host offers. A row that sets it replaces the model provider, and does not run on the Node wasm host, which offers no login.
+	login *acpLoginSpec
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -51,6 +53,9 @@ type acpScenario struct {
 type acpInit struct {
 	version, want int
 	notices       bool
+	// terminal adds the client capability auth.terminal. methods are the ids of authMethods, in order.
+	terminal bool
+	methods  []string
 }
 
 // acpRaw writes one line as it is. A non-zero code expects an error response
@@ -76,6 +81,9 @@ func (s acpInit) run(t *testing.T, c *acpConn) {
 	if s.notices {
 		caps["session"] = map[string]any{"notices": map[string]any{}}
 	}
+	if s.terminal {
+		caps["auth"] = map[string]any{"terminal": true}
+	}
 	id := c.request("initialize", map[string]any{
 		"protocolVersion":    s.version,
 		"clientCapabilities": caps,
@@ -85,6 +93,7 @@ func (s acpInit) run(t *testing.T, c *acpConn) {
 	if got, _ := res["protocolVersion"].(float64); int(got) != s.want {
 		t.Errorf("initialize with version %d answered version %v, want %d", s.version, res["protocolVersion"], s.want)
 	}
+	checkACPAuthMethods(t, res, s.methods)
 }
 
 func (s acpRaw) run(t *testing.T, c *acpConn) {
@@ -117,12 +126,12 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
 		name: "initialize_answers_agent_info",
-		cite: "`initialize` answers the agent info, the agent capabilities, and an empty `authMethods`.",
+		cite: "`initialize` answers the agent info, the agent capabilities, and `authMethods`, which is empty unless the host offers a login (Authentication).",
 		steps: []acpStep{
 			acpInit{version: 1, want: 1},
 		},
@@ -252,7 +261,7 @@ func (sc acpScenario) runsOn(host string) bool {
 	case "binary":
 		return len(sc.allowed) == 0
 	case nodeHostName:
-		return !sc.needsExec && !sc.needsMCP
+		return sc.login == nil && !sc.needsExec && !sc.needsMCP
 	}
 	return true
 }
@@ -271,14 +280,23 @@ func TestACPScenarios(t *testing.T) {
 			}
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
 				t.Parallel()
-				fake := harnesstest.NewAnthropic(t, sc.model...)
-				env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), sc.config), sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir()}
+				var fake *harnesstest.Server
+				env := acpEnv{sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir()}
+				if sc.login != nil {
+					env.login = startACPLogin(t, *sc.login, sc.model)
+					fake = env.login.fake
+					env.configPath = writeGoalConfigWith(t, "", env.login.config())
+				} else {
+					fake = harnesstest.NewAnthropic(t, sc.model...)
+					env.configPath = writeGoalConfigWith(t, fake.URL(), sc.config)
+				}
 				if sc.afterRead != nil {
 					env.afterRead = func(rt *harness.Runtime, id string) { sc.afterRead(t, rt, id) }
 				}
 				in, out, stop := host.start(t, env)
 				c := newACPConn(t, schema, in, out)
 				c.fake, c.env = fake, env
+				env.login.register(c)
 				c.reconnect = func() {
 					c.t.Helper()
 					c.drain()
