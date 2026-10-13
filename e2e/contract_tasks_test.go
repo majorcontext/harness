@@ -37,7 +37,7 @@ func TestContractTaskProfileFiles(t *testing.T) {
 	attempt := func(files map[string]string, wait ...action) []action {
 		return slices.Concat(inDir(files), []action{create{as: "a"}, submit{as: "a", text: "refuse it"}}, wait, []action{waitIdle{as: "a"}})
 	}
-	childSettled := awaitRequests{n: 4}
+	childSettled := []action{awaitRequests{n: 3}, release{step: "child"}, awaitRequests{n: 4}}
 	model := func(agents ...string) []harnesstest.Step {
 		var calls []map[string]any
 		for _, name := range agents {
@@ -47,6 +47,9 @@ func TestContractTaskProfileFiles(t *testing.T) {
 			taskStep("refuse", userStarts("refuse"), fixed(calls...)),
 			{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
 		}
+	}
+	withChild := func(agent string) []harnesstest.Step {
+		return slices.Insert(model(agent), 1, harnesstest.Step{Name: "child", Match: userStarts("a"), Reply: childDone})
 	}
 	runScenarios(t, []scenario{
 		{
@@ -63,18 +66,18 @@ func TestContractTaskProfileFiles(t *testing.T) {
 		{
 			name:       "task_profile_file_with_model_inherit_and_color_is_a_profile",
 			concurrent: true,
-			model:      model("reader"),
+			model:      withChild("reader"),
 			actions: attempt(map[string]string{
 				".agents/reader.md": agent("name: reader\ndescription: Reads.\ntools: ls, grep\nmodel: inherit\ncolor: blue", "Only read."),
-			}, childSettled),
+			}, childSettled...),
 		},
 		{
 			name:       "task_profile_file_replaces_a_built_in_profile",
 			concurrent: true,
-			model:      model("general-purpose"),
+			model:      withChild("general-purpose"),
 			actions: append(attempt(map[string]string{
 				".agents/gp.md": agent("name: general-purpose\ndescription: Mine.", "Custom."),
-			}, childSettled), recordSystemLine{user: "a", contains: "Custom."}),
+			}, childSettled...), recordSystemLine{user: "a", contains: "Custom."}),
 		},
 	})
 }
