@@ -12,6 +12,10 @@ import (
 // the prompts to answer and for the pump to send their updates, then stops the
 // pump and releases the session. The log stays.
 func (a *agent) closeSession(ctx context.Context, params json.RawMessage) (any, error) {
+	return a.ordered(ctx, params, func() (any, error) { return a.closeNow(ctx, params) })
+}
+
+func (a *agent) closeNow(ctx context.Context, params json.RawMessage) (any, error) {
 	var p struct {
 		SessionID string `json:"sessionId"`
 	}

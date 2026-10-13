@@ -37,6 +37,9 @@ type Config struct {
 	// MCP says that the host starts MCP servers. Without it the agent
 	// advertises no MCP transport and refuses mcpServers.
 	MCP bool
+	// List says that the host has a work directory for a session/list with no
+	// cwd, so the agent advertises and answers session/list.
+	List bool
 }
 
 // Runtimes gives the adapter the Runtime of a work directory. The host builds
@@ -92,6 +95,7 @@ type agent struct {
 
 	mu       sync.Mutex
 	sessions map[string]*held
+	tails    map[string]chan struct{}
 	closed   bool
 	closeErr error
 }
@@ -107,6 +111,9 @@ func (a *agent) Request(ctx context.Context, method string, params json.RawMessa
 	case "session/resume":
 		return a.resumeSession(ctx, params)
 	case "session/list":
+		if !a.cfg.List {
+			break
+		}
 		return a.listSessions(ctx, params)
 	case "session/close":
 		return a.closeSession(ctx, params)
@@ -192,8 +199,16 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 		"agentCapabilities": map[string]any{
 			"loadSession":         true,
 			"mcpCapabilities":     map[string]any{"http": a.cfg.MCP, "sse": false},
-			"sessionCapabilities": map[string]any{"list": map[string]any{}, "resume": map[string]any{}, "close": map[string]any{}},
+			"sessionCapabilities": a.sessionCapabilities(),
 		},
 		"authMethods": []any{},
 	}, nil
+}
+
+func (a *agent) sessionCapabilities() map[string]any {
+	caps := map[string]any{"resume": map[string]any{}, "close": map[string]any{}}
+	if a.cfg.List {
+		caps["list"] = map[string]any{}
+	}
+	return caps
 }

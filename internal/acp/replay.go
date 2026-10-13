@@ -22,8 +22,34 @@ const noToolOutput = "(no output)"
 // messages do not change while the replay reads them.
 func (h *held) replay(ctx context.Context, r harness.Reader, st *pumpState) error {
 	sent := map[uint64]bool{}
+	return walk(ctx, r, func(page protocol.MessagePage, first bool, msgs []protocol.Message) error {
+		if first {
+			if err := h.replayCommands(page.Commands, "", sent); err != nil {
+				return err
+			}
+		}
+		for _, m := range msgs {
+			if err := h.replayMessage(ctx, r, m, st); err != nil {
+				return err
+			}
+			if err := h.replayCommands(page.Commands, m.ID, sent); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// walk reads every message of r, oldest first, one page at a time. The last
+// page can overlap the one before it; walk passes only the messages that no
+// earlier call had. first is true for the page that holds the start of the
+// conversation.
+func walk(ctx context.Context, r harness.Reader, visit func(page protocol.MessagePage, first bool, msgs []protocol.Message) error) error {
 	next := uint64(1)
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		page, err := r.Messages(ctx, next+replayPage, replayPage)
 		if err != nil {
 			return err
@@ -32,21 +58,8 @@ func (h *held) replay(ctx context.Context, r harness.Reader, st *pumpState) erro
 		if page.FirstSeq > 0 && next > page.FirstSeq {
 			skip = int(next - page.FirstSeq)
 		}
-		if page.FirstSeq <= 1 {
-			if err := h.replayCommands(page.Commands, "", sent); err != nil {
-				return err
-			}
-		}
-		for _, m := range page.Messages[min(skip, len(page.Messages)):] {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := h.replayMessage(ctx, r, m, st); err != nil {
-				return err
-			}
-			if err := h.replayCommands(page.Commands, m.ID, sent); err != nil {
-				return err
-			}
+		if err := visit(page, page.FirstSeq <= 1, page.Messages[min(skip, len(page.Messages)):]); err != nil {
+			return err
 		}
 		if page.LastSeq >= page.Total {
 			return nil
@@ -128,26 +141,25 @@ func readAll(ctx context.Context, r harness.Reader, key string) ([]byte, error) 
 	return io.ReadAll(b.Body)
 }
 
-// seedDiffs records in st the diff of each call in the newest page of r that has
-// no result, so a tool_call_update after a resume keeps the diff of its call.
+// seedDiffs records in st the diff of each call of r that has no result, so a
+// tool_call_update after a resume keeps the diff of its call. It reads the whole
+// conversation and sends nothing.
 func (h *held) seedDiffs(ctx context.Context, r harness.Reader, st *pumpState) error {
-	page, err := r.Messages(ctx, 0, protocol.DefaultMessageLimit)
-	if err != nil {
-		return err
-	}
-	for _, m := range page.Messages {
-		for _, part := range logMessage(m).Parts {
-			switch part.Type {
-			case protocol.LogPartToolCall:
-				if body := describeCall(part, h.cwd); len(body.Content) > 0 {
-					st.diffs[part.CallID] = body.Content
+	return walk(ctx, r, func(_ protocol.MessagePage, _ bool, msgs []protocol.Message) error {
+		for _, m := range msgs {
+			for _, part := range logMessage(m).Parts {
+				switch part.Type {
+				case protocol.LogPartToolCall:
+					if body := describeCall(part, h.cwd); len(body.Content) > 0 {
+						st.diffs[part.CallID] = body.Content
+					}
+				case protocol.LogPartToolResult:
+					delete(st.diffs, part.CallID)
 				}
-			case protocol.LogPartToolResult:
-				delete(st.diffs, part.CallID)
 			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // logMessage maps a message of a reader to the log message that the pump reads.

@@ -1,0 +1,31 @@
+{
+  "requests": null,
+  "sessions": {},
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/resume",
+        "params": {
+          "sessionId": "x"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "sessionId and cwd are required"
+          },
+          "message": "Invalid params"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

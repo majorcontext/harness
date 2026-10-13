@@ -27,7 +27,7 @@ func acpCmd(args []string) error {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	err := acp.Serve(ctx, acpRuntimes(logger), os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger, MCP: true})
+	err := acp.Serve(ctx, acpRuntimes(logger), os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger, MCP: true, List: acpDir() != ""})
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		return nil
 	}
@@ -38,7 +38,7 @@ func acpCmd(args []string) error {
 // the runtimes of the acp command. The first work directory decides the session
 // directory and the owner epoch.
 func acpRuntimes(logger *slog.Logger) *cwdruntimes.Runtimes {
-	dir, _ := os.Getwd()
+	dir := acpDir()
 	return cwdruntimes.New(cwdruntimes.Options{
 		Config: func(cwd string) (*config.Config, error) {
 			cfg, err := config.LoadProject(userConfigPath(), cwd)
@@ -60,4 +60,11 @@ func acpRuntimes(logger *slog.Logger) *cwdruntimes.Runtimes {
 		Getenv:     os.Getenv,
 		Logger:     logger,
 	})
+}
+
+// acpDir is the work directory of the process, or empty when it has none. It is
+// the runtime that serves a session/list with no cwd.
+func acpDir() string {
+	dir, _ := os.Getwd()
+	return dir
 }

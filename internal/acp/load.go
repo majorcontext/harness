@@ -14,11 +14,21 @@ type setupResult struct {
 }
 
 func (a *agent) loadSession(ctx context.Context, params json.RawMessage) (any, error) {
-	return a.openSession(ctx, params, true)
+	return a.ordered(ctx, params, func() (any, error) { return a.openSession(ctx, params, true) })
 }
 
 func (a *agent) resumeSession(ctx context.Context, params json.RawMessage) (any, error) {
-	return a.openSession(ctx, params, false)
+	return a.ordered(ctx, params, func() (any, error) { return a.openSession(ctx, params, false) })
+}
+
+// ordered runs f in the order of the requests for the session of params. Params
+// with no session ID run at once, and f answers them with invalid params.
+func (a *agent) ordered(ctx context.Context, params json.RawMessage, f func() (any, error)) (any, error) {
+	id := sessionIDOf(params)
+	if id == "" {
+		return f()
+	}
+	return a.ticketed(ctx, id, f)
 }
 
 // openSession serves session/load, which replays the conversation, and
@@ -30,8 +40,11 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 		CWD        string            `json:"cwd"`
 		MCPServers []json.RawMessage `json:"mcpServers"`
 	}
-	if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" || p.CWD == "" || (replay && p.MCPServers == nil) {
-		return nil, invalidParams("sessionId, cwd, and mcpServers are required")
+	if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" || p.CWD == "" {
+		return nil, invalidParams(setupRequired(replay))
+	}
+	if replay && p.MCPServers == nil {
+		return nil, invalidParams(setupRequired(replay))
 	}
 	cwd, servers, err := a.sessionTarget(p.CWD, p.MCPServers)
 	if err != nil {
@@ -99,4 +112,12 @@ func (a *agent) heldSetup(ctx context.Context, h *held, view harness.Reader, cwd
 		}
 	}
 	return setupResult{ConfigOptions: configOptions(h.models, h.sess.Snapshot())}, nil
+}
+
+// setupRequired names the required fields of session/load, or of session/resume.
+func setupRequired(load bool) string {
+	if load {
+		return "sessionId, cwd, and mcpServers are required"
+	}
+	return "sessionId and cwd are required"
 }

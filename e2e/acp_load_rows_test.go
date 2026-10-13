@@ -60,6 +60,14 @@ type acpSeed struct {
 // acpLoadChild sends session/load for a task child of the store and expects -32602.
 type acpLoadChild struct{}
 
+// acpBurst sends the requests (each "load", "resume", or "close", for the
+// session as) back to back without reading, then reads until every one is
+// answered with a result.
+type acpBurst struct {
+	as      string
+	methods []string
+}
+
 // acpReconnect ends the agent process and starts a new one over the same session
 // directory, so the next step talks to a connection that holds no session.
 type acpReconnect struct{}
@@ -67,6 +75,32 @@ type acpReconnect struct{}
 // acpReplayEquals checks that the updates a load replayed equal the updates the
 // turns sent live, and that the replay holds the user message.
 type acpReplayEquals struct{}
+
+func (s acpBurst) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	ids := map[int]string{}
+	for _, m := range s.methods {
+		params := map[string]any{"sessionId": c.session(s.as)}
+		if m != "close" {
+			params["cwd"], params["mcpServers"] = c.dir(""), []any{}
+		}
+		ids[c.request("session/"+m, params)] = m
+	}
+	for len(ids) > 0 {
+		f := c.read()
+		if _, isMessage := f["method"]; isMessage {
+			continue
+		}
+		id, _ := f["id"].(float64)
+		m, ok := ids[int(id)]
+		if !ok {
+			t.Fatalf("unexpected response %v", f)
+		}
+		delete(ids, int(id))
+		def := map[string]string{"load": "LoadSessionResponse", "resume": "ResumeSessionResponse", "close": "CloseSessionResponse"}[m]
+		c.mustBeResult(f, def)
+	}
+}
 
 func (acpReconnect) run(t *testing.T, c *acpConn) {
 	t.Helper()
@@ -378,6 +412,56 @@ var acpLoadScenarios = []acpScenario{
 		},
 	},
 	{
+		name:  "load_after_a_close_on_the_wire_opens_a_fresh_session",
+		cite:  "So a load that follows a close opens the session after the release, and two loads of one session start one pump.",
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "one", stop: "end_turn"},
+			acpBurst{as: "a", methods: []string{"close", "load"}},
+			acpPrompt{as: "a", text: "two", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) { acpRequests(t, c, 2) }),
+		},
+	},
+	{
+		name:  "two_loads_of_one_session_start_one_pump",
+		cite:  "So a load that follows a close opens the session after the release, and two loads of one session start one pump.",
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "one", stop: "end_turn"},
+			acpReconnect{},
+			acpBurst{as: "a", methods: []string{"load", "load"}},
+			acpPrompt{as: "a", text: "two", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				last := slices.IndexFunc(c.wire, func(f acpFrame) bool {
+					return f.Dir == "client" && strings.Contains(string(f.Frame), `"text":"two"`)
+				})
+				chunks, replays, commands := 0, 0, 0
+				for i, f := range c.wire {
+					switch updateKind(f) {
+					case "agent_message_chunk":
+						if i > last {
+							chunks++
+						}
+					case "user_message_chunk":
+						replays++
+					case "available_commands_update":
+						commands++
+					}
+				}
+				if chunks != 1 || replays != 2 || commands != 2 {
+					t.Errorf("reply chunks = %d, replayed user messages = %d, command updates = %d; want 1, 2, 2 (the new session, then one fresh load)", chunks, replays, commands)
+				}
+			}),
+		},
+	},
+	{
+		name:  "resume_without_a_cwd_is_invalid",
+		cite:  "A `session/resume` without `sessionId` or `cwd` is `-32602`.",
+		steps: []acpStep{acpCall{method: "session/resume", params: map[string]any{"sessionId": "x"}, code: acpInvalidParams}},
+	},
+	{
 		name:     "held_session_takes_no_new_mcp_servers",
 		needsMCP: true,
 		cite:     "and so are `mcpServers` in either request, because the held session keeps the servers it has.",
@@ -399,9 +483,8 @@ var acpLoadScenarios = []acpScenario{
 		},
 	},
 	{
-		name:            "list_with_no_cwd_and_no_runtime_uses_the_process_directory",
-		cite:            "Without a `cwd`, the agent lists through a runtime that it holds, else through the runtime of the work directory of the process.",
-		needsDefaultDir: true,
+		name: "list_with_no_cwd_and_no_runtime_uses_the_process_directory",
+		cite: "Without a `cwd`, the agent lists through a runtime that it holds, else through the runtime of the work directory of the process.",
 		steps: []acpStep{
 			acpSeed{n: 2, prefix: "s"},
 			acpList{want: acpAliases("s", 0, 2)},

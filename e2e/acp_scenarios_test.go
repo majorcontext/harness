@@ -44,8 +44,6 @@ type acpScenario struct {
 	// frames interleave by goroutine scheduling, which the single thread of the
 	// wasm module orders differently. The Node wasm host skips all three.
 	needsExec, needsMCP, schedulerOrder bool
-	// needsDefaultDir marks a row that lists with no runtime held, which needs the work directory of the host process. The wasm host has none.
-	needsDefaultDir bool
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -254,7 +252,7 @@ func (sc acpScenario) runsOn(host string) bool {
 	case "binary":
 		return len(sc.allowed) == 0
 	case nodeHostName:
-		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder && !sc.needsDefaultDir
+		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder
 	}
 	return true
 }

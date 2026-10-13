@@ -57,7 +57,7 @@ func startACPInProcess(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, fun
 		rts = hookRuntimes{acpRuntimes(env), env.afterRead}
 	}
 	go func() {
-		err := acp.Serve(t.Context(), rts, inR, outW, acp.Config{Version: "in-process", MCP: true, AllowedTools: env.allowed})
+		err := acp.Serve(t.Context(), rts, inR, outW, acp.Config{Version: "in-process", MCP: true, List: true, AllowedTools: env.allowed})
 		_ = outW.Close()
 		_ = inR.CloseWithError(io.ErrClosedPipe)
 		done <- err

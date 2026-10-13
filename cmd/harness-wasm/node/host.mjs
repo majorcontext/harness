@@ -63,6 +63,7 @@ if (options.cyclicConfig) {
 const conn = globalThis.harnessConnect({
   config,
   storeDir: options.storeDir,
+  defaultDir: process.cwd(),
   env: options.env,
   builtinTools: options.builtinTools,
   tools: [...(options.echoTool ? [echoTool] : []), ...(options.jsTools ?? []).map((name) => jsTools[name])],

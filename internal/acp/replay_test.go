@@ -16,8 +16,20 @@ type fakeReader struct{ msgs []protocol.Message }
 
 func (f fakeReader) Snapshot() protocol.Session { return protocol.Session{} }
 func (f fakeReader) Messages(_ context.Context, before uint64, limit int) (protocol.MessagePage, error) {
-	n := uint64(len(f.msgs))
-	return protocol.MessagePage{Messages: f.msgs, FirstSeq: 1, LastSeq: n, Total: n}, nil
+	total := uint64(len(f.msgs))
+	hi := total
+	if before > 0 && before-1 < hi {
+		hi = before - 1
+	}
+	page := protocol.MessagePage{Total: total}
+	if hi >= 1 {
+		lo := uint64(1)
+		if hi > uint64(limit) {
+			lo = hi - uint64(limit) + 1
+		}
+		page.Messages, page.FirstSeq, page.LastSeq = f.msgs[lo-1:hi], lo, hi
+	}
+	return page, nil
 }
 func (f fakeReader) Inputs(context.Context) ([]protocol.QueuedInput, error) { return nil, nil }
 func (f fakeReader) Blob(context.Context, string) (harness.Blob, error) {
@@ -82,5 +94,21 @@ func TestResumeSeedsTheDiffOfACallThatHasNoResultYet(t *testing.T) {
 	}
 	if len(sent) != 0 || len(st.diffs["c1"]) != 1 {
 		t.Errorf("sent %d updates and seeded %d diffs, want 0 and 1", len(sent), len(st.diffs["c1"]))
+	}
+}
+
+func TestResumeSeedsTheDiffOfACallBeyondTheNewestPage(t *testing.T) {
+	var sent []map[string]any
+	h := replayHeld(&sent)
+	st := newPumpState(protocol.Session{})
+	msgs := editCallMessages()
+	for range 2*replayPage + 5 {
+		msgs = append(msgs, protocol.Message{ID: "msg_x", Role: protocol.RoleUser, Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: "more"}}})
+	}
+	if err := h.seedDiffs(t.Context(), fakeReader{msgs: msgs}, st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.diffs["c1"]) != 1 {
+		t.Errorf("seeded %d diffs for the call in the first message, want 1", len(st.diffs["c1"]))
 	}
 }
