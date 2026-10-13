@@ -31,7 +31,9 @@ func ParseRetryAfter(h http.Header, now time.Time) (d time.Duration, ok bool) {
 	return 0, false
 }
 
-// permanentDeclarer is implemented by a transport error that no retry can resolve.
+// permanentDeclarer is implemented by a transport error that no retry can
+// resolve. errors.As stops at the first error in the chain that has a
+// Permanent method, so a wrapper that has one decides for the whole chain.
 type permanentDeclarer interface{ Permanent() bool }
 
 func declaresPermanent(err error) bool {

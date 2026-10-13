@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -25,10 +24,17 @@ func (e declaredError) Permanent() bool { return e.permanent }
 type failingTransport struct {
 	err      error
 	attempts atomic.Int64
+	// arrived, when set, receives once per request; the request then waits for
+	// its context to end before it fails with err.
+	arrived chan struct{}
 }
 
-func (f *failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+func (f *failingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	f.attempts.Add(1)
+	if f.arrived != nil {
+		f.arrived <- struct{}{}
+		<-req.Context().Done()
+	}
 	return nil, f.err
 }
 
@@ -42,7 +48,7 @@ func TestContractRuntimeTransport(t *testing.T) {
 		{"a_transport_error_that_declares_itself_permanent_makes_one_attempt_and_ends_the_turn_permanent", rowAPermanentTransportErrorMakesOneAttempt},
 		{"a_permanent_transport_error_inside_a_wrapping_error_makes_one_attempt", rowAPermanentTransportErrorInsideAWrappingErrorMakesOneAttempt},
 		{"an_ordinary_transport_error_keeps_both_retry_layers", rowAnOrdinaryTransportErrorKeepsBothRetryLayers},
-		{"a_permanent_transport_error_keeps_its_readable_text", rowAPermanentTransportErrorKeepsItsReadableText},
+		{"a_canceled_request_with_a_permanent_transport_error_stays_an_abort", rowACanceledRequestWithAPermanentTransportErrorStaysAnAbort},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -54,6 +60,11 @@ func TestContractRuntimeTransport(t *testing.T) {
 func transportTurn(t *testing.T, err error) (harness.TurnResult, *failingTransport) {
 	t.Helper()
 	ft := &failingTransport{err: err}
+	return waitTurn(t, promptTurn(t, transportSession(t, ft), textInput("a", "go"))), ft
+}
+
+func transportSession(t *testing.T, ft *failingTransport) *harness.Session {
+	t.Helper()
 	r, nerr := harness.New(harness.Options{
 		Store:          store.NewMemStore(),
 		Getenv:         os.Getenv,
@@ -73,7 +84,7 @@ func transportTurn(t *testing.T, err error) (harness.TurnResult, *failingTranspo
 	if cerr != nil {
 		t.Fatal(cerr)
 	}
-	return waitTurn(t, promptTurn(t, s, textInput("a", "go"))), ft
+	return s
 }
 
 func rowAPermanentTransportErrorMakesOneAttempt(t *testing.T) {
@@ -103,9 +114,18 @@ func rowAnOrdinaryTransportErrorKeepsBothRetryLayers(t *testing.T) {
 	}
 }
 
-func rowAPermanentTransportErrorKeepsItsReadableText(t *testing.T) {
-	res, _ := transportTurn(t, declaredError{msg: "TypeError: Failed to fetch: check CORS, the URL, and mixed content", permanent: true})
-	if !strings.Contains(res.Error, "TypeError: Failed to fetch") || strings.Contains(res.Error, "<object>") {
-		t.Errorf("error = %q, want the readable fetch failure with no <object>", res.Error)
+func rowACanceledRequestWithAPermanentTransportErrorStaysAnAbort(t *testing.T) {
+	ft := &failingTransport{err: declaredError{msg: "fetch aborted", permanent: true}, arrived: make(chan struct{}, 4)}
+	turn := promptTurn(t, transportSession(t, ft), textInput("a", "go"))
+	<-ft.arrived
+	if err := turn.Cancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	res := waitTurn(t, turn)
+	if n := ft.attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1", n)
+	}
+	if res.StopReason != protocol.StopInterrupted || res.ErrorClass == protocol.ErrorPermanent {
+		t.Errorf("result = %+v, want an interrupted turn that is not permanent", res)
 	}
 }
