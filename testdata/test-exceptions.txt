@@ -26,3 +26,4 @@ internal/plugin/typescript_conformance_test.go the TypeScript SDK manifest needs
 examples/guardrail/internal/guard/guard_test.go an example's matcher table; no contract row runs examples
 internal/turn/turn_test.go the window between the before hook and the context check of runTool cannot be scheduled from a contract row; the test needs a hook that cancels the turn context inside it
 internal/workspace/workspace_test.go rows run in parallel, so each row needs its own git repository, and the serial rows need t.Chdir or t.Setenv; no contract row can start that many git repositories
+internal/imageclamp/imageclamp_test.go each test encodes large PNG fixtures, and the race detector makes each encode slow; a per-size fixture cache in a package-level variable shares one encode across the tests
