@@ -89,6 +89,10 @@ const (
 	// rowPending: the row waits for a fix. It runs as an
 	// expected failure.
 	rowPending
+	// rowRuntimeOnly: only the runtime host runs the row, because its
+	// determinism needs an in-process seam. The contract golden is the
+	// golden of the runtime host.
+	rowRuntimeOnly
 )
 
 // runtimeRow is the disposition of one row. cites are the lines of
@@ -100,18 +104,19 @@ type runtimeRow struct {
 }
 
 func (r runtimeRow) String() string {
-	return fmt.Sprintf("%s: %s", [...]string{"same", "re-golden", "deleted by design", "pending"}[r.kind], strings.Join(r.cites, "; "))
+	return fmt.Sprintf("%s: %s", [...]string{"same", "re-golden", "deleted by design", "pending", "runtime only"}[r.kind], strings.Join(r.cites, "; "))
 }
 
 // runtimeEnv enables the runtime host, which runs beside the serve host.
 const runtimeEnv = "HARNESS_E2E_RUNTIME"
 
 // onHost runs each row of table on h by its disposition. The runtime host
-// runs only with runtimeEnv, and not under -update, which the serve host
-// writes. Every row owns its environment, so every row runs in parallel.
+// runs only with runtimeEnv, and under -update only the runtime-only rows,
+// which the serve host does not run. Every row owns its environment, so
+// every row runs in parallel.
 func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func(*testing.T, S) observation) {
 	t.Helper()
-	if h.runtime && (os.Getenv(runtimeEnv) == "" || *updateGoldens) {
+	if h.runtime && os.Getenv(runtimeEnv) == "" && !*updateGoldens {
 		return
 	}
 	t.Run(h.name(), func(t *testing.T) {
@@ -124,6 +129,13 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func
 				}
 				if row.kind == rowDeleted {
 					t.Skip(row)
+				}
+				only := row.kind == rowRuntimeOnly
+				if !h.runtime && only {
+					t.Skip(row)
+				}
+				if h.runtime && *updateGoldens && !only {
+					t.Skip("-update writes this row from the serve host")
 				}
 				pending := row.kind == rowPending
 				if pending && os.Getenv(pendingBinEnv) == "" {
@@ -138,7 +150,11 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func
 					compareGoldenAt(t, filepath.Join("testdata", "contract", name+".golden.json"), obs, *updateGoldens)
 					return
 				}
-				if row.kind == rowSame || pending {
+				if only && *updateGoldens {
+					compareGoldenAt(t, filepath.Join("testdata", "contract", name+".golden.json"), obs, true)
+					return
+				}
+				if row.kind == rowSame || row.kind == rowRuntimeOnly || pending {
 					compareSame(t, name, obs)
 					return
 				}
@@ -259,10 +275,17 @@ func citeErrors(row runtimeRow, spec string, reasons map[string]string) []string
 		errs = append(errs, "a re-golden row cites at least one sentence of docs/architecture.md or one reason id")
 	case row.kind == rowDeleted && len(row.cites) != 1:
 		errs = append(errs, "a deleted row cites one sentence of docs/architecture.md or one reason id")
+	case row.kind == rowRuntimeOnly && (len(row.cites) != 1 || !listed(reasons, row.cites[0])):
+		errs = append(errs, "a runtime-only row cites one reason id of "+reasonsFile)
 	case row.kind == rowPending && len(row.cites) == 0:
 		errs = append(errs, "a pending row cites a sentence of docs/architecture.md or a reason id")
 	}
 	return errs
+}
+
+func listed(reasons map[string]string, id string) bool {
+	_, ok := reasons[id]
+	return ok
 }
 
 // testStringLiterals holds each row-name string literal of the e2e test files
@@ -333,7 +356,7 @@ func TestRuntimeRows(t *testing.T) {
 			t.Errorf("row %s names no scenario", name)
 		}
 		hasServe, hasRuntime := slices.Contains(serve, name), slices.Contains(runtime, name)
-		wantServe := row.kind == rowSame || row.kind == rowPending
+		wantServe := row.kind == rowSame || row.kind == rowPending || row.kind == rowRuntimeOnly
 		switch {
 		case wantServe && !hasServe:
 			t.Errorf("row %s is %s and needs a contract golden", name, row)

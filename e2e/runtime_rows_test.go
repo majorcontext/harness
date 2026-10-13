@@ -158,11 +158,20 @@ const (
 	specAskRule        = "Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal."
 )
 
+// reasonRetryHeld is the id of the reason that the rows with a server that fails its first initialize cite.
+const reasonRetryHeld = "mcp-retry-held"
+
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
 
 // reGolden gives each reason that decides a difference of the row, and each
 // finding that owns the rest.
 func reGolden(cites ...string) runtimeRow { return runtimeRow{kind: rowRegolden, cites: cites} }
+
+// runtimeOnly marks a row that only the runtime host runs, for the reason id that its determinism needs
+// an in-process seam. The row has a contract golden that the runtime host matches.
+func runtimeOnly(reason string) runtimeRow {
+	return runtimeRow{kind: rowRuntimeOnly, cites: []string{reason}}
+}
 
 func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cites: []string{spec}} }
 
@@ -171,7 +180,7 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
-	"mcp_connect_adds_tools_but_not_instructions":                                                              sameAsServe(),
+	"mcp_connect_adds_tools_but_not_instructions":                                                              runtimeOnly(reasonRetryHeld),
 	"skills_listed_sorted_and_read_through_read_file":                                                          reGolden(specBlankJoin),
 	"skills_dirs_config_replaces_the_default_dir":                                                              reGolden(specBlankJoin),
 	"skills_from_several_dirs_are_listed_sorted_by_name":                                                       reGolden(specBlankJoin),
@@ -373,9 +382,9 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_two_servers_share_a_tool_name":                                      sameAsServe(),
 	"pins_after_a_compaction_keep_each_request_a_prefix_of_the_next":         reGolden(specMessages),
 	"bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next": reGolden(specMessages),
-	"mcp_notice_then_compaction_keeps_a_call_paired":                         reGolden(specMessages),
-	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":                 reGolden(specMessages),
-	"mcp_unavailable_at_start_then_connect":                                  sameAsServe(),
+	"mcp_notice_then_compaction_keeps_a_call_paired":                         runtimeOnly(reasonRetryHeld),
+	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":                 runtimeOnly(reasonRetryHeld),
+	"mcp_unavailable_at_start_then_connect":                                  runtimeOnly(reasonRetryHeld),
 	"mcp_unavailable_connect_fails_with_classified_reason":                   reGolden(specMCPText),
 	"messages_page_after_compaction":                                         reGolden(specMessages, specBootstrapGone, specErrors),
 	"messages_page_windows":                                                  reGolden(specMessages, specBootstrapGone, specErrors),

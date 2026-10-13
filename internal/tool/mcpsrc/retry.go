@@ -2,8 +2,10 @@ package mcpsrc
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -11,6 +13,13 @@ const (
 	retryBase  = time.Second
 	maxRetries = 3
 )
+
+var retriesHeld atomic.Bool
+
+// HoldRetries stops every background retry of this process from firing before its Source closes. A test
+// host calls it before it builds a runtime, so a test controls when a down server connects. Production code
+// never calls it.
+func HoldRetries() { retriesHeld.Store(true) }
 
 // health is what the attempts to connect one server left behind. reason is
 // empty while the server is connected.
@@ -32,7 +41,11 @@ func retryWait(failures int) time.Duration {
 // server that is parked then waits for the connect action of the mcp tool.
 func (s *Source) retry(name string) {
 	for failures := 0; failures < maxRetries; failures++ {
-		t := time.NewTimer(retryWait(failures))
+		wait := retryWait(failures)
+		if retriesHeld.Load() {
+			wait = time.Duration(math.MaxInt64)
+		}
+		t := time.NewTimer(wait)
 		select {
 		case <-t.C:
 		case <-s.ctx.Done():

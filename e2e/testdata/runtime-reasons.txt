@@ -13,3 +13,4 @@ status-line-follows The base prompt says that the process status follows the sys
 task-notice-is-input A task notification is an input with source child.
 task-tool-wording The task tool has the actions spawn, cancel, status, send, and log.
 workspace-changes-rows The git_changes rows pin GET /workspace/changes and its error body.
+mcp-retry-held The background retry of the serve binary can connect a server before the connect action of the row, so only the runtime host, which holds the retry, runs the row.
