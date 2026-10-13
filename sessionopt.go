@@ -2,6 +2,8 @@ package harness
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
@@ -21,7 +23,12 @@ type sessionOptions struct {
 // secrets in their env and headers, so a later Open has the servers only when it passes this option
 // again. An Open of a session that this runtime already runs keeps the servers that it has.
 func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption {
-	return func(o *sessionOptions) { o.mcp = servers }
+	own := make(map[string]config.MCPServerSpec, len(servers))
+	for name, sp := range servers {
+		sp.Command, sp.Env, sp.Headers = slices.Clone(sp.Command), slices.Clone(sp.Env), maps.Clone(sp.Headers)
+		own[name] = sp
+	}
+	return func(o *sessionOptions) { o.mcp = own }
 }
 
 // sessionOptions applies opts and checks the session servers: each must meet the rules of

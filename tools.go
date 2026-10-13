@@ -31,10 +31,13 @@ type sessionTool interface {
 // tool of Options.Tools, a started plugin tool, an MCP tool, a built-in tool
 // of the WorkDir that a harness loop runs, the history tool, or a built-in
 // tool of the backend of model. An empty model names no backend.
-func (r *Runtime) known(model, name string) bool {
+func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name, false) }
+
+// knownIn is known for a session that has session MCP servers when session is true.
+func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
 	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || !caps.OwnsLoop && r.builtin(name) ||
-		r.mcp != nil && mcpsrc.Reserved(name) || r.owns(name)
+		(r.mcp != nil || session) && mcpsrc.Reserved(name) || r.owns(name)
 }
 
 // owns reports whether name is a tool of Options.Tools or of a started plugin.

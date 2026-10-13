@@ -315,7 +315,7 @@ func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, er
 	if r.workDir != "" {
 		l.created.WorkDir = r.workDir
 	}
-	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
+	if err := r.checkModel(l.created.Model, l.created.AllowedTools, len(l.mcp) > 0); err != nil {
 		return nil, err
 	}
 	return r.load(ctx, id, l)
@@ -416,7 +416,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 			sm.Close()
 			r.forget(id, e, closeDone)
 		},
-		Check: r.changeModel,
+		Check: r.changeModel(len(l.mcp) > 0),
 	}
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)

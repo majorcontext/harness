@@ -40,6 +40,9 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"an_open_without_the_option_has_no_session_tools", rowAnOpenWithoutTheOptionHasNoSessionTools},
 		{"no_secret_of_a_session_server_is_in_the_log", rowNoSecretOfASessionServerIsInTheLog},
 		{"a_session_server_reaches_a_backend_that_owns_mcp", rowASessionServerReachesABackendThatOwnsMCP},
+		{"runtime_and_session_servers_answer_in_one_turn_and_status_lists_both", rowRuntimeAndSessionServersAnswerInOneTurn},
+		{"no_secret_of_a_connected_session_server_is_in_the_log_or_a_tool_error", rowNoSecretOfAConnectedSessionServerIsInTheLogOrAToolError},
+		{"a_backend_that_owns_the_loop_allows_a_session_tool_by_name", rowABackendThatOwnsTheLoopAllowsASessionToolByName},
 		{"a_session_server_may_not_take_the_name_of_a_runtime_server", rowASessionServerMayNotTakeTheNameOfARuntimeServer},
 	}
 	for _, row := range rows {
@@ -228,7 +231,10 @@ func rowASessionServerThatFailsToConnectParks(t *testing.T) {
 
 func rowAnOpenWithoutTheOptionHasNoSessionTools(t *testing.T) {
 	st := store.NewMemStore()
-	r, fake := sessionMCPRuntime(t, nil, st, config.Config{}, replyText("ok"))
+	r, fake := sessionMCPRuntime(t, nil, st, config.Config{},
+		harnesstest.Step{Name: "first", Reply: harnesstest.Reply{Text: "ok"}},
+		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "mcp__weather__forecast", Input: map[string]any{"city": "Oslo"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "done"}})
 	s := sessionMCPCreate(t, r, weatherServer(t))
 	sessionMCPTurn(t, s, "a", "go")
 	if err := s.Release(t.Context()); err != nil {
@@ -240,13 +246,16 @@ func rowAnOpenWithoutTheOptionHasNoSessionTools(t *testing.T) {
 	}
 	sessionMCPTurn(t, s, "b", "again")
 	reqs := fake.Requests()
-	if len(reqs) != 2 || !requestHas(reqs[0], "mcp__weather__forecast") {
+	if len(reqs) != 3 || !requestHas(reqs[0], "mcp__weather__forecast") {
 		t.Fatalf("requests = %+v", reqs)
 	}
 	for _, n := range reqs[1].Tools {
 		if strings.HasPrefix(n, "mcp") {
 			t.Errorf("an Open without the option has the tool %q", n)
 		}
+	}
+	if got := requestText(reqs[2]); !strings.Contains(got, "no such tool available") {
+		t.Errorf("the result of a session tool call after an Open without the option = %s, want no such tool available", got)
 	}
 }
 
@@ -331,5 +340,96 @@ func rowASessionServerReachesABackendThatOwnsMCP(t *testing.T) {
 	}
 	if f.MCPServers["runtime"]["url"] != "http://127.0.0.1:1/runtime" || f.MCPServers["session"]["url"] != "http://127.0.0.1:1/session" {
 		t.Errorf("--mcp-config servers = %v, want the runtime server and the session server", f.MCPServers)
+	}
+}
+
+func rowABackendThatOwnsTheLoopAllowsASessionToolByName(t *testing.T) {
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: config.Config{
+		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: fakeClaudePath()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	req := protocol.CreateSession{ID: "s1", Model: "claude-code/sonnet", AllowedTools: []string{"mcp__session__x"}}
+	if _, err := r.Create(t.Context(), req); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("Create without session servers = %v, want ErrInvalidRequest", err)
+	}
+	if _, err := r.Create(t.Context(), req, harness.WithSessionMCP(map[string]config.MCPServerSpec{"session": {URL: "http://127.0.0.1:1/s"}})); err != nil {
+		t.Errorf("Create with the session server = %v, want nil", err)
+	}
+}
+
+func rowRuntimeAndSessionServersAnswerInOneTurn(t *testing.T) {
+	runtime := map[string]config.MCPServerSpec{"weather": {Command: []string{mcpStubBin(t)}, Env: mcpWeather("").StdioEnv()}}
+	session := map[string]config.MCPServerSpec{"docs": {Command: []string{mcpStubBin(t)}, Env: mcpDocs().StdioEnv()}}
+	r, fake := sessionMCPRuntime(t, nil, nil, config.Config{MCPServers: runtime},
+		harnesstest.Step{Name: "calls", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "c1", Name: "mcp__weather__forecast", Input: map[string]any{"city": "Oslo"}},
+			{ID: "c2", Name: "mcp__docs__search", Input: map[string]any{}},
+			{ID: "c3", Name: "mcp", Input: map[string]any{"action": "status"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	s := sessionMCPCreate(t, r, session)
+	sessionMCPTurn(t, s, "a", "go")
+	reqs := fake.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(reqs))
+	}
+	got := requestText(reqs[1])
+	for _, want := range []string{"Oslo: 3C, snow", "no hits", `"name":"weather"`, `"name":"docs"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the second request lacks %q: %s", want, got)
+		}
+	}
+}
+
+func rowNoSecretOfAConnectedSessionServerIsInTheLogOrAToolError(t *testing.T) {
+	log := newSyncLog()
+	remote := harnesstest.NewMCPServer(t, mcpWeather(""))
+	remote.RequireAuthorization("Bearer " + sessionMCPSecretHeader)
+	call := func(id, name string) harnesstest.Step {
+		return harnesstest.Step{Name: id, Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: id, Name: name, Input: map[string]any{"city": "Oslo"}}}}}
+	}
+	text := func(id string) harnesstest.Step {
+		return harnesstest.Step{Name: id, Reply: harnesstest.Reply{Text: "ok"}}
+	}
+	r, fake := sessionMCPRuntime(t, slog.New(log), nil, config.Config{}, call("c1", "mcp__remote__forecast"), text("t1"),
+		call("c2", "mcp__remote__forecast"), text("t2"), call("c3", "mcp__local__forecast"), text("t3"))
+	s := sessionMCPCreate(t, r, map[string]config.MCPServerSpec{
+		"remote": {URL: remote.URL() + "?key=" + sessionMCPSecretHeader, Headers: map[string]string{"Authorization": "Bearer " + sessionMCPSecretHeader}},
+		"local":  {Command: []string{mcpStubBin(t)}, Env: append(mcpWeather("").StdioEnv(), "API_TOKEN="+sessionMCPSecretEnv)},
+	})
+	sessionMCPTurn(t, s, "a", "one")
+	remote.SetAvailable(false)
+	sessionMCPTurn(t, s, "b", "two")
+	sessionMCPTurn(t, s, "c", "three")
+	var all []string
+	ended := 0
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, string(b))
+		if e.Kind == "turn.ended" {
+			if ended++; ended == 3 {
+				break
+			}
+		}
+	}
+	for _, r := range fake.Requests() {
+		all = append(all, requestText(r))
+	}
+	all = append(all, log.String())
+	joined := strings.Join(all, "\n")
+	if !strings.Contains(joined, "call failed") {
+		t.Fatalf("the unavailable server did not fail a call: %s", joined)
+	}
+	for _, secret := range []string{sessionMCPSecretEnv, sessionMCPSecretHeader} {
+		if strings.Contains(joined, secret) {
+			t.Errorf("the log, an event, or a request holds %q", secret)
+		}
 	}
 }

@@ -151,9 +151,6 @@ func (s *Source) Close() {
 
 // wait connects every server once and reports whether that ended before ctx.
 func (s *Source) wait(ctx context.Context) bool {
-	if s.parent != nil && !s.parent.wait(ctx) {
-		return false
-	}
 	s.start.Do(func() {
 		s.group.Go(func() {
 			var wg sync.WaitGroup
@@ -178,6 +175,9 @@ func (s *Source) wait(ctx context.Context) bool {
 			close(s.ready)
 		})
 	})
+	if s.parent != nil && !s.parent.wait(ctx) {
+		return false
+	}
 	select {
 	case <-s.ready:
 		return true
