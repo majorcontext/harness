@@ -73,3 +73,16 @@ func TestStartConcurrentSpawnsExactlyOnce(t *testing.T) {
 		t.Fatalf("%d processes spawned, want exactly 1", markerCount())
 	}
 }
+
+func TestAwaitReadyFailsWithTheCanceledContextWhenTheProcessIsAlreadyReadyAndDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 200 {
+		p := &managedProcess{readyCh: make(chan struct{}), doneCh: make(chan struct{})}
+		close(p.readyCh)
+		close(p.doneCh)
+		if _, err := p.awaitReady(ctx, time.Hour); err != context.Canceled {
+			t.Fatalf("awaitReady = %v with a canceled context, want context.Canceled", err)
+		}
+	}
+}

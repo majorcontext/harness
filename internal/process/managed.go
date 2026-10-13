@@ -125,7 +125,11 @@ func (p *managedProcess) awaitReady(ctx context.Context, timeout time.Duration) 
 	case <-timer.C:
 		p.noteReadyTimeout(timeout)
 	case <-ctx.Done():
-		return p.snapshot(), ctx.Err()
+	}
+	// select picks at random among ready cases: a canceled ctx must win over a
+	// process that the cancel itself killed.
+	if err := ctx.Err(); err != nil {
+		return p.snapshot(), err
 	}
 	return p.snapshot(), nil
 }
