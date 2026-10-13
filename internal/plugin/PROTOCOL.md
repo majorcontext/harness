@@ -1,8 +1,8 @@
 # Harness Plugin Protocol — v1
 
 Plugins are separate processes speaking **JSON-RPC 2.0 over stdio, one
-message per line** (NDJSON). Any language works; the TypeScript SDK is the published SDK, and
-`internal/plugin` is a Go fixture plugin for the harness tests. Log to stderr — stdout belongs to the protocol.
+message per line** (NDJSON). Any language works. The TypeScript SDK and the Go package
+`github.com/majorcontext/harness/plugin` implement it. Log to stderr — stdout belongs to the protocol.
 
 The channel is **bidirectional**: the harness sends hook dispatches and tool
 executions; the plugin sends client API calls back — including while one of
@@ -13,16 +13,22 @@ own requests independently.
 
 1. Harness spawns the long-lived plugin process lazily on the first hook
    dispatch or tool call. Before host construction, a matching cached manifest
-   is reused; a missing or stale entry gets one bounded probe.
+   is reused; a missing or stale entry gets one bounded probe. The cache
+   trusts the size and the mtime of the executable: a guard binary that is
+   replaced in place with the same size and mtime, and that now subscribes to
+   a hook, is not seen until `harness plugin probe` runs or the size or the
+   mtime changes.
 2. Harness → `initialize` (request) with `InitializeParams`. Plugin responds
    with its `Manifest`. A protocol-version mismatch is an initialize error.
-   The harness verifies the live manifest matches the cached one.
+   The harness compares the live manifest with the cached one: name, protocol
+   version, hooks, `deny_on_failure`, `hook_timeouts`, and tools. A difference
+   is a start failure.
 3. Hook dispatches, tool executions, and client API calls flow until:
 4. Harness → `shutdown` (notification), then closes stdin. Plugin exits.
 
 `InitializeParams` carries `serve_url` and `run_token` when (and only when)
 the harness is running in `harness serve` mode: a plugin process — in any
-language, not just the Go fixture — can then also hit the HTTP API directly
+language — can then also hit the HTTP API directly
 (`GET /sessions/{id}/messages`, etc.) instead of going through the stdio
 client API. Both are empty in `harness run` mode, where there is no HTTP
 API to reach. See "Trust model" below.
@@ -43,7 +49,60 @@ that should not have this reach simply should not be installed.
 
 A plugin that fails to start or errors on a dispatch is skipped — **hook
 chains fail open**; a plugin can never wedge a session. Every sync dispatch
-carries a deadline (default 5s).
+carries a deadline (default 5s; see Hook timeouts).
+
+### Deny on failure
+
+A plugin can mark `tool.execute.before` as deny-on-failure. The manifest gets
+an optional list:
+
+```json
+{"name": "guard", "protocol_version": 1,
+ "hooks": ["tool.execute.before"],
+ "deny_on_failure": ["tool.execute.before"]}
+```
+
+- `tool.execute.before` is the only valid value, and `hooks` must list it. Any
+  other value makes the manifest invalid: a probed manifest fails the first
+  `Create` or `Open`, and an in-process plugin fails `harness.New`.
+- A failure is any of: the plugin does not start, the process exits, the
+  deadline passes, the response does not decode, or the hook returns an error
+  or panics.
+- When a flagged hook fails, the chain stops and the tool does not run. The
+  model gets an error tool result: `denied: plugin <name> failed: <error>`.
+- A hook is flagged when the cached manifest or the live manifest flags it. A
+  start failure, a manifest mismatch included, denies each call of a flagged
+  hook.
+- A canceled context is an abort, not a failure. An interrupt during a flagged
+  hook ends the call and records no deny.
+- A hook that is not flagged keeps the fail-open rule.
+- `Options.OnError` receives each failure, flagged or not.
+
+An older host ignores `deny_on_failure` and fails open. A plugin cannot
+change this. A guardrail that must fail closed needs a host that has this
+field.
+
+### Hook timeouts
+
+A plugin can set the deadline of a synchronous hook. The manifest gets an
+optional map from hook name to milliseconds:
+
+```json
+{"name": "guard", "protocol_version": 1,
+ "hooks": ["tool.execute.before"],
+ "hook_timeouts": {"tool.execute.before": 60000}}
+```
+
+- A hook with no entry uses 5s.
+- A value must be from 1 to 600000. The hook must be in `hooks` and must not be
+  `event`. Any other value makes the manifest invalid: a probed manifest fails
+  the first `Create` or `Open`, and an in-process plugin fails `harness.New`.
+- The timer does not pause while the hook waits on a client call.
+- When the dispatch of that hook starts the plugin, the `initialize` call has
+  the longer of the hook timeout and 5s, so a short timeout never shortens the
+  start. Only `initialize` has that bound; the spawn or dial does not end with
+  the context. The timeout bounds the hook call alone.
+- The `event` hook is asynchronous and has no per-hook deadline.
 
 ## Methods: harness → plugin
 
@@ -79,29 +138,38 @@ list for any session the harness process owns (live or reloaded from disk
 in serve mode; the one in-flight session in run mode). An unknown session
 id is an RPC error, never an empty/silent success.
 
-`client/mcp.call` routes to the harness's configured `mcp_servers` (see the
-config package doc and `internal/tool/mcpsrc`): `Server` names one of them, `Tool` is
-the tool's unnamespaced name on that server (not the
-`mcp__<server>__<tool>` form a model-issued tool call uses). It reaches the
-exact same connected MCP clients the runtime's own namespaced tool calls
-use. An unconfigured or connection-failed server is a clear RPC error, not
-a panic or a silently empty result. `client/generate` is wired into the
-dispatch path and type-checks end to end, but is not implemented yet:
-provider-layer routing for plugin-initiated LLM calls is a separate PR, and
-it returns a clear RPC error until then.
+`client/mcp.call` calls a tool of any server in the `mcp_servers` config of
+the runtime. The host waits for the first connect of the servers and never
+dials again: a server that is retrying in the background or parked fails the
+call at once with its reason, without a new attempt, and only the connect
+action of the `mcp` tool brings a parked server back. The result is
+`{content, is_error}`: a tool that reports an error is a result with
+`is_error` set. An unknown server, a down server, or a failed transport is
+an RPC error, and its text hides the server URL and headers.
 
-Any language implementing this protocol (the Go helpers in this package, the
-TypeScript SDK under `sdk/typescript`, etc.) gets `serve_url`/`run_token` for
-free once it decodes `InitializeParams` — no protocol-version bump was needed
-since they are additive, optional fields (see Versioning below).
+`client/generate` makes one model request with no tools. An empty `model` is
+the default model, and an alias resolves. A model that no configured provider
+serves is an RPC error. A model whose backend runs its own agent loop (claude-code) is an RPC error too, because it would start an agent with every tool of its CLI. A failure message is masked as a session error is. The result is `{message, usage}`: `message` is an
+assistant message with the text of the reply, and `usage` is the optional
+token count of the call, which this host always sends, with zero counts when the model reports none (`input_tokens`, `output_tokens`, and the cache
+counts). No session records the call. On success the host logs one line with the
+plugin name, the model, and the usage.
+
+Both calls end when the plugin connection ends or the runtime closes. A client call runs no hook of the chain.
+
+Any language implementing this protocol (the Go package `harness/plugin`, the
+TypeScript SDK under `sdk/typescript`, etc.) gets `serve_url`/`run_token` once
+it decodes `InitializeParams`. They are additive, optional fields (see
+Versioning below).
 
 ## Chaining semantics
 
 Sync hooks run across plugins in config order; each plugin sees the previous
 plugin's mutations.
 
-- `chat.params`, `chat.message`: response replaces the request value for the
-  next plugin.
+- `chat.params`, `chat.message`: a response with a `params` (`message`) key
+  replaces the request value for the next plugin; a response without the key
+  changes nothing.
 - `system.transform`: additive — segments append; nothing is replaced.
 - `shell.env`: maps merge; later plugins win on key conflicts.
 - `tool.execute.before`: non-nil `args` replaces; non-empty `deny` blocks the
@@ -160,16 +228,16 @@ The rules, for a plugin in any language:
   request `id`, never by arrival order. Both sides number their own requests
   independently, so an id is unique only within one direction.
 - **Answer in any order.** A plugin may reply to a later request first. The
-  harness demultiplexes by `id` (`conn.call`, `conn.dispatch`), so a slow
+  harness demultiplexes by `id` (`wire.Conn.Call`, `wire.Conn`), so a slow
   handler never blocks a fast one.
 - **Write each frame as one whole line, atomically.** A plugin that writes
   from more than one thread MUST serialize its writes. Two frames whose
   bytes interleave are both lost, and the connection carries responses for
-  every other in-flight request too. The Go fixture holds one write mutex for
-  the life of the connection (`conn.write`).
+  every other in-flight request too. The Go host holds one write mutex for
+  the life of the connection (`wire.Conn.write`).
 - **Reentrancy is the plugin's choice.** A plugin whose handlers are not
   safe to run at the same time MAY serialize them internally. The harness
-  stays correct — it is throttled, not broken. The Go fixture does the opposite
+  stays correct — it is throttled, not broken. The Go package `harness/plugin` does the opposite
   by default: it serves each incoming request on its own goroutine, so a Go
   plugin's hook handlers must be safe for concurrent use.
 - **The `hook/event` FIFO guarantee is unchanged.** Notifications still
@@ -193,6 +261,12 @@ Tool outputs and generate results use the canonical `message.Parts` encoding:
 a JSON array of objects, each with a `"type"` discriminator (`text`, `blob`,
 `tool_call`, `tool_result`, `reasoning`). See package
 `github.com/majorcontext/harness/internal/message`.
+
+A `tool/execute` output holds `text` and `blob` parts. The text parts, joined
+by a newline, are the result text. A `blob` part with `data` is a result blob
+that the model reads after the text. A `blob` part with only `url` becomes the
+text line `blob: <url> (<media_type>)`. The host fails the call for a part of
+any other type.
 
 ## Versioning
 

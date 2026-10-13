@@ -6,13 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/majorcontext/harness/internal/message"
+	pub "github.com/majorcontext/harness/plugin"
+
+	"github.com/majorcontext/harness/internal/plugin/wire"
 )
 
 // defaultEventQueueSize is the per-plugin-instance bound on queued
@@ -22,16 +26,10 @@ const defaultEventQueueSize = 256
 
 // ClientAPI is implemented by the runtime to serve plugin → harness calls.
 type ClientAPI interface {
-	SessionMessages(ctx context.Context, req *SessionMessagesRequest) (*SessionMessagesResponse, error)
-	MCPCall(ctx context.Context, req *MCPCallRequest) (*MCPCallResult, error)
-	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
+	SessionMessages(ctx context.Context, req *pub.SessionMessagesRequest) (*pub.SessionMessagesResponse, error)
+	MCPCall(ctx context.Context, req *pub.MCPCallRequest) (*pub.MCPCallResult, error)
+	Generate(ctx context.Context, req *pub.GenerateRequest) (*pub.GenerateResponse, error)
 }
-
-// ErrGenerateNotImplemented is the analogous sentinel for
-// ClientAPI.Generate: routing a plugin's LLM call through the harness
-// provider layer is not yet wired. Returned instead of panicking or
-// silently returning an empty message.
-var ErrGenerateNotImplemented = errors.New("plugin: generate not implemented yet (provider-layer integration is a separate PR)")
 
 // Spec configures one plugin for a Host.
 //
@@ -46,7 +44,7 @@ type Spec struct {
 	// Config is this plugin's block from the harness config, passed
 	// verbatim in InitializeParams.
 	Config   json.RawMessage
-	Manifest Manifest
+	Manifest pub.Manifest
 
 	// dial overrides process spawning; used by tests.
 	dial func() (io.ReadWriteCloser, error)
@@ -76,7 +74,9 @@ type Options struct {
 	// open: the erroring plugin is skipped and the chain continues. It is
 	// also invoked (once, on the first occurrence) when a plugin's event
 	// queue is full and an event had to be dropped — see Host.Emit.
-	OnError func(plugin string, hook Hook, err error)
+	OnError func(plugin string, hook pub.Hook, err error)
+	// Log receives one line for each client/generate call. nil: slog.Default().
+	Log *slog.Logger
 	// EventQueueSize bounds the per-plugin-instance event queue drained by
 	// that instance's dedicated sender goroutine (see Host.Emit). Defaults
 	// to defaultEventQueueSize when <= 0.
@@ -105,9 +105,12 @@ func NewHost(opts Options, specs ...Spec) (*Host, error) {
 		if spec.Manifest.Name == "" {
 			return nil, fmt.Errorf("plugin: spec missing manifest (run Probe at install time)")
 		}
-		if spec.Manifest.ProtocolVersion != ProtocolVersion {
+		if spec.Manifest.ProtocolVersion != pub.ProtocolVersion {
 			return nil, fmt.Errorf("plugin %s: protocol version %d, harness speaks %d",
-				spec.Manifest.Name, spec.Manifest.ProtocolVersion, ProtocolVersion)
+				spec.Manifest.Name, spec.Manifest.ProtocolVersion, pub.ProtocolVersion)
+		}
+		if err := validateManifest(spec.Manifest); err != nil {
+			return nil, err
 		}
 		if seen[spec.Manifest.Name] {
 			return nil, fmt.Errorf("plugin %s: duplicate name", spec.Manifest.Name)
@@ -120,8 +123,8 @@ func NewHost(opts Options, specs ...Spec) (*Host, error) {
 
 // Tools returns all plugin-provided tool definitions, for the model's tool
 // list. It reads cached manifests only.
-func (h *Host) Tools() []ToolDef {
-	var defs []ToolDef
+func (h *Host) Tools() []pub.ToolDef {
+	var defs []pub.ToolDef
 	for _, inst := range h.instances {
 		defs = append(defs, inst.spec.Manifest.Tools...)
 	}
@@ -207,7 +210,7 @@ func (inst *instance) liveState() string {
 		// signal here needs no new death-detection goroutine.
 		if c := inst.liveConn.Load(); c != nil {
 			select {
-			case <-c.closed:
+			case <-c.Done():
 				return PluginErrored
 			default:
 			}
@@ -248,10 +251,10 @@ func (h *Host) Close() {
 //
 // Plugins subscribed to events are started (lazily) by their sender
 // goroutine on its first dequeued event.
-func (h *Host) Emit(events []Event) {
-	batch := &EventBatch{Events: events}
+func (h *Host) Emit(events []pub.Event) {
+	batch := &pub.EventBatch{Events: events}
 	for _, inst := range h.instances {
-		if !inst.subscribes(HookEvent) {
+		if !inst.subscribes(pub.HookEvent) {
 			continue
 		}
 		inst.enqueueEvent(h, batch)
@@ -298,85 +301,38 @@ func (h *Host) NotificationsDropped(pluginName string) uint64 {
 		if c == nil {
 			return 0
 		}
-		return c.notifyDropped.Load()
+		return c.NotifyDropped()
 	}
 	return 0
 }
 
-// ChatParams runs the chat.params chain and returns the final params.
-func (h *Host) ChatParams(ctx context.Context, req *ChatParamsRequest) ChatParams {
-	dispatchChain(ctx, h, HookChatParams, req, func(req *ChatParamsRequest, resp *ChatParamsResponse) bool {
-		req.Params = resp.Params
-		return true
-	})
-	return req.Params
-}
-
-// ChatMessage runs the chat.message chain and returns the final message.
-func (h *Host) ChatMessage(ctx context.Context, req *ChatMessageRequest) message.Message {
-	dispatchChain(ctx, h, HookChatMessage, req, func(req *ChatMessageRequest, resp *ChatMessageResponse) bool {
-		req.Message = resp.Message
-		return true
-	})
-	return req.Message
-}
-
 // SystemTransform collects system prompt segments from all subscribed
 // plugins, in chain order.
-func (h *Host) SystemTransform(ctx context.Context, req *SystemTransformRequest) []string {
+func (h *Host) SystemTransform(ctx context.Context, req *pub.SystemTransformRequest) []string {
 	var segments []string
-	dispatchChain(ctx, h, HookSystemTransform, req, func(_ *SystemTransformRequest, resp *SystemTransformResponse) bool {
+	dispatchChain(ctx, h, pub.HookSystemTransform, req, func(_ *pub.SystemTransformRequest, resp *pub.SystemTransformResponse) bool {
 		segments = append(segments, resp.Segments...)
 		return true
-	})
+	}, nil)
 	return segments
 }
 
 // ShellEnv merges env additions from all subscribed plugins. Later plugins
 // override earlier ones on key conflicts.
-func (h *Host) ShellEnv(ctx context.Context, req *ShellEnvRequest) map[string]string {
+func (h *Host) ShellEnv(ctx context.Context, req *pub.ShellEnvRequest) map[string]string {
 	env := make(map[string]string)
-	dispatchChain(ctx, h, HookShellEnv, req, func(_ *ShellEnvRequest, resp *ShellEnvResponse) bool {
+	dispatchChain(ctx, h, pub.HookShellEnv, req, func(_ *pub.ShellEnvRequest, resp *pub.ShellEnvResponse) bool {
 		for k, v := range resp.Env {
 			env[k] = v
 		}
 		return true
-	})
+	}, nil)
 	return env
-}
-
-// ToolExecuteBefore runs the tool.execute.before chain. It returns the
-// (possibly rewritten) args, or a non-empty deny message if a plugin blocked
-// the call — in which case the chain stops and the tool must not run.
-func (h *Host) ToolExecuteBefore(ctx context.Context, req *ToolExecuteBeforeRequest) (args json.RawMessage, deny string) {
-	dispatchChain(ctx, h, HookToolExecuteBefore, req, func(req *ToolExecuteBeforeRequest, resp *ToolExecuteBeforeResponse) bool {
-		if resp.Deny != "" {
-			deny = resp.Deny
-			return false
-		}
-		if resp.Args != nil {
-			req.Args = resp.Args
-		}
-		return true
-	})
-	return req.Args, deny
-}
-
-// ToolExecuteAfter runs the tool.execute.after chain and returns the final
-// output.
-func (h *Host) ToolExecuteAfter(ctx context.Context, req *ToolExecuteAfterRequest) message.Parts {
-	dispatchChain(ctx, h, HookToolExecuteAfter, req, func(req *ToolExecuteAfterRequest, resp *ToolExecuteAfterResponse) bool {
-		if resp.Output != nil {
-			req.Output = resp.Output
-		}
-		return true
-	})
-	return req.Output
 }
 
 // ExecuteTool routes a plugin-provided tool call to the plugin that declares
 // it in its manifest.
-func (h *Host) ExecuteTool(ctx context.Context, req *ToolExecuteRequest) (*ToolExecuteResponse, error) {
+func (h *Host) ExecuteTool(ctx context.Context, req *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error) {
 	for _, inst := range h.instances {
 		for _, def := range inst.spec.Manifest.Tools {
 			if def.Name == req.Tool {
@@ -384,48 +340,15 @@ func (h *Host) ExecuteTool(ctx context.Context, req *ToolExecuteRequest) (*ToolE
 				if err != nil {
 					return nil, err
 				}
-				var resp ToolExecuteResponse
-				if err := c.call(ctx, methodToolExecute, req, &resp); err != nil {
+				var resp toolExecuteResponse
+				if err := c.Call(ctx, wire.MethodToolExecute, req, &resp); err != nil {
 					return nil, err
 				}
-				return &resp, nil
+				return &resp.ToolExecuteResponse, nil
 			}
 		}
 	}
 	return nil, fmt.Errorf("plugin: no plugin provides tool %q", req.Tool)
-}
-
-// dispatchChain runs one sync hook across subscribed plugins in order. apply
-// folds each response into the shared request; returning false stops the
-// chain. Failures (including per-dispatch deadline) skip the plugin and
-// continue: hook chains fail open, matching the design rule that a plugin
-// must never wedge a session.
-func dispatchChain[Req, Resp any](ctx context.Context, h *Host, hook Hook, req *Req, apply func(*Req, *Resp) bool) {
-	for _, inst := range h.instances {
-		if !inst.subscribes(hook) {
-			continue
-		}
-		cctx, cancel := context.WithTimeout(ctx, h.opts.HookTimeout)
-		c, err := inst.start(cctx)
-		if err == nil {
-			var resp Resp
-			if err = c.call(cctx, hook.method(), req, &resp); err == nil {
-				cancel()
-				if !apply(req, &resp) {
-					return
-				}
-				continue
-			}
-		}
-		cancel()
-		h.onError(inst, hook, err)
-	}
-}
-
-func (h *Host) onError(inst *instance, hook Hook, err error) {
-	if h.opts.OnError != nil {
-		h.opts.OnError(inst.spec.Manifest.Name, hook, err)
-	}
 }
 
 // reportedState is instance.state's value space: the spawn lifecycle a
@@ -450,7 +373,7 @@ type instance struct {
 	started bool
 	stopped bool
 	err     error
-	conn    *conn
+	conn    *wire.Conn
 	cmd     *exec.Cmd
 
 	// state is inst's reportedState. start and stop are its only writers,
@@ -465,7 +388,10 @@ type instance struct {
 	// atomic store as state, under the same "writers may hold mu, the
 	// reader never does" rule. liveState uses it to notice a POST-spawn
 	// death (conn.closed, closed by conn.fail when the read loop errors).
-	liveConn atomic.Pointer[conn]
+	liveConn atomic.Pointer[wire.Conn]
+	// liveDeny is the deny_on_failure list of the live manifest, stored at
+	// spawn before the manifest comparison, so a mismatch still flags.
+	liveDeny atomic.Pointer[[]pub.Hook]
 
 	// Event delivery: a bounded queue drained by one dedicated sender
 	// goroutine, created on the first Emit for this instance and exited
@@ -474,13 +400,13 @@ type instance struct {
 	// the entire (possibly slow, possibly wedged) handshake; Emit must be
 	// able to enqueue without ever waiting on that.
 	eventMu      sync.Mutex
-	eventCh      chan *EventBatch
+	eventCh      chan *pub.EventBatch
 	eventStop    chan struct{}
 	eventStopped bool
 	eventDropped atomic.Uint64
 }
 
-func (inst *instance) subscribes(hook Hook) bool {
+func (inst *instance) subscribes(hook pub.Hook) bool {
 	for _, h := range inst.spec.Manifest.Hooks {
 		if h == hook {
 			return true
@@ -489,11 +415,21 @@ func (inst *instance) subscribes(hook Hook) bool {
 	return false
 }
 
+// flags reports whether the cached manifest or the live manifest seen at
+// spawn marks hook as deny-on-failure.
+func (inst *instance) flags(hook pub.Hook) bool {
+	if slices.Contains(inst.spec.Manifest.DenyOnFailure, hook) {
+		return true
+	}
+	live := inst.liveDeny.Load()
+	return live != nil && slices.Contains(*live, hook)
+}
+
 // enqueueEvent enqueues batch for delivery to inst, lazily starting its
 // dedicated sender goroutine on first use. The send is always non-blocking:
 // on a full queue (or once the instance has been stopped) the event is
 // dropped and counted, and the first drop is reported via Host.OnError.
-func (inst *instance) enqueueEvent(h *Host, batch *EventBatch) {
+func (inst *instance) enqueueEvent(h *Host, batch *pub.EventBatch) {
 	inst.eventMu.Lock()
 	if inst.eventStopped {
 		// Host.Close was already called: never (re)spawn a sender.
@@ -502,7 +438,7 @@ func (inst *instance) enqueueEvent(h *Host, batch *EventBatch) {
 		return
 	}
 	if inst.eventCh == nil {
-		inst.eventCh = make(chan *EventBatch, h.opts.EventQueueSize)
+		inst.eventCh = make(chan *pub.EventBatch, h.opts.EventQueueSize)
 		inst.eventStop = make(chan struct{})
 		go inst.runEventSender(h, inst.eventCh, inst.eventStop)
 	}
@@ -518,7 +454,7 @@ func (inst *instance) enqueueEvent(h *Host, batch *EventBatch) {
 
 func (inst *instance) recordEventDrop(h *Host) {
 	if inst.eventDropped.Add(1) == 1 {
-		h.onError(inst, HookEvent, fmt.Errorf(
+		h.onError(inst, pub.HookEvent, fmt.Errorf(
 			"plugin: event queue full (capacity %d): dropping events, see Host.EventsDropped for a running count",
 			h.opts.EventQueueSize))
 	}
@@ -529,16 +465,16 @@ func (inst *instance) recordEventDrop(h *Host) {
 // goroutines and FIFO delivery per plugin follows directly from FIFO
 // enqueue order. It exits once eventStop is closed (on Host.Close /
 // instance.stop).
-func (inst *instance) runEventSender(h *Host, ch chan *EventBatch, stop chan struct{}) {
+func (inst *instance) runEventSender(h *Host, ch chan *pub.EventBatch, stop chan struct{}) {
 	for {
 		select {
 		case batch := <-ch:
 			ctx, cancel := context.WithTimeout(context.Background(), h.opts.HookTimeout)
 			c, err := inst.start(ctx)
 			if err != nil {
-				h.onError(inst, HookEvent, err)
-			} else if err := c.notify(HookEvent.method(), batch); err != nil {
-				h.onError(inst, HookEvent, err)
+				h.onError(inst, pub.HookEvent, err)
+			} else if err := c.Notify(hookMethod(pub.HookEvent), batch); err != nil {
+				h.onError(inst, pub.HookEvent, err)
 			}
 			cancel()
 		case <-stop:
@@ -554,7 +490,10 @@ var errInstanceStopped = errors.New("plugin: instance stopped")
 
 // start spawns and initializes the plugin process on first use. A failed
 // start is sticky: the plugin is skipped for the rest of the session rather
-// than respawned on every dispatch. Once stopped, an instance never
+// than respawned on every dispatch. Only a start that fails with a canceled
+// ctx is not sticky: the next dispatch starts again. A deadline is still
+// latched, because the start ctx always has a deadline, so a parent deadline
+// cannot be told from a hung start. Once stopped, an instance never
 // (re)spawns: start returns errInstanceStopped instead.
 //
 // It returns the conn established under inst.mu, alongside any error.
@@ -562,7 +501,7 @@ var errInstanceStopped = errors.New("plugin: instance stopped")
 // re-read inst.conn afterwards, since inst.mu is released by the time start
 // returns and a concurrent stop() (or a future start()) can nil or replace
 // it out from under an unsynchronized read.
-func (inst *instance) start(ctx context.Context) (*conn, error) {
+func (inst *instance) start(ctx context.Context) (*wire.Conn, error) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	if inst.stopped {
@@ -571,8 +510,12 @@ func (inst *instance) start(ctx context.Context) (*conn, error) {
 	if inst.started {
 		return inst.conn, inst.err
 	}
+	err := inst.startLocked(ctx)
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		return nil, err
+	}
 	inst.started = true
-	inst.err = inst.startLocked(ctx)
+	inst.err = err
 	if inst.err != nil {
 		inst.state.Store(int32(stateErrored))
 	} else {
@@ -587,12 +530,12 @@ func (inst *instance) startLocked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("plugin %s: %w", inst.spec.Manifest.Name, err)
 	}
-	c := newConn(rwc, inst.host.clientHandler())
-	go c.run() //nolint:errcheck // stream end is surfaced via pending calls
+	c := wire.NewConn(rwc, inst.host.clientHandler(inst.spec.Manifest.Name))
+	go c.Run() //nolint:errcheck // stream end is surfaced via pending calls
 
-	var live Manifest
-	init := &InitializeParams{
-		ProtocolVersion: ProtocolVersion,
+	var live pub.Manifest
+	init := &pub.InitializeParams{
+		ProtocolVersion: pub.ProtocolVersion,
 		HarnessVersion:  inst.host.opts.HarnessVersion,
 		WorkspaceDir:    inst.host.opts.WorkspaceDir,
 		HTTPHeaders:     inst.host.opts.HTTPHeaders,
@@ -600,14 +543,15 @@ func (inst *instance) startLocked(ctx context.Context) error {
 		ServeURL:        inst.host.opts.ServeURL,
 		RunToken:        inst.host.opts.RunToken,
 	}
-	if err := c.call(ctx, methodInitialize, init, &live); err != nil {
-		c.close()
+	if err := c.Call(ctx, wire.MethodInitialize, init, &live); err != nil {
+		_ = c.Close()
 		return fmt.Errorf("plugin %s: initialize: %w", inst.spec.Manifest.Name, err)
 	}
-	if live.Name != inst.spec.Manifest.Name || live.ProtocolVersion != inst.spec.Manifest.ProtocolVersion {
-		c.close()
-		return fmt.Errorf("plugin %s: live manifest (%s, v%d) disagrees with cache — reinstall the plugin",
-			inst.spec.Manifest.Name, live.Name, live.ProtocolVersion)
+	inst.liveDeny.Store(&live.DenyOnFailure)
+	if !sameManifest(inst.spec.Manifest, live) {
+		_ = c.Close()
+		return fmt.Errorf("plugin %s: live manifest disagrees with cache in %s — reinstall the plugin",
+			inst.spec.Manifest.Name, diffManifest(inst.spec.Manifest, live))
 	}
 	inst.conn = c
 	return nil
@@ -683,7 +627,7 @@ func (inst *instance) stop() {
 		next := stateStopped
 		if c := inst.liveConn.Load(); c != nil {
 			select {
-			case <-c.closed:
+			case <-c.Done():
 				next = stateErrored
 			default:
 			}
@@ -692,40 +636,9 @@ func (inst *instance) stop() {
 	}
 	inst.liveConn.Store(nil)
 	if inst.conn != nil {
-		_ = inst.conn.notify(methodShutdown, struct{}{})
-		_ = inst.conn.close()
+		_ = inst.conn.Notify(wire.MethodShutdown, struct{}{})
+		_ = inst.conn.Close()
 		inst.conn = nil
-	}
-}
-
-// clientHandler serves plugin → harness API calls.
-func (h *Host) clientHandler() handlerFunc {
-	return func(ctx context.Context, method string, params json.RawMessage) (any, error) {
-		if h.opts.Client == nil {
-			return nil, &rpcError{Code: codeMethodNotFound, Message: "client API not available"}
-		}
-		switch method {
-		case methodSessionMessages:
-			var req SessionMessagesRequest
-			if err := json.Unmarshal(params, &req); err != nil {
-				return nil, err
-			}
-			return h.opts.Client.SessionMessages(ctx, &req)
-		case methodMCPCall:
-			var req MCPCallRequest
-			if err := json.Unmarshal(params, &req); err != nil {
-				return nil, err
-			}
-			return h.opts.Client.MCPCall(ctx, &req)
-		case methodGenerate:
-			var req GenerateRequest
-			if err := json.Unmarshal(params, &req); err != nil {
-				return nil, err
-			}
-			return h.opts.Client.Generate(ctx, &req)
-		default:
-			return nil, &rpcError{Code: codeMethodNotFound, Message: fmt.Sprintf("unknown method %q", method)}
-		}
 	}
 }
 
@@ -769,7 +682,7 @@ func (p *procConn) Close() error {
 // instance.dial/startLocked) always supplies all three. Probing with less
 // than the real spawn does risks caching a manifest the live plugin
 // wouldn't actually advertise.
-func ProbeSpec(ctx context.Context, spec Spec) (Manifest, error) {
+func ProbeSpec(ctx context.Context, spec Spec) (pub.Manifest, error) {
 	inst := &instance{
 		host: &Host{opts: Options{HookTimeout: 5 * time.Second}},
 		spec: Spec{
@@ -777,24 +690,24 @@ func ProbeSpec(ctx context.Context, spec Spec) (Manifest, error) {
 			Env:      spec.Env,
 			Dir:      spec.Dir,
 			Config:   spec.Config,
-			Manifest: Manifest{Name: "probe", ProtocolVersion: ProtocolVersion},
+			Manifest: pub.Manifest{Name: "probe", ProtocolVersion: pub.ProtocolVersion},
 			dial:     spec.dial,
 		},
 	}
 	rwc, err := inst.dial()
 	if err != nil {
-		return Manifest{}, err
+		return pub.Manifest{}, err
 	}
-	c := newConn(rwc, inst.host.clientHandler())
-	go c.run() //nolint:errcheck
-	defer c.close()
+	c := wire.NewConn(rwc, inst.host.clientHandler(inst.spec.Manifest.Name))
+	go c.Run() //nolint:errcheck
+	defer func() { _ = c.Close() }()
 
-	var m Manifest
-	init := &InitializeParams{ProtocolVersion: ProtocolVersion, Config: spec.Config}
-	if err := c.call(ctx, methodInitialize, init, &m); err != nil {
-		return Manifest{}, fmt.Errorf("plugin probe: %w", err)
+	var m pub.Manifest
+	init := &pub.InitializeParams{ProtocolVersion: pub.ProtocolVersion, Config: spec.Config}
+	if err := c.Call(ctx, wire.MethodInitialize, init, &m); err != nil {
+		return pub.Manifest{}, fmt.Errorf("plugin probe: %w", err)
 	}
-	_ = c.notify(methodShutdown, struct{}{})
+	_ = c.Notify(wire.MethodShutdown, struct{}{})
 	return m, nil
 }
 
@@ -803,6 +716,6 @@ func ProbeSpec(ctx context.Context, spec Spec) (Manifest, error) {
 // Kept for backward compatibility; prefer ProbeSpec, which probes with the
 // same Env/Dir/Config a real spawn uses so the cached manifest can't diverge
 // from what the live, fully-configured plugin actually advertises.
-func Probe(ctx context.Context, command []string) (Manifest, error) {
+func Probe(ctx context.Context, command []string) (pub.Manifest, error) {
 	return ProbeSpec(ctx, Spec{Command: command})
 }

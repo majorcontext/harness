@@ -21,7 +21,9 @@ import (
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/plugin"
+	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
+	pub "github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -37,6 +39,7 @@ type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error
 type Plugins struct {
 	log       *slog.Logger
 	specs     []config.PluginSpec
+	inproc    []*pub.Plugin
 	opts      plugin.Options
 	workDir   string
 	cachePath string
@@ -45,42 +48,65 @@ type Plugins struct {
 	host   atomic.Pointer[plugin.Host]
 	mu     sync.Mutex
 	closed bool
+
+	serving sync.WaitGroup
+	smu     sync.Mutex
+	stopped bool
 }
 
-// New returns the Plugins of cfg.Plugins, or nil when it is empty. It does no I/O.
-func New(cfg config.Config, workDir string, history History, blob Blob, serveURL, runToken string, log *slog.Logger) *Plugins {
-	if len(cfg.Plugins) == 0 {
+func (p *Plugins) spawn(fn func()) error {
+	p.smu.Lock()
+	defer p.smu.Unlock()
+	if p.stopped {
+		return errors.New("plugins are closed")
+	}
+	p.serving.Go(fn)
+	return nil
+}
+
+// New returns the Plugins of cfg.Plugins and inproc, or nil when both are
+// empty. It does no I/O.
+func New(cfg config.Config, inproc []*pub.Plugin, workDir string, calls Calls, serveURL, runToken string, log *slog.Logger) *Plugins {
+	if len(cfg.Plugins) == 0 && len(inproc) == 0 {
 		return nil
 	}
-	return &Plugins{log: cmp.Or(log, slog.Default()), specs: cfg.Plugins, workDir: workDir, cachePath: cfg.PluginCache,
-		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob},
-			ServeURL: serveURL, RunToken: runToken}}
+	log = cmp.Or(log, slog.Default())
+	onError := func(name string, hook pub.Hook, err error) {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		log.Warn("plugin: hook failed", "plugin", name, "hook", string(hook), "error", plugin.SanitizeSessionError(toolresult.Mask(err.Error())))
+	}
+	return &Plugins{log: log, specs: cfg.Plugins, inproc: inproc, workDir: workDir, cachePath: cfg.PluginCache,
+		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{calls}, Log: log,
+			ServeURL: serveURL, RunToken: runToken, OnError: onError}}
 }
 
-// Start reads the manifest of each plugin once: from the manifest cache when
-// the plugin has not changed since its last probe, else with one bounded probe.
-// With refresh, it always probes. The warm process of a plugin starts on its
-// first hook or tool call. taken reports a tool name that another tool has.
-// After an error, the next call tries again.
+// Start reads the manifest of each configured plugin once: from the manifest
+// cache when the plugin has not changed since its last probe, else with one
+// bounded probe. With refresh, it always probes. The in-process plugins follow
+// the configured ones; they have no probe and no cache entry. The warm process
+// of a plugin starts on its first hook or tool call. taken reports a tool name
+// that another tool has. After an error, the next call tries again.
 func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.host.Load() != nil {
 		return nil
 	}
-	c := &cache{Entries: map[string]cacheEntry{}}
+	c := newCache()
 	if p.cachePath != "" {
 		var err error
 		if c, err = loadCache(p.cachePath, p.log); err != nil {
 			return fmt.Errorf("plugin cache: %w", err)
 		}
 	}
-	probe := func(spec plugin.Spec) (plugin.Manifest, error) {
+	probe := func(spec plugin.Spec) (pub.Manifest, error) {
 		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		defer cancel()
 		return plugin.ProbeSpec(pctx, spec)
 	}
-	specs := make([]plugin.Spec, len(p.specs))
+	specs := make([]plugin.Spec, len(p.specs), len(p.specs)+len(p.inproc))
 	names := map[string]bool{}
 	dirty := false
 	for i, ps := range p.specs {
@@ -97,14 +123,24 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 		}
 		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config, Manifest: m}
 	}
-	if dirty && p.cachePath != "" {
-		if err := c.save(p.cachePath); err != nil {
-			return fmt.Errorf("plugin cache: %w", err)
+	for _, ip := range p.inproc {
+		spec := plugin.InProcess(ip, p.spawn)
+		for _, d := range spec.Manifest.Tools {
+			if d.Name == "" || names[d.Name] || taken(d.Name) {
+				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ip.Name, d.Name)
+			}
+			names[d.Name] = true
 		}
+		specs = append(specs, spec)
 	}
 	host, err := plugin.NewHost(p.opts, specs...)
 	if err != nil {
 		return err
+	}
+	if dirty && p.cachePath != "" {
+		if err := c.save(p.cachePath); err != nil {
+			return fmt.Errorf("plugin cache: %w", err)
+		}
 	}
 	p.host.Store(host)
 	return nil
@@ -113,7 +149,7 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 // Has reports whether a started plugin has a tool named name.
 func (p *Plugins) Has(name string) bool {
 	h := p.host.Load()
-	return h != nil && slices.ContainsFunc(h.Tools(), func(d plugin.ToolDef) bool { return d.Name == name })
+	return h != nil && slices.ContainsFunc(h.Tools(), func(d pub.ToolDef) bool { return d.Name == name })
 }
 
 // Session returns the plugins of session id. Call it after Start.
@@ -139,14 +175,19 @@ func (p *Plugins) Info() []protocol.Plugin {
 	return out
 }
 
-// Close stops every plugin process. A second Close does nothing.
+// Close stops every plugin process and waits for the in-process serve loops.
+// A second Close does nothing.
 func (p *Plugins) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.smu.Lock()
+	p.stopped = true
+	p.smu.Unlock()
 	if h := p.host.Load(); h != nil && !p.closed {
 		h.Close()
 	}
 	p.closed = true
+	p.serving.Wait()
 }
 
 // Session is a turn.Source and turn.Hooks for one session.
@@ -161,21 +202,22 @@ type Session struct {
 // segments of this model call as its prompt.
 func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	ref, _ := modelref.ParseModelRef(model)
-	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id, Model: ref})
+	segs := s.host.SystemTransform(ctx, &pub.SystemTransformRequest{SessionID: s.id, Model: ref.String()})
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
 }
 
 // ChatParams runs the chat.params chain for one model call. An empty model in
 // the result keeps p.Model; a nil sampling value keeps the provider default.
 func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallParams {
-	in := plugin.ChatParams{Temperature: p.Temperature, TopP: p.TopP}
+	in := pub.ChatParams{Temperature: p.Temperature, TopP: p.TopP}
 	if p.MaxTokens > 0 {
 		in.MaxTokens = &p.MaxTokens
 	}
-	in.Model, _ = modelref.ParseModelRef(p.Model)
-	out := s.host.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.id, Params: in})
-	if !out.Model.IsZero() {
-		p.Model = out.Model.String()
+	ref, _ := modelref.ParseModelRef(p.Model)
+	in.Model = ref.String()
+	out := s.host.ChatParams(ctx, &pub.ChatParamsRequest{SessionID: s.id, Params: in})
+	if out.Model != "" {
+		p.Model = out.Model
 	}
 	if out.MaxTokens != nil {
 		p.MaxTokens = *out.MaxTokens
@@ -186,7 +228,7 @@ func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallPa
 
 // ShellEnv returns the variables that the shell.env hooks add to a bash command.
 func (s *Session) ShellEnv(ctx context.Context, command string) map[string]string {
-	return s.host.ShellEnv(ctx, &plugin.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.workDir})
+	return s.host.ShellEnv(ctx, &pub.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.workDir})
 }
 
 // Untransformed returns s as a Source that runs no system.transform, for a
@@ -199,12 +241,13 @@ func (u untransformed) Toolset(_ context.Context, _ []protocol.LogMessage, allow
 	return turn.Toolset{Tools: turn.Restrict(u.s.tools, allowed), Hooks: u.s}
 }
 
-// Before runs the tool.execute.before chain and announces a call that runs.
+// Before runs the tool.execute.before chain and announces a call that the
+// chain did not deny. After announces its end, also when ctx ended.
 func (s *Session) Before(ctx context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {
-	args, deny := s.host.ToolExecuteBefore(ctx, &plugin.ToolExecuteBeforeRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
+	args, deny := s.host.ToolExecuteBefore(ctx, &pub.ToolExecuteBeforeRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
 	if deny == "" {
 		c.Arguments = args
-		s.emit(plugin.EventToolExecuteStart, plugin.ToolExecuteStartProperties{Tool: c.Name, CallID: c.ID})
+		s.emit(pub.EventToolExecuteStart, pub.ToolExecuteStartProperties{Tool: c.Name, CallID: c.ID})
 	}
 	return c, deny
 }
@@ -212,19 +255,22 @@ func (s *Session) Before(ctx context.Context, c protocol.ToolCall) (protocol.Too
 // After announces the end of a call and runs the tool.execute.after chain.
 // A successful write_file or edit_file call also announces file.edited.
 func (s *Session) After(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
-	s.emit(plugin.EventToolExecuteEnd, plugin.ToolExecuteEndProperties{Tool: c.Name, CallID: c.ID, OK: !r.IsError})
+	s.emit(pub.EventToolExecuteEnd, pub.ToolExecuteEndProperties{Tool: c.Name, CallID: c.ID, OK: !r.IsError})
 	var edit struct{ Path string }
 	if (c.Name == "write_file" || c.Name == "edit_file") && !r.IsError && json.Unmarshal(c.Arguments, &edit) == nil && edit.Path != "" {
 		if !filepath.IsAbs(edit.Path) {
 			edit.Path = filepath.Join(s.workDir, edit.Path)
 		}
 		if abs, err := filepath.Abs(edit.Path); err == nil {
-			s.emit(plugin.EventFileEdited, plugin.FileEditedProperties{Path: abs})
+			s.emit(pub.EventFileEdited, pub.FileEditedProperties{Path: abs})
 		}
 	}
-	out := s.host.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments,
-		Output: message.Parts{&message.Text{Text: r.Text}}})
-	return protocol.ToolResult{Text: out.Text(), IsError: r.IsError, Blobs: r.Blobs}
+	if ctx.Err() != nil {
+		return r
+	}
+	out := s.host.ToolExecuteAfter(ctx, &pub.ToolExecuteAfterRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments,
+		Output: []pub.Part{pub.TextPart(r.Text)}})
+	return protocol.ToolResult{Text: partsText(out), IsError: r.IsError, Blobs: r.Blobs}
 }
 
 // Appended announces the start and the end of each turn in events.
@@ -232,26 +278,26 @@ func (s *Session) Appended(events []protocol.Payload) {
 	for _, e := range events {
 		switch e := e.(type) {
 		case protocol.TurnStarted, protocol.TurnResumed:
-			s.emit(plugin.EventSessionStatus, map[string]string{"status": "busy"})
+			s.emit(pub.EventSessionStatus, map[string]string{"status": "busy"})
 		case protocol.TurnSuspended:
-			s.emit(plugin.EventSessionStatus, map[string]string{"status": "idle"})
+			s.emit(pub.EventSessionStatus, map[string]string{"status": "idle"})
 		case protocol.TurnEnded:
 			if e.StopReason == protocol.StopFailed {
-				s.emit(plugin.EventSessionError, plugin.SessionErrorProperties{Message: plugin.SanitizeSessionError(e.Error)})
+				s.emit(pub.EventSessionError, pub.SessionErrorProperties{Message: plugin.SanitizeSessionError(e.Error)})
 			}
-			s.emit(plugin.EventSessionStatus, map[string]string{"status": "idle"})
+			s.emit(pub.EventSessionStatus, map[string]string{"status": "idle"})
 		}
 	}
 }
 
 func (s *Session) emit(typ string, props any) {
 	b, _ := json.Marshal(props)
-	s.host.Emit([]plugin.Event{{Type: typ, SessionID: s.id, Properties: b}})
+	s.host.Emit([]pub.Event{{Type: typ, SessionID: s.id, Properties: b}})
 }
 
 type tool struct {
 	s   *Session
-	def plugin.ToolDef
+	def pub.ToolDef
 }
 
 func (t tool) Spec() protocol.ToolSpec {
@@ -259,21 +305,45 @@ func (t tool) Spec() protocol.ToolSpec {
 }
 
 func (t tool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	resp, err := t.s.host.ExecuteTool(ctx, &plugin.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
+	resp, err := t.s.host.ExecuteTool(ctx, &pub.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
 	if err != nil {
 		return protocol.ToolResult{}, err
 	}
-	return protocol.ToolResult{Text: resp.Output.Text(), IsError: resp.IsError}, nil
+	text, blobs, err := toolOutput(resp.Output)
+	if err != nil {
+		return protocol.ToolResult{}, err
+	}
+	return protocol.ToolResult{Text: text, IsError: resp.IsError, Blobs: blobs}, nil
+}
+
+// toolOutput maps tool output to result text and blobs. A blob part with
+// inline data becomes a blob, and one with only a URL becomes a text line. A
+// part of another type is not result content and fails the call.
+func toolOutput(parts []pub.Part) (string, []protocol.Blob, error) {
+	var lines []string
+	var blobs []protocol.Blob
+	for _, p := range parts {
+		switch {
+		case p.Type == pub.PartText:
+			lines = append(lines, p.Text)
+		case p.Type == pub.PartBlob && len(p.Data) > 0:
+			blobs = append(blobs, protocol.Blob{MediaType: p.MediaType, Data: p.Data})
+		case p.Type == pub.PartBlob:
+			lines = append(lines, fmt.Sprintf("blob: %s (%s)", p.URL, p.MediaType))
+		default:
+			return "", nil, fmt.Errorf("plugin tool output has a %q part, which is not tool result content", p.Type)
+		}
+	}
+	return strings.Join(lines, "\n"), blobs, nil
 }
 
 // client serves the plugin calls of the harness client API.
 type client struct {
-	history History
-	blob    Blob
+	calls Calls
 }
 
-func (c client) SessionMessages(ctx context.Context, req *plugin.SessionMessagesRequest) (*plugin.SessionMessagesResponse, error) {
-	h, err := c.history(ctx, req.SessionID)
+func (c client) SessionMessages(ctx context.Context, req *pub.SessionMessagesRequest) (*pub.SessionMessagesResponse, error) {
+	h, err := c.calls.History(ctx, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -300,22 +370,31 @@ func (c client) SessionMessages(ctx context.Context, req *plugin.SessionMessages
 		}
 		msgs = append(msgs, out)
 	}
-	return &plugin.SessionMessagesResponse{Messages: msgs}, nil
+	var out []pub.Message
+	if err := convert(msgs, &out); err != nil {
+		return nil, err
+	}
+	return &pub.SessionMessagesResponse{Messages: out}, nil
+}
+
+func partsText(parts []pub.Part) string {
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == pub.PartText {
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
 }
 
 func (c client) readBlob(ctx context.Context, sessionID, key string) ([]byte, error) {
-	rc, err := c.blob(ctx, sessionID, key)
+	rc, err := c.calls.Blob(ctx, sessionID, key)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rc.Close() }()
 	return io.ReadAll(rc)
-}
-
-func (client) MCPCall(context.Context, *plugin.MCPCallRequest) (*plugin.MCPCallResult, error) {
-	return nil, errors.New("pluginsrc: client/mcp.call is not served")
-}
-
-func (client) Generate(context.Context, *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
-	return nil, plugin.ErrGenerateNotImplemented
 }

@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -64,7 +65,59 @@ func TestContractPluginManifestCache(t *testing.T) {
 				t.Errorf("the cache keeps the stale manifest:\n%s", b)
 			}
 		})
+		t.Run("plugin_cache_from_before_the_flag_is_probed_again", func(t *testing.T) { staleFlagCacheIsProbedAgain(t, h) })
 	})
+}
+
+func staleFlagCacheIsProbedAgain(t *testing.T, h host) {
+	cfg := pluginBoxesConfig(t)
+	cache := filepath.Join(t.TempDir(), "plugin_cache.json")
+	cfg["plugin_cache"] = cache
+	cfg["plugins"].([]any)[0].(map[string]any)["config"] = map[string]any{"deny_on_failure": true}
+
+	pluginTools(t, h, cfg)
+	var file map[string]any
+	b, err := os.ReadFile(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &file); err != nil {
+		t.Fatal(err)
+	}
+	delete(file, "version")
+	for _, e := range file["entries"].(map[string]any) {
+		delete(e.(map[string]any)["manifest"].(map[string]any), "deny_on_failure")
+	}
+	if b, err = json.Marshal(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cache, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pluginTools(t, h, cfg)
+	if b, err = os.ReadFile(cache); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Version int `json:"version"`
+		Entries map[string]struct {
+			Manifest struct {
+				DenyOnFailure []string `json:"deny_on_failure"`
+			} `json:"manifest"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 2 || len(got.Entries) != 1 {
+		t.Fatalf("cache = version %d with %d entries, want version 2 with 1:\n%s", got.Version, len(got.Entries), b)
+	}
+	for _, e := range got.Entries {
+		if !slices.Equal(e.Manifest.DenyOnFailure, []string{"tool.execute.before"}) {
+			t.Errorf("cache entry deny_on_failure = %v, want [tool.execute.before]:\n%s", e.Manifest.DenyOnFailure, b)
+		}
+	}
 }
 
 func TestContractCLIPluginProbeRefreshesTheCache(t *testing.T) {

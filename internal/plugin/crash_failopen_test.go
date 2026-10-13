@@ -3,6 +3,8 @@ package plugin
 import (
 	"context"
 	"testing"
+
+	pub "github.com/majorcontext/harness/plugin"
 )
 
 // TestCrashMidHookFailsOpen covers a plugin that dies while a sync hook
@@ -20,31 +22,31 @@ import (
 // applied, matching the design rule that one wedged/dead plugin cannot
 // take a session down.
 func TestCrashMidHookFailsOpen(t *testing.T) {
-	crasher := testPlugin(t, "crasher", &Hooks{
-		SystemTransform: func(_ context.Context, c *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
-			// Simulate the process dying mid-call: sever the connection
-			// instead of ever replying.
-			_ = c.c.close()
-			return &SystemTransformResponse{Segments: []string{"should never be applied"}}, nil
+	var sever func()
+	crasher := testPlugin(t, "crasher", &pub.Plugin{
+		SystemTransform: func(_ context.Context, _ *pub.Client, _ *pub.SystemTransformRequest) (*pub.SystemTransformResponse, error) {
+			sever()
+			return &pub.SystemTransformResponse{Segments: []string{"should never be applied"}}, nil
 		},
 	})
-	survivor := testPlugin(t, "survivor", &Hooks{
-		SystemTransform: func(_ context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
-			return &SystemTransformResponse{Segments: []string{"survivor ran"}}, nil
+	sever = severable(&crasher)
+	survivor := testPlugin(t, "survivor", &pub.Plugin{
+		SystemTransform: func(_ context.Context, _ *pub.Client, _ *pub.SystemTransformRequest) (*pub.SystemTransformResponse, error) {
+			return &pub.SystemTransformResponse{Segments: []string{"survivor ran"}}, nil
 		},
 	})
 
 	var errs []string
 	h := newTestHost(t, Options{
-		OnError: func(name string, hook Hook, _ error) {
-			if hook != HookSystemTransform {
-				t.Errorf("OnError hook = %v, want HookSystemTransform", hook)
+		OnError: func(name string, hook pub.Hook, _ error) {
+			if hook != pub.HookSystemTransform {
+				t.Errorf("OnError hook = %v, want pub.HookSystemTransform", hook)
 			}
 			errs = append(errs, name)
 		},
 	}, crasher, survivor)
 
-	got := h.SystemTransform(context.Background(), &SystemTransformRequest{SessionID: "s1"})
+	got := h.SystemTransform(context.Background(), &pub.SystemTransformRequest{SessionID: "s1"})
 
 	if len(got) != 1 || got[0] != "survivor ran" {
 		t.Errorf("segments = %v, want [survivor ran]", got)
@@ -65,28 +67,23 @@ func TestCrashMidHookFailsOpen(t *testing.T) {
 // crash). Chain-continuation behavior must be identical to the
 // closed-pipe case above.
 func TestCrashMidHookPanicFailsOpen(t *testing.T) {
-	crasher := testPlugin(t, "crasher", &Hooks{
-		SystemTransform: func(_ context.Context, c *Client, _ *SystemTransformRequest) (resp *SystemTransformResponse, err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					_ = c.c.close()
-				}
-			}()
+	crasher := testPlugin(t, "crasher", &pub.Plugin{
+		SystemTransform: func(context.Context, *pub.Client, *pub.SystemTransformRequest) (*pub.SystemTransformResponse, error) {
 			panic("simulated plugin crash mid-hook")
 		},
 	})
-	survivor := testPlugin(t, "survivor", &Hooks{
-		SystemTransform: func(_ context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
-			return &SystemTransformResponse{Segments: []string{"survivor ran"}}, nil
+	survivor := testPlugin(t, "survivor", &pub.Plugin{
+		SystemTransform: func(_ context.Context, _ *pub.Client, _ *pub.SystemTransformRequest) (*pub.SystemTransformResponse, error) {
+			return &pub.SystemTransformResponse{Segments: []string{"survivor ran"}}, nil
 		},
 	})
 
 	var errs []string
 	h := newTestHost(t, Options{
-		OnError: func(name string, _ Hook, _ error) { errs = append(errs, name) },
+		OnError: func(name string, _ pub.Hook, _ error) { errs = append(errs, name) },
 	}, crasher, survivor)
 
-	got := h.SystemTransform(context.Background(), &SystemTransformRequest{SessionID: "s1"})
+	got := h.SystemTransform(context.Background(), &pub.SystemTransformRequest{SessionID: "s1"})
 
 	if len(got) != 1 || got[0] != "survivor ran" {
 		t.Errorf("segments = %v, want [survivor ran]", got)

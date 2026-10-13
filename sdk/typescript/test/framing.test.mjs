@@ -184,6 +184,25 @@ test('a hook response of undefined/null becomes an empty-object response', async
   await done;
 });
 
+test('a chat.params or chat.message hook that returns nothing sends no params or message key', async () => {
+  const host = new FakeHost();
+  const done = startPlugin(
+    { name: 'noop', hooks: { chatParams: async () => undefined, chatMessage: async () => null } },
+    host,
+  );
+
+  host.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocol_version: PROTOCOL_VERSION } });
+  await host.next();
+
+  host.send({ jsonrpc: '2.0', id: 2, method: 'hook/chat.params', params: { session_id: 's1', params: { temperature: 0.2 } } });
+  assert.deepEqual((await host.next()).result, {});
+  host.send({ jsonrpc: '2.0', id: 3, method: 'hook/chat.message', params: { session_id: 's1', message: { id: 'm', role: 'user', parts: [] } } });
+  assert.deepEqual((await host.next()).result, {});
+
+  host.closeStdin();
+  await done;
+});
+
 test('tool.execute.after hook mutation round trip', async () => {
   const host = new FakeHost();
   const done = startPlugin(

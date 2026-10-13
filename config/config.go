@@ -77,11 +77,11 @@ type Config struct {
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
 	// Plugins lists the plugin processes to wire into every session's
-	// turn hooks. Order matters: sync hooks
-	// chain across plugins in this order, each seeing the previous plugin's
-	// mutations. A nil (omitted) value disables plugins entirely. In the
-	// project-config merge a non-empty project value replaces the user
-	// value entirely (arrays override, like SkillsDirs).
+	// turn hooks. Order matters: sync hooks chain across plugins in this
+	// order, each seeing the previous plugin's mutations. A nil (omitted)
+	// value disables plugins entirely. In the project-config merge the
+	// project plugins come first and the user plugins last, so the most
+	// trusted plugins see the final result. A name in both files is an error.
 	Plugins []PluginSpec `json:"plugins,omitempty"`
 	// PluginHTTPHeaders are stamped on every plugin's outbound HTTP traffic
 	// (for example workspace attribution). Maps merge

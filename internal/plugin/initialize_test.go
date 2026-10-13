@@ -3,62 +3,32 @@ package plugin
 import (
 	"context"
 	"testing"
+
+	pub "github.com/majorcontext/harness/plugin"
 )
 
-// TestInitializeParamsServeURLAndRunToken covers audit gap #6's last piece:
-// InitializeParams.ServeURL/RunToken must actually reach the plugin (via
-// Client.ServeURL/Client.RunToken) when a Host is configured for serve mode.
+// A Host built with ServeURL and RunToken passes them to the plugin through
+// InitializeParams. A Host built without them (`harness run` has no HTTP API)
+// leaks nothing.
 func TestInitializeParamsServeURLAndRunToken(t *testing.T) {
-	var gotServeURL, gotRunToken string
-	seen := false
-	p := testPlugin(t, "p1", &Hooks{
-		ChatParams: func(_ context.Context, c *Client, req *ChatParamsRequest) (*ChatParamsResponse, error) {
-			gotServeURL = c.ServeURL()
-			gotRunToken = c.RunToken()
-			seen = true
-			return nil, nil
-		},
-	})
-
-	h := newTestHost(t, Options{ServeURL: "http://localhost:4096", RunToken: "secret-run-token"}, p)
-	h.ChatParams(context.Background(), &ChatParamsRequest{SessionID: "s1"})
-
-	if !seen {
-		t.Fatal("hook never invoked")
-	}
-	if gotServeURL != "http://localhost:4096" {
-		t.Errorf("ServeURL = %q, want http://localhost:4096", gotServeURL)
-	}
-	if gotRunToken != "secret-run-token" {
-		t.Errorf("RunToken = %q, want secret-run-token", gotRunToken)
-	}
-}
-
-// TestInitializeParamsOmittedInRunMode covers the flip side: a Host built
-// without ServeURL/RunToken (as `harness run` does — there is no HTTP API to
-// reach) must not leak anything into InitializeParams.
-func TestInitializeParamsOmittedInRunMode(t *testing.T) {
-	var gotServeURL, gotRunToken string
-	seen := false
-	p := testPlugin(t, "p1", &Hooks{
-		ChatParams: func(_ context.Context, c *Client, req *ChatParamsRequest) (*ChatParamsResponse, error) {
-			gotServeURL = c.ServeURL()
-			gotRunToken = c.RunToken()
-			seen = true
-			return nil, nil
-		},
-	})
-
-	h := newTestHost(t, Options{}, p) // run mode: no ServeURL/RunToken configured
-	h.ChatParams(context.Background(), &ChatParamsRequest{SessionID: "s1"})
-
-	if !seen {
-		t.Fatal("hook never invoked")
-	}
-	if gotServeURL != "" {
-		t.Errorf("ServeURL = %q, want empty in run mode", gotServeURL)
-	}
-	if gotRunToken != "" {
-		t.Errorf("RunToken = %q, want empty in run mode", gotRunToken)
+	for name, tc := range map[string]Options{
+		"serve mode": {ServeURL: "http://localhost:4096", RunToken: "secret-run-token"},
+		"run mode":   {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var gotServeURL, gotRunToken string
+			var seen bool
+			p := testPlugin(t, "p1", &pub.Plugin{
+				ChatParams: func(_ context.Context, c *pub.Client, _ *pub.ChatParamsRequest) (*pub.ChatParamsResponse, error) {
+					gotServeURL, gotRunToken, seen = c.ServeURL(), c.RunToken(), true
+					return nil, nil
+				},
+			})
+			h := newTestHost(t, tc, p)
+			h.ChatParams(context.Background(), &pub.ChatParamsRequest{SessionID: "s1"})
+			if !seen || gotServeURL != tc.ServeURL || gotRunToken != tc.RunToken {
+				t.Errorf("hook ran = %v, ServeURL, RunToken = %q, %q, want %q, %q", seen, gotServeURL, gotRunToken, tc.ServeURL, tc.RunToken)
+			}
+		})
 	}
 }

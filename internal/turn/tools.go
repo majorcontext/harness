@@ -234,7 +234,8 @@ func toolCalls(items []protocol.LogMessage) []protocol.ToolCall {
 
 // runTool runs c between the hooks h. It refuses a call to a tool that the
 // model may not call, and turns an error into an error result that the
-// model sees.
+// model sees. A canceled ctx after Before skips the run, and After still sees
+// the error result so that a hook which announced the call can announce its end.
 func runTool(ctx context.Context, tools []Tool, h Hooks, c protocol.ToolCall) protocol.ToolResult {
 	if h == nil {
 		return invoke(ctx, tools, c)
@@ -242,6 +243,9 @@ func runTool(ctx context.Context, tools []Tool, h Hooks, c protocol.ToolCall) pr
 	c, deny := h.Before(ctx, c)
 	if deny != "" {
 		return protocol.ToolResult{Text: deny, IsError: true}
+	}
+	if err := ctx.Err(); err != nil {
+		return h.After(ctx, c, protocol.ToolResult{Text: err.Error(), IsError: true})
 	}
 	return h.After(ctx, c, invoke(ctx, tools, c))
 }

@@ -16,7 +16,7 @@ import (
 var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server)/\w|` +
 	`(?:^|[^\w/.-])engine\.[A-Za-z_]|` +
 	`\bprovider/claudecode\b|` +
-	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|plugin|skill|command|process|imageclamp|migrate|provider)\b|` +
+	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|skill|command|process|imageclamp|migrate|provider)\b|` +
 	`\bharness-migrate\b`)
 
 // CheckDeletedReferences fails each Go file, in code or in a comment, that

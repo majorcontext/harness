@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 type request struct {
@@ -87,6 +89,33 @@ var config struct {
 		Temperature float64 `json:"temperature"`
 		TopP        float64 `json:"top_p"`
 	} `json:"chat_params"`
+	// Name is the manifest name. It must equal the name of the config entry.
+	// A plugin with another name than "fixture" has no tools, because tool
+	// names are unique across plugins.
+	Name string `json:"name"`
+	// Rewrite replaces the From substring of a bash command with To.
+	Rewrite *struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"rewrite"`
+	// Deny denies a bash command that contains this substring.
+	Deny string `json:"deny"`
+	// DenyOnFailure flags tool.execute.before as deny-on-failure in the manifest.
+	DenyOnFailure bool `json:"deny_on_failure"`
+	// DenyHook flags this hook instead of tool.execute.before.
+	DenyHook string `json:"deny_hook"`
+	// DenyUnsubscribed removes tool.execute.before from the hooks of the manifest and flags it.
+	DenyUnsubscribed bool `json:"deny_unsubscribed"`
+	// BeforeFail makes a bash before hook exit the process ("exit"), return a JSON-RPC error ("error"), or never answer ("hang").
+	BeforeFail string `json:"before_fail"`
+	// HookTimeouts sets hook_timeouts in the manifest, in milliseconds by hook name.
+	HookTimeouts map[string]int `json:"hook_timeouts"`
+	// BeforeDelayMS makes a bash before hook wait this many milliseconds before it answers.
+	BeforeDelayMS int `json:"before_delay_ms"`
+	// HostCalls adds the tools fixture_mcp and fixture_generate, which call the host.
+	HostCalls bool `json:"host_calls"`
+	// PidFile receives the process ID before each host call, so a scenario can kill the plugin.
+	PidFile string `json:"pid_file"`
 	// Serve adds a system segment with the serve_url and run_token of initialize.
 	Serve bool `json:"serve"`
 }
@@ -162,14 +191,37 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		rawConfig = init.Config
 		_ = json.Unmarshal(init.Config, &config)
 		m := maps.Clone(manifest)
+		if config.Name != "" {
+			m["name"] = config.Name
+		}
+		if config.Name != "" && config.Name != "fixture" {
+			m["tools"] = []toolSpec{}
+		}
 		if config.ExtraTool != "" {
-			m["tools"] = append(slices.Clone(manifest["tools"].([]toolSpec)), toolSpec{config.ExtraTool, "An extra tool.", json.RawMessage(objectSchema)})
+			m["tools"] = append(slices.Clone(m["tools"].([]toolSpec)), toolSpec{config.ExtraTool, "An extra tool.", json.RawMessage(objectSchema)})
+		}
+		if config.HostCalls {
+			m["tools"] = withHostCallTools(m["tools"].([]toolSpec))
 		}
 		if config.ShellEnv != "" {
 			m["hooks"] = append(slices.Clone(manifest["hooks"].([]string)), "shell.env")
 		}
 		if config.ChatParams != nil {
 			m["hooks"] = append(slices.Clone(m["hooks"].([]string)), "chat.params")
+		}
+		if config.DenyUnsubscribed {
+			m["hooks"] = []string{"system.transform"}
+			m["deny_on_failure"] = []string{"tool.execute.before"}
+		}
+		if config.HookTimeouts != nil {
+			m["hook_timeouts"] = config.HookTimeouts
+		}
+		if config.DenyOnFailure || config.DenyHook != "" {
+			hook := "tool.execute.before"
+			if config.DenyHook != "" {
+				hook = config.DenyHook
+			}
+			m["deny_on_failure"] = []string{hook}
 		}
 		return m, nil
 	case "hook/chat.params":
@@ -188,7 +240,7 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 	case "hook/system.transform":
 		return systemTransform(params), nil
 	case "hook/tool.execute.before":
-		return before(params), nil
+		return before(params)
 	case "hook/tool.execute.after":
 		return after(params), nil
 	case "tool/execute":
@@ -327,7 +379,7 @@ func recordEvents(params json.RawMessage) {
 	}
 }
 
-func before(params json.RawMessage) any {
+func before(params json.RawMessage) (any, *rpcError) {
 	var req struct {
 		Tool string `json:"tool"`
 		Args struct {
@@ -336,15 +388,30 @@ func before(params json.RawMessage) any {
 	}
 	_ = json.Unmarshal(params, &req)
 	if req.Tool != "bash" {
-		return map[string]any{}
+		return map[string]any{}, nil
+	}
+	if config.BeforeDelayMS > 0 {
+		time.Sleep(time.Duration(config.BeforeDelayMS) * time.Millisecond)
+	}
+	switch config.BeforeFail {
+	case "exit":
+		os.Exit(3)
+	case "error":
+		return nil, &rpcError{Code: -32000, Message: "fixture before hook failed"}
+	case "hang":
+		time.Sleep(time.Hour)
 	}
 	switch {
+	case config.Deny != "" && strings.Contains(req.Args.Command, config.Deny):
+		return map[string]any{"deny": "denied by " + cmp.Or(config.Name, "fixture")}, nil
+	case config.Rewrite != nil && strings.Contains(req.Args.Command, config.Rewrite.From):
+		return map[string]any{"args": map[string]string{"command": strings.ReplaceAll(req.Args.Command, config.Rewrite.From, config.Rewrite.To)}}, nil
 	case strings.Contains(req.Args.Command, "block-me"):
-		return map[string]any{"deny": "blocked by fixture"}
+		return map[string]any{"deny": "blocked by fixture"}, nil
 	case strings.Contains(req.Args.Command, "rewrite-me"):
-		return map[string]any{"args": map[string]string{"command": "echo rewritten"}}
+		return map[string]any{"args": map[string]string{"command": "echo rewritten"}}, nil
 	}
-	return map[string]any{}
+	return map[string]any{}, nil
 }
 
 func after(params json.RawMessage) any {
@@ -396,6 +463,9 @@ func execute(params json.RawMessage) any {
 		return map[string]any{"output": []part{{Type: "text", Text: string(rawConfig)}}}
 	case "fixture_crash":
 		os.Exit(3)
+	}
+	if res, ok := hostCall(req.Tool, params); ok {
+		return res
 	}
 	return map[string]any{"output": []part{{Type: "text", Text: "unknown tool"}}, "is_error": true}
 }

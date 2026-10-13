@@ -25,6 +25,7 @@ a standalone document.
 | [context-compaction.md](design/context-compaction.md) | Automatic and manual context compaction |
 | [codex-websocket-chaining.md](design/codex-websocket-chaining.md) | Codex response chaining and startup prewarm |
 | [fleet-model.md](design/fleet-model.md) | Task lineage, fleet state, and provider exhaustion |
+| [go-plugins.md](design/go-plugins.md) | Go plugins in-process and as processes, deny-on-failure hooks, and the plugin config merge |
 | [git-changes.md](design/git-changes.md) | GET /git/changes: constant-cost diff computation without touching the index |
 | [managed-processes.md](design/managed-processes.md) | Box-scoped managed process lifecycle |
 | [mcp-lazy-tools.md](design/mcp-lazy-tools.md) | Deferred MCP schema design |

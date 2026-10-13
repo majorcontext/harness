@@ -148,3 +148,46 @@ func TestRunStartsOneItemForEachCallThatStreams(t *testing.T) {
 		})
 	}
 }
+
+type abortingHooks struct {
+	cancel context.CancelFunc
+	after  []protocol.ToolResult
+}
+
+func (h *abortingHooks) Before(_ context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {
+	h.cancel()
+	return c, ""
+}
+
+func (h *abortingHooks) After(_ context.Context, _ protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	h.after = append(h.after, r)
+	return r
+}
+
+type hookedSource struct {
+	tool  turn.Tool
+	hooks turn.Hooks
+}
+
+func (s hookedSource) Toolset(context.Context, []protocol.LogMessage, []string, string) turn.Toolset {
+	return turn.Toolset{Tools: []turn.Tool{s.tool}, Hooks: s.hooks}
+}
+
+type noopTool struct{}
+
+func (noopTool) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: "noop"} }
+func (noopTool) Run(context.Context, protocol.ToolCall) (protocol.ToolResult, error) {
+	return protocol.ToolResult{Text: "ran"}, nil
+}
+
+func TestRunGivesAfterTheErrorResultOfACallThatWasCanceledAfterBefore(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hooks := &abortingHooks{cancel: cancel}
+	call := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartToolCall, CallID: "c1", Name: "noop", Arguments: json.RawMessage(`{}`)}}}
+	m := &model{replies: []protocol.LogMessage{call, say("done")}}
+	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, hookedSource{noopTool{}, hooks}, &recorder{}, turn.Limits{})
+	if len(hooks.after) != 1 || !hooks.after[0].IsError || hooks.after[0].Text != context.Canceled.Error() {
+		t.Errorf("After saw %+v, want one error result with the cancel cause", hooks.after)
+	}
+}

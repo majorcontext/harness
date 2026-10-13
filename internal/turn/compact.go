@@ -51,10 +51,9 @@ func Summarize(ctx context.Context, b Backend, req Request, lim Limits) (string,
 	return SummaryBanner + text, usage, nil
 }
 
-// Ask makes a model call of req with no tools, as Summarize does, and returns its text.
-func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, error) {
-	text, _, err := ask(ctx, b, req, lim)
-	return text, err
+// Ask makes a model call of req with no tools, as Summarize does, and returns its text and usage.
+func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
+	return ask(ctx, b, req, lim)
 }
 
 func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {

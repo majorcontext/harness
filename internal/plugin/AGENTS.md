@@ -2,7 +2,7 @@
 
 Read the root AGENTS.md. Read `internal/plugin/PROTOCOL.md` before a wire or hook change.
 
-- A plugin is a separate process speaking versioned JSON-RPC over stdio.
+- A plugin speaks versioned JSON-RPC. It runs as a separate process over stdio, or in the host process over an in-memory pipe that serves a `plugin.Plugin` value.
 - `harness plugin probe` caches the manifest with executable and spec identity.
 - Startup trusts a matching cached manifest. A missing or stale entry gets one bounded probe.
 - Spawn a plugin on its first hook or tool call. Keep one warm process.
