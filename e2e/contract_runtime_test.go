@@ -29,8 +29,8 @@ func runtimeWorkdir(t *testing.T, files map[string]string) string {
 }
 
 // onHosts runs fn as a subtest on each host: the serve binary always, and
-// the runtime in process with runtimeEnv. It runs a row that sets no
-// process environment, so the tests run in parallel.
+// the runtime in process with runtimeEnv. The test runs in parallel on both
+// hosts, because no row changes the process environment.
 func onHosts(t *testing.T, fn func(t *testing.T, h host)) {
 	t.Helper()
 	t.Parallel()

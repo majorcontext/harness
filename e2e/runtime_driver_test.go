@@ -52,7 +52,8 @@ type runtimeDriver struct {
 const runtimeVersion = "0.1.0-dev"
 
 // getenv is the environment of the in-process runtime: env, then the model key
-// that startServeIn gives serve, then the process.
+// that startServeIn gives serve, then the process. A row cannot set
+// ANTHROPIC_API_KEY back to the process value.
 func getenv(env map[string]string) func(string) string {
 	return func(k string) string {
 		if v, ok := env[k]; ok {
