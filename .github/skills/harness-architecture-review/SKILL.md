@@ -1,6 +1,6 @@
 ---
 name: harness-architecture-review
-description: Harness-specific checks for the shared architecture-review skill: the spec sections, layering, deleted surfaces, single owners, wire doubles, and structure gates. Use on every review of harness code, docs, or CI config.
+description: Harness-specific checks for the shared architecture-review skill: the spec sections, layering, deleted surfaces, single owners, wire doubles, proportion, and structure gates. Use on every review of harness code, docs, or CI config.
 ---
 
 # Harness architecture checks
@@ -28,6 +28,7 @@ Answer each one with a spec section and the quoted sentence, written as `docs/ar
 5. Unrecorded divergence. Does the change differ from the spec? A divergence is a blocker unless the same PR updates the spec, as a decision of Andy, so that it describes the system as it is. A PR body that cites no spec sections is a finding.
 6. Test double against the real wire. Does a changed double (`harnesstest`, `harnesstest/fakeclaude`, a golden, a fixture) match what the real component it imitates sends and accepts (the provider API, the Claude Code stream-json, `harness serve`)? A double that drifts from the real wire is a finding. For where tests belong, read `Contract suite`, `Unit tests`, and the `CI gates` row on test lines outside the contract suite.
 7. Duplicated type. Does a hand-written type repeat a `protocol` type or a generated one (`protocol/openapi.json`, `protocol/protocol.ts`)? Generated output must come from `go generate ./protocol` in the same PR.
+8. Proportion. Answer the shared skill's `Proportion` question with the harness inputs. One concern per PR is a root `AGENTS.md` `Spec and review` rule. Leave `testdata/wire` recordings, `go generate ./protocol` output, and goldens out of the size count. A new line in `testdata/test-exceptions.txt` needs a reason that names a path no `e2e/` row can reach; a test listed there that repeats a row is a finding. The `internal/gates` `comment_share` warnings name the files whose comments to read.
 
 ## Invariants the review checks
 
@@ -55,7 +56,7 @@ Check the code layout too. A "yes" is a finding; cite the file and line. The Go 
 
 - Imports. A new import follows `Internal packages` and passes the `depguard` rules in `.golangci.yml`. A change that widens a `depguard` rule needs a spec line.
 - Second definition. A type or concept defined a second time is a finding. Each record has one owner; name it.
-- Package purpose and size. A package has one purpose. A file over about 1,000 lines or a function over about 150 lines needs a stated reason; `internal/gates` fails changed code above its lower limits (800 and 80).
+- Package purpose and size. A package has one purpose. `internal/gates` fails a changed file over 800 lines or a function over 80 lines (root `AGENTS.md` `Code`).
 - Logic in `cmd/`. Logic in `cmd/` that is not flag parsing and wiring belongs in `internal/`.
 - Grab-bag names. No `util`, `common`, or `helpers` packages; no files named `types.go` or `interfaces.go`.
 - Go API design. Apply the `go-guide` skill; names do not stutter (`session.Actor`, not `session.SessionActor`).
@@ -65,6 +66,6 @@ Check the code layout too. A "yes" is a finding; cite the file and line. The Go 
 - Lead with the architecture findings, then the correctness findings.
 - Rank a spec divergence, a second source of truth, and a deleted surface as blockers. Rank a layering concern as a blocker when the wrong layer would be hard to move later.
 - Give each finding: the question number, the spec section, the code line, and the smallest change that restores the boundary.
-- Say plainly when the change passes: "Checked questions 1 to 7 against the spec; no finding." Do not invent a finding to fill space.
+- Say plainly when the change passes: "Checked questions 1 to 8 against the spec; no finding." Do not invent a finding to fill space.
 - Do not flag a pre-existing violation that the change does not touch or worsen.
 - Do not flag style. A correct finding is not a requirement; judge its cost against its benefit.
