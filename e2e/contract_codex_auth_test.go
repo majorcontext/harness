@@ -13,6 +13,9 @@ import (
 
 const codexAccount = "acct-1"
 
+// codexSentinelKey is the OPENAI_API_KEY of a row that checks the key goes nowhere.
+const codexSentinelKey = "sk-sentinel-must-not-leak"
+
 // codexAuth scripts the stored Codex login of a row: the access token that the
 // auth file holds, and the issuer that refreshes it.
 type codexAuth struct {
@@ -22,6 +25,8 @@ type codexAuth struct {
 	issuer   harnesstest.CodexIssuerOptions
 	// readOnly makes the directory of the file refuse a write after the seed.
 	readOnly bool
+	// secret is a value that no request to the issuer may carry in a header.
+	secret string
 	// project is a .harness.json of the work dir.
 	project map[string]any
 }
@@ -62,6 +67,7 @@ func (a *codexAuthRun) write(t *testing.T, label string, lifetime time.Duration,
 
 func startCodexAuth(t *testing.T, spec codexAuth) *codexAuthRun {
 	t.Helper()
+	spec.issuer.Secret = spec.secret
 	a := &codexAuthRun{spec: spec, issuer: harnesstest.NewCodexIssuer(t, spec.issuer), path: filepath.Join(t.TempDir(), "auth", "codex.json")}
 	if spec.label != "" {
 		a.write(t, spec.label, spec.lifetime, harnesstest.CodexInitialRefresh)
@@ -128,6 +134,16 @@ func (recordRedirect) run(t *testing.T, _ *run) {
 func (recordRedirect) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 	hits, creds := o.Redirected()
 	r.record(t, "redirect", "", callResult{Status: 200, Body: map[string]any{"target_requests": hits, "target_got_credentials": creds}})
+}
+
+// recordSecret records whether any request of the Responses double or the issuer carried the secret of the row in a header.
+type recordSecret struct{}
+
+func (recordSecret) run(t *testing.T, _ *run) {
+	t.Fatal("recordSecret runs only under runCodexScenario")
+}
+func (recordSecret) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	r.record(t, "secret", "", callResult{Status: 200, Body: map[string]any{"sent_to_the_model_server": o.SawSecret(), "sent_to_the_issuer": r.codex.issuer.SawSecret()}})
 }
 
 // rewriteCodexAuth replaces the stored login, as another process that signs in again does.
@@ -248,6 +264,12 @@ func codexAuthRows() []codexScenario {
 			scenario: scenario{name: "codex_login_redirect_from_the_bound_url_is_refused", actions: codexSession(codexTurn("a", "hello"), []action{recordRedirect{}}, record)},
 			opts:     harnesstest.OpenAIOptions{RedirectTo: "/backend-api/codex/stolen"},
 			auth:     &codexAuth{label: "seed", lifetime: time.Hour},
+		},
+		{
+			scenario: scenario{name: "codex_login_never_sends_the_openai_api_key", actions: codexSession(codexTurn("a", "hello"), []action{recordSecret{}})},
+			opts:     harnesstest.OpenAIOptions{RedirectTo: "/backend-api/codex/stolen", Secret: codexSentinelKey},
+			auth:     &codexAuth{label: "seed", lifetime: 2 * time.Minute, secret: codexSentinelKey},
+			env:      map[string]string{"OPENAI_API_KEY": codexSentinelKey},
 		},
 		{
 			scenario: scenario{name: "codex_login_project_file_cannot_move_the_login_to_another_url", model: codexHi, actions: codexSession(codexTurn("a", "hello"), record)},

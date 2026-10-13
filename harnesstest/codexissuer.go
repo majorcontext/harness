@@ -41,6 +41,8 @@ type CodexIssuerOptions struct {
 	DevicePending int
 	// AccountID is the chatgpt_account_id claim. Empty is "acct-1".
 	AccountID string
+	// Secret, when set, is a value that no request header may hold. SawSecret reports a request that did.
+	Secret string
 	// HoldRefresh makes a refresh grant wait for ReleaseRefresh before it answers.
 	HoldRefresh bool
 }
@@ -59,6 +61,7 @@ type CodexIssuer struct {
 	polls        int
 	valid        map[string]bool // refresh tokens that a refresh grant accepts
 	lastRedirect string
+	secretSeen   bool
 	challenge    string // the code_challenge that a browser sign-in sent
 	arrived      chan struct{}
 	gate         chan struct{}
@@ -74,6 +77,11 @@ func NewCodexIssuer(t testing.TB, opts CodexIssuerOptions) *CodexIssuer {
 }
 
 func (i *CodexIssuer) serve(w http.ResponseWriter, r *http.Request) {
+	if i.opts.Secret != "" && headersHold(r.Header, i.opts.Secret) {
+		i.mu.Lock()
+		i.secretSeen = true
+		i.mu.Unlock()
+	}
 	switch {
 	case r.Method != http.MethodPost:
 		http.NotFound(w, r)
@@ -87,6 +95,9 @@ func (i *CodexIssuer) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
+
+// SawSecret reports whether a request carried CodexIssuerOptions.Secret in a header.
+func (i *CodexIssuer) SawSecret() bool { i.mu.Lock(); defer i.mu.Unlock(); return i.secretSeen }
 
 // ExpectChallenge sets the code_challenge of the browser sign-in. The issuer
 // accepts the browser code only with a verifier whose S256 hash is the challenge.

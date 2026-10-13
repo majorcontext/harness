@@ -512,6 +512,7 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_login_transient_refresh_failure_does_not_retry_on_every_request": sameAsServe(),
 	"codex_login_redirect_from_the_bound_url_is_refused":                    sameAsServe(),
 	"codex_login_project_file_cannot_move_the_login_to_another_url":         sameAsServe(),
+	"codex_login_never_sends_the_openai_api_key":                            sameAsServe(),
 	"codex_http_5xx_is_retried_by_the_request":                              sameAsServe(),
 	"compact_summary_is_retried_after_a_refusal":                            sameAsServe(),
 	"max_tokens_cut_response_is_retried":                                    sameAsServe(),

@@ -43,6 +43,8 @@ type OpenAIOptions struct {
 	// RedirectTo, when set, answers every request to the Responses path with a 307
 	// to this path on the same host. Redirected counts the requests that follow it.
 	RedirectTo string
+	// Secret, when set, is a value that no request header may hold. SawSecret reports a request that did.
+	Secret string
 	// OnReject runs after the server rejects a bearer token, before it answers.
 	OnReject func()
 }
@@ -160,6 +162,7 @@ type OpenAI struct {
 	faults    []string
 	held      bool // a prewarm took the hold of HoldPrewarm
 
+	secretSeen   bool
 	redirectHits int  // requests to RedirectTo
 	redirectAuth bool // one of them carried a credential header
 }
@@ -255,6 +258,24 @@ func (o *OpenAI) holdPrewarm(ctx context.Context, conn *websocket.Conn) bool {
 	return true
 }
 
+// SawSecret reports whether a request carried OpenAIOptions.Secret in a header.
+func (o *OpenAI) SawSecret() bool {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.secretSeen
+}
+
+func headersHold(h http.Header, secret string) bool {
+	for _, vs := range h {
+		for _, v := range vs {
+			if strings.Contains(v, secret) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Redirected reports how many requests reached the target of RedirectTo and
 // whether one carried an Authorization or chatgpt-account-id header.
 func (o *OpenAI) Redirected() (hits int, credentials bool) {
@@ -284,6 +305,11 @@ func (o *OpenAI) logWire(w WireEvent) {
 }
 
 func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
+	if o.opts.Secret != "" && headersHold(r.Header, o.opts.Secret) {
+		o.wmu.Lock()
+		o.secretSeen = true
+		o.wmu.Unlock()
+	}
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if o.opts.RedirectTo != "" && r.URL.Path == o.opts.RedirectTo {
 		o.wmu.Lock()

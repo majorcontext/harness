@@ -35,6 +35,8 @@ type codexScenario struct {
 	alsoOpenAI bool
 	// auth, when set, replaces the API key of the codex entry with the stored Codex login.
 	auth *codexAuth
+	// env is added to the environment of the host.
+	env map[string]string
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -150,7 +152,7 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	if ca != nil {
 		ca.configure(cfg)
 	}
-	drv := codexDriver(t, h, ca, o.URL(), cfg)
+	drv := codexDriver(t, h, ca, sc.env, o.URL(), cfg)
 	r := &run{
 		codex:  ca,
 		drv:    drv,
@@ -483,10 +485,13 @@ func codexRetryRows() []codexScenario {
 }
 
 // codexDriver opens h on the config, with the project file of the login row when it has one.
-func codexDriver(t *testing.T, h host, ca *codexAuthRun, modelURL string, cfg map[string]any) driver {
+func codexDriver(t *testing.T, h host, ca *codexAuthRun, env map[string]string, modelURL string, cfg map[string]any) driver {
 	t.Helper()
 	if ca == nil || ca.spec.project == nil {
-		return h.newDriver(t, modelURL, cfg)
+		if env == nil {
+			return h.newDriver(t, modelURL, cfg)
+		}
+		return h.openIn(t, writeGoalConfigWith(t, modelURL, scenarioConfig(cfg)), t.TempDir(), env)
 	}
 	work := t.TempDir()
 	body, err := json.Marshal(ca.spec.project)
@@ -496,5 +501,5 @@ func codexDriver(t *testing.T, h host, ca *codexAuthRun, modelURL string, cfg ma
 	if err := os.WriteFile(filepath.Join(work, ".harness.json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return h.openIn(t, writeGoalConfigWith(t, modelURL, scenarioConfig(cfg)), work, nil)
+	return h.openIn(t, writeGoalConfigWith(t, modelURL, scenarioConfig(cfg)), work, env)
 }
