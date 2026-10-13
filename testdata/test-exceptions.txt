@@ -32,3 +32,4 @@ harnesstest/mcp_test.go the port of the MCP fixture and its refusal after Close 
 protocol/rev_test.go Rev is a pure text type; a serve binary cannot send a revision text that it refuses
 internal/acptck/report_test.go judge is pure and fails closed on reports that a conforming TCK never writes, so no real TCK run reaches those branches
 internal/testtime/main_test.go the budget tool is a CI program with no contract row; its test is pure stream logic
+internal/process/process_race_test.go the select race at the ready gate needs a canceled context and a closed ready channel at once, which no scenario action times
