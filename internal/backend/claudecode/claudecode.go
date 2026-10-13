@@ -116,7 +116,7 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	if err != nil {
 		return err
 	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), names: map[string]string{},
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), names: map[string]string{}, calls: map[string]bool{},
 		continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: req.Questions || res != nil}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)

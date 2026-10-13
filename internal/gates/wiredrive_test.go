@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -184,6 +185,7 @@ var fakeClaudeHangs = map[string]bool{
 	"hang_after_text": true, "hang_after_listing": true, "hang_in_tool": true,
 	"tool_on_interrupt": true, "tool_result_on_interrupt": true, "success_on_interrupt": true,
 	"placeholder_on_interrupt": true, "exit_on_interrupt": true,
+	"steer_hang": true,
 }
 
 // fakeClaudeExitsByDesign holds the modes that end with an error or print no
@@ -230,7 +232,7 @@ func claudeRuns(modes []string) []claudeRun {
 		case mode == "mirror":
 			one.env = []string{"FAKE_CLAUDE_MIRROR_FIXTURE=" + claudeMirrorDir + "run1.stdout.jsonl," + claudeMirrorDir + "run2.stdout.jsonl"}
 			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}}, {stdin: []string{claudeUserLine}}}
-		case mode == "queue_injection" || mode == "steer":
+		case slices.Contains([]string{"queue_injection", "steer", "steer_final_text", "steer_unanswered", "steer_untaken", "steer_text_then_tool"}, mode):
 			one.spawns = []claudeSpawn{{stdin: queued}}
 		}
 		runs = append(runs, one)

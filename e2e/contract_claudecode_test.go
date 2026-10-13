@@ -82,11 +82,86 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 		},
 		{
 			name:   "claudecode_queued_prompt_injected_mid_turn",
-			driver: claudeLaneDriver("queue_injection"),
+			driver: claudeLaneDriver("steer"),
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "run it"},
-				claudeAwaitText{as: "a", text: "WAITING_FOR_QUEUE"},
+				claudeAwaitToolCall{as: "a", callID: "toolu_s"},
+				enqueue{as: "a", text: "second"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			},
+		},
+	})
+}
+
+func TestContractClaudeCodeSteer(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:   "claudecode_steer_during_final_text_runs_as_the_next_turn",
+			driver: claudeLaneDriver("steer_final_text"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitText{as: "a", text: "FINAL_TEXT"},
+				enqueue{as: "a", text: "second"},
+				claudeAwaitAdmitted{as: "a", text: "second", n: 1},
+				claudeCloseWindow{},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			},
+		},
+		{
+			name:   "claudecode_steer_held_during_text_joins_at_the_next_tool_boundary",
+			driver: claudeLaneDriver("steer_text_then_tool"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitText{as: "a", text: "FINAL_TEXT"},
+				enqueue{as: "a", text: "second"},
+				claudeAwaitAdmitted{as: "a", text: "second", n: 1},
+				writeFile{path: "child.gate", body: "open\n"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			},
+		},
+		{
+			name:   "claudecode_cli_exit_before_answering_a_steer_fails_the_turn",
+			driver: claudeLaneDriver("steer_unanswered"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitToolCall{as: "a", callID: "toolu_r"},
+				enqueue{as: "a", text: "second"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			},
+		},
+		{
+			name:   "claudecode_interrupt_while_awaiting_a_steer_answer_interrupts_the_turn",
+			driver: claudeLaneDriver("steer_hang"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitToolCall{as: "a", callID: "toolu_r"},
+				enqueue{as: "a", text: "second"},
+				claudeAwaitText{as: "a", text: "tool done"},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+			},
+		},
+		{
+			name:   "claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn",
+			driver: claudeLaneDriver("steer_untaken"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitToolCall{as: "a", callID: "toolu_r"},
 				enqueue{as: "a", text: "second"},
 				waitIdle{as: "a"},
 				claudeSession{as: "a"},
