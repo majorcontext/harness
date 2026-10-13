@@ -31,6 +31,7 @@ jobs:
           key: go-static-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-static-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - name: Check formatting
         run: |
@@ -119,6 +120,7 @@ jobs:
           key: go-gates-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-gates-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - name: Gates
         env:
@@ -157,6 +159,7 @@ jobs:
           key: go-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - name: Build and size budget
         # Builds cmd/harness-wasm for GOOS=js GOARCH=wasm and fails when the
@@ -200,6 +203,7 @@ jobs:
           key: go-unit-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-unit-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - name: Unit tests
         # The e2e package runs in its own jobs.
@@ -242,6 +246,7 @@ jobs:
           key: go-contract-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-contract-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - name: Contract
         # -count=1 keeps a cached e2e result from skipping the coverage table.
@@ -284,6 +289,7 @@ jobs:
           key: go-runtime-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-runtime-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - name: Runtime contract
         # Runs the contract rows on harness.Runtime in process by their
@@ -324,6 +330,7 @@ jobs:
           key: go-node-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
             go-node-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            setup-go-${{ runner.os }}-
 
       - uses: actions/setup-node@v5
         with:
