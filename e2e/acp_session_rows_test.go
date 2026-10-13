@@ -92,7 +92,7 @@ var acpSessionScenarios = []acpScenario{
 	},
 	{
 		name:  "prompt_answer_precedes_the_updates_of_a_later_turn",
-		cite:  "A prompt's answer follows every update of its turn and precedes every update of a later turn",
+		cite:  "The answer of a prompt that a turn takes follows every update of its turn and precedes every update of a later turn",
 		model: []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Text: "first turn", Block: true}}, {Name: "next", Reply: harnesstest.Reply{Text: "second turn"}}},
 		steps: []acpStep{
 			acpNew{as: "a"},
@@ -106,7 +106,7 @@ var acpSessionScenarios = []acpScenario{
 	},
 	{
 		name:  "cancelled_prompt_answers_before_the_updates_of_a_queued_prompt",
-		cite:  "A prompt's answer follows every update of its turn and precedes every update of a later turn",
+		cite:  "The answer of a prompt that a turn takes follows every update of its turn and precedes every update of a later turn",
 		model: []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Text: "first turn", Block: true}}, {Name: "next", Reply: harnesstest.Reply{Text: "second turn"}}},
 		steps: []acpStep{
 			acpNew{as: "a"},

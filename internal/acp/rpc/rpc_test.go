@@ -352,3 +352,23 @@ func TestFollowerMessageReachesThePeerAfterTheResponse(t *testing.T) {
 	}
 	p.finish()
 }
+
+type followedError struct{ conn *Conn }
+
+func (followedError) Error() string { return "failed" }
+func (f followedError) AfterSent()  { _ = f.conn.Notify("after", nil) }
+
+func TestFollowerErrorMessageReachesThePeerAfterTheErrorResponse(t *testing.T) {
+	var p *peer
+	p = startPeer(t, handlerFunc(func(context.Context, string, json.RawMessage) (any, error) {
+		return nil, followedError{conn: p.conn}
+	}))
+	p.send(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)
+	if got := p.next(); got["id"] != float64(1) || got["error"] == nil {
+		t.Errorf("first message = %v, want the error response", got)
+	}
+	if got := p.next(); got["method"] != "after" {
+		t.Errorf("second message = %v, want the follower notification", got)
+	}
+	p.finish()
+}
