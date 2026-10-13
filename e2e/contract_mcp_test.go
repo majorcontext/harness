@@ -55,6 +55,9 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 				if d.holdRetry {
 					srv.FailInitialize(1)
 					srv.HoldInitialize()
+					// The held retry ends only when its connect timeout does, so
+					// the timeout must outlast any scenario wait.
+					entry["connect_timeout_s"] = 3600
 				}
 				if d.sse {
 					srv.UseSSE()
