@@ -8,6 +8,7 @@ const port = await workerPort();
 const inNode = typeof globalThis.process?.versions?.node === "string" && typeof globalThis.WorkerGlobalScope === "undefined";
 const bridge = workerBridge(port.post);
 let conn;
+let releaseStore = () => {};
 
 async function loadWasmExec(source) {
   if (inNode) {
@@ -38,6 +39,10 @@ async function moduleBytes(source) {
 }
 
 async function start({ module, wasmExec, options }) {
+  if (!inNode) {
+    const { installBrowserFs } = await import("./browserfs.mjs");
+    releaseStore = await installBrowserFs({ persist: options.persist });
+  }
   await loadWasmExec(wasmExec);
   const source = await moduleBytes(module);
   const go = new Go();
@@ -66,7 +71,8 @@ port.onMessage(async (m) => {
       await start(m.init);
       port.post({ ready: true });
     } catch (err) {
-      port.post({ error: err instanceof Error ? err.message : String(err) });
+      releaseStore();
+      port.post({ error: err instanceof Error ? err.message : String(err), code: err?.code });
     }
   } else if (m.frame !== undefined) {
     conn?.send(m.frame);
@@ -74,6 +80,7 @@ port.onMessage(async (m) => {
     try {
       await conn?.close();
     } finally {
+      releaseStore();
       port.post({ closed: true });
     }
   } else {
