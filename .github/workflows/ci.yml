@@ -10,8 +10,6 @@ jobs:
   static:
     name: Static
     runs-on: ubuntu-latest
-    env:
-      GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -41,11 +39,6 @@ jobs:
           git diff --exit-code -- protocol/
 
       - run: go vet ./...
-
-      - name: Gates
-        env:
-          GATES_REQUIRED: '1'
-        run: go test -race -count=1 -v -run '^TestRepository$' ./internal/gates/
 
       - uses: golangci/golangci-lint-action@v9.3.0
         with:
@@ -81,6 +74,28 @@ jobs:
           case "$out" in '{"jsonrpc":"2.0","id":1,"result":'*) ;; *) echo "acp: no initialize result: $out"; exit 1 ;; esac
           echo "best-of-5 time to initialize: ${best}ms (budget: 50ms)"
           [ "$best" -le 50 ]
+
+  gates:
+    name: Gates
+    runs-on: ubuntu-latest
+    env:
+      GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Gates
+        env:
+          GATES_REQUIRED: '1'
+        run: |
+          set -o pipefail
+          go test -race -count=1 -json -run '^TestRepository$' ./internal/gates/ | go run ./internal/testtime -title Gates -job gates
 
   wasm:
     name: WebAssembly
@@ -123,7 +138,7 @@ jobs:
         # step summary.
         run: |
           set -o pipefail
-          go test -race -count=1 -json -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$') | go run ./internal/testtime -title Unit
+          go test -race -count=1 -json -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$') | go run ./internal/testtime -title Unit -job unit
 
   contract:
     name: Contract
@@ -145,7 +160,7 @@ jobs:
           HARNESS_E2E_COVER: '1'
         run: |
           set -o pipefail
-          go test -race -count=1 -json ./e2e/ | go run ./internal/testtime -title Contract
+          go test -race -count=1 -json ./e2e/ | go run ./internal/testtime -title Contract -job contract
 
   runtime:
     name: Runtime contract
@@ -167,7 +182,7 @@ jobs:
         # the serve binary and the CLI, which the Contract job runs.
         run: |
           set -o pipefail
-          HARNESS_E2E_RUNTIME=1 go test -race -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract'
+          HARNESS_E2E_RUNTIME=1 go test -race -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract' -job runtime
 
   node-wasm:
     name: Node wasm

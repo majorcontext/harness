@@ -41,6 +41,7 @@ func main() {
 	budgetFile := flag.String("budget", "testdata/test-time-budget.txt", "budget file")
 	summaryFile := flag.String("summary", os.Getenv("GITHUB_STEP_SUMMARY"), "file that receives a Markdown summary")
 	title := flag.String("title", "", "heading of the step summary")
+	job := flag.String("job", "", "job name; a package budget PATH@JOB beats PATH")
 	flag.Parse()
 	budget, err := readBudget(*budgetFile)
 	if err != nil {
@@ -48,9 +49,11 @@ func main() {
 		os.Exit(1)
 	}
 	rep := consume(os.Stdin, os.Stdout)
-	over := rep.check(budget)
+	over := rep.check(budget, *job)
+	text := summary(*title, rep, over)
+	fmt.Print("\n" + text)
 	if path := *summaryFile; path != "" {
-		if err := appendSummary(path, *title, rep, over); err != nil {
+		if err := appendFile(path, text); err != nil {
 			fmt.Fprintln(os.Stderr, "testtime:", err)
 		}
 	}
@@ -121,7 +124,7 @@ func (r *report) record(ev event) {
 
 // check compares every leaf test and every package with its budget. A test
 // with subtests is not a leaf: its time is the sum of the time of its parts.
-func (r *report) check(b *budget) []string {
+func (r *report) check(b *budget, job string) []string {
 	var over []string
 	for _, t := range r.tests {
 		if r.parents[t.pkg+"\x00"+t.name] {
@@ -132,19 +135,24 @@ func (r *report) check(b *budget) []string {
 		}
 	}
 	for _, p := range r.packages {
-		if limit := b.packageLimit(p.pkg); p.elapsed > limit {
+		if limit := b.packageLimit(p.pkg, job); p.elapsed > limit {
 			over = append(over, fmt.Sprintf("package %s took %.1fs, budget %.1fs", p.pkg, p.elapsed, limit))
 		}
 	}
 	return over
 }
 
-func appendSummary(path, title string, r *report, over []string) error {
+func appendFile(path, text string) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	_, err = f.WriteString(text)
+	return err
+}
+
+func summary(title string, r *report, over []string) string {
 	if title == "" {
 		title = "Test time"
 	}
@@ -170,6 +178,5 @@ func appendSummary(path, title string, r *report, over []string) error {
 		fmt.Fprintf(&b, "\nOver budget: %s\n", line)
 	}
 	b.WriteString("\n")
-	_, err = f.WriteString(b.String())
-	return err
+	return b.String()
 }

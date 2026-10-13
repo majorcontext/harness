@@ -23,7 +23,7 @@ type budget struct {
 // readBudget parses the budget file. Each line is one of:
 //
 //	leaf SECONDS                 limit of a test with no subtests
-//	package PATH|default SECONDS limit of the wall time of a package
+//	package PATH|default SECONDS limit of the wall time of a package; PATH@JOB sets it for one job
 //	test PATH NAME SECONDS       limit of the tests whose name starts with NAME
 func readBudget(path string) (*budget, error) {
 	data, err := os.ReadFile(path)
@@ -73,7 +73,10 @@ func (b *budget) testLimit(pkg, name string) float64 {
 	return b.leaf
 }
 
-func (b *budget) packageLimit(pkg string) float64 {
+func (b *budget) packageLimit(pkg, job string) float64 {
+	if v, ok := b.pkgs[pkg+"@"+job]; ok {
+		return v
+	}
 	if v, ok := b.pkgs[pkg]; ok {
 		return v
 	}

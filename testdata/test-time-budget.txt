@@ -1,12 +1,28 @@
 # Time budgets for go test, read by internal/testtime.
 #   leaf SECONDS                  a test that has no subtests
-#   package PATH|default SECONDS  wall time of one package
+#   package PATH|default SECONDS  wall time of one package; PATH@JOB sets it for one job
 #   test PATH NAME SECONDS        tests of PATH whose name starts with NAME
-# Each number is about 2 times the slowest CI run seen, with a floor, so runner noise does not fail a
-# build and a test that grows several times over does. A change that makes a test slower raises its
-# number in the same diff and states why.
-leaf 45
-package default 45
-package e2e 150
-package internal/workspace 90
-test internal/workspace TestChangesRefusals 75
+# Rule: a package budget is 1.5 times the slowest of six CI runs on 2026-10-13, with a floor of 10 s.
+# A leaf budget is 10 s; a slower test has a test line with its reason. A test with subtests is not
+# checked, because parallel parents report the time of the whole package. A change that makes a test
+# or package slower raises its number in the same diff and states why.
+#
+# Package        slowest CI run  budget
+# e2e (Contract)         51 s      77 s
+# e2e@runtime            24 s      36 s
+# claudecode             14 s      21 s
+# imageclamp            8.3 s      13 s
+# gates                 7.6 s      12 s
+# server                7.5 s      12 s
+# any other              <6 s      10 s
+leaf 10
+package default 10
+package e2e 77
+package e2e@runtime 36
+package internal/backend/claudecode 21
+package internal/imageclamp 13
+package internal/gates 12
+package internal/server 12
+
+# The gates run the whole repository against the merge base.
+test internal/gates TestRepository 12
