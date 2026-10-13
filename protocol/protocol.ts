@@ -19,6 +19,7 @@ export interface BackendState {
 export interface BaseRef {
   ref: string;
   sha: string;
+  rev?: string;
 }
 
 export interface ChangedFile {
@@ -130,7 +131,7 @@ export interface CreateSession {
 }
 
 export interface Error {
-  code: "blob_not_found" | "draining" | "input_conflict" | "internal" | "invalid_request" | "model_unavailable" | "no_base" | "not_a_git_repo" | "payload_too_large" | "process_not_found" | "request_not_pending" | "session_busy" | "session_exists" | "session_not_found" | "session_not_owned" | "session_unreplayable" | "too_many_changes" | "turn_mismatch" | "unauthorized";
+  code: "blob_not_found" | "draining" | "input_conflict" | "internal" | "invalid_request" | "model_unavailable" | "no_base" | "not_a_git_repo" | "not_a_repo" | "payload_too_large" | "process_not_found" | "request_not_pending" | "session_busy" | "session_exists" | "session_not_found" | "session_not_owned" | "session_unreplayable" | "too_many_changes" | "turn_mismatch" | "unauthorized";
   message: string;
   details: Record<string, unknown> | null;
 }
@@ -565,8 +566,10 @@ export interface Usage {
 export interface WorkspaceChanges {
   dir: string;
   scope: string;
+  engine: string;
   branch: string;
   head: string;
+  head_rev?: string;
   base?: BaseRef;
   files: ChangedFile[];
   patch: string;

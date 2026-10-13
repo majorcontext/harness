@@ -53,6 +53,9 @@
           },
           "sha": {
             "type": "string"
+          },
+          "rev": {
+            "type": "string"
           }
         },
         "type": "object",
@@ -429,6 +432,7 @@
               "model_unavailable",
               "no_base",
               "not_a_git_repo",
+              "not_a_repo",
               "payload_too_large",
               "process_not_found",
               "request_not_pending",
@@ -1967,10 +1971,16 @@
           "scope": {
             "type": "string"
           },
+          "engine": {
+            "type": "string"
+          },
           "branch": {
             "type": "string"
           },
           "head": {
+            "type": "string"
+          },
+          "head_rev": {
             "type": "string"
           },
           "base": {
@@ -1993,6 +2003,7 @@
         "required": [
           "dir",
           "scope",
+          "engine",
           "branch",
           "head",
           "files",

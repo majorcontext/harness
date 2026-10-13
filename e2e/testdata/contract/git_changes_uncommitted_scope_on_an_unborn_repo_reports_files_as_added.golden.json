@@ -7,6 +7,7 @@
       "body": {
         "branch": "main",
         "dir": "\u003cworkdir\u003e",
+        "engine": "git",
         "files": [
           {
             "additions": 1,

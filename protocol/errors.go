@@ -10,19 +10,21 @@ type Code string
 
 // Error codes of the HTTP API.
 const (
-	CodeInvalidRequest      Code = "invalid_request"
-	CodeSessionNotFound     Code = "session_not_found"
-	CodeSessionExists       Code = "session_exists"
-	CodeSessionNotOwned     Code = "session_not_owned"
-	CodeInputConflict       Code = "input_conflict"
-	CodeTurnMismatch        Code = "turn_mismatch"
-	CodeSessionBusy         Code = "session_busy"
-	CodeRequestNotPending   Code = "request_not_pending"
-	CodeModelUnavailable    Code = "model_unavailable"
-	CodePayloadTooLarge     Code = "payload_too_large"
-	CodeDraining            Code = "draining"
-	CodeInternal            Code = "internal"
-	CodeNotAGitRepo         Code = "not_a_git_repo"
+	CodeInvalidRequest    Code = "invalid_request"
+	CodeSessionNotFound   Code = "session_not_found"
+	CodeSessionExists     Code = "session_exists"
+	CodeSessionNotOwned   Code = "session_not_owned"
+	CodeInputConflict     Code = "input_conflict"
+	CodeTurnMismatch      Code = "turn_mismatch"
+	CodeSessionBusy       Code = "session_busy"
+	CodeRequestNotPending Code = "request_not_pending"
+	CodeModelUnavailable  Code = "model_unavailable"
+	CodePayloadTooLarge   Code = "payload_too_large"
+	CodeDraining          Code = "draining"
+	CodeInternal          Code = "internal"
+	CodeNotAGitRepo       Code = "not_a_git_repo"
+	// CodeNotARepo is the engine-neutral name that replaces CodeNotAGitRepo; the server sends CodeNotAGitRepo.
+	CodeNotARepo            Code = "not_a_repo"
 	CodeNoBase              Code = "no_base"
 	CodeTooManyChanges      Code = "too_many_changes"
 	CodeProcessNotFound     Code = "process_not_found"
@@ -87,6 +89,7 @@ var statuses = map[Code]int{
 	CodePayloadTooLarge:     http.StatusRequestEntityTooLarge,
 	CodeDraining:            http.StatusServiceUnavailable,
 	CodeNotAGitRepo:         http.StatusConflict,
+	CodeNotARepo:            http.StatusConflict,
 	CodeNoBase:              http.StatusConflict,
 	CodeTooManyChanges:      http.StatusConflict,
 	CodeProcessNotFound:     http.StatusNotFound,
