@@ -62,12 +62,16 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
-            "loadSession": false,
+            "loadSession": true,
             "mcpCapabilities": {
               "http": true,
               "sse": false
             },
-            "sessionCapabilities": {}
+            "sessionCapabilities": {
+              "close": {},
+              "list": {},
+              "resume": {}
+            }
           },
           "agentInfo": {
             "name": "harness",

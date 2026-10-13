@@ -1,7 +1,12 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
+	"testing"
+
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 func acpToolCall(name string, in map[string]any) []harnesstest.Step {
@@ -84,12 +89,16 @@ var acpToolScenarios = []acpScenario{
 		needsExec: true,
 		cite:      "A tool call that the cancel of a turn cut short has an error result in the log, so its update is `failed`, and it reaches the client before the `cancelled` answer.",
 		model: []harnesstest.Step{
-			{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "sleep 300"}}}}},
+			{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "touch started && sleep 300"}}}}},
 		},
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPromptStart{as: "a", text: "go"},
 			acpAwaitUpdate{kind: "tool_call", status: "in_progress"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				marker := filepath.Join(c.dir(""), "started")
+				testpoll.Until(t, waitBound, "bash did not start", func() bool { _, err := os.Stat(marker); return err == nil })
+			}),
 			acpCancel{as: "a"},
 			acpResult{id: "a", stop: "cancelled"},
 		},

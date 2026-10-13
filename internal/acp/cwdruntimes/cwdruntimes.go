@@ -29,6 +29,8 @@ type Options struct {
 	Version string
 	Getenv  func(string) string
 	Logger  *slog.Logger
+	// DefaultDir is the work directory of the host process, for a request that names none. Empty means the host has none.
+	DefaultDir string
 	// ModelTransport and Tools are the matching harness.Options of every runtime.
 	ModelTransport func(provider string) http.RoundTripper
 	Tools          []harness.Tool
@@ -42,6 +44,7 @@ type Runtimes struct {
 	store harness.Store
 	owner harness.Owner
 	rts   map[string]*harness.Runtime
+	order []string
 	shut  bool
 }
 
@@ -82,7 +85,23 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 		return nil, err
 	}
 	r.rts[cwd] = rt
+	r.order = append(r.order, cwd)
 	return rt, nil
+}
+
+// Default returns the Runtime that For built first, else the one of DefaultDir, else nil.
+func (r *Runtimes) Default(ctx context.Context) (acp.Runtime, error) {
+	r.mu.Lock()
+	if len(r.order) > 0 {
+		rt := r.rts[r.order[0]]
+		r.mu.Unlock()
+		return rt, nil
+	}
+	r.mu.Unlock()
+	if r.opts.DefaultDir == "" {
+		return nil, nil
+	}
+	return r.For(ctx, r.opts.DefaultDir)
 }
 
 // ToolImage returns a tool-result image of a session from the shared Store. It

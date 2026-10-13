@@ -21,6 +21,10 @@ type acpEnv struct {
 	configPath string
 	sessDir    string
 	allowed    []string
+	// afterRead, when set, runs after each Runtime.Read of the in-process host.
+	afterRead func(rt *harness.Runtime, id string)
+	// defaultDir is the work directory of the in-process host process.
+	defaultDir string
 }
 
 const acpDummyKey = "e2e-dummy-key"
@@ -35,8 +39,9 @@ func acpRuntimes(env acpEnv) *cwdruntimes.Runtimes {
 		Shared: func(*config.Config) (harness.Store, harness.Owner, error) {
 			return store.NewDiskStore(env.sessDir), harness.NewLocalOwner(1), nil
 		},
-		Version: "in-process",
-		Getenv:  acpGetenv,
+		Version:    "in-process",
+		Getenv:     acpGetenv,
+		DefaultDir: env.defaultDir,
 	})
 }
 
@@ -47,9 +52,12 @@ func startACPInProcess(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, fun
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
-	rts := acpRuntimes(env)
+	var rts acp.Runtimes = acpRuntimes(env)
+	if env.afterRead != nil {
+		rts = hookRuntimes{acpRuntimes(env), env.afterRead}
+	}
 	go func() {
-		err := acp.Serve(t.Context(), rts, inR, outW, acp.Config{Version: "in-process", MCP: true, AllowedTools: env.allowed})
+		err := acp.Serve(t.Context(), rts, inR, outW, acp.Config{Version: "in-process", MCP: true, List: true, AllowedTools: env.allowed})
 		_ = outW.Close()
 		_ = inR.CloseWithError(io.ErrClosedPipe)
 		done <- err
@@ -95,4 +103,32 @@ func writeACPDir(t *testing.T, files map[string]string) string {
 		}
 	}
 	return dir
+}
+
+// hookRuntimes wraps the Runtimes of the in-process host so that each Read of a
+// session calls after.
+type hookRuntimes struct {
+	*cwdruntimes.Runtimes
+	after func(rt *harness.Runtime, id string)
+}
+
+func (h hookRuntimes) For(ctx context.Context, cwd string) (acp.Runtime, error) {
+	rt, err := h.Runtimes.For(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+	return hookRuntime{rt, h.after}, nil
+}
+
+type hookRuntime struct {
+	acp.Runtime
+	after func(rt *harness.Runtime, id string)
+}
+
+func (h hookRuntime) Read(ctx context.Context, id string) (harness.Reader, error) {
+	r, err := h.Runtime.Read(ctx, id)
+	if err == nil {
+		h.after(h.Runtime.(*harness.Runtime), id)
+	}
+	return r, err
 }

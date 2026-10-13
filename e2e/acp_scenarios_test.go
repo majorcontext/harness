@@ -32,6 +32,8 @@ type acpScenario struct {
 	config  map[string]any
 	dirs    map[string]map[string]string
 	allowed []string
+	// afterRead runs in the in-process host after Runtime.Read of a session and before Open, so a row can append a record between the replay and the open. A row that sets it runs on that host only.
+	afterRead func(t *testing.T, rt *harness.Runtime, id string)
 	// files are the files of the "main" directory.
 	files map[string]string
 	// wireOnly leaves the requests, the sessions, and the usage_update and session_info_update frames out of the golden, for a row whose turn depends on timing.
@@ -115,7 +117,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
@@ -243,6 +245,9 @@ func acpTableHosts() []acpHost {
 // runsOn says whether the row runs on the host. A row with a default tool set
 // runs on the hosts that take one.
 func (sc acpScenario) runsOn(host string) bool {
+	if sc.afterRead != nil {
+		return host == "in-process"
+	}
 	switch host {
 	case "binary":
 		return len(sc.allowed) == 0
@@ -267,10 +272,20 @@ func TestACPScenarios(t *testing.T) {
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
 				t.Parallel()
 				fake := harnesstest.NewAnthropic(t, sc.model...)
-				env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), sc.config), sessDir: t.TempDir(), allowed: sc.allowed}
+				env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), sc.config), sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir()}
+				if sc.afterRead != nil {
+					env.afterRead = func(rt *harness.Runtime, id string) { sc.afterRead(t, rt, id) }
+				}
 				in, out, stop := host.start(t, env)
 				c := newACPConn(t, schema, in, out)
 				c.fake, c.env = fake, env
+				c.reconnect = func() {
+					c.t.Helper()
+					c.drain()
+					stop()
+					in, out, stop = host.start(t, env)
+					c.attach(in, out)
+				}
 				c.dirs["main"] = writeACPDir(t, sc.files)
 				for name, files := range sc.dirs {
 					c.dirs[name] = writeACPDir(t, files)
@@ -279,7 +294,7 @@ func TestACPScenarios(t *testing.T) {
 					step.run(t, c)
 				}
 				c.finish(stop)
-				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0 && host.name == "in-process")
+				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process")
 				got := acpGoldenOf(t, c, sc.wireOnly)
 				if host.name == nodeHostName {
 					got = alignNodeGolden(t, got)

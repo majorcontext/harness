@@ -185,7 +185,14 @@ type promptKey struct{}
 // the handler of a request starts. It registers a session/prompt, so a
 // session/cancel that follows on the wire finds the prompt.
 func (a *agent) Admit(ctx context.Context, method string, params json.RawMessage) context.Context {
-	if method != "session/prompt" {
+	switch method {
+	case "session/load", "session/resume", "session/close":
+		if id := sessionIDOf(params); id != "" {
+			return context.WithValue(ctx, ticketKey{}, a.reserve(id))
+		}
+		return ctx
+	case "session/prompt":
+	default:
 		return ctx
 	}
 	var p struct {

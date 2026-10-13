@@ -25,6 +25,7 @@ type options struct {
 	user         *config.Config
 	err          error
 	storeDir     string
+	defaultDir   string
 	env          map[string]string
 	builtinTools []string
 	tools        []harness.Tool
@@ -34,7 +35,7 @@ type options struct {
 	logger       *slog.Logger
 }
 
-// readOptions reads {config, storeDir, env, tools, builtinTools, proxy: {headers, baseURL},
+// readOptions reads {config, storeDir, defaultDir, env, tools, builtinTools, proxy: {headers, baseURL},
 // onFrame, onLog}. Every option that is present must have its type. A bad value
 // does not throw: the first error fails the first session/new as an invalid
 // request.
@@ -48,6 +49,8 @@ func readOptions(o js.Value) *options {
 	}
 	var err error
 	opts.storeDir, err = jshost.StringField(o, "storeDir")
+	keep(err)
+	opts.defaultDir, err = jshost.StringField(o, "defaultDir")
 	keep(err)
 	opts.env, err = jshost.StringMap("env", o.Get("env"))
 	keep(err)
@@ -121,9 +124,10 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			}
 			return store.NewDiskStore(o.storeDir), harness.NewLocalOwner(1), nil
 		},
-		Version: "wasm",
-		Getenv:  func(k string) string { return o.env[k] },
-		Logger:  o.logger,
+		DefaultDir: o.defaultDir,
+		Version:    "wasm",
+		Getenv:     func(k string) string { return o.env[k] },
+		Logger:     o.logger,
 		ModelTransport: func(string) http.RoundTripper {
 			return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}
 		},
@@ -156,7 +160,7 @@ func harnessConnect(_ js.Value, args []js.Value) any {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cfg := acp.Config{Version: "wasm", Logger: opts.logger, AllowedTools: opts.builtinTools}
+		cfg := acp.Config{Version: "wasm", Logger: opts.logger, AllowedTools: opts.builtinTools, List: opts.defaultDir != ""}
 		if err := acp.Serve(context.Background(), opts.runtimes(), inR, outW, cfg); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 			opts.logger.Error("acp", "error", err.Error())
 		}

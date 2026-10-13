@@ -1,0 +1,41 @@
+{
+  "requests": null,
+  "sessions": {
+    "s0": [],
+    "s1": []
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {}
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessions": [
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s0\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:s1\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

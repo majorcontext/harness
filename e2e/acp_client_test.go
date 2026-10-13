@@ -41,6 +41,10 @@ type acpConn struct {
 	paths    map[string]string
 	fake     *harnesstest.Server
 	env      acpEnv
+	// reconnect ends the agent process and starts a new one over the same session directory.
+	reconnect func()
+	// cursor is the nextCursor of the last session/list.
+	cursor string
 }
 
 type acpLine struct {
@@ -57,23 +61,31 @@ type acpHost struct {
 
 func newACPConn(t *testing.T, schema *acpSchema, in io.Writer, out io.Reader) *acpConn {
 	t.Helper()
-	c := &acpConn{t: t, schema: schema, in: in, lines: make(chan acpLine, 64),
+	c := &acpConn{t: t, schema: schema,
 		sessions: map[string]string{}, dirs: map[string]string{}, pending: map[string]int{}, paths: map[string]string{}}
+	c.attach(in, out)
+	return c
+}
+
+// attach reads the agent output out and writes to in. A reconnect attaches the
+// pipes of a new agent process to the same connection record.
+func (c *acpConn) attach(in io.Writer, out io.Reader) {
+	lines := make(chan acpLine, 64)
+	c.in, c.lines = in, lines
 	go func() {
 		r := bufio.NewReader(out)
 		for {
 			text, err := r.ReadString('\n')
 			if text != "" {
-				c.lines <- acpLine{text: strings.TrimSuffix(text, "\n")}
+				lines <- acpLine{text: strings.TrimSuffix(text, "\n")}
 			}
 			if err != nil {
-				c.lines <- acpLine{err: err}
-				close(c.lines)
+				lines <- acpLine{err: err}
+				close(lines)
 				return
 			}
 		}
 	}()
-	return c
 }
 
 // raw writes one line as it is. It is the only path that skips the schema.
@@ -202,6 +214,20 @@ func (c *acpConn) finish(stop func()) {
 		}
 	}
 	stop()
+}
+
+// drain closes the input and fails on any line that no step read, until the
+// agent closes its output.
+func (c *acpConn) drain() {
+	c.t.Helper()
+	if closer, ok := c.in.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	for l := range c.lines {
+		if l.text != "" {
+			c.t.Errorf("stdout holds a line that no step read: %q", l.text)
+		}
+	}
 }
 
 // startACPProc runs `harness acp` in its own process group.

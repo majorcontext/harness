@@ -7,6 +7,9 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// errNoRuntimes is the error of a request that needs a runtime on a connection that has none.
+var errNoRuntimes = errors.New("acp: no runtimes")
+
 // codeNotFound is the JSON-RPC code of a missing resource.
 const codeNotFound = -32002
 
