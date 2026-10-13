@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/internal/message"
@@ -27,17 +28,22 @@ func baseLimits() Limits {
 	}
 }
 
+// pngMemo shares each fixture across tests; Clamp never mutates its input.
+var pngMemo sync.Map
+
 // pngBytes encodes a solid-color RGBA image of the given size as PNG.
 func pngBytes(t *testing.T, w, h int) []byte {
 	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for i := range img.Pix {
-		img.Pix[i] = 0x80
+	if v, ok := pngMemo.Load([2]int{w, h}); ok {
+		return bytes.Clone(v.([]byte))
 	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	copy(img.Pix, bytes.Repeat([]byte{0x80}, len(img.Pix)))
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		t.Fatalf("png.Encode: %v", err)
 	}
+	pngMemo.Store([2]int{w, h}, bytes.Clone(buf.Bytes()))
 	return buf.Bytes()
 }
 
@@ -57,9 +63,7 @@ func noisePNG(t *testing.T, w, h int) []byte {
 func jpegBytes(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for i := range img.Pix {
-		img.Pix[i] = 0x80
-	}
+	copy(img.Pix, bytes.Repeat([]byte{0x80}, len(img.Pix)))
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); err != nil {
 		t.Fatalf("jpeg.Encode: %v", err)
@@ -250,10 +254,7 @@ func TestClampLeavesURLBlobUntouched(t *testing.T) {
 }
 
 func TestClampRecursesIntoToolResult(t *testing.T) {
-	tr := &message.ToolResult{
-		CallID:  "call_1",
-		Content: message.Parts{&message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}},
-	}
+	tr := &message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}}}
 	in := []message.Message{{ID: "m1", Role: message.RoleTool, Parts: message.Parts{tr}}}
 	out := Clamp(in, baseLimits())
 	gotTR := out[0].Parts[0].(*message.ToolResult)
