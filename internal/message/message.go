@@ -655,8 +655,9 @@ func WireSafeCallID(id string, maxLen int) bool {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-') {
+		switch c := id[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '_', c == '-':
+		default:
 			return false
 		}
 	}
