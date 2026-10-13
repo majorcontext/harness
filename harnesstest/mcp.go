@@ -362,10 +362,12 @@ func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{},
 		held: make(chan struct{}, 64), abandoned: make(chan struct{}, 64)}
 	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
-	if ln, err := listenQuiet(); err == nil {
-		_ = s.srv.Listener.Close()
-		s.srv.Listener = ln
+	ln, err := listenQuiet()
+	if err != nil {
+		t.Fatalf("harnesstest: no free MCP fixture port in [%d, %d): %v", mcpPortBase, mcpPortBase+mcpPortSpan, err)
 	}
+	_ = s.srv.Listener.Close()
+	s.srv.Listener = ln
 	s.srv.Config.SetKeepAlivesEnabled(false)
 	s.srv.Start()
 	t.Cleanup(s.srv.Close)
@@ -382,10 +384,13 @@ var (
 	mcpPortStart = sync.OnceFunc(func() { mcpNextPort.Store(rand.Uint32N(mcpPortSpan)) })
 )
 
-// listenQuiet listens on a loopback port below the ephemeral range of Linux
-// and macOS. The process takes ports in sequence, and a listener that the OS
-// places with bind(0) never gets one, so no server of the process takes the
-// port of a closed server, and a later request is refused.
+// listenQuiet listens on a loopback port below the default ephemeral range of
+// Linux and macOS. The process takes ports in sequence, and a listener that
+// the OS places with bind(0) never gets one, so no server of the process takes
+// the port of a closed server, and a later request is refused. A host that
+// widens ip_local_port_range to include this range loses that guarantee. On
+// macOS a bind of 127.0.0.1:N succeeds while another process listens on *:N,
+// so a published port in this range can make a closed fixture not refuse.
 func listenQuiet() (net.Listener, error) {
 	mcpPortStart()
 	var err error
