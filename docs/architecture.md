@@ -536,7 +536,7 @@ type Ownership interface {
 }
 ```
 
-`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`. A `Create` waits for an `Open` of the same ID that is in flight, and creates the session when that `Open` fails, so an `Open` that races a spawn never fails the spawn. An empty `model` is `Config.Model`, or `config.DefaultModel` when that is empty, after one alias lookup. An explicit model gets no alias lookup. Every session that the runtime creates, a child too, records the cleaned `WorkDir` of the runtime as `work_dir` in `session.created`; `protocol.Session.work_dir` and the entry of `List` show it. It is empty without a `WorkDir`, and for a session whose log has no `work_dir`.
+`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`. A `Create` waits for an `Open` of the same ID that is in flight, and creates the session when that `Open` fails, so an `Open` that races a spawn never fails the spawn. An empty `model` is `Config.Model`, or `config.DefaultModel` when that is empty, after one alias lookup. An explicit model gets no alias lookup. Every session that the runtime creates, a child too, records the cleaned `WorkDir` of the runtime as `work_dir` in `session.created`; `protocol.Session.work_dir` shows it. It is empty without a `WorkDir`, and for a session whose log has no `work_dir`.
 
 Start-up order of `Open` after `Acquire`:
 

@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -203,7 +202,7 @@ func runSession(ctx context.Context, rt *harness.Runtime, store harness.Store, c
 // lastSession returns the ID of the newest root session that the runtime
 // created in its work directory.
 func lastSession(ctx context.Context, rt *harness.Runtime) (string, error) {
-	dir := filepath.Clean(rt.WorkDir())
+	dir := rt.WorkDir()
 	last := ""
 	for after := ""; ; {
 		page, err := rt.List(ctx, protocol.ListSessions{After: after})
@@ -211,7 +210,7 @@ func lastSession(ctx context.Context, rt *harness.Runtime) (string, error) {
 			return "", err
 		}
 		for _, s := range page.Sessions {
-			if s.ParentID == "" && s.WorkDir == dir {
+			if s.ParentID == "" && sameDir(s.WorkDir, dir) {
 				last = s.ID
 			}
 		}
@@ -224,6 +223,23 @@ func lastSession(ctx context.Context, rt *harness.Runtime) (string, error) {
 		return "", fmt.Errorf("no sessions to continue in %s", dir)
 	}
 	return last, nil
+}
+
+// sameDir reports whether a and b name one directory: equal strings, or paths
+// that stat to the same file. A session whose directory is gone never matches.
+func sameDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	ia, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	ib, err := os.Stat(b)
+	return err == nil && os.SameFile(ia, ib)
 }
 
 // drive starts the work of the run and prints the stream of the session until

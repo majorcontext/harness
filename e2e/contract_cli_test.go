@@ -45,7 +45,7 @@ func (h *cliHost) start(args ...string) (wait func() (stdout, stderr string, cod
 	ctx, cancel := context.WithTimeout(h.t.Context(), waitBound)
 	cmd := exec.CommandContext(ctx, harnessBin, args...)
 	cmd.Dir = h.work
-	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
+	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key", "PWD": h.work})
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Start(); err != nil {
@@ -176,6 +176,41 @@ func TestContractCLIRunContinueTakesTheNewestSessionOfTheWorkDir(t *testing.T) {
 	list, _, _ := h.run("sessions")
 	if got := strings.Count(strings.TrimSpace(list), "\n") + 1; got != 2 {
 		t.Errorf("sessions = %q, want the 2 sessions of the two directories", list)
+	}
+}
+
+func TestContractCLIRunContinueSkipsTheChildrenOfTheWorkDir(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
+	_, errOut, code := h.run("run", "-p", "delegate")
+	if code != 0 {
+		t.Fatalf("run with a task child = %d\n%s", code, errOut)
+	}
+	root := sessionID(t, errOut)
+	if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != root {
+		t.Errorf("run -c = %d, want the root session %s and not its child\n%s", code, root, errOut)
+	}
+}
+
+func TestContractCLIRunContinueMatchesTheWorkDirThroughASymlink(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, replyText("one"), replyText("two"))
+	real := h.work
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	h.work = link
+	_, errOut, code := h.run("run", "-p", "hi")
+	if code != 0 {
+		t.Fatalf("run through the link = %d\n%s", code, errOut)
+	}
+	id := sessionID(t, errOut)
+	h.work = real
+	if _, errOut, code := h.run("run", "-c", "-p", "again"); code != 0 || sessionID(t, errOut) != id {
+		t.Errorf("run -c from the resolved path = %d, want session %s\n%s", code, id, errOut)
 	}
 }
 

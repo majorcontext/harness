@@ -233,7 +233,8 @@ func New(opts Options) (*Runtime, error) {
 		tools = append(slices.Clip(tools), selftool.NewGoal(toolHost{r}))
 	}
 	if opts.WorkDir != "" {
-		r.procs, r.workDir = proc.NewManager(opts.WorkDir, opts.Config.Processes), opts.WorkDir
+		r.workDir = filepath.Clean(opts.WorkDir)
+		r.procs = proc.NewManager(opts.WorkDir, opts.Config.Processes)
 		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
 		if opts.Config.ModelToolEnabled() {
 			tools = append(tools, selftool.NewModel(toolHost{r}, catalog))
@@ -298,7 +299,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 
 func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, error) {
 	if r.workDir != "" {
-		l.created.WorkDir = filepath.Clean(r.workDir)
+		l.created.WorkDir = r.workDir
 	}
 	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
 		return nil, err
