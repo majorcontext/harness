@@ -236,7 +236,7 @@ ceiling.
 `--show-toplevel`'s own output is trimmed with `strings.TrimSuffix(out,
 "\n")`, not `TrimSpace`: a repository whose real path ends in a space is a
 legitimate, if unusual, directory name, and `TrimSpace` would silently
-drop it, making the endpoint report `not_a_git_repo` for a real repository.
+drop it, making the endpoint report `not_a_repo` for a real repository.
 
 ## Base resolution edge cases
 
