@@ -129,7 +129,7 @@ func changes(ctx context.Context, root, dir, real, ceiling, scope string, explic
 		branch = strings.TrimSpace(b)
 	}
 	//nolint:staticcheck // the deprecated fields keep their values for clients that read them
-	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: "git", Branch: branch, Head: head}
+	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: protocol.EngineGit, Branch: branch, Head: head}
 	if head != "" {
 		c.HeadRev = protocol.Rev{Kind: protocol.RevCommit, ID: head}
 	}
