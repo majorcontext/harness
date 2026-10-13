@@ -55,9 +55,9 @@ const (
 
 var (
 	errGoalCleared = errors.New("harness: goal cleared")
-	// ErrGoalActive reports a StartGoal while a goal is active or paused.
+	// ErrGoalActive reports a StartGoal while a goal is active, paused, or blocked.
 	ErrGoalActive = errors.New("harness: a goal is already active")
-	// ErrNoGoal reports an AdjustGoal with no active or paused goal.
+	// ErrNoGoal reports an AdjustGoal with no active, paused, or blocked goal.
 	ErrNoGoal = errors.New("harness: no active goal")
 )
 
@@ -73,8 +73,8 @@ func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) err
 // StartGoal is SetGoal with no turn limit that always admits the
 // condition: while a turn runs, the condition waits, and the goal judges
 // no turn before it; the condition posts after the turn of
-// the goal tool. It fails with ErrGoalActive while a goal is active or
-// paused.
+// the goal tool. It fails with ErrGoalActive while a goal is active, paused,
+// or blocked.
 func (a *Actor) StartGoal(ctx context.Context, condition string) error {
 	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*protocol.GoalSet, bool, error) {
 		if live {
@@ -84,11 +84,11 @@ func (a *Actor) StartGoal(ctx context.Context, condition string) error {
 	})
 }
 
-// AdjustGoal replaces the condition of the active or paused goal. It keeps
+// AdjustGoal replaces the condition of the active, paused, or blocked goal. It keeps
 // max_turns and the turn count, so an adjust never extends the turn limit.
 // The same condition changes nothing. A condition that still waits in the
 // queue is replaced by the new one. It fails with ErrNoGoal when no goal is
-// active or paused.
+// active, paused, or blocked.
 func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error) {
 		switch {
@@ -105,7 +105,7 @@ func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 }
 
 // setGoal appends the goal that set returns for the current goal, and
-// whether that goal is active or paused. A nil goal appends nothing. When
+// whether that goal is active, paused, or blocked. A nil goal appends nothing. When
 // set reports post, the condition is an input even while the session is
 // busy.
 func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error)) error {
@@ -213,7 +213,7 @@ func (a *Actor) settle(check bool) error {
 }
 
 // blockUndriven blocks an active goal that nothing drives: no run, no open
-// turn or request, no queued goal input, no queued input that starts, and no
+// turn or request, no queued input that starts, and no
 // turn left to judge. It starts no turn and calls no model.
 func (a *Actor) blockUndriven() error {
 	g, _ := a.state.Goal()
@@ -224,7 +224,7 @@ func (a *Actor) blockUndriven() error {
 		return nil
 	}
 	q := a.state.Queue()
-	if slices.ContainsFunc(q, func(in protocol.InputAdmitted) bool { return in.Source == sourceGoal }) || len(q) > 0 && !a.waitsForInput() {
+	if len(q) > 0 && !a.waitsForInput() {
 		return nil
 	}
 	return a.append(protocol.GoalChanged{State: protocol.GoalBlocked, Reason: goalNoDriver})

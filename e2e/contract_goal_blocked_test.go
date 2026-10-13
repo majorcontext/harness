@@ -5,75 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
-	"github.com/majorcontext/harness/store"
 )
-
-// halt stops the host and leaves its store as it is.
-func (d *runtimeDriver) halt(t *testing.T) {
-	t.Helper()
-	if d.serve {
-		d.proc.terminate(t)
-		return
-	}
-	d.stop(t, t.Context())
-}
-
-// seed appends events to the log of session id in the store of the halted host.
-func (d *runtimeDriver) seed(t *testing.T, id string, events ...protocol.Payload) {
-	t.Helper()
-	st := store.NewDiskStore(d.store)
-	head, err := st.Head(t.Context(), id)
-	if err != nil {
-		t.Fatalf("head of %s: %v", id, err)
-	}
-	for _, ev := range events {
-		head++
-		data, err := eventlog.Envelope{Seq: head, Time: time.Now(), Event: ev}.Encode()
-		if err != nil {
-			t.Fatalf("encode %T: %v", ev, err)
-		}
-		if err := st.Append(t.Context(), id, head-1, data); err != nil {
-			t.Fatalf("append %T: %v", ev, err)
-		}
-	}
-}
-
-// resumable reads the log of session id with no host, as a box does before it wakes the session.
-func (d *runtimeDriver) resumable(t *testing.T, id string) bool {
-	t.Helper()
-	v, err := harness.OpenView(t.Context(), store.NewDiskStore(d.store), id)
-	if err != nil {
-		t.Fatalf("view %s: %v", id, err)
-	}
-	return v.Resumable()
-}
-
-func (d *runtimeDriver) count(t *testing.T, id string, kind string) int {
-	t.Helper()
-	n := 0
-	for _, e := range d.events(t, id) {
-		if e.Kind == kind {
-			n++
-		}
-	}
-	return n
-}
 
 func seedInput(id, source, text string) protocol.InputAdmitted {
 	return protocol.InputAdmitted{InputID: id, Delivery: protocol.DeliveryQueue, Source: source,
 		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
-}
-
-func seedOwners(n int) []protocol.Payload {
-	var out []protocol.Payload
-	for i := range n {
-		out = append(out, protocol.OwnerAcquired{Epoch: uint64(i + 2), Owner: "earlier"})
-	}
-	return out
 }
 
 func finishedTurn(end protocol.TurnEnded) []protocol.Payload {
@@ -90,6 +28,7 @@ func TestContractGoalBlocked(t *testing.T) {
 	skipShort(t)
 	completed := protocol.TurnEnded{TurnID: "turn1", StopReason: protocol.StopCompleted}
 	stopped := protocol.TurnEnded{TurnID: "turn1", StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped}
+	exhausted := protocol.TurnEnded{TurnID: "turn1", StopReason: protocol.StopFailed, Cause: protocol.CauseProviderExhausted, Error: "limit"}
 	set := protocol.GoalSet{Condition: "finish the brief"}
 	join := func(parts ...[]protocol.Payload) []protocol.Payload { return slices.Concat(parts...) }
 	onHosts(t, func(t *testing.T, h host) {
@@ -98,11 +37,14 @@ func TestContractGoalBlocked(t *testing.T) {
 			log  []protocol.Payload
 		}{
 			{"a_goal_set_after_a_completed_turn_with_no_driver_blocks_at_open", join(finishedTurn(completed),
-				[]protocol.Payload{protocol.ContextMeasured{Source: "migrated"}, set}, seedOwners(3))},
+				[]protocol.Payload{set})},
 			{"a_goal_set_after_a_stopped_turn_with_no_driver_blocks_at_open", join(finishedTurn(stopped),
-				[]protocol.Payload{protocol.ContextMeasured{Source: "migrated"}, set}, seedOwners(3))},
+				[]protocol.Payload{set})},
+			{"a_goal_activated_with_a_held_goal_input_blocks_at_open", join(finishedTurn(exhausted),
+				[]protocol.Payload{set, protocol.GoalChanged{State: protocol.GoalPaused, Reason: "provider_exhausted", RetryAt: time.Now().Add(time.Hour)},
+					protocol.GoalChanged{State: protocol.GoalActive}, seedInput("seed_goal1", "goal", "Continue working toward the goal.\n\nGOAL: finish the brief")})},
 			{"a_goal_set_after_settled_children_with_no_driver_blocks_at_open", join(finishedTurn(completed),
-				[]protocol.Payload{protocol.ChildSpawned{ChildID: "ses_c"}, protocol.ChildSettled{ChildID: "ses_c", Outcome: protocol.OutcomeDone}, set}, seedOwners(4))},
+				[]protocol.Payload{protocol.ChildSpawned{ChildID: "ses_c"}, protocol.ChildSettled{ChildID: "ses_c", Outcome: protocol.OutcomeDone}, set})},
 		} {
 			t.Run(row.name, func(t *testing.T) {
 				t.Parallel()
@@ -118,9 +60,10 @@ func TestContractGoalBlocked(t *testing.T) {
 				if d.resumable(t, id) {
 					t.Error("a blocked goal makes the session resumable")
 				}
+				changes := d.count(t, id, protocol.KindGoalChanged)
 				d.Restart(t, false)
-				if n := d.count(t, id, protocol.KindGoalChanged); n != 1 {
-					t.Errorf("goal.changed records after a second open = %d, want 1", n)
+				if n := d.count(t, id, protocol.KindGoalChanged); n != changes {
+					t.Errorf("goal.changed records after a second open = %d, want %d", n, changes)
 				}
 				if n := len(fake.Requests()); n != 0 {
 					t.Fatalf("model requests before any input = %d, want 0", n)

@@ -14,7 +14,7 @@ compute that serves one name. The name and its volume are durable.
 A new box over the same volume continues the history of the old one. At start,
 `harness serve` calls `CatchUp`, which replicates every stored session through
 `Sync`. It also opens each stored session that has work to resume: a running or
-suspended turn, a queued input, an active or paused goal, a command that no
+suspended turn, a queued input, an active or paused goal (a blocked goal does not count), a command that no
 owner finished, or an unsettled child. A session whose log fails to replay is logged and skipped. It
 does not stop `serve`.
 
