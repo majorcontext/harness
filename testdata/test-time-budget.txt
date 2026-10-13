@@ -26,3 +26,8 @@ package internal/server 12
 
 # The gates run the whole repository against the merge base.
 test internal/gates TestRepository 12
+
+# The first test of the package to start a runtime builds the fake CLI (12 s on CI, budget 1.5 times).
+test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
+# Each row restarts a runtime over a CLI-backed session and replays a large saved state (16 s on CI).
+test e2e TestContractRuntimeClaudeCodeStateChunks 24
