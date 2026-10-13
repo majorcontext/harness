@@ -87,10 +87,12 @@ var changeRows = []struct {
 	// relative passes root relative to the working directory.
 	at, dir  string
 	relative bool
-	setup    func(t *testing.T, dir string)
-	files    string
-	patch    []string
-	check    func(t *testing.T, dir string, c protocol.WorkspaceChanges)
+	// serial marks a row that sets process state, which parallel rows share.
+	serial bool
+	setup  func(t *testing.T, dir string)
+	files  string
+	patch  []string
+	check  func(t *testing.T, dir string, c protocol.WorkspaceChanges)
 }{
 	{name: "a rename keeps the old path", scope: protocol.ScopeUncommitted,
 		setup: func(t *testing.T, dir string) { git(t, dir, "mv", "seed.txt", "moved.txt") },
@@ -148,7 +150,7 @@ var changeRows = []struct {
 				t.Error("a filter or hook of the repository ran")
 			}
 		}},
-	{name: "an inherited GIT_DIR selects no other repository", scope: protocol.ScopeUncommitted,
+	{name: "an inherited GIT_DIR selects no other repository", scope: protocol.ScopeUncommitted, serial: true,
 		setup: func(t *testing.T, dir string) {
 			outer := repo(t)
 			write(t, outer, "outer.txt", "o\n")
@@ -285,7 +287,7 @@ var changeRows = []struct {
 		},
 		files: "root.txt added +1 -0; sub/f.txt modified +1 -0",
 		patch: []string{"+more", "+root"}},
-	{name: "a relative root takes a relative dir", scope: protocol.ScopeUncommitted, dir: "sub", relative: true,
+	{name: "a relative root takes a relative dir", scope: protocol.ScopeUncommitted, dir: "sub", relative: true, serial: true,
 		setup: func(t *testing.T, dir string) { write(t, dir, "sub/f.txt", "f\n") },
 		files: "sub/f.txt added +1 -0"},
 	{name: "a detached HEAD has no branch", scope: protocol.ScopeUncommitted,
@@ -301,6 +303,7 @@ var changeRows = []struct {
 func TestChanges(t *testing.T) {
 	for _, row := range changeRows {
 		t.Run(row.name, func(t *testing.T) {
+			parallelUnless(t, row.serial)
 			dir := repo(t)
 			if row.at != "" {
 				dir = repoAt(t, filepath.Join(t.TempDir(), row.at))
@@ -337,6 +340,12 @@ func TestChanges(t *testing.T) {
 				row.check(t, dir, c)
 			}
 		})
+	}
+}
+
+func parallelUnless(t *testing.T, serial bool) {
+	if !serial {
+		t.Parallel()
 	}
 }
 
