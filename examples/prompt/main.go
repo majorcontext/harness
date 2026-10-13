@@ -54,4 +54,11 @@ func main() {
 		}
 	}
 	fmt.Println()
+	res, err := t.Wait(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if res.StopReason == protocol.StopFailed {
+		log.Fatal(res.Error)
+	}
 }
