@@ -4,7 +4,7 @@ A fast, extensible, composable agent harness in Go.
 
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-- **Fast** — millisecond startup
+- **Fast** — starts in tens of milliseconds
 - **Extensible** — plugins in Go (in process or as a process) and in any language over stdio (TypeScript SDK included)
 - **Composable** — headless runtime, event streams, client/server, MCP servers
 
