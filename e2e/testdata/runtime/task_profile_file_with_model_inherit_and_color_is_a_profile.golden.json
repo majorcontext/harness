@@ -168,7 +168,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=reader) done: ok (usage: 5 in / 3 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=reader) done: child done (usage: 5 in / 3 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }

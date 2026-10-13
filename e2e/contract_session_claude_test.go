@@ -10,7 +10,7 @@ func TestContractClaudeCodeAskingSessions(t *testing.T) {
 	reader := "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: claude-code/sonnet\n---\n\nOnly read files.\n"
 	runScenarios(t, []scenario{{
 		name:   "claudecode_child_and_goal_sessions_ask_no_question",
-		driver: claudeLane{mode: "fast_no_drain", ask: true, initTools: "[]"}.newDriver,
+		driver: claudeLane{mode: "fast_no_drain", ask: true, initTools: "[]", spawnModes: "3=fast_gated"}.newDriver,
 		model: []harnesstest.Step{
 			evaluatorStep("judge", "MET: ok", true),
 			taskStep("delegate", userStarts("delegate"), fixed(spawn("reader", "child work"))),
@@ -30,6 +30,7 @@ func TestContractClaudeCodeAskingSessions(t *testing.T) {
 			awaitRequests{n: 3},
 			waitIdle{as: "parent"},
 			bindChild{as: "kid", parent: "parent", record: true},
+			writeFile{path: "child.gate", body: "open\n"},
 			claudeAwaitText{as: "kid", text: "Done before you finished writing."},
 			awaitRequests{n: 4},
 			waitIdle{as: "parent"},

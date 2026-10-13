@@ -130,9 +130,17 @@ var basicModes = map[string]mode{
 	"crash":                    crashAfter(),
 	"placeholder_before_turn":  frames(success("", 0, 0).set("num_turns", 0), say("Real answer."), success("Real answer.", 7, 2)),
 	"fast_no_drain":            frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
+	"fast_gated":               fastGated,
 	"error":                    frames(failed(11, 3, "fake failure")),
 	"rate_limit_error":         frames(failed(6, 1, "rate_limit_error: please retry later")),
 	"credential_error":         frames(failed(6, 1, "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.")),
+}
+
+// fastGated is fast_no_drain that reads its input and waits for the gate file
+// before it answers, so a test orders the end of the turn after its own steps.
+func fastGated(f *fake) {
+	awaitGate()
+	f.emit(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6))
 }
 
 func hangAfterText(f *fake) {

@@ -55,7 +55,7 @@ var acpSessionScenarios = []acpScenario{
 	{
 		name:     "cancel_right_after_the_prompt_is_not_lost",
 		cite:     "A `session/cancel` that follows a `session/prompt` on the wire reaches that prompt.",
-		model:    []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Text: "partial", Block: true}, Repeat: true}},
+		model:    []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Block: true}, Repeat: true}},
 		wireOnly: true,
 		steps: []acpStep{
 			acpNew{as: "a"},
