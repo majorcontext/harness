@@ -622,6 +622,14 @@
           "pauses": {
             "type": "integer"
           },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "impossible"
+            ]
+          },
           "reason": {
             "type": "string"
           },

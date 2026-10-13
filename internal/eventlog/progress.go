@@ -52,6 +52,7 @@ func advance(p protocol.Progress, seq uint64, ev protocol.Payload) (protocol.Pro
 			g := *p.Goal
 			g.Turns++
 			g.Pauses = 0
+			g.Verdict = e.Verdict
 			p.Goal = &g
 		}
 	case protocol.GoalChanged:

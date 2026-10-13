@@ -405,7 +405,8 @@
           "condition": "c",
           "reason": "ok",
           "state": "achieved",
-          "turns": 1
+          "turns": 1,
+          "verdict": "met"
         },
         "head_seq": 24,
         "id": "ses:a",

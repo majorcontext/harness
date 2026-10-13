@@ -264,33 +264,30 @@ func TestContractCLIRunJSONPrintsTheEvents(t *testing.T) {
 func TestContractCLIRunGoalExitCodes(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	met := newCLIHost(t, nil, agentStep("work", "done", true), evaluatorStep("judge", "MET: said done", true))
-	if _, errOut, code := met.run("run", "-goal", "say done"); code != 0 || !strings.Contains(errOut, "goal achieved in 1 turn(s)") {
-		t.Errorf("met goal = %d, want 0 and the verdict\n%s", code, errOut)
+	judgeFails := func(status int, msg string) harnesstest.Step {
+		return harnesstest.Step{Name: "judge-fail", Match: isEvaluator, Reply: harnesstest.Reply{HTTPStatus: status, ErrorMessage: msg}, Repeat: true}
 	}
-	unmet := newCLIHost(t, nil, agentStep("try", "try", true), evaluatorStep("judge", "NOT MET: keep going", true))
-	if _, errOut, code := unmet.run("run", "-goal", "say done", "-goal-max-turns", "2"); code != 3 || !strings.Contains(errOut, "goal not achieved after 2 turn(s)") {
-		t.Errorf("unmet goal = %d, want 3 and the verdict\n%s", code, errOut)
-	}
-}
-
-func TestContractCLIRunGoalExitsThreeOnAnImpossibleVerdict(t *testing.T) {
-	skipShort(t)
-	t.Parallel()
-	h := newCLIHost(t, nil, agentStep("work", "done", true), evaluatorStep("judge", "IMPOSSIBLE: no way", true))
-	if _, errOut, code := h.run("run", "-goal", "say done"); code != 3 || !strings.Contains(errOut, "goal not achieved") {
-		t.Errorf("impossible goal = %d, want 3 and the verdict\n%s", code, errOut)
-	}
-}
-
-func TestContractCLIRunGoalExitsOneWhenTheEvaluatorFails(t *testing.T) {
-	skipShort(t)
-	t.Parallel()
-	h := newCLIHost(t, nil, agentStep("work", "done", true),
-		harnesstest.Step{Name: "judge-fail", Match: isEvaluator, Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad evaluator request"}, Repeat: true})
-	out, errOut, code := h.run("run", "-goal", "say done")
-	if code != 1 || !strings.Contains(errOut, "bad evaluator request") || strings.Contains(errOut, "goal not achieved") {
-		t.Errorf("run -goal with a failed evaluator = %d, want 1 and the error\nstdout: %s\nstderr: %s", code, out, errOut)
+	for _, c := range []struct {
+		name  string
+		steps []harnesstest.Step
+		extra []string
+		code  int
+		want  string
+		deny  string
+	}{
+		{"met", []harnesstest.Step{agentStep("work", "done", true), evaluatorStep("judge", "MET: said done", true)}, nil, 0, "goal achieved in 1 turn(s)", ""},
+		{"unmet", []harnesstest.Step{agentStep("try", "try", true), evaluatorStep("judge", "NOT MET: keep going", true)}, []string{"-goal-max-turns", "2"}, 3, "goal not achieved after 2 turn(s)", ""},
+		{"impossible", []harnesstest.Step{agentStep("work", "done", true), evaluatorStep("judge", "IMPOSSIBLE: no way", true)}, nil, 3, "goal not achieved", ""},
+		{"evaluator error", []harnesstest.Step{agentStep("work", "done", true), judgeFails(400, "bad evaluator request")}, nil, 1, "goal evaluator failed: ", "goal not achieved"},
+		{"evaluator retryable error", []harnesstest.Step{agentStep("work", "done", true), judgeFails(429, "evaluator rate limited")}, nil, 1, "goal evaluator failed: ", "goal not achieved"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newCLIHost(t, nil, c.steps...)
+			_, errOut, code := h.run(append([]string{"run", "-goal", "say done"}, c.extra...)...)
+			if code != c.code || !strings.Contains(errOut, c.want) || (c.deny != "" && strings.Contains(errOut, c.deny)) {
+				t.Errorf("run -goal = %d, want %d and %q without %q\n%s", code, c.code, c.want, c.deny, errOut)
+			}
+		})
 	}
 }
 
