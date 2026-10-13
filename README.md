@@ -136,7 +136,7 @@ harness run -goal "go test ./... passes"
 ```
 
 The command exits 0 when the goal is met, 3 when it is not, and 1 when a turn
-fails.
+or the goal evaluator fails.
 
 ### Block tool calls with a plugin
 

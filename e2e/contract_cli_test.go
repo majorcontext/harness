@@ -274,6 +274,26 @@ func TestContractCLIRunGoalExitCodes(t *testing.T) {
 	}
 }
 
+func TestContractCLIRunGoalExitsThreeOnAnImpossibleVerdict(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, agentStep("work", "done", true), evaluatorStep("judge", "IMPOSSIBLE: no way", true))
+	if _, errOut, code := h.run("run", "-goal", "say done"); code != 3 || !strings.Contains(errOut, "goal not achieved") {
+		t.Errorf("impossible goal = %d, want 3 and the verdict\n%s", code, errOut)
+	}
+}
+
+func TestContractCLIRunGoalExitsOneWhenTheEvaluatorFails(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, agentStep("work", "done", true),
+		harnesstest.Step{Name: "judge-fail", Match: isEvaluator, Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad evaluator request"}, Repeat: true})
+	out, errOut, code := h.run("run", "-goal", "say done")
+	if code != 1 || !strings.Contains(errOut, "bad evaluator request") || strings.Contains(errOut, "goal not achieved") {
+		t.Errorf("run -goal with a failed evaluator = %d, want 1 and the error\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
 func TestContractCLIRunTypedCommandPrintsNothingOnSuccess(t *testing.T) {
 	skipShort(t)
 	t.Parallel()

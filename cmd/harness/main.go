@@ -83,7 +83,8 @@ func usage(w io.Writer) {
   harness run -p <prompt> [flags]   run a one-shot prompt
   harness run -goal <condition> [flags]
                                     pursue a goal until an evaluator judges it
-                                    met (exit 0 achieved, 3 not achieved)
+                                    met (exit 0 achieved, 3 not achieved,
+                                    1 turn or evaluator failed)
   harness serve [-addr host:port] [-unauthenticated] [--ask-user-question]
                                     serve the HTTP+SSE session API
   harness plugin probe              probe the configured plugins and print

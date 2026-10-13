@@ -315,6 +315,8 @@ type printer struct {
 	// streamedThis is set when text streamed since the last completed item.
 	streamedThis bool
 	command      *protocol.Event
+	// lastVerdict is the last verdict of the goal evaluator on the root session.
+	lastVerdict protocol.Verdict
 }
 
 // follower is the printing of one task child. mark is the seq of the newest
@@ -451,6 +453,12 @@ func (p *printer) handle(id string, ev protocol.Event) {
 	if ev.Kind == "command.recorded" && id == p.rootID {
 		p.command = &ev
 	}
+	if ev.Kind == protocol.KindGoalEvaluated && id == p.rootID {
+		var e protocol.GoalEvaluated
+		if json.Unmarshal(ev.Data, &e) == nil {
+			p.lastVerdict = e.Verdict
+		}
+	}
 	if p.jsonOut {
 		_ = p.enc.Encode(jsonLine{SessionID: id, Event: ev})
 		return
@@ -512,9 +520,12 @@ func (p *printer) item(ev protocol.Event) {
 }
 
 // verdict returns the failure of the run: a turn that failed, a typed command
-// that did not succeed, or a goal that was not achieved.
+// that did not succeed, or a goal that was not achieved or whose evaluator failed.
 func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol.Admitted) error {
 	v := s.Snapshot()
+	p.mu.Lock()
+	verdict := p.lastVerdict
+	p.mu.Unlock()
 	if opts.goal != "" {
 		g := v.Goal
 		switch {
@@ -525,6 +536,8 @@ func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol
 			return nil
 		case v.LastTurn != nil && v.LastTurn.Error != "":
 			return errors.New(v.LastTurn.Error)
+		case g.State == protocol.GoalFailed && verdict != protocol.VerdictImpossible:
+			return fmt.Errorf("goal evaluator failed: %s", g.Reason)
 		default:
 			fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s\n", g.Turns, g.Reason)
 			return errGoalNotAchieved
