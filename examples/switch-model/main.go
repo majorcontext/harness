@@ -48,7 +48,7 @@ func main() {
 	fmt.Println()
 }
 
-// say sends text and streams the reply until the turn ends.
+// say sends text, streams the reply, and exits when the turn fails.
 func say(ctx context.Context, s *harness.Session, id, text string) {
 	t, err := s.Prompt(ctx, protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}})
 	if err != nil {
@@ -65,5 +65,12 @@ func say(ctx context.Context, s *harness.Session, id, text string) {
 				fmt.Print(f.Text)
 			}
 		}
+	}
+	res, err := t.Wait(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if res.StopReason == protocol.StopFailed {
+		log.Fatal(res.Error)
 	}
 }
