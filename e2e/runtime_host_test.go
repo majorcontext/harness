@@ -274,8 +274,9 @@ func goldenNames(t *testing.T, dir string) []string {
 	return names
 }
 
-// TestRuntimeRows checks that each contract golden has one disposition, that
-// each re-golden row has a runtime golden, and that each citation holds.
+// TestRuntimeRows checks that each golden has one disposition, that a same or
+// pending row has a contract golden, that a re-golden row has a runtime golden
+// only, that a deleted row has no golden, and that each citation holds.
 func TestRuntimeRows(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
@@ -292,11 +293,10 @@ func TestRuntimeRows(t *testing.T) {
 		}
 	}
 	for name, row := range runtimeRows {
-		switch {
-		case !slices.Contains(serve, name):
-			t.Errorf("disposition %s names no golden", name)
-		case row.kind == rowRegolden != slices.Contains(runtime, name):
-			t.Errorf("row %s is %s, and a runtime golden exists = %t", name, row, slices.Contains(runtime, name))
+		hasServe, hasRuntime := slices.Contains(serve, name), slices.Contains(runtime, name)
+		wantServe := row.kind == rowSame || row.kind == rowPending
+		if hasServe != wantServe || hasRuntime != (row.kind == rowRegolden) {
+			t.Errorf("row %s is %s, and a contract golden exists = %t, and a runtime golden exists = %t", name, row, hasServe, hasRuntime)
 		}
 		for _, c := range row.cites {
 			used[c] = true

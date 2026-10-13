@@ -4,7 +4,7 @@ Read the root AGENTS.md.
 
 - Contract scenarios drive the real binary over HTTP.
 - Each row runs on the serve binary, and with `HARNESS_E2E_RUNTIME=1` also on `harness.Runtime` in process, through `httpapi.Handler`. Both hosts call the routes of `httpapi.Handler`.
-- Each golden has one disposition in `runtime_rows_test.go`. A change that alters a runtime result updates it.
+- Each row has one disposition in `runtime_rows_test.go`. A same or pending row has a golden under `testdata/contract`, a re-golden row has one under `testdata/runtime` only, and a deleted row has none. A change that alters a runtime result updates it.
 - Every test calls `skipShort(t)`, directly or through `runScenarios`.
 - Do not poll state that has an in-process notification seam.
 - Wait on an SSE stream or a channel.
