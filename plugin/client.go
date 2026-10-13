@@ -12,7 +12,8 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// Client is the handle of a plugin to the harness.
+// Client is the handle of a plugin to the harness. Its calls to the host run
+// no hook, and fail when the connection ends or the runtime closes.
 type Client struct {
 	conn *wire.Conn
 	init atomic.Pointer[InitializeParams]
@@ -25,16 +26,17 @@ func (c *Client) params() InitializeParams {
 	return InitializeParams{}
 }
 
-// WorkspaceDir is the project directory of the harness, or "" when it has none.
+// WorkspaceDir is the work directory of the runtime, or "" when it has none.
 func (c *Client) WorkspaceDir() string { return c.params().WorkspaceDir }
 
 // HarnessVersion is the version of the harness.
 func (c *Client) HarnessVersion() string { return c.params().HarnessVersion }
 
-// Config is the config block of this plugin as JSON, or nil when it has none.
+// Config is the "config" value of the plugin entry in the harness config, or
+// nil when it has none, as for an in-process plugin.
 func (c *Client) Config() json.RawMessage { return bytes.Clone(c.params().Config) }
 
-// HTTPHeaders returns a copy of the headers that the harness wants on outbound HTTP traffic.
+// HTTPHeaders returns a copy of plugin_http_headers from the harness config.
 func (c *Client) HTTPHeaders() map[string]string { return maps.Clone(c.params().HTTPHeaders) }
 
 // HTTPClient returns an HTTP client that adds HTTPHeaders to each request. A
@@ -64,13 +66,15 @@ func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// ServeURL is the base URL of the `harness serve` HTTP API, or "" in run mode.
+// ServeURL is the base URL of the harness HTTP API, or "" when the host serves
+// none.
 func (c *Client) ServeURL() string { return c.params().ServeURL }
 
 // RunToken is the bearer token for ServeURL.
 func (c *Client) RunToken() string { return c.params().RunToken }
 
-// SessionMessages returns the messages of a session.
+// SessionMessages returns the messages of a session in log order, with each
+// attachment as a PartBlob part.
 func (c *Client) SessionMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	var resp SessionMessagesResponse
 	if err := c.conn.Call(ctx, wire.MethodSessionMessages, &SessionMessagesRequest{SessionID: sessionID}, &resp); err != nil {
@@ -79,7 +83,7 @@ func (c *Client) SessionMessages(ctx context.Context, sessionID string) ([]Messa
 	return resp.Messages, nil
 }
 
-// MCPCallRequest is the request of the client/mcp.call method.
+// MCPCallRequest is the wire record of Client.MCPCall.
 type MCPCallRequest struct {
 	Server string          `json:"server"` // name in the harness config
 	Tool   string          `json:"tool"`
@@ -92,8 +96,9 @@ type MCPCallResult struct {
 	IsError bool   `json:"is_error,omitempty"`
 }
 
-// MCPCall calls a tool of an MCP server of the harness config. A tool error
-// sets IsError; an unknown server or a failed connect returns an error.
+// MCPCall calls a tool of a server in mcp_servers. A tool error sets IsError.
+// An unknown server, a server that is down, retrying, or parked, or a failed
+// transport returns an error. MCPCall never connects a server again.
 func (c *Client) MCPCall(ctx context.Context, server, tool string, args json.RawMessage) (*MCPCallResult, error) {
 	var out MCPCallResult
 	if err := c.conn.Call(ctx, wire.MethodMCPCall, &MCPCallRequest{Server: server, Tool: tool, Args: args}, &out); err != nil {
@@ -107,7 +112,7 @@ type GenerateRequest struct {
 	Model     string    `json:"model"` // provider/model reference or config alias; empty: the default model
 	System    string    `json:"system,omitempty"`
 	Messages  []Message `json:"messages"`
-	MaxTokens int       `json:"max_tokens,omitempty"` // 0 keeps the default
+	MaxTokens int       `json:"max_tokens,omitempty"` // 0 keeps the default; negative fails
 }
 
 // Usage counts the tokens of a model call.
@@ -119,7 +124,9 @@ type GenerateResponse struct {
 	Usage   *Usage  `json:"usage,omitempty"` // zero counts when the model reports none
 }
 
-// Generate makes one tool-less model call through the harness provider layer.
+// Generate makes one model call with no tools, with the retry limits of the
+// runtime. No session records it. A model whose backend runs its own agent
+// loop, such as Claude Code, fails the call.
 func (c *Client) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
 	var resp GenerateResponse
 	if err := c.conn.Call(ctx, wire.MethodGenerate, req, &resp); err != nil {

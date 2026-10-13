@@ -10,6 +10,7 @@ First tagged release.
 
 ### Fixed
 
+- **Plugin package documentation** (`plugin`) — the package documentation is a guide: how to write and run a plugin, what each hook does, when each event is sent, the chain order, the failure and deadline rules, and which hooks a backend that runs its own agent loop skips. Runnable examples show a process plugin, an in-process plugin, a plugin tool, and a manifest. Corrected statements: `tool.execute.after` replaces only the result text; `ChatParamsResponse.Params` replaces all the parameters; `Client.ServeURL` is empty when the host serves no HTTP API; `question.asked` is never sent; a process plugin must use the name of its config entry and write logs to standard error.
 - **Goal evaluator failure exit code** (`cmd/harness`) — `harness run -goal` exits 1 and prints `goal evaluator failed: <error>` when the goal evaluator fails (for example, when its model has no API key), in place of `goal not achieved after N turn(s)` and exit 3. A paused goal after a retryable evaluator error also exits 1. Exit 3 stays for a goal that the evaluator judged not met or `impossible`. `harness run` prints `session: <id>` on every exit code when it saved the session. `GoalView` gains `verdict`, the last verdict of the evaluator.
 
 ### Added
