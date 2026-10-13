@@ -21,8 +21,9 @@ A fast, extensible, composable agent harness in Go.
 
 ## Quickstart
 
-Install the CLI. `go install` puts it in `$(go env GOPATH)/bin`, which must be
-on your `PATH`:
+Install the CLI. `go install` puts it in `$(go env GOBIN)`, or in
+`$(go env GOPATH)/bin` when `GOBIN` is empty. That directory must be on your
+`PATH`:
 
 ```bash
 go install github.com/majorcontext/harness/cmd/harness@latest
@@ -431,7 +432,10 @@ rt, err := harness.New(harness.Options{
 ### Run a plugin in the process
 
 The `guard` value of [the plugin step](#block-tool-calls-with-a-plugin) also
-runs inside your program, with no separate process and no config entry:
+runs inside your program, with no separate process and no config entry. Copy
+its `guard` variable and `check` function into your program, add the imports
+`strings` and `github.com/majorcontext/harness/plugin`, and pass it to the
+runtime:
 
 ```go
 rt, err := harness.New(harness.Options{
@@ -494,11 +498,16 @@ export OLLAMA_API_KEY=ollama
 ```
 
 Quit the Ollama app first, because it serves port 11434 without the next
-setting. Start Ollama with the context window Harness will assume, and pull a
-model:
+setting. Start Ollama with the context window Harness will assume. It runs in
+the foreground:
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=131072 ollama serve
+```
+
+In another terminal, pull a model:
+
+```bash
 ollama pull llama3.1
 ```
 
