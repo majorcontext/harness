@@ -11,6 +11,15 @@ import (
 // setupResult is the answer of session/load and session/resume.
 type setupResult struct {
 	ConfigOptions []configOption `json:"configOptions"`
+	after         func()
+}
+
+// AfterSent lets the pump of the session send its updates, so that no live
+// update comes before the answer.
+func (r setupResult) AfterSent() {
+	if r.after != nil {
+		r.after()
+	}
 }
 
 func (a *agent) loadSession(ctx context.Context, params json.RawMessage) (any, error) {
@@ -87,11 +96,13 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	gate := make(chan struct{})
+	h.gate = gate
 	h.start(a.base, sess, st, snap.HeadSeq)
 	if h, err = a.adopt(ctx, h); err != nil {
 		return nil, err
 	}
-	return setupResult{ConfigOptions: configOptions(h.models, snap)}, nil
+	return setupResult{ConfigOptions: configOptions(h.models, snap), after: func() { close(gate) }}, nil
 }
 
 // heldSetup answers a load or resume of a session that the connection holds.

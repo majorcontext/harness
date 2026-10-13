@@ -15,6 +15,7 @@ First tagged release.
 
 ### Fixed
 
+- **Load answer order** (`internal/acp`) — the event pump of a session that `session/load` or `session/resume` opens starts after the answer is sent. A record that the log gains between the read and the open no longer reaches the client before the answer.
 - **ACP answer order** (`internal/acp`) — the answer to `session/prompt` follows every update of its turn and precedes every update of a later turn, such as a goal turn that starts at once. The event pump holds at the end of the turn until the answer is queued.
 - **Native model list** (`internal/modelmeta`) — `Runtime.Models`, `GET /models`, the `model` tool `list`, and the ACP model picker list the chat models of the `anthropic` and `openai` providers, as they list the `codex` and `claude-code` models. A dated snapshot id (for example `claude-haiku-4-5-20251001`) is not listed when its undated alias is in the table. A session can still use a dated id.
 - **Start after Close** (`internal/process`) — a start that waits at the ready gate while `Runtime.Close` cancels it fails with the canceled context. It never replies with a status, even when the cancel also ended the process.

@@ -27,6 +27,8 @@ type held struct {
 
 	stop    context.CancelFunc
 	stopped chan struct{}
+	// gate, when not nil, holds the pump until it is closed.
+	gate chan struct{}
 
 	mu      sync.Mutex
 	done    uint64
@@ -103,6 +105,13 @@ func newPumpState(snap protocol.Session) *pumpState {
 func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 	defer close(h.stopped)
 	defer h.finish()
+	if h.gate != nil {
+		select {
+		case <-h.gate:
+		case <-ctx.Done():
+			return
+		}
+	}
 	for e, err := range h.sess.Events(ctx, after) {
 		if err != nil {
 			if ctx.Err() == nil {

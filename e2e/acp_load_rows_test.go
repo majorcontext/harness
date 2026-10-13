@@ -590,11 +590,45 @@ var acpLoadScenarios = []acpScenario{
 		},
 	},
 	{
-		name:          "a_record_appended_between_replay_and_open_arrives_once",
-		cite:          "so a record that the log gains between the read and the open reaches the client once, as a live update.",
-		model:         []harnesstest.Step{{Name: "first", Reply: harnesstest.Reply{Text: "first reply"}}, {Name: "late", Reply: harnesstest.Reply{Text: "late reply"}}},
-		afterRead:     afterLateTurn,
-		liveAfterLoad: true,
+		name:      "load_sends_no_update_before_the_answer",
+		cite:      "The pump sends no update before the answer to `session/load` or `session/resume`.",
+		model:     []harnesstest.Step{{Name: "first", Reply: harnesstest.Reply{Text: "first reply"}}, {Name: "late", Reply: harnesstest.Reply{Text: "late reply"}}},
+		afterRead: afterLateTurn,
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "one", stop: "end_turn"},
+			acpClose{as: "a"},
+			acpLoad{as: "a"},
+			acpAwaitText{text: "late reply"},
+			acpAwaitUpdate{kind: "session_info_update"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				late, answer := -1, -1
+				for i, f := range c.wire {
+					if f.Dir != "agent" {
+						continue
+					}
+					text := string(f.Frame)
+					if strings.Contains(text, `"result"`) && strings.Contains(text, `"configOptions"`) {
+						answer = i
+					}
+					if updateKind(f) == "agent_message_chunk" && strings.Contains(text, "late reply") {
+						late = i
+					}
+				}
+				if answer < 0 {
+					t.Fatal("the agent sent no answer to session/load")
+				}
+				if late >= 0 && late < answer {
+					t.Errorf("the late reply (frame %d) came before the answer to session/load (frame %d)", late, answer)
+				}
+			}),
+		},
+	},
+	{
+		name:      "a_record_appended_between_replay_and_open_arrives_once",
+		cite:      "so a record that the log gains between the read and the open reaches the client once, as a live update.",
+		model:     []harnesstest.Step{{Name: "first", Reply: harnesstest.Reply{Text: "first reply"}}, {Name: "late", Reply: harnesstest.Reply{Text: "late reply"}}},
+		afterRead: afterLateTurn,
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "one", stop: "end_turn"},
