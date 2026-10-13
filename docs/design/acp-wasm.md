@@ -347,7 +347,7 @@ Status words: **maps**, **gap** (the Go API lacks it), **non-goal** (the spec ex
 
 | ACP | Harness | Status | Notes |
 | --- | --- | --- | --- |
-| `initialize` | none (answered before a `Runtime` is built) | maps | `agentInfo{name:"harness", title, version}`. `authMethods: []`. `promptCapabilities{image:true, embeddedContext:true}`. `mcpCapabilities{http:true, sse:false}` once C1 lands, on the native host only (7.4). `sessionCapabilities` by phase. |
+| `initialize` | none (answered before a `Runtime` is built) | maps | `agentInfo{name:"harness", title, version}`. `authMethods: []`. `promptCapabilities` by phase: `{image:true, embeddedContext:true}` once the PR that maps image and resource blocks lands. `mcpCapabilities{http:true, sse:false}` once C1 lands, on the native host only (7.4). `sessionCapabilities` by phase. |
 | `authenticate`, `logout` | none | ignore | Not advertised. The overview says `authenticate` applies "if required by the Agent". A call answers a JSON-RPC error (`-32601`). Credentials come from the environment that the editor passes and from config (`Options.Getenv = os.Getenv`). |
 | `session/new {cwd, mcpServers, additionalDirectories}` | `Runtimes.For(cwd)`, then `Runtime.Create(req, WithSessionMCP(servers))` | maps after C1 | 7.4. `additionalDirectories` is not advertised. |
 | `session/load` | `Runtime.Read` for replay, then `Runtime.Open` | maps | 7.5. |

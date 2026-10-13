@@ -47,6 +47,24 @@ linters:
               desc: backends and tools sit below the child tree
             - pkg: github.com/majorcontext/harness/internal/server
               desc: backends and tools sit below the HTTP mapping
+        acp-seam:
+          files:
+            - "**/internal/acp/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness
+            - github.com/majorcontext/harness/config
+            - github.com/majorcontext/harness/internal/acp
+            - github.com/majorcontext/harness/internal/acp/rpc
+            - github.com/majorcontext/harness/protocol
+        acp-rpc-leaf:
+          files:
+            - "**/internal/acp/rpc/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness/internal/acp/rpc
         selftool-seam:
           files:
             - "**/internal/selftool/**"

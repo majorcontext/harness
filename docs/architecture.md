@@ -1,6 +1,6 @@
 # Harness architecture
 
-Harness runs coding-agent sessions. A session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer. `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. This document is the binding spec of the system as it is.
+Harness runs coding-agent sessions. A session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer. `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`, and `acp` over the ACP adapter. This document is the binding spec of the system as it is.
 
 ## Goals and non-goals
 
@@ -330,6 +330,8 @@ Free to change.
 | Package | Owns |
 | --- | --- |
 | `internal/server` | HTTP mapping of the Go API, generic over the sessions that `httpapi` supplies |
+| `internal/acp` | The Agent Client Protocol adapter. It reads and writes bytes through an `io.Reader` and an `io.Writer`, so it does not know its host. It imports `harness`, `config`, and `protocol` |
+| `internal/acp/rpc` | The newline-delimited JSON-RPC 2.0 connection of the adapter: request IDs, notifications, `$/cancel_request`, and one writer. It imports the standard library only |
 | `internal/listing` | The page of sessions in creation order, shared by `Runtime.List` and `httpapi.ReadHandler` |
 | `internal/storecheck` | The name and record rules that `store.CheckName` and `store.CheckRecords` report and the runtime applies |
 | `internal/eventlog` | The record codec, `Apply`, and `Check`. The event schema is in `protocol` |
@@ -360,7 +362,7 @@ Free to change.
 | `internal/gates` | The repository checks of "CI gates" |
 | `internal/testpoll` | Polling for cross-process waits in tests |
 
-The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `backoff`, `eventlog`, and `protocol`, `internal/selftool` imports only `modelref`, `process`, `prompt`, `session`, `tool/proc`, `toolresult`, `turn`, and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, only `internal/backend` builds a provider wire, only `internal/backend`, `internal/provider`, `internal/plugin`, `internal/prompt`, `internal/imageclamp`, and `internal/tool/pluginsrc` import `internal/message`, `config` imports the standard library only, the public `plugin` package imports the standard library, `protocol`, and `internal/plugin/wire` only, and no internal package imports `cmd`.
+The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `backoff`, `eventlog`, and `protocol`, `internal/selftool` imports only `modelref`, `process`, `prompt`, `session`, `tool/proc`, `toolresult`, `turn`, and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, only `internal/backend` builds a provider wire, only `internal/backend`, `internal/provider`, `internal/plugin`, `internal/prompt`, `internal/imageclamp`, and `internal/tool/pluginsrc` import `internal/message`, `internal/acp` imports the standard library, `harness`, `config`, `protocol`, and `internal/acp/rpc` only, `internal/acp/rpc` imports the standard library only, `config` imports the standard library only, the public `plugin` package imports the standard library, `protocol`, and `internal/plugin/wire` only, and no internal package imports `cmd`.
 
 ## eventlog
 
@@ -836,9 +838,52 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - `serve` wraps its store to log a slow store operation (`slow store phase`, over 1 s), an operation still in flight (`store phase in flight`, every 5 s after 5 s), the append that creates a session (`session created`), and the append of `child.spawned` (`task spawned`). It also logs the config summary at start, and each GC pause of 200 ms or more.
 - `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-c` names the newest root session whose `work_dir` equals the cleaned current directory, and fails with `no sessions to continue in <dir>` when none does; a session from another directory, and a session with no `work_dir`, is never chosen. `-model` replaces the model of an opened session, `-system` appends a prompt segment, and `-max-tokens` sets `max_tokens` and wins over the config key. It submits the prompt as a typed input, so a slash command runs as `Prompt` runs it, and prints each text delta of the session and of each task child to stdout and each tool call and failed tool to stderr, or each event as a JSON line with `-json` (each line holds its `session_id`). It returns when the session has settled. It exits 1 when the turn failed, also under `-goal`, when the goal evaluator failed (the goal is `paused`, or `failed` with a verdict other than `impossible`; stderr names the error), or when a typed command did not succeed. It exits 3 when the evaluator judged the `-goal` not met, or `impossible`, and no turn failed. It prints `session: <id>` on stderr when it saved the session. A command that fails prints its error on stderr with the prefix `harness: `, once: an error that already starts with that prefix is not prefixed again. A run whose session another process opened later fails with the takeover error of `Ownership` and exits 1.
 - `-h` and `--help` on any command (`version` included), and `help` at the top level and after `plugin`, print the usage to stdout and exit 0. A missing command prints the usage to stderr. An unknown command prints `harness: unknown command "<x>"`, a missing or unknown `plugin` subcommand prints `harness: plugin: missing subcommand` or `harness: plugin: unknown subcommand "<x>"`, and a flag error or a positional argument that a command does not take (for example `serve help` or `sessions extra`) prints `harness: <error>`, each followed by the usage on stderr. All of these exit 2, and the command does not start. One parse function in `cmd/harness` handles the flags of every command.
+- `acp` serves ACP over stdin and stdout (see ACP). It takes no flag. It reads no config file, makes no network call, and builds no runtime. A `SIGINT` or `SIGTERM` ends it with status 0.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins`, which probes each plugin again and refreshes the manifest cache, and prints each plugin with its hooks.
 - `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline; a session whose tool ignores the cancel then keeps its lease until the lease expires. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`.
+
+## ACP
+
+`harness acp` serves the Agent Client Protocol (ACP) version 1 over stdin and stdout, for editors and for programs that start it. `internal/acp` is the adapter. It reads bytes from an `io.Reader` and writes bytes to an `io.Writer`, so it does not know its host. `internal/acp/rpc` is the framing.
+
+### Schema
+
+- The schema is `schema.json` of the release `schema-v1.25.0` of `github.com/agentclientprotocol/agent-client-protocol`, with sha256 `4bcd1d2051ff7ed379bd9b234fb9b09c5ab9245478698e9fab805bd9b52a33a6`. The repository keeps it at `e2e/testdata/acp/schema/schema.json`.
+- A test fails when the file does not match the digest.
+- The test client checks each frame in both directions against the schema. The validator implements each keyword that the schema uses. A schema that uses another keyword fails at load, in a test.
+- One protocol version holds for each connection. Version 1 is the only version.
+
+### Transport
+
+- A message is one JSON-RPC 2.0 object on one line, with no newline inside it. stdout holds ACP messages only. The JSON `slog` logger writes to stderr.
+- One goroutine reads the lines, one goroutine writes, and each request runs in its own goroutine. The messages of one goroutine reach stdout in the order of its writes.
+- A blank line is skipped. A line of more than 64 MiB is skipped and answered with `-32700`.
+- A line that is not JSON is answered with `-32700` and a null id, and the connection stays open.
+- A line that is JSON but not a request, a notification, or a response is answered with `-32600` and a null id. An `id` that is not a string, a number, or null is the same error.
+- A request with a null `id` is a request and is answered. A message with no `id` is a notification.
+- Two numbers that are equal name one id, so `1` and `1.0` are the same id. A request whose id names a request that still runs is answered with `-32600`.
+- A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.
+- `$/cancel_request` cancels the context of the request that `requestId` names. If that request then fails, the answer is `-32800`. A `requestId` that names no running request is ignored.
+- A handler that fails with an error that is not a JSON-RPC error is answered with `-32603` and the text `Internal error`. The error text never reaches the client.
+- At the end of the input, the process writes the responses of the requests that run, and then exits with status 0. After `SIGINT` or `SIGTERM` it cancels the requests that run, writes their responses, and exits with status 0. It exits with status 1 when it cannot read its input.
+
+### Methods
+
+| Method | Status |
+| --- | --- |
+| `initialize` | Answered |
+| `authenticate`, `logout` | `-32601`. The agent advertises no authentication |
+| Any other method | `-32601` |
+
+### Initialize
+
+- `initialize` answers the agent info, the agent capabilities, and an empty `authMethods`.
+- The agent info is `name` `harness`, `title` `Harness`, and the harness version.
+- When the client version is not 1, the answer is version 1, the latest version of the agent. When it is 1, the answer is 1.
+- `initialize` without a `protocolVersion` that is an integer from 0 to 65535 is `-32602`.
+- The agent capabilities are `loadSession` false, `mcpCapabilities` with `http` and `sse` false, and empty `sessionCapabilities`. They hold no `promptCapabilities`: the agent advertises a capability only when the method that uses it works.
+- The agent never sends `session/request_permission`: harness has no permission system.
 
 ## turn and backend
 
@@ -1170,6 +1215,7 @@ The Codex websocket transport cannot dial on js, because a browser `WebSocket` c
 - A test double that imitates a wire is checked against a real recording in `testdata/wire` (see the Wire doubles gate). `internal/wirerecord` makes the recordings and runs only with `HARNESS_RECORD_WIRE=1`; `internal/wirescrub` removes ids, tokens, emails, and paths first.
 - A scenario is a model script and a list of actions. Its golden holds the normalized model requests and the final transcript of each session, not event shapes. An action that returns a result records its status and body under `calls`, keyed `<action>.<alias>`, with `#2`, `#3` on a repeat. Ids in a body become `ses:<alias>`, `msg#N`, and so on, and a scenario binds each child with `bindChild` before it lists sessions, so no id gets a run-dependent number. `scenario.config` adds top-level keys to the served config, and `scenario.chat` serves the model through `NewChat` as provider `bifrost`.
 - Scenarios run the real `harness serve` binary over loopback, in its own process group, through a driver interface. Each wait has a bound. Every scenario checks the invariants of the log: unique message ids, one result for each tool call, and contiguous event sequence numbers.
+- The ACP table (`e2e/acp_scenarios_test.go`) is separate from the driver rows. A row is a list of steps, run on the real `harness acp` binary over stdio and on `acp.Serve` over pipes in process. Both hosts match one golden in `e2e/testdata/acp`. The golden holds the frames in order, not event shapes, because the frames are the ACP contract. The test client checks each frame in both directions against the pinned ACP schema. Each row cites a sentence of the ACP section, and `TestACPRows` checks that the sentence is there.
 - The runtime host runs the rows on `harness.Runtime` in process. With `HARNESS_E2E_RUNTIME=1`, each row also runs through `httpapi.Handler`, on a `DiskStore`, with the config that serve reads. A restart closes the runtime and opens a new one on the same store. A kill copies the store, closes the old runtime on its own directory under an ended context, and opens the new runtime on the copy, so nothing that the old runtime does after the kill reaches the next owner. The driver reads the transcript from the session events, as a reader sees it. A wait for an idle child also waits until its parent records `child.settled` and is idle, because the report of the child can start a turn of the parent.
 - Each row has one disposition in `e2e/runtime_rows_test.go`: a contract golden under `e2e/testdata/contract` that both hosts match; a runtime golden under `e2e/testdata/runtime` and no contract golden; deleted, for a behavior that the contract does not have, with no golden; or pending on a fix, with a contract golden. Each row cites a sentence of this document, or an id of the closed list `e2e/testdata/runtime-reasons.txt` for a reason that this document cannot hold; an unknown cite fails, and so does a listed id that no row cites. A re-golden row cites each sentence or reason that accounts for a difference. A pending row runs in a child test process as an expected failure: the run fails when a pending row matches its serve golden, so it must become a same row. `TestRuntimeRows` checks that each row has the goldens that its disposition names and no other, and that each cite list fits its kind of row. CI runs the runtime host in a step that gates.
 - The contract client checks every HTTP response of a host except a CORS preflight, on both drivers. A body must match the schema that `protocol/openapi.json` gives its route and status, and a field that the schema does not list fails. A schema keyword that the check does not implement fails. An SSE frame must match `Event`, and an `error` frame must match `ErrorBody`. A status of 400 or more must have the `ErrorBody` envelope and the status that the Errors table gives its code. A route, a status, or a content type that the document lacks fails the row.
@@ -1177,7 +1223,7 @@ The Codex websocket transport cannot dial on js, because a browser `WebSocket` c
 
 ### Unit tests
 
-Unit tests cover pure code only: `Apply`, wire transcoders (`internal/provider/*/` and the `internal/backend` wire mapping files), `config`, `internal/message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
+Unit tests cover pure code only: `Apply`, `internal/acp`, wire transcoders (`internal/provider/*/` and the `internal/backend` wire mapping files), `config`, `internal/message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
 
 ### CI gates
 
@@ -1188,7 +1234,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders (`internal/provider/*
 | File size | Fail above 800 lines |
 | Function size | Fail when the closing brace is more than 80 lines below the opening brace |
 | Test lines vs code lines per package | Fail above 1.5 test lines per code line, unless the ratio does not rise over the merge base. A new package has no base, but a moved package compares with the package it came from. A change that removes code and adds no test lines always passes |
-| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines (code lines inside `Test`, `Benchmark`, `Fuzz`, and `Example` functions and package-level `var` declarations; top-level helpers, fakes, and types do not count) outside `e2e/`, `internal/eventlog`, `internal/provider/*/`, `config`, `internal/message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
+| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines (code lines inside `Test`, `Benchmark`, `Fuzz`, and `Example` functions and package-level `var` declarations; top-level helpers, fakes, and types do not count) outside `e2e/`, `internal/eventlog`, `internal/acp`, `internal/provider/*/`, `config`, `internal/message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
 | `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file |
 | `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
 | Merge-base diff | `TestRepository` checks only files and packages that differ from `git merge-base HEAD origin/main`, or from `$GATES_BASE_REF`. A new file meets each limit above. A changed file may not cross a limit that it met, and may not get worse on a limit that it already broke. A renamed file compares with its old path. A change that only deletes code always passes. An unchanged file is not checked. No baseline file exists |

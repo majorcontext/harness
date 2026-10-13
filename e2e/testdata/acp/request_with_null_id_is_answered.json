@@ -1,0 +1,26 @@
+{
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": null,
+        "jsonrpc": "2.0",
+        "method": "bogus/method"
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32601,
+          "data": {
+            "method": "bogus/method"
+          },
+          "message": "Method not found"
+        },
+        "id": null,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

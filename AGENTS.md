@@ -41,7 +41,8 @@ Add none of these without a new design decision:
 - A web UI. `majorcontext/bailey` owns that surface.
 
 ## Startup rules
-- Keep `harness version` inside the budget of the `Startup budget` step in `.github/workflows/ci.yml`.
+- Keep `harness version` and the time to the `initialize` response of `harness acp` inside the budget of the `Startup budget` step in `.github/workflows/ci.yml`.
+- Keep stdout of `harness acp` for ACP frames only. Log to stderr.
 - Before first output, read only the user and project config files.
 - Make no network call and start no subprocess before a command needs it.
 - Add no `init()` side effects. Keep production Go free of cgo.
@@ -58,7 +59,7 @@ Add none of these without a new design decision:
 
 ## Tests
 - TDD means: write the failing contract test first, see it fail for the named reason, then implement. A contract test is a scenario row in `e2e/`; a row runs on both drivers with `HARNESS_E2E_RUNTIME=1`, except a row marked `rowDeleted` (the contract has no such behavior). A behavior change adds a row; a bug fix adds one row to the nearest table.
-- Write no other test unless the code is pure: `internal/eventlog` Apply, wire transcoders (`internal/provider/*/`, `internal/backend/modelapi/convert_test.go`, `internal/backend/claudecode/frames_test.go`), `config`, `internal/message`, `internal/gates`. Otherwise list the file with a one-line reason in `testdata/test-exceptions.txt` (path, space, reason). `internal/gates` fails a change that nets new lines inside Test, Benchmark, Fuzz, or Example functions or package-level vars elsewhere. Top-level helpers, fakes, and types do not count. A listed file still meets the 1.5 test:code ratio of its package.
+- Write no other test unless the code is pure: `internal/eventlog` Apply, `internal/acp`, wire transcoders (`internal/provider/*/`, `internal/backend/modelapi/convert_test.go`, `internal/backend/claudecode/frames_test.go`), `config`, `internal/message`, `internal/gates`. Otherwise list the file with a one-line reason in `testdata/test-exceptions.txt` (path, space, reason). `internal/gates` fails a change that nets new lines inside Test, Benchmark, Fuzz, or Example functions or package-level vars elsewhere. Top-level helpers, fakes, and types do not count. A listed file still meets the 1.5 test:code ratio of its package.
 - Name a test by its behavior, never by an incident. No test reads another package's unexported state.
 - No `time.Sleep` or `time.After` in tests. Use `testing/synctest` or channels. Use `internal/testpoll` only for cross-process waits.
 - Run Go tests with `-race`. `gofmt` output differs across Go minor versions; CI reads the version from `go.mod`.

@@ -1,0 +1,81 @@
+{
+  "wire": [
+    {
+      "dir": "client",
+      "frame": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":"
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32700,
+          "message": "Parse error"
+        },
+        "id": null,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": ""
+    },
+    {
+      "dir": "client",
+      "frame": [
+        1,
+        2
+      ]
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32600,
+          "message": "Invalid Request"
+        },
+        "id": null,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "clientCapabilities": {},
+          "clientInfo": {
+            "name": "e2e",
+            "version": "0"
+          },
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "agentCapabilities": {
+            "loadSession": false,
+            "mcpCapabilities": {
+              "http": false,
+              "sse": false
+            },
+            "sessionCapabilities": {}
+          },
+          "agentInfo": {
+            "name": "harness",
+            "title": "Harness",
+            "version": "\u003cversion\u003e"
+          },
+          "authMethods": [],
+          "protocolVersion": 1
+        }
+      }
+    }
+  ]
+}
