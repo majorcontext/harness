@@ -25,7 +25,7 @@
         "work_dir": "\u003cworkdir\u003e"
       }
     },
-    "create.openrouter/vendor/model": {
+    "create.gateway/vendor/model": {
       "status": 201,
       "body": {
         "context": {
@@ -35,7 +35,7 @@
         "created_at": "\u003ctime\u003e",
         "head_seq": 2,
         "id": "ses#2",
-        "model": "openrouter/vendor/model",
+        "model": "gateway/vendor/model",
         "origin": "",
         "status": "idle",
         "subscription_usage": null,

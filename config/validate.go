@@ -4,16 +4,13 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"regexp"
 )
 
 // Validate returns the first rule that c breaks. It never changes c.
 func (c *Config) Validate() error {
-	providers := maps.Clone(c.Providers)
-	applyProviderDefaults(providers)
-	if err := cmp.Or(c.validateFile(), validateProviders(providers), validateAppendSystemPromptArgs(c)); err != nil {
+	if err := cmp.Or(c.validateFile(), validateProviders(c.Providers), validateAppendSystemPromptArgs(c)); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil

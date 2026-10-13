@@ -12,8 +12,9 @@ A fast, extensible, composable agent harness in Go.
 
 - Go 1.27.1 or later, to install the CLI and to build Go plugins and programs.
 - An API key for one model provider. The default model is Anthropic's
-  (`ANTHROPIC_API_KEY`). With an OpenAI or OpenRouter key, choose a model of
-  that provider, as [Choose a model](#choose-a-model) shows.
+  (`ANTHROPIC_API_KEY`). With an OpenAI key, choose an OpenAI model, as
+  [Choose a model](#choose-a-model) shows. For any other provider, add a
+  `providers` entry, as [Configuration](#configuration) shows.
 - A directory you can reset, such as a git repository. Harness has no approval
   prompts: the model reads and edits files and runs shell commands in the
   current directory without asking. Use a [plugin](#block-tool-calls-with-a-plugin)
@@ -57,7 +58,7 @@ To change the default, set `model` in a config file (see
 {"model": "openai/gpt-5-mini"}
 ```
 
-[Configuration](#configuration) shows OpenRouter, Ollama, and other endpoints.
+[Configuration](#configuration) shows how to add OpenRouter, Ollama, and other endpoints.
 
 ### Continue the session
 
@@ -485,8 +486,8 @@ ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
 ## Configuration
 
 These keys go in either [config file](#config-files). In a model ref
-`provider/model`, `provider` is a built-in family (`anthropic`, `openai`,
-`openrouter`) or a key from `providers`.
+`provider/model`, `provider` is a built-in family (`anthropic`, `openai`) or a
+key from `providers`.
 
 ### OpenAI-compatible endpoints
 
@@ -540,26 +541,28 @@ and `extra_headers` (sent on every request).
 
 ### OpenRouter
 
-Harness registers an `openrouter` provider when `providers` has no
-`openrouter` entry, so you only need a key:
-
-```bash
-export OPENROUTER_API_KEY=...
-harness run -model openrouter/anthropic/claude-sonnet-5 -p "Review the diff"
-```
-
-An `openrouter` entry takes `type`, `base_url`, and `api_key_env` from those
-defaults when you leave them out. To send attribution headers, set only
-`extra_headers`:
+OpenRouter is an OpenAI-compatible endpoint. Add it as a `providers` entry of
+type `openai-compat`:
 
 ```json
 {
   "providers": {
     "openrouter": {
+      "type": "openai-compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
       "extra_headers": {"HTTP-Referer": "https://example.com", "X-Title": "my-app"}
     }
   }
 }
+```
+
+The `extra_headers` field is optional. Then set the key and use the key of the
+entry as the provider name:
+
+```bash
+export OPENROUTER_API_KEY=...
+harness run -model openrouter/anthropic/claude-sonnet-5 -p "Review the diff"
 ```
 
 ### OpenAI Responses endpoints
@@ -601,8 +604,9 @@ and overrides the catalog.
 ### Config errors
 
 These fail config loading with an error that names the entry: an unknown
-`type`, an `openai-compat` or `openai` entry with no `base_url` (except
-`openrouter`, which has a default), and a misplaced `responses_path`.
+`type`, an `openai-compat` or `openai` entry with no `base_url`, an entry with no
+`type` under a key other than `anthropic` or `openai`, and a misplaced
+`responses_path`.
 
 ## Contributing
 

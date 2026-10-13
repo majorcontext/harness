@@ -1,7 +1,5 @@
 package config
 
-import "maps"
-
 // DefaultModel is the model ref used when neither a flag nor config names one.
 const DefaultModel = "anthropic/claude-fable-5"
 
@@ -19,39 +17,6 @@ func Defaults() Config {
 		MCPToolLoadingThreshold: 20,
 		MaxTaskDepth:            3,
 		MaxConcurrentTasks:      20,
-		Providers: map[string]Provider{
-			"openrouter": {Type: TypeOpenAICompat, BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"},
-		},
-	}
-}
-
-// ResolvedProviders returns a new map of the providers of c with the empty fields of each default entry filled.
-func (c *Config) ResolvedProviders() map[string]Provider {
-	out := maps.Clone(c.Providers)
-	applyProviderDefaults(out)
-	return out
-}
-
-// applyProviderDefaults must run on the merged map, because one layer may set only some fields of an entry.
-func applyProviderDefaults(providers map[string]Provider) {
-	for name, def := range Defaults().Providers {
-		p, ok := providers[name]
-		if !ok {
-			continue
-		}
-		if p.Type == "" {
-			p.Type = def.Type
-		}
-		if p.BaseURL == "" {
-			p.BaseURL = def.BaseURL
-		}
-		if p.APIKeyEnv == "" {
-			p.APIKeyEnv = def.APIKeyEnv
-		}
-		if p.Family == "" {
-			p.Family = def.Family
-		}
-		providers[name] = p
 	}
 }
 

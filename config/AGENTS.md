@@ -14,7 +14,7 @@ Read the root AGENTS.md. `cmd/harness/AGENTS.md` covers environment resolution.
 - A plugin name in both files is an error that names the plugin and both files. `LoadProject` checks it.
 - Do not copy that additive shape to another key without the same trust argument.
 - Reject both Claude Code append-prompt options in `extra_args` when `append_system_prompt` is non-empty.
-- Validate providers after merge and native-default application.
+- Validate providers once, on the merged config.
 - Validate an adapter field against the adapter the entry builds, not the map key.
 - Reject unreadable or unsupported values. Never silently pick another policy.
 - Use table tests for merge and validation. Cover absent, zero, negative, and malformed values.

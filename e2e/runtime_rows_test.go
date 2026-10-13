@@ -465,6 +465,7 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_settings_switch_to_another_provider_keeps_the_history":        reGolden(specView, specItems, specUpdate),
 	"commands_menu_lists_builtin_and_prompt_commands":                    reGolden(specCmdMenuRoutes, specCmdUnsupport),
 	"create_checks_the_provider":                                         reGolden(specNoProvider, specUnknownWindow, specErrors, specView),
+	"create_names_no_built_in_openrouter_provider":                       reGolden(specNoProvider, specErrors, specView),
 	"create_without_a_model_takes_the_default_model":                     reGolden(specView),
 	"create_takes_an_unknown_model_with_a_configured_window":             reGolden(specView),
 	"goal_tool_actions_report_and_refuse":                                reGolden(specView, specGoalTranscript),

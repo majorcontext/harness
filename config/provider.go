@@ -95,7 +95,7 @@ func omitResponseParams() []string {
 	}
 }
 
-// validateProviders rejects an unknown Type, an empty Type on a key that is not native or defaulted, and a missing BaseURL.
+// validateProviders rejects an unknown Type, an empty Type on a key that is not native, and a missing BaseURL.
 func validateProviders(providers map[string]Provider) error {
 	for name, p := range providers {
 		switch p.Type {

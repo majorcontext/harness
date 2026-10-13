@@ -37,6 +37,11 @@ func TestContractModels(t *testing.T) {
 				"bifrost/fireworks/accounts/fireworks/routers/firerouter", "nope/gpt-5", "gpt-5", "fast", ""),
 		},
 		{
+			name:    "create_names_no_built_in_openrouter_provider",
+			config:  map[string]any{"providers": map[string]any{"anthropic": key(nil)}},
+			actions: creates("openrouter/x"),
+		},
+		{
 			name:    "create_without_a_model_takes_the_default_model",
 			config:  map[string]any{"model": ""},
 			actions: creates(""),
@@ -45,9 +50,9 @@ func TestContractModels(t *testing.T) {
 			name: "create_takes_an_unknown_model_with_a_configured_window",
 			config: map[string]any{
 				"context_window_tokens": 1000,
-				"providers":             map[string]any{"anthropic": key(nil), "openrouter": key(nil)},
+				"providers":             map[string]any{"anthropic": key(nil), "gateway": key(map[string]any{"type": "openai-compat", "base_url": "https://gateway.test"})},
 			},
-			actions: creates("anthropic/no-such-model", "openrouter/vendor/model"),
+			actions: creates("anthropic/no-such-model", "gateway/vendor/model"),
 		},
 		{
 			name: "models_lists_the_configured_providers",

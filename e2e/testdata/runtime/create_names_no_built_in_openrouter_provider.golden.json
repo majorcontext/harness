@@ -1,0 +1,16 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create.openrouter/x": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: no provider \"openrouter\" is configured for openrouter/x"
+        }
+      }
+    }
+  }
+}
