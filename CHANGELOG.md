@@ -8,6 +8,10 @@ Harness is pre-1.0. The runtime API, config schema, and plugin protocol may chan
 
 First tagged release.
 
+### Fixed
+
+- **Goal evaluator failure exit code** (`cmd/harness`) — `harness run -goal` exits 1 and prints `goal evaluator failed: <error>` when the goal evaluator fails (for example, when its model has no API key), in place of `goal not achieved after N turn(s)` and exit 3. A paused goal after a retryable evaluator error also exits 1. Exit 3 stays for a goal that the evaluator judged not met or `impossible`. `harness run` prints `session: <id>` on every exit code when it saved the session. `GoalView` gains `verdict`, the last verdict of the evaluator.
+
 ### Added
 
 - **Plugin failure log line** (`harness`) — a plugin hook that fails open writes one `plugin: hook failed` Warn line through the runtime logger, with the plugin name, the hook, and the error text with secrets masked.

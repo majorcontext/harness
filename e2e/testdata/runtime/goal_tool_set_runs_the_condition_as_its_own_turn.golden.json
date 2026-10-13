@@ -270,7 +270,8 @@
           "condition": "say done",
           "reason": "ok",
           "state": "achieved",
-          "turns": 1
+          "turns": 1,
+          "verdict": "met"
         },
         "head_seq": 18,
         "id": "ses:a",

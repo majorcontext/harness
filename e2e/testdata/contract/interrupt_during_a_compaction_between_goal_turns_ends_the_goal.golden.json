@@ -195,7 +195,8 @@
           "max_turns": 3,
           "reason": "interrupted",
           "state": "cleared",
-          "turns": 1
+          "turns": 1,
+          "verdict": "not_met"
         },
         "head_seq": 17,
         "id": "ses:a",

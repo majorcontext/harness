@@ -89,7 +89,8 @@
           "max_turns": 3,
           "reason": "no way",
           "state": "failed",
-          "turns": 1
+          "turns": 1,
+          "verdict": "impossible"
         },
         "head_seq": 10,
         "id": "ses:a",

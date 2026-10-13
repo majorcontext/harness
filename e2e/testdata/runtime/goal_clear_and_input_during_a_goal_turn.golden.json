@@ -374,7 +374,8 @@
           "condition": "say done",
           "reason": "ok",
           "state": "achieved",
-          "turns": 3
+          "turns": 3,
+          "verdict": "met"
         },
         "head_seq": 29,
         "id": "ses:a",

@@ -280,7 +280,8 @@
           "max_turns": 2,
           "reason": "max_turns 2 reached",
           "state": "exhausted",
-          "turns": 2
+          "turns": 2,
+          "verdict": "not_met"
         },
         "head_seq": 20,
         "id": "ses:a",

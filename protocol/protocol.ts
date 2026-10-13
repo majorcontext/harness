@@ -181,6 +181,7 @@ export interface GoalView {
   state: "active" | "paused" | "achieved" | "failed" | "exhausted" | "cleared";
   turns: number;
   pauses?: number;
+  verdict?: "met" | "not_met" | "impossible";
   reason?: string;
   retry_at?: string;
 }

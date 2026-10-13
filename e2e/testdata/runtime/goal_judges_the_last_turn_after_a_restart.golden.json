@@ -105,7 +105,8 @@
           "max_turns": 3,
           "reason": "ok",
           "state": "achieved",
-          "turns": 1
+          "turns": 1,
+          "verdict": "met"
         },
         "head_seq": 11,
         "id": "ses:a",

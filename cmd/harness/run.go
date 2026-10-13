@@ -141,7 +141,7 @@ func runCmd(args []string) error {
 	if out.printedText {
 		fmt.Println()
 	}
-	if !opts.noSave && (runErr == nil || errors.Is(runErr, errGoalNotAchieved)) {
+	if !opts.noSave {
 		fmt.Fprintln(os.Stderr, "session:", s.Snapshot().ID)
 	}
 	return errors.Join(runErr, closeRuntime(rt))
@@ -512,7 +512,7 @@ func (p *printer) item(ev protocol.Event) {
 }
 
 // verdict returns the failure of the run: a turn that failed, a typed command
-// that did not succeed, or a goal that was not achieved.
+// that did not succeed, or a goal that was not achieved or whose evaluator failed.
 func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol.Admitted) error {
 	v := s.Snapshot()
 	if opts.goal != "" {
@@ -525,6 +525,8 @@ func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol
 			return nil
 		case v.LastTurn != nil && v.LastTurn.Error != "":
 			return errors.New(v.LastTurn.Error)
+		case g.State == protocol.GoalPaused, g.State == protocol.GoalFailed && g.Verdict != protocol.VerdictImpossible:
+			return fmt.Errorf("goal evaluator failed: %s", g.Reason)
 		default:
 			fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s\n", g.Turns, g.Reason)
 			return errGoalNotAchieved
