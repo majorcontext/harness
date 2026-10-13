@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,24 +13,27 @@ import (
 // Load reads one config file. A missing file is an empty Config. A key that Config has no field for is an
 // error that names the path and the key. Providers are validated after the merge, not here.
 func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &Config{}, nil
 		}
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	return Parse(path, data)
+}
 
-	dec := json.NewDecoder(f)
+// Parse decodes one config document like Load, and name labels its errors.
+func Parse(name string, data []byte) (*Config, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var c Config
 	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+		return nil, fmt.Errorf("config: parsing %s: %w", name, err)
 	}
 	c.SessionDir = expandHome(c.SessionDir)
 	if err := c.validateFile(); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+		return nil, fmt.Errorf("config: parsing %s: %w", name, err)
 	}
 	return &c, nil
 }
@@ -43,12 +47,17 @@ func LoadProject(userPath, dir string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	return MergeProject(user, userPath, dir)
+}
+
+// MergeProject is LoadProject for a user config that the caller holds. userName labels it in errors.
+func MergeProject(user *Config, userName, dir string) (*Config, error) {
 	projPath := filepath.Join(dir, ".harness.json")
 	proj, err := Load(projPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectSharedPlugins(user, proj, userPath, projPath); err != nil {
+	if err := rejectSharedPlugins(user, proj, userName, projPath); err != nil {
 		return nil, err
 	}
 	return mergeAndValidate(user, proj)

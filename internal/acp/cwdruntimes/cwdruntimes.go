@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync"
 
@@ -28,6 +29,9 @@ type Options struct {
 	Version string
 	Getenv  func(string) string
 	Logger  *slog.Logger
+	// ModelTransport and Tools are the matching harness.Options of every runtime.
+	ModelTransport func(provider string) http.RoundTripper
+	Tools          []harness.Tool
 }
 
 // Runtimes implements acp.Runtimes.
@@ -72,7 +76,8 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 		}
 	}
 	rt, err := harness.New(harness.Options{Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
-		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger})
+		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
+		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools})
 	if err != nil {
 		return nil, err
 	}

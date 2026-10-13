@@ -120,6 +120,7 @@ func (c *acpConn) read() map[string]any {
 		if !ok || l.err != nil {
 			c.t.Fatalf("the agent closed its output while the test waited for a frame: %v", l.err)
 		}
+		c.t.Logf("DBG %s", l.text)
 		return c.decode(l.text)
 	case <-timer.C:
 		c.t.Fatalf("waited %s for a frame of the agent", waitBound)
@@ -213,6 +214,15 @@ func startACPProc(t *testing.T) (io.WriteCloser, io.Reader, *procGroup, *lockedB
 // startACPProcEnv is startACPProc with the config and session directory of env.
 func startACPProcEnv(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, *procGroup, *lockedBuffer) {
 	t.Helper()
+	cmd := exec.Command(harnessBin, "acp")
+	cmd.Dir = t.TempDir()
+	cmd.Env = cleanEnv(map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey})
+	return startACPCmd(t, cmd)
+}
+
+// startACPCmd runs cmd in its own process group with ACP on its stdin and stdout.
+func startACPCmd(t *testing.T, cmd *exec.Cmd) (io.WriteCloser, io.Reader, *procGroup, *lockedBuffer) {
+	t.Helper()
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -221,9 +231,6 @@ func startACPProcEnv(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, *proc
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(harnessBin, "acp")
-	cmd.Dir = t.TempDir()
-	cmd.Env = cleanEnv(map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey})
 	stderr := &lockedBuffer{}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, stderr
 	g := startGroup(t, cmd)

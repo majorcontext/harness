@@ -27,7 +27,7 @@ type acpScenario struct {
 	// model is the script of the model. config adds top-level keys to the user
 	// config. dirs names extra directories and their files; "main" always
 	// exists. allowed is the default tool set of the in-process adapter, so
-	// a row that sets it runs on that host only.
+	// a row that sets it runs on the hosts that take one: in process and Node wasm.
 	model   []harnesstest.Step
 	config  map[string]any
 	dirs    map[string]map[string]string
@@ -37,6 +37,11 @@ type acpScenario struct {
 	// wireOnly leaves the requests and the sessions out of the golden, for a row whose model traffic depends on timing.
 	wireOnly bool
 	steps    []acpStep
+	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
+	// one that passes an mcpServers entry. schedulerOrder marks one whose frames
+	// interleave by goroutine scheduling, which the single thread of the wasm
+	// module orders differently. The Node wasm host skips all three.
+	needsExec, needsMCP, schedulerOrder bool
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -219,15 +224,37 @@ func acpHosts() []acpHost {
 	}
 }
 
-// TestACPScenarios runs each row on the binary host and on the in-process host.
-// Both hosts must produce the one golden.
+// acpTableHosts adds the Node wasm host when HARNESS_E2E_NODE=1.
+func acpTableHosts() []acpHost {
+	hosts := acpHosts()
+	if os.Getenv(nodeEnv) == "1" {
+		hosts = append(hosts, acpHost{name: nodeHostName, start: startACPNode})
+	}
+	return hosts
+}
+
+// runsOn says whether the row runs on the host. A row with a default tool set
+// runs on the hosts that take one.
+func (sc acpScenario) runsOn(host string) bool {
+	switch host {
+	case "binary":
+		return len(sc.allowed) == 0
+	case nodeHostName:
+		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder
+	}
+	return true
+}
+
+// TestACPScenarios runs each row on the binary host and on the in-process host,
+// and with HARNESS_E2E_NODE=1 on the Node wasm host. The hosts must produce the
+// one golden.
 func TestACPScenarios(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	schema := loadACPSchema(t)
 	for _, sc := range acpScenarios {
-		for _, host := range acpHosts() {
-			if len(sc.allowed) > 0 && host.name != "in-process" {
+		for _, host := range acpTableHosts() {
+			if !sc.runsOn(host.name) {
 				continue
 			}
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
@@ -245,8 +272,12 @@ func TestACPScenarios(t *testing.T) {
 					step.run(t, c)
 				}
 				c.finish(stop)
-				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0)
-				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpGoldenOf(t, c, sc.wireOnly), update)
+				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0 && host.name == "in-process")
+				got := acpGoldenOf(t, c, sc.wireOnly)
+				if host.name == nodeHostName {
+					got = alignNodeMCP(t, got)
+				}
+				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), got, update)
 			})
 		}
 	}
