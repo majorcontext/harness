@@ -17,6 +17,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -42,6 +43,9 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_server_reaches_a_backend_that_owns_mcp", rowASessionServerReachesABackendThatOwnsMCP},
 		{"runtime_and_session_servers_answer_in_one_turn_and_status_lists_both", rowRuntimeAndSessionServersAnswerInOneTurn},
 		{"no_secret_of_a_connected_session_server_is_in_the_log_or_a_tool_error", rowNoSecretOfAConnectedSessionServerIsInTheLogOrAToolError},
+		{"a_session_server_may_not_share_a_name_with_an_embedder_tool", rowASessionServerMayNotShareANameWithAnEmbedderTool},
+		{"a_session_server_may_not_share_a_name_with_a_plugin_tool", rowASessionServerMayNotShareANameWithAPluginTool},
+		{"a_model_change_keeps_a_session_tool_allowed", rowAModelChangeKeepsASessionToolAllowed},
 		{"a_backend_that_owns_the_loop_allows_a_session_tool_by_name", rowABackendThatOwnsTheLoopAllowsASessionToolByName},
 		{"a_session_server_may_not_take_the_name_of_a_runtime_server", rowASessionServerMayNotTakeTheNameOfARuntimeServer},
 	}
@@ -431,5 +435,62 @@ func rowNoSecretOfAConnectedSessionServerIsInTheLogOrAToolError(t *testing.T) {
 		if strings.Contains(joined, secret) {
 			t.Errorf("the log, an event, or a request holds %q", secret)
 		}
+	}
+}
+
+type namedTool string
+
+func (n namedTool) Spec() protocol.ToolSpec {
+	return protocol.ToolSpec{Name: string(n), Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`)}
+}
+
+func (namedTool) Run(context.Context, harness.Call) (protocol.ToolResult, error) {
+	return protocol.ToolResult{Text: "x"}, nil
+}
+
+func sessionMCPCollision(t *testing.T, opts harness.Options) {
+	t.Helper()
+	fake := harnesstest.NewChat(t, replyText("ok"))
+	opts.Store = store.NewMemStore()
+	opts.Config.Providers = map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL()}}
+	r, err := harness.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	req := protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"}
+	if _, err := r.Create(t.Context(), req, harness.WithSessionMCP(weatherServer(t))); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("Create with session servers = %v, want ErrInvalidRequest", err)
+	}
+	if _, err := r.Create(t.Context(), protocol.CreateSession{ID: "s2", Model: "bifrost/gpt-test"}); err != nil {
+		t.Errorf("Create without session servers = %v, want nil", err)
+	}
+}
+
+func rowASessionServerMayNotShareANameWithAnEmbedderTool(t *testing.T) {
+	sessionMCPCollision(t, harness.Options{Tools: []harness.Tool{namedTool("mcp")}})
+}
+
+func rowASessionServerMayNotShareANameWithAPluginTool(t *testing.T) {
+	sessionMCPCollision(t, harness.Options{Plugins: []*plugin.Plugin{{Name: "p", Tools: []plugin.Tool{{
+		Def:     plugin.ToolDef{Name: "mcp__weather__forecast", Description: "x", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Execute: func(context.Context, *plugin.Client, json.RawMessage) ([]plugin.Part, error) { return nil, nil }}}}}})
+}
+
+func rowAModelChangeKeepsASessionToolAllowed(t *testing.T) {
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: config.Config{
+		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: fakeClaudePath()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "claude-code/sonnet", AllowedTools: []string{"mcp__session__x"}},
+		harness.WithSessionMCP(map[string]config.MCPServerSpec{"session": {URL: "http://127.0.0.1:1/s"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opus := "claude-code/opus"
+	if _, err := s.Update(t.Context(), protocol.SettingsPatch{Model: &opus}); err != nil {
+		t.Errorf("Update to another model = %v, want nil", err)
 	}
 }

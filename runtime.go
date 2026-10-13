@@ -353,7 +353,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	if err := r.startPlugins(ctx, false); err != nil {
+	if err := cmp.Or(r.startPlugins(ctx, false), r.checkSessionTools(l.mcp)); err != nil {
 		return nil, err
 	}
 	if err := r.yieldCatchUp(ctx, id); err != nil {

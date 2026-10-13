@@ -59,3 +59,21 @@ func (r *Runtime) sessionSource(servers map[string]config.MCPServerSpec) *mcpsrc
 	}
 	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.log)
 }
+
+// checkSessionTools fails when a session that has MCP servers would share a tool name with an
+// embedder tool or a started plugin tool: the names of the MCP tools are reserved for it.
+func (r *Runtime) checkSessionTools(servers map[string]config.MCPServerSpec) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	names := r.plugins.Names()
+	for _, t := range r.tools {
+		names = append(names, t.Spec().Name)
+	}
+	for _, n := range names {
+		if mcpsrc.Reserved(n) {
+			return fmt.Errorf("%w: tool %q has a name that session MCP servers reserve", ErrInvalidRequest, n)
+		}
+	}
+	return nil
+}
