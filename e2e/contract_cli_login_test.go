@@ -202,3 +202,60 @@ func TestContractCLILoginRefusesAFileThatOthersCanRead(t *testing.T) {
 	}
 	noSecret(t, "status output", out+errOut)
 }
+
+func TestContractCLILoginIgnoresAnIssuerFromTheEnvironment(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{})
+	h.env = map[string]string{"HARNESS_CODEX_ISSUER": "http://203.0.113.1:9"}
+	if out, errOut, code := h.run("login", "codex", "--device"); code != 0 || issuer.Exchanges() != 1 {
+		t.Fatalf("login = %d, exchanges %d, want 0 and 1: the issuer of the config, not of the environment\n%s%s", code, issuer.Exchanges(), out, errOut)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("login stored no file: %v", err)
+	}
+}
+
+func TestContractCLILoginRefusesAnIssuerOverPlainHTTPToARemoteHost(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, map[string]any{"codex_issuer": "http://issuer.example"}, replyText("unused"))
+	out, errOut, code := h.run("login", "codex", "--device")
+	if code != 1 || !strings.Contains(out+errOut, "codex_issuer") {
+		t.Errorf("login = %d %q %q, want 1 and an error that names codex_issuer", code, out, errOut)
+	}
+}
+
+func TestContractCLILoginRefusesADirectoryThatOthersCanReach(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{})
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := h.run("login", "codex", "--device")
+	if code != 1 || !strings.Contains(out+errOut, "chmod 700") {
+		t.Errorf("login = %d %q %q, want 1 and the chmod 700 advice", code, out, errOut)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) || issuer.Exchanges() > 1 {
+		t.Errorf("file %v, want none", err)
+	}
+}
+
+func TestContractCLILoginDeviceCodeWaitsUntilTheCodeIsEntered(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{DevicePending: 1})
+	if _, errOut, code := h.run("login", "codex", "--device"); code != 0 {
+		t.Fatalf("login = %d\n%s", code, errOut)
+	}
+	if issuer.Polls() != 2 || issuer.Exchanges() != 1 {
+		t.Errorf("polls %d, exchanges %d, want 2 polls (one pending, one grant) before the 1 exchange", issuer.Polls(), issuer.Exchanges())
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("login stored no file: %v", err)
+	}
+}

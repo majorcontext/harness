@@ -252,7 +252,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, CodexAuthFile: opts.Config.CodexAuthFile, CodexIssuer: opts.Config.CodexIssuer})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)

@@ -48,10 +48,6 @@ type Env struct {
 	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
-	// CodexAuthFile is the file of the Codex login, read at the first request of a provider with auth "chatgpt".
-	CodexAuthFile string
-	// CodexIssuer is the OAuth issuer of that login. Empty: the issuer of the Codex CLI.
-	CodexIssuer string
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
@@ -70,7 +66,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		}
 	}
 	codex := sync.OnceValue(func() *codexauth.Source {
-		return codexauth.NewSource(codexauth.SourceOptions{Path: env.CodexAuthFile, Issuer: env.CodexIssuer, Log: env.Log})
+		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
 	})
 	for name, p := range cfg.Providers {
 		if p.Type == config.TypeClaudeCodeCLI {

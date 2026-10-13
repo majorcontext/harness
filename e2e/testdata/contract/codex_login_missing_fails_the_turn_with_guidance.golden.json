@@ -19,6 +19,7 @@
       "status": 200,
       "body": {
         "error_says_login": true,
+        "file_exists": false,
         "refreshes": 0,
         "secret_in_error_or_log": false,
         "turn#1": null,

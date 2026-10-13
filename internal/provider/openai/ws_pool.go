@@ -114,6 +114,8 @@ type wsStreamRequest struct {
 	HTTPClient *http.Client
 	Prewarm    bool
 	Log        *slog.Logger
+	// Permanent, when set, receives a dial error that no HTTP fallback can resolve, such as a missing login.
+	Permanent *error
 }
 
 // stream returns a session WebSocket stream after it reads its first event.
@@ -157,6 +159,9 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		p.invalidate(entry)
 		newConn, _, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
 		if err != nil {
+			if req.Permanent != nil && provider.DeclaresPermanent(err) {
+				*req.Permanent = err
+			}
 			cmp.Or(req.Log, slog.Default()).Debug("openai: websocket dial failed; using HTTP", "error", err)
 			p.recordFailure(entry)
 			p.release(entry)
@@ -443,6 +448,9 @@ func (p *wsPool) warm(ctx context.Context, req wsStreamRequest, drain func(provi
 	defer p.endWarm(entry)
 	st, ok := p.open(ctx, entry, req)
 	if !ok {
+		if req.Permanent != nil && *req.Permanent != nil {
+			return *req.Permanent
+		}
 		return errors.New("openai: websocket warm-up failed")
 	}
 	defer func() { _ = st.Close() }()

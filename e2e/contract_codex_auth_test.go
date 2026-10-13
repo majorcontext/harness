@@ -1,9 +1,12 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +28,8 @@ type codexAuth struct {
 	issuer   harnesstest.CodexIssuerOptions
 	// readOnly makes the directory of the file refuse a write after the seed.
 	readOnly bool
+	// rejectAll makes the Responses server reject every token.
+	rejectAll bool
 	// secret is a value that no request to the issuer may carry in a header.
 	secret string
 	// project is a .harness.json of the work dir.
@@ -38,6 +43,10 @@ type codexAuthRun struct {
 	path   string
 	writes int
 	tokens []string
+	// configPath is the user config of the row.
+	configPath string
+	logout     *exec.Cmd
+	logoutOut  *bytes.Buffer
 }
 
 func (a *codexAuthRun) write(t *testing.T, label string, lifetime time.Duration, refresh string) {
@@ -90,6 +99,9 @@ func startCodexAuth(t *testing.T, spec codexAuth) *codexAuthRun {
 
 // accepts is the bearer test of the Responses server: the token "revoked" is the one that it rejects.
 func (a *codexAuthRun) accepts(token string) (string, bool) {
+	if a.spec.rejectAll {
+		return "", false
+	}
 	label, ok := harnesstest.TokenLabel(token)
 	return label, ok && label != "revoked"
 }
@@ -146,6 +158,42 @@ func (recordSecret) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 	r.record(t, "secret", "", callResult{Status: 200, Body: map[string]any{"sent_to_the_model_server": o.SawSecret(), "sent_to_the_issuer": r.codex.issuer.SawSecret()}})
 }
 
+// startLogout runs `harness logout codex` on the login of the row, without waiting for it.
+type startLogout struct{}
+
+func (startLogout) run(t *testing.T, _ *run) { t.Fatal("startLogout runs only under runCodexScenario") }
+func (startLogout) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
+	cmd := exec.CommandContext(t.Context(), harnessBin, "logout", "codex")
+	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": r.codex.configPath})
+	r.codex.logoutOut = &bytes.Buffer{}
+	cmd.Stdout, cmd.Stderr = r.codex.logoutOut, r.codex.logoutOut
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r.codex.logout = cmd
+}
+
+// awaitLogout waits for the logout and fails the row when it failed.
+type awaitLogout struct{}
+
+func (awaitLogout) run(t *testing.T, _ *run) { t.Fatal("awaitLogout runs only under runCodexScenario") }
+func (awaitLogout) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
+	if err := r.codex.logout.Wait(); err != nil {
+		t.Fatalf("logout: %v\n%s", err, r.codex.logoutOut)
+	}
+}
+
+// recordFallback records whether the HTTP path got a request after the websocket was rejected.
+type recordFallback struct{}
+
+func (recordFallback) run(t *testing.T, _ *run) {
+	t.Fatal("recordFallback runs only under runCodexScenario")
+}
+func (recordFallback) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	ws, sse := o.Rejections()
+	r.record(t, "fallback", "", callResult{Status: 200, Body: map[string]any{"websocket_rejected": ws > 0, "http_fallback_attempted": sse > 0}})
+}
+
 // rewriteCodexAuth replaces the stored login, as another process that signs in again does.
 type rewriteCodexAuth struct{ label string }
 
@@ -159,13 +207,17 @@ func (a rewriteCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 // recordCodexAuth records what a row says about the login without a secret: the
 // refreshes of the issuer, the stored login after the row, and whether a token
 // reached the error of the turn or the log.
-type recordCodexAuth struct{ as string }
+type recordCodexAuth struct {
+	as string
+	// stable leaves out the refresh count and the stored tokens, which a race between warm-up and turn can change.
+	stable bool
+}
 
 func (recordCodexAuth) run(t *testing.T, _ *run) {
 	t.Fatal("recordCodexAuth runs only under runCodexScenario")
 }
 func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
-	state := map[string]any{"refreshes": r.codex.issuer.Refreshes()}
+	state := map[string]any{"refreshes": r.codex.issuer.Refreshes(), "file_exists": false}
 	var stored struct {
 		Access  string `json:"access_token"`
 		Refresh string `json:"refresh_token"`
@@ -177,6 +229,7 @@ func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 		info, _ := os.Stat(r.codex.path)
 		dir, _ := os.Stat(filepath.Dir(r.codex.path))
 		state["stored_access"], state["stored_refresh"], state["stored_account"] = label, stored.Refresh, stored.Account
+		state["file_exists"] = true
 		state["file_mode"], state["dir_mode"] = info.Mode().Perm().String(), dir.Mode().Perm().String()
 		secrets = append(secrets[:len(secrets):len(secrets)], stored.Access)
 	}
@@ -195,10 +248,19 @@ func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 		leak = leak || strings.Contains(logs, s)
 	}
 	state["secret_in_error_or_log"] = leak
+	if a.stable {
+		delete(state, "refreshes")
+		delete(state, "stored_access")
+		delete(state, "stored_refresh")
+	}
 	r.record(t, "codex_login", a.as, callResult{Status: 200, Body: state})
 }
 
 func codexAuthRows() []codexScenario {
+	return slices.Concat(codexAuthLoginRows(), codexAuthFailureRows())
+}
+
+func codexAuthLoginRows() []codexScenario {
 	step := func(user, reply string) harnesstest.Step { return codexTurnStep(reply, user, reply) }
 	record := []action{recordWire{}, recordCodexAuth{as: "a"}}
 	return []codexScenario{
@@ -240,6 +302,13 @@ func codexAuthRows() []codexScenario {
 			scenario: scenario{name: "codex_login_refresh_failure_fails_the_turn_with_guidance", actions: codexSession(codexTurn("a", "hello"), record)},
 			auth:     &codexAuth{label: "seed", lifetime: time.Minute, issuer: harnesstest.CodexIssuerOptions{RefreshStatus: 400}},
 		},
+	}
+}
+
+func codexAuthFailureRows() []codexScenario {
+	step := func(user, reply string) harnesstest.Step { return codexTurnStep(reply, user, reply) }
+	record := []action{recordWire{}, recordCodexAuth{as: "a"}}
+	return []codexScenario{
 		{
 			scenario: scenario{
 				name:  "codex_login_cancel_during_refresh_keeps_the_rotated_token",
@@ -277,6 +346,24 @@ func codexAuthRows() []codexScenario {
 				"codex": map[string]any{"base_url": "http://127.0.0.1:1/evil", "responses_path": "/evil"},
 				"evil":  map[string]any{"type": "openai", "auth": "chatgpt", "base_url": "http://127.0.0.1:1"},
 			}}},
+		},
+		{
+			scenario: scenario{
+				name:  "codex_login_logout_during_a_refresh_leaves_no_file",
+				model: codexHi,
+				actions: codexSession([]action{submit{as: "a", text: "first"}}, []action{awaitIssuerRefresh{}, startLogout{}, releaseIssuerRefresh{}, waitIdle{as: "a"}, awaitLogout{}},
+					[]action{recordCodexAuth{as: "a"}}),
+			},
+			auth: &codexAuth{label: "seed", lifetime: 2 * time.Minute, issuer: harnesstest.CodexIssuerOptions{HoldRefresh: true}},
+		},
+		{
+			scenario:  scenario{name: "codex_login_rejected_websocket_fails_the_turn_without_the_http_fallback", actions: codexSession(codexTurn("a", "hello"), []action{recordFallback{}, recordCodexAuth{as: "a", stable: true}})},
+			websocket: true,
+			auth:      &codexAuth{label: "seed", lifetime: time.Hour, rejectAll: true},
+		},
+		{
+			scenario: scenario{name: "codex_login_malformed_refresh_answer_fails_the_turn_with_guidance", actions: codexSession(codexTurn("a", "hello"), record)},
+			auth:     &codexAuth{label: "seed", lifetime: time.Minute, issuer: harnesstest.CodexIssuerOptions{RefreshStatus: 200}},
 		},
 		{
 			scenario: scenario{name: "codex_login_missing_fails_the_turn_with_guidance", actions: codexSession(codexTurn("a", "hello"), record)},

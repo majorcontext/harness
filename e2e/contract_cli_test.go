@@ -23,6 +23,7 @@ type cliHost struct {
 	t                 *testing.T
 	config, dir, work string
 	fake              *harnesstest.Server
+	env               map[string]string // added to the environment of each run
 }
 
 func newCLIHost(t *testing.T, extra map[string]any, steps ...harnesstest.Step) *cliHost {
@@ -45,7 +46,9 @@ func (h *cliHost) start(args ...string) (wait func() (stdout, stderr string, cod
 	ctx, cancel := context.WithTimeout(h.t.Context(), waitBound)
 	cmd := exec.CommandContext(ctx, harnessBin, args...)
 	cmd.Dir = h.work
-	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key", "PWD": h.work})
+	env := map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key", "PWD": h.work}
+	maps.Copy(env, h.env)
+	cmd.Env = cleanEnv(env)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Start(); err != nil {

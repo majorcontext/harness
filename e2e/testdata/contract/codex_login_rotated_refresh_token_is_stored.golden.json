@@ -65,6 +65,7 @@
       "body": {
         "dir_mode": "-rwx------",
         "error_says_login": false,
+        "file_exists": true,
         "file_mode": "-rw-------",
         "refreshes": 1,
         "secret_in_error_or_log": false,

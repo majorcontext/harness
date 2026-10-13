@@ -42,8 +42,8 @@ func (s Store) Load() (Credentials, error) {
 // A reader sees the old file or the new file, never a part of one. The caller holds Lock.
 func (s Store) Save(c Credentials) error {
 	dir := filepath.Dir(s.Path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("codex login: %w", err)
+	if err := s.ensureDir(); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(c)
 	if err != nil {
@@ -79,6 +79,19 @@ func (s Store) Save(c Credentials) error {
 	return nil
 }
 
+// ensureDir creates the directory with mode 0700 and refuses an existing directory that the
+// group or other users can reach (on a platform that has such modes).
+func (s Store) ensureDir() error {
+	dir := filepath.Dir(s.Path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("codex login: %w", err)
+	}
+	if info, err := os.Stat(dir); err == nil && otherUsersCanRead(info.Mode()) {
+		return fmt.Errorf("codex login: the directory %s has mode %04o and other users can reach it; run chmod 700 on it", dir, info.Mode().Perm())
+	}
+	return nil
+}
+
 // Remove deletes the file under the lock, so a refresh that writes it does not run beside it.
 // A missing file is no error.
 func (s Store) Remove(ctx context.Context) error {
@@ -96,8 +109,8 @@ func (s Store) Remove(ctx context.Context) error {
 // Lock takes the exclusive lock of the file, which two processes need before they write a refreshed login.
 // The unlock function releases it.
 func (s Store) Lock(ctx context.Context) (unlock func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
-		return nil, fmt.Errorf("codex login: %w", err)
+	if err := s.ensureDir(); err != nil {
+		return nil, err
 	}
 	f, err := os.OpenFile(s.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

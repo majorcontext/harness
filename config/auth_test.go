@@ -72,3 +72,14 @@ func TestProjectFileCannotMoveTheLogin(t *testing.T) {
 		t.Errorf("fresh auth = %q, want none: a project file cannot set auth", merged.Providers["fresh"].Auth)
 	}
 }
+
+func TestCodexIssuerHasNoEnvironmentVariable(t *testing.T) {
+	c := &Config{}
+	env := map[string]string{"HARNESS_CODEX_ISSUER": "http://remote.example", "HARNESS_CODEX_AUTH_FILE": "/tmp/codex.json"}
+	if err := c.ApplyEnv(func(k string) string { return env[k] }); err != nil {
+		t.Fatal(err)
+	}
+	if c.CodexIssuer != "" || c.CodexAuthFile != "/tmp/codex.json" {
+		t.Errorf("issuer %q, auth file %q, want no issuer from the environment and the file from it", c.CodexIssuer, c.CodexAuthFile)
+	}
+}

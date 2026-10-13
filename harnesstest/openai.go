@@ -163,8 +163,9 @@ type OpenAI struct {
 	held      bool // a prewarm took the hold of HoldPrewarm
 
 	secretSeen   bool
-	redirectHits int  // requests to RedirectTo
-	redirectAuth bool // one of them carried a credential header
+	rejected     map[string]int // rejected bearer tokens by transport
+	redirectHits int            // requests to RedirectTo
+	redirectAuth bool           // one of them carried a credential header
 }
 
 const heldPrewarm = "prewarm"
@@ -258,6 +259,13 @@ func (o *OpenAI) holdPrewarm(ctx context.Context, conn *websocket.Conn) bool {
 	return true
 }
 
+// Rejections counts the requests that Credentials rejected, over the websocket and over SSE.
+func (o *OpenAI) Rejections() (ws, sse int) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.rejected["ws"], o.rejected["sse"]
+}
+
 // SawSecret reports whether a request carried OpenAIOptions.Secret in a header.
 func (o *OpenAI) SawSecret() bool {
 	o.wmu.Lock()
@@ -332,6 +340,16 @@ func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 		o.fault("request path %q, want %q", r.URL.Path, codexPath)
 		writeError(w, http.StatusNotFound, "harnesstest: unexpected path")
 	case o.opts.Credentials != nil && !accepted:
+		kind := "sse"
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			kind = "ws"
+		}
+		o.wmu.Lock()
+		if o.rejected == nil {
+			o.rejected = map[string]int{}
+		}
+		o.rejected[kind]++
+		o.wmu.Unlock()
 		if o.opts.OnReject != nil {
 			o.opts.OnReject()
 		}

@@ -300,17 +300,17 @@ func (s *Source) post(ctx context.Context, c Credentials) (Credentials, error) {
 	defer resp.Body.Close() //nolint:errcheck
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	switch {
-	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return Credentials{}, &LoginRequiredError{Reason: fmt.Sprintf("the refresh token was rejected, HTTP %d", resp.StatusCode), refreshRejected: true}
-	case resp.StatusCode != http.StatusOK:
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 		return Credentials{}, fmt.Errorf("codex login refresh: HTTP %d", resp.StatusCode)
+	case resp.StatusCode != http.StatusOK:
+		return Credentials{}, &LoginRequiredError{Reason: fmt.Sprintf("the refresh token was rejected, HTTP %d", resp.StatusCode), refreshRejected: true}
 	}
 	var tok struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
 	if json.Unmarshal(raw, &tok) != nil || tok.AccessToken == "" {
-		return Credentials{}, errors.New("codex login refresh: the answer holds no access token")
+		return Credentials{}, &LoginRequiredError{Reason: "the refresh answer holds no access token", refreshRejected: true}
 	}
 	next := Credentials{AccessToken: tok.AccessToken, RefreshToken: c.RefreshToken, AccountID: c.AccountID}
 	if tok.RefreshToken != "" {
