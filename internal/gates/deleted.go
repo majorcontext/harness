@@ -9,15 +9,41 @@ import (
 	"strings"
 )
 
-// deletedPathRE matches a reference to a package path that does not exist or
+// deletedRules match a reference to a package path that does not exist or
 // lives under internal/: a path under engine, server, or mcpserver at the
 // module root, a symbol of the engine package, provider/claudecode, the
-// module path of a package that moved under internal/ (provider included), and harness-migrate.
-var deletedPathRE = regexp.MustCompile(`(?:^|[^\w/.-])(?:engine|mcpserver|server)/\w|` +
-	`(?:^|[^\w/.-])engine\.[A-Za-z_]|` +
-	`\bprovider/claudecode\b|` +
-	`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|skill|command|process|imageclamp|migrate|provider)\b|` +
-	`\bharness-migrate\b`)
+// module path of a package that moved under internal/ (provider included), and
+// harness-migrate. A rule runs only on a line that holds its literal, which
+// its pattern contains.
+var deletedRules = []struct {
+	literal string
+	re      *regexp.Regexp
+}{
+	{"engine/", regexp.MustCompile(`(?:^|[^\w/.-])engine/\w`)},
+	{"server/", regexp.MustCompile(`(?:^|[^\w/.-])(?:mcp)?server/\w`)},
+	{"engine.", regexp.MustCompile(`(?:^|[^\w/.-])engine\.[A-Za-z_]`)},
+	{"provider/claudecode", regexp.MustCompile(`\bprovider/claudecode\b`)},
+	{"majorcontext/harness/", regexp.MustCompile(`majorcontext/harness/(?:engine|server|mcpserver|message|modelmeta|mcp|skill|command|process|imageclamp|migrate|provider)\b`)},
+	{"harness-migrate", regexp.MustCompile(`\bharness-migrate\b`)},
+}
+
+func namesDeletedPath(line string) bool {
+	for _, r := range deletedRules {
+		if strings.Contains(line, r.literal) && r.re.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func mayNameDeletedPath(text string) bool {
+	for _, r := range deletedRules {
+		if strings.Contains(text, r.literal) {
+			return true
+		}
+	}
+	return false
+}
 
 // CheckDeletedReferences fails each Go file, in code or in a comment, that
 // names a deleted package path (spec: Internal packages), except the
@@ -42,8 +68,12 @@ func CheckDeletedReferences(fsys fs.FS, allow map[string]string) ([]Violation, e
 		if err != nil {
 			return err
 		}
-		for i, line := range strings.Split(string(data), "\n") {
-			if deletedPathRE.MatchString(line) {
+		text := string(data)
+		if !mayNameDeletedPath(text) {
+			return nil
+		}
+		for i, line := range strings.Split(text, "\n") {
+			if namesDeletedPath(line) {
 				hit[p] = true
 				if _, listed := allow[p]; !listed {
 					out = append(out, Violation{Path: p, Rule: "deleted_reference", Detail: fmt.Sprintf("line %d names a deleted package path: %s", i+1, strings.TrimSpace(line))})
