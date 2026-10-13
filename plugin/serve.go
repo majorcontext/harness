@@ -1,19 +1,3 @@
-// Package plugin is the Go API for Harness plugins.
-//
-// A plugin is a *Plugin value. Manifest derives the hook and tool list from
-// the fields that are set, so a manifest never disagrees with the code.
-//
-// One value runs in two ways: an embedder passes it to the runtime, which
-// serves it in process, or a small main calls Serve to make a plugin process.
-// In both ways the host applies the same chain order, deadline, and failure
-// rules.
-//
-// ToolBefore.DenyOnFailure makes the host deny the tool call when the hook
-// fails: it errors, panics, misses the deadline, or the plugin does not start.
-//
-// The context of a tool call or of an Event call ends when the connection
-// ends. The context of any other hook ends at its deadline: HookTimeouts, or
-// 5 s. The host stops waiting at the same deadline.
 package plugin
 
 import (
