@@ -124,6 +124,17 @@ linters:
             - github.com/majorcontext/harness/internal/listing
             - github.com/majorcontext/harness/internal/server
             - github.com/majorcontext/harness/protocol
+        plugin-leaf:
+          files:
+            - "**/plugin/*.go"
+            - "!**/internal/**"
+            - "!$test"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness/internal/plugin/wire
+            - github.com/majorcontext/harness/plugin
+            - github.com/majorcontext/harness/protocol
         config-leaf:
           files:
             - "**/config/**"

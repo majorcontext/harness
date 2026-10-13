@@ -52,7 +52,7 @@ type Source struct {
 	defers    bool
 	mode      string
 	threshold int
-	dialing   map[string]*sync.Mutex
+	dialing   map[string]chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -84,10 +84,10 @@ func New(cfg config.Config, log *slog.Logger) *Source {
 		return nil
 	}
 	s := &Source{log: cmp.Or(log, slog.Default()), specs: cfg.MCPServers, names: slices.Sorted(maps.Keys(cfg.MCPServers)), mode: cfg.MCPToolLoading,
-		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold), dialing: map[string]*sync.Mutex{},
+		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold), dialing: map[string]chan struct{}{},
 		ready: make(chan struct{}), servers: map[string]*server{}, health: map[string]*health{}}
 	for _, name := range s.names {
-		s.dialing[name], s.health[name] = &sync.Mutex{}, &health{}
+		s.dialing[name], s.health[name] = make(chan struct{}, 1), &health{}
 		s.defers = s.defers || s.loading(name) != "eager"
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
@@ -154,8 +154,12 @@ func (s *Source) wait(ctx context.Context) bool {
 // connect dials server unless it is connected.
 func (s *Source) connect(ctx context.Context, name string) error {
 	lock := s.dialing[name]
-	lock.Lock()
-	defer lock.Unlock()
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 	if s.server(name).up() {
 		return nil
 	}

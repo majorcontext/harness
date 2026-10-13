@@ -76,3 +76,23 @@ func TestCreateAfterCloseDoesNotProbeThePlugins(t *testing.T) {
 		t.Errorf("Create after Close = %v, want ErrDraining", err)
 	}
 }
+
+func TestInvalidManifestIsNotCached(t *testing.T) {
+	fixture := pluginFixture(t, `{"deny_hook":"tool.execute.after"}`)
+	cache := filepath.Join(t.TempDir(), "plugins.json")
+	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{})
+	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Config: config.Config{
+		PluginCache: cache, Plugins: fixture,
+		Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: s.URL()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeRuntime(t, r)
+	if _, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"}); err == nil || !strings.Contains(err.Error(), "deny_on_failure is valid only for") {
+		t.Fatalf("Create = %v, want the manifest error", err)
+	}
+	if _, err := os.Stat(cache); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("cache file stat = %v, want no cache file for an invalid manifest", err)
+	}
+}

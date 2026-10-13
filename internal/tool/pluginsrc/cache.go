@@ -15,24 +15,28 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/plugin"
+	pub "github.com/majorcontext/harness/plugin"
 )
 
 // cache holds the probed manifest of each plugin, in a JSON file.
 type cache struct {
+	Version int                   `json:"version"`
 	Entries map[string]cacheEntry `json:"entries"`
 }
+
+const cacheVersion = 2
 
 // cacheEntry is one manifest and the identity of the files that produced it:
 // the executable, and each script argument that is a regular file. The size
 // and the mtime decide a hit with no read; a change of either falls back to the
 // content hash, and only a change of content probes again.
 type cacheEntry struct {
-	BinaryHash  string          `json:"binary_hash"`
-	Size        int64           `json:"size"`
-	ModTimeNS   int64           `json:"mtime_unix_nano"`
-	ScriptFiles []fileStat      `json:"script_files,omitempty"`
-	ScriptHash  string          `json:"script_hash,omitempty"`
-	Manifest    plugin.Manifest `json:"manifest"`
+	BinaryHash  string       `json:"binary_hash"`
+	Size        int64        `json:"size"`
+	ModTimeNS   int64        `json:"mtime_unix_nano"`
+	ScriptFiles []fileStat   `json:"script_files,omitempty"`
+	ScriptHash  string       `json:"script_hash,omitempty"`
+	Manifest    pub.Manifest `json:"manifest"`
 }
 
 type fileStat struct {
@@ -41,20 +45,29 @@ type fileStat struct {
 	ModTimeNS int64  `json:"mtime_unix_nano"`
 }
 
+func newCache() *cache {
+	return &cache{Version: cacheVersion, Entries: map[string]cacheEntry{}}
+}
+
 // loadCache reads path. A missing file is an empty cache, and so is a file
-// that does not decode: every plugin probes again and the next save replaces it.
+// that does not decode or whose version is not cacheVersion: every plugin
+// probes again and the next save replaces it.
 func loadCache(path string, log *slog.Logger) (*cache, error) {
-	c := &cache{Entries: map[string]cacheEntry{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return c, nil
+		return newCache(), nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	c := &cache{}
 	if err := json.Unmarshal(data, c); err != nil {
 		log.Warn("pluginsrc: plugin cache ignored, probing again", "path", path, "err", err)
-		return &cache{Entries: map[string]cacheEntry{}}, nil
+		return newCache(), nil
+	}
+	if c.Version != cacheVersion {
+		log.Warn("pluginsrc: plugin cache version changed, probing again", "path", path, "version", c.Version)
+		return newCache(), nil
 	}
 	if c.Entries == nil {
 		c.Entries = map[string]cacheEntry{}
@@ -173,7 +186,7 @@ func scriptsHash(files []fileStat) (string, error) {
 // manifest returns the manifest of ps from the cache when the plugin has not
 // changed, else from a new probe, which it stores in c. changed reports a write
 // to c. With refresh, it always probes.
-func (c *cache) manifest(probe probeFunc, ps config.PluginSpec, refresh bool) (m plugin.Manifest, changed bool, err error) {
+func (c *cache) manifest(probe probeFunc, ps config.PluginSpec, refresh bool) (m pub.Manifest, changed bool, err error) {
 	path, err := plugin.ResolveExecutable(ps.Command, ps.Dir)
 	if err != nil {
 		return m, false, err
@@ -239,4 +252,4 @@ func (c *cache) manifest(probe probeFunc, ps config.PluginSpec, refresh bool) (m
 }
 
 // probeFunc reads the manifest of a plugin with one bounded probe.
-type probeFunc func(plugin.Spec) (plugin.Manifest, error)
+type probeFunc func(plugin.Spec) (pub.Manifest, error)

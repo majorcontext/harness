@@ -5,7 +5,7 @@ A fast, extensible, composable agent harness in Go.
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 - **Fast** — millisecond startup
-- **Extensible** — language-agnostic process plugins (TypeScript SDK included)
+- **Extensible** — plugins in Go (in process or as a process) and in any language over stdio (TypeScript SDK included)
 - **Composable** — headless runtime, event streams, client/server, MCP servers
 
 ## Quickstart
@@ -254,6 +254,43 @@ rt, err := harness.New(harness.Options{
 })
 ```
 
+### Guard tool calls with a plugin
+
+A `plugin.Plugin` hooks into the runtime. This one denies a force push before
+the bash tool runs it:
+
+```go
+var guard = &plugin.Plugin{
+	Name: "guard",
+	ToolExecuteBefore: &plugin.ToolBefore{
+		DenyOnFailure: true,
+		Run: func(ctx context.Context, c *plugin.Client, req *plugin.ToolExecuteBeforeRequest) (*plugin.ToolExecuteBeforeResponse, error) {
+			if req.Tool == "bash" && strings.Contains(string(req.Args), "push --force") {
+				return &plugin.ToolExecuteBeforeResponse{Deny: "force push is blocked"}, nil
+			}
+			return nil, nil
+		},
+	},
+}
+```
+
+Give it to the runtime with `Plugins: []*plugin.Plugin{guard}`. The model gets
+the deny message as an error result. `DenyOnFailure` also denies the call when
+the hook fails, so a broken guard does not let the call run.
+
+To run the same value as a separate process, call `plugin.Serve(guard)` from
+`main` and add the binary to the `plugins` key of `.harness.json`:
+
+```json
+{"plugins": [{"name": "guard", "command": ["guard-plugin"]}]}
+```
+
+A plugin in another language speaks the same protocol over stdio. See the
+[TypeScript SDK](sdk/typescript/README.md), the
+[protocol](internal/plugin/PROTOCOL.md), and the
+[`plugin` package reference](https://pkg.go.dev/github.com/majorcontext/harness/plugin)
+for the other hooks, custom tools, and the client calls.
+
 ### Serve over HTTP
 
 `httpapi.Handler` serves the sessions of the runtime with the same API as
@@ -276,6 +313,8 @@ everything else.
 - [`custom-tool`](examples/custom-tool): give the model a Go function to call.
 - [`switch-model`](examples/switch-model): continue one conversation on a
   different model or provider.
+- [`guardrail`](examples/guardrail): one Go plugin that blocks risky tool
+  calls, in process and as a plugin process.
 
 ## Configuration
 
