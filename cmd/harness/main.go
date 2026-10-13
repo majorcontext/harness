@@ -32,6 +32,10 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "version", "--version", "-v":
+		if len(os.Args) > 2 {
+			versionArgs(os.Args[2:])
+			return
+		}
 		fmt.Println("harness " + version)
 		return
 	case "help", "-h", "--help":
@@ -61,6 +65,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, errorLine(err))
 		os.Exit(1)
 	}
+}
+
+// versionArgs handles the arguments of `harness version`: -h and --help print
+// its usage, and any other argument is a usage error.
+func versionArgs(args []string) {
+	if args[0] == "-h" || args[0] == "--help" {
+		fmt.Println("usage: harness version")
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "harness: unexpected argument %q\nusage: harness version\n", args[0])
+	os.Exit(2)
 }
 
 func usage(w io.Writer) {

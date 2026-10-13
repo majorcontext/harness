@@ -554,7 +554,7 @@ func TestContractCLIHelpPrintsUsageOnStdoutAndExitsZero(t *testing.T) {
 	t.Parallel()
 	h := newCLIHost(t, nil)
 	for _, args := range [][]string{
-		{"-h"}, {"--help"}, {"help"}, {"plugin", "-h"}, {"plugin", "--help"}, {"plugin", "help"},
+		{"-h"}, {"--help"}, {"help"}, {"version", "-h"}, {"version", "--help"}, {"-v", "-h"}, {"plugin", "-h"}, {"plugin", "--help"}, {"plugin", "help"},
 		{"run", "-h"}, {"run", "--help"}, {"serve", "-h"}, {"serve", "--help"},
 		{"sessions", "-h"}, {"sessions", "--help"}, {"plugin", "probe", "-h"}, {"plugin", "probe", "--help"},
 	} {
@@ -577,6 +577,8 @@ func TestContractCLIUsageErrorPrintsUsageOnStderrAndExitsTwo(t *testing.T) {
 	}{
 		{nil, ""},
 		{[]string{"bogus"}, `harness: unknown command "bogus"`},
+		{[]string{"version", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"--version", "extra"}, `harness: unexpected argument "extra"`},
 		{[]string{"serve", "-addr", "127.0.0.1:0", "help"}, `harness: unexpected argument "help"`},
 		{[]string{"serve", "-addr", "127.0.0.1:0", "extra"}, `harness: unexpected argument "extra"`},
 		{[]string{"sessions", "extra"}, `harness: unexpected argument "extra"`},
