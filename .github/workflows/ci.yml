@@ -340,7 +340,7 @@ jobs:
         # HARNESS_E2E_NODE=1 makes a missing node fail the test, not skip it.
         env:
           HARNESS_E2E_NODE: '1'
-        run: go test -race -count=1 ./e2e/ -run '^(TestACPScenarios|TestNodeWasm.*)$' -skip '^TestACPScenarios/[^/]+/(binary|in-process)$'
+        run: go test -race -count=1 ./e2e/ -run '^(TestACPScenarios|TestNode.*)$' -skip '^TestACPScenarios/[^/]+/(binary|in-process)$'
 
       - name: sdk/embed over the Worker transport
         # The tests start the module in a worker_threads Worker; a missing
