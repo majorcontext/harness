@@ -141,3 +141,29 @@ func SpecErrorStatuses(spec string) (map[string]int, error) {
 	}
 	return out, nil
 }
+
+var acpErrorRowRE = regexp.MustCompile("(?m)^\\| ((?:`[a-z_]+`(?:, )?)+) \\| `(-[0-9]+)`")
+
+// SpecACPErrorCodes returns the JSON-RPC code of each error code in the Error
+// mapping table of the ACP section of the spec.
+func SpecACPErrorCodes(spec string) (map[string]int, error) {
+	_, section, found := strings.Cut(spec, "\n### Error mapping\n")
+	if !found {
+		return nil, errors.New("the spec has no Error mapping section")
+	}
+	section, _, _ = strings.Cut(section, "\n#")
+	out := map[string]int{}
+	for _, m := range acpErrorRowRE.FindAllStringSubmatch(section, -1) {
+		n, _ := strconv.Atoi(m[2])
+		for _, c := range strings.Split(strings.ReplaceAll(m[1], "`", ""), ", ") {
+			if _, dup := out[c]; dup {
+				return nil, fmt.Errorf("the Error mapping table of the spec holds the code %q twice", c)
+			}
+			out[c] = n
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("the Error mapping table of the spec holds no row")
+	}
+	return out, nil
+}

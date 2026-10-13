@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -42,6 +43,13 @@ func TestErrorCodesAgreeAcrossTheirSources(t *testing.T) {
 	spec, err := SpecErrorStatuses(readSpec(t))
 	if err != nil {
 		t.Fatal(err)
+	}
+	acpSpec, err := SpecACPErrorCodes(readSpec(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range CheckACPErrorCodes(constants, acpSpec, func(c string) int { return acp.RPCCode(protocol.Code(c)) }) {
+		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
 	}
 	enum, err := OpenAPICodeEnum(doc)
 	if err != nil {
@@ -111,5 +119,17 @@ func TestProtocolStatusCodesReadsTheTableKeys(t *testing.T) {
 	got, err := ProtocolStatusCodes("package p\n\nconst (\n\tCodeB = \"b\"\n\tCodeA = \"a\"\n)\n\nvar statuses = map[Code]int{CodeA: 400}\n")
 	if err != nil || strings.Join(got, ",") != "a" {
 		t.Errorf("ProtocolStatusCodes = %v, %v; want only the listed code", got, err)
+	}
+}
+
+func TestACPErrorCodeRule(t *testing.T) {
+	mapped := func(string) int { return -32603 }
+	if got := CheckACPErrorCodes([]string{"a"}, map[string]int{"a": -32603}, mapped); len(got) != 0 {
+		t.Errorf("agreeing sources reported %v", got)
+	}
+	for name, spec := range map[string]map[string]int{"a missing row": {}, "a different code": {"a": -32602}, "an extra row": {"a": -32603, "z": -32603}} {
+		if got := CheckACPErrorCodes([]string{"a"}, spec, mapped); len(got) != 1 {
+			t.Errorf("%s: violations = %v, want 1", name, got)
+		}
 	}
 }

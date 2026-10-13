@@ -1,0 +1,254 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ],
+    "b": [
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:second\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessionId": "\u003csession:b\u003e"
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "one",
+              "type": "text"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "ok",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "two",
+              "type": "text"
+            }
+          ],
+          "sessionId": "\u003csession:b\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:b\u003e",
+          "update": {
+            "content": {
+              "text": "ok",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:2\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "requests": null,
+  "sessions": {},
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": [
+            {
+              "args": [],
+              "command": "/bin/true",
+              "env": [],
+              "name": "x"
+            },
+            {
+              "headers": [],
+              "name": "x",
+              "type": "http",
+              "url": "https://example.com/mcp"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "mcpServers names \"x\" twice"
+          },
+          "message": "Invalid params"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

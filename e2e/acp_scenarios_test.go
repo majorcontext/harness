@@ -2,12 +2,16 @@ package e2e
 
 import (
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // acpStep is one action of an ACP scenario.
@@ -18,9 +22,19 @@ type acpStep interface {
 // acpScenario is one row of the ACP table. cite is a sentence of the ACP
 // section of docs/architecture.md that the row pins.
 type acpScenario struct {
-	name  string
-	cite  string
-	steps []acpStep
+	name string
+	cite string
+	// model is the script of the model. config adds top-level keys to the user
+	// config. dirs names extra directories and their files; "main" always
+	// exists. allowed is the default tool set of the in-process adapter, so
+	// a row that sets it runs on that host only.
+	model   []harnesstest.Step
+	config  map[string]any
+	dirs    map[string]map[string]string
+	allowed []string
+	// wireOnly leaves the requests and the sessions out of the golden, for a row whose model traffic depends on timing.
+	wireOnly bool
+	steps    []acpStep
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -87,7 +101,9 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = []acpScenario{
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios)
+
+var acpWireScenarios = []acpScenario{
 	{
 		name: "initialize_answers_agent_info",
 		cite: "`initialize` answers the agent info, the agent capabilities, and an empty `authMethods`.",
@@ -151,12 +167,52 @@ var acpScenarios = []acpScenario{
 }
 
 type acpGolden struct {
-	Wire []acpFrame `json:"wire"`
+	Requests []normRequest            `json:"requests"`
+	Sessions map[string][]normMessage `json:"sessions"`
+	Wire     []acpFrame               `json:"wire"`
+}
+
+// acpObserve reads what the wire does not show: the normalized model requests,
+// and the final transcript of each session, read from the store after the
+// connection closed, with no ACP replay.
+func acpObserve(t *testing.T, c *acpConn) acpGolden {
+	t.Helper()
+	st := store.NewDiskStore(c.env.sessDir)
+	sessions := map[string][]transcriptMessage{}
+	for alias, id := range c.sessions {
+		v, err := harness.OpenView(t.Context(), st, id)
+		if err != nil {
+			t.Fatalf("view %s: %v", alias, err)
+		}
+		var msgs []transcriptMessage
+		for before := uint64(0); ; {
+			page, err := v.Messages(t.Context(), before, protocol.MaxMessageLimit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			msgs = append(transcriptOfPage(t, page.Messages), msgs...)
+			if !page.HasMore {
+				break
+			}
+			before = page.FirstSeq
+		}
+		sessions[alias] = msgs
+	}
+	obs := normalizeRun(c.fake.Requests(), sessions, nil, c.sessions, c.dirs["main"])
+	return acpGolden{Requests: obs.Requests, Sessions: obs.Sessions, Wire: c.goldenWire()}
+}
+
+func acpGoldenOf(t *testing.T, c *acpConn, wireOnly bool) acpGolden {
+	t.Helper()
+	if wireOnly {
+		return acpGolden{Wire: c.goldenWire()}
+	}
+	return acpObserve(t, c)
 }
 
 func acpHosts() []acpHost {
 	return []acpHost{
-		{name: "binary", start: func(t *testing.T) (io.WriteCloser, io.Reader, func()) { return startACPBinary(t) }},
+		{name: "binary", start: startACPBinary},
 		{name: "in-process", start: startACPInProcess},
 	}
 }
@@ -169,15 +225,26 @@ func TestACPScenarios(t *testing.T) {
 	schema := loadACPSchema(t)
 	for _, sc := range acpScenarios {
 		for _, host := range acpHosts() {
+			if len(sc.allowed) > 0 && host.name != "in-process" {
+				continue
+			}
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
 				t.Parallel()
-				in, out, stop := host.start(t)
+				fake := harnesstest.NewAnthropic(t, sc.model...)
+				env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), sc.config), sessDir: t.TempDir(), allowed: sc.allowed}
+				in, out, stop := host.start(t, env)
 				c := newACPConn(t, schema, in, out)
+				c.fake, c.env = fake, env
+				c.dirs["main"] = t.TempDir()
+				for name, files := range sc.dirs {
+					c.dirs[name] = writeACPDir(t, files)
+				}
 				for _, step := range sc.steps {
 					step.run(t, c)
 				}
 				c.finish(stop)
-				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpGolden{Wire: c.wire}, *updateGoldens && host.name == "binary")
+				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0)
+				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpGoldenOf(t, c, sc.wireOnly), update)
 			})
 		}
 	}

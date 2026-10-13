@@ -1,0 +1,58 @@
+{
+  "requests": null,
+  "sessions": {},
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "relative/dir",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "cwd must be an absolute path"
+          },
+          "message": "Invalid params"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "/nonexistent/acp/dir",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "invalid_request"
+          },
+          "message": "harness: invalid request"
+        },
+        "id": 2,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

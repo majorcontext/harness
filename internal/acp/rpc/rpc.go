@@ -49,6 +49,18 @@ type Handler interface {
 	Notification(ctx context.Context, method string, params json.RawMessage)
 }
 
+// Closer is an optional interface of a Handler. Serve calls EndOfInput once,
+// when it stops reading, before it waits for the requests that run, so the
+// handler can end the work of those requests.
+type Closer interface{ EndOfInput() }
+
+// Admitter is an optional interface of a Handler. Serve calls Admit in the
+// reader goroutine, in wire order, before it starts the goroutine of a request.
+// The context that Admit returns goes to Request. Admit must not block.
+type Admitter interface {
+	Admit(ctx context.Context, method string, params json.RawMessage) context.Context
+}
+
 // Conn is one newline-delimited JSON-RPC 2.0 connection. One goroutine reads,
 // one goroutine writes, and each request runs in its own goroutine.
 type Conn struct {
@@ -300,6 +312,9 @@ func (c *Conn) Serve(ctx context.Context, h Handler) error {
 	var wg sync.WaitGroup
 	err := c.loop(ctx, h, lines, &wg)
 	close(stop)
+	if cl, ok := h.(Closer); ok {
+		cl.EndOfInput()
+	}
 	wg.Wait()
 	c.shutdown()
 	if err == nil {
@@ -452,6 +467,9 @@ func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGro
 	}
 	c.running[key] = cancel
 	c.mu.Unlock()
+	if ad, ok := h.(Admitter); ok {
+		rctx = ad.Admit(rctx, *m.Method, m.Params)
+	}
 	wg.Go(func() {
 		defer func() {
 			c.mu.Lock()
