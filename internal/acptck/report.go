@@ -51,6 +51,18 @@ func failing(r requirement) bool { return r.Status == "FAIL" || r.Status == "NOT
 func judge(w io.Writer, rep report, allowed map[string]string) bool {
 	ok := true
 	seen := map[string]bool{}
+	inReport := map[string]bool{}
+	mandatory := 0
+	for _, r := range rep.Requirements {
+		inReport[r.ID] = true
+		if r.Tier == "MANDATORY" {
+			mandatory++
+		}
+	}
+	if mandatory == 0 {
+		_, _ = fmt.Fprintf(w, "\nthe report holds no MANDATORY requirement\n")
+		ok = false
+	}
 	for _, tier := range []string{"MANDATORY", "CAPABILITY", "ADVISORY", "INFORMATIONAL"} {
 		counts := map[string]int{}
 		var rows []requirement
@@ -80,7 +92,10 @@ func judge(w io.Writer, rep report, allowed map[string]string) bool {
 		}
 	}
 	for id := range allowed {
-		if !seen[id] {
+		if !inReport[id] {
+			_, _ = fmt.Fprintf(w, "\nallow-list entry %s is not in the report\n", id)
+			ok = false
+		} else if !seen[id] {
 			_, _ = fmt.Fprintf(w, "\nstale allow-list entry: %s passes or is in another tier\n", id)
 			ok = false
 		}
