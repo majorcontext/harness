@@ -345,7 +345,7 @@ func TestContractPluginDenyOnFailure(t *testing.T) {
 		},
 		{
 			name:    "plugin_flagged_before_hook_denies_at_the_deadline",
-			config:  flagged("hang"),
+			config:  pluginConfig(t, map[string]any{"deny_on_failure": true, "before_fail": "hang", "hook_timeouts": map[string]any{"tool.execute.before": 200}}),
 			model:   toolChain(ftBash("echo should-not-run")),
 			actions: oneTurn,
 		},
