@@ -565,11 +565,6 @@ func pinPrefixRows() []scenario {
 	}
 }
 
-// mcpRetryRace is why a row with a server that fails its first initialize skips the serve host: the
-// background retry of a served process connects the server 0.5 to 1 s after the first request, and the
-// connect action of the row then reads "already connected". Only the runtime host holds the retry.
-const mcpRetryRace = "the background retry of the serve binary can connect the server before the connect action"
-
 func TestContractMCPAvailability(t *testing.T) {
 	forecast := mcpTool("weather", "forecast", "city", "Oslo")
 	pinModel := []harnesstest.Step{
@@ -591,7 +586,7 @@ func TestContractMCPAvailability(t *testing.T) {
 	pinSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), failInit: 1})
 	runScenarios(t, append(pinPrefixRows(), []scenario{
 		{
-			name: "mcp_unavailable_at_start_then_connect", runtimeOnly: mcpRetryRace,
+			name:  "mcp_unavailable_at_start_then_connect",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts."), failInit: 1}),
 			model: toolChain(
 				mcpAction("action", "connect", "server", "weather"),
@@ -606,7 +601,7 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 		},
 		{
-			name: "mcp_connect_adds_tools_but_not_instructions", runtimeOnly: mcpRetryRace,
+			name: "mcp_connect_adds_tools_but_not_instructions",
 			setup: mcpSetup(nil,
 				mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts."), failInit: 1},
 				mcpServerDef{name: "docs", spec: mcpDocs()}),
@@ -630,8 +625,8 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}}, expectSystem{req: 4, sameAs: 1}),
 		},
-		{name: "mcp_notice_then_compaction_keeps_a_call_paired", runtimeOnly: mcpRetryRace, setup: pinSetup, model: pinModel, actions: pinActions},
-		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", runtimeOnly: mcpRetryRace, chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
+		{name: "mcp_notice_then_compaction_keeps_a_call_paired", setup: pinSetup, model: pinModel, actions: pinActions},
+		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
 	}...))
 }
 

@@ -26,9 +26,6 @@ type scenario struct {
 	model      []harnesstest.Step
 	actions    []action
 	driver     func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
-	// runtimeOnly is why the row skips the serve host: the row needs a seam that only the in-process host reaches.
-	// -update writes the golden of such a row from the runtime host.
-	runtimeOnly string
 }
 
 type action interface{ run(t *testing.T, r *run) }
@@ -484,7 +481,7 @@ func runScenarios(t *testing.T, table []scenario) {
 	skipShort(t)
 	t.Parallel()
 	for _, h := range []host{serveHost, runtimeHost} {
-		onHost(t, h, table, func(sc scenario) string { return sc.name }, func(sc scenario) string { return sc.runtimeOnly },
+		onHost(t, h, table, func(sc scenario) string { return sc.name },
 			func(t *testing.T, sc scenario) observation { return runScenario(t, sc, h) })
 	}
 }
