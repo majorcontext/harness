@@ -12,6 +12,8 @@ import (
 
 // A browser WebSocket cannot set request headers, so the Codex websocket
 // transport cannot dial on js.
+const socketAvailable = false
+
 func dialSocket(context.Context, string, http.Header, *http.Client) (*websocket.Conn, *http.Response, error) {
 	return nil, nil, errors.New("websocket transport unavailable on js")
 }

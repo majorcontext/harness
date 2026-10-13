@@ -86,7 +86,7 @@ func (c *Client) Name() string { return c.family() }
 // StartupPrewarmEnabled reports whether engine startup assembly can produce
 // transport state for this client without relying on request data.
 func (c *Client) StartupPrewarmEnabled() bool {
-	return c.family() == CodexFamily && c.UseWebSocketTransport
+	return socketAvailable && c.family() == CodexFamily && c.UseWebSocketTransport
 }
 
 // httpClient returns c.HTTPClient, or http.DefaultClient when unset. HTTP and
