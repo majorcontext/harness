@@ -366,7 +366,7 @@ Free to change.
 | `internal/message` | The provider-wire conversation model |
 | `internal/modelref` | `ModelRef` ("provider/model") and `Effort`, with their parsers. A leaf with no harness imports |
 | `internal/backoff` | The wait between two attempts of a retried model request or model call. A leaf with no harness imports |
-| `internal/modelmeta` | Context-window table from models.dev; only the model API backend reads it, and `Runtime.Models` and `GET /models` list it |
+| `internal/modelmeta` | Context-window table from models.dev; only the model API backend reads it for a window. `Runtime.Models` and `GET /models` list the chat models of each configured `anthropic`, `openai`, `codex`, and `claude-code` provider; a dated snapshot id is not listed when its undated alias is in the table |
 | `internal/mcp`, `plugin`, `skill`, `command`, `process`, `imageclamp` | The MCP client and server roles, the plugin host (`internal/plugin`, with the JSON-RPC transport in `internal/plugin/wire`), skill discovery, the slash-command registry, the process manager, and image clamping |
 | `internal/wirerecord` | The program that records the real wire streams of `testdata/wire` and scrubs them. It makes real model calls only with `HARNESS_RECORD_WIRE=1` and reads keys from the environment |
 | `internal/wirescrub` | Replaces ids, tokens, emails, home and temporary paths, and socket and pid paths in a recording with stable placeholders, and lists what a recording still holds |

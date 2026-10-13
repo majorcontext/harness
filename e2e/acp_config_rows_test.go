@@ -223,8 +223,17 @@ var acpConfigScenarios = []acpScenario{
 			acpNew{as: "a"},
 			acpSetConfig{as: "a", id: "model", value: "codex/gpt-6-luna"},
 			acpCheck(func(t *testing.T, c *acpConn) {
-				if got := acpNewOptions(c)[0].(map[string]any)["options"].([]any); len(got) != 4 {
-					t.Errorf("the model option lists %d values, want the 3 codex models and the model of the session", len(got))
+				var codex, native int
+				for _, o := range acpNewOptions(c)[0].(map[string]any)["options"].([]any) {
+					switch v := o.(map[string]any)["value"].(string); {
+					case strings.HasPrefix(v, "codex/"):
+						codex++
+					case strings.HasPrefix(v, "anthropic/"):
+						native++
+					}
+				}
+				if codex != 3 || native == 0 {
+					t.Errorf("the model option lists %d codex and %d anthropic values, want the 3 codex models and the anthropic models", codex, native)
 				}
 			}),
 		},

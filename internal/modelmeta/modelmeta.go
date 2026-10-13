@@ -98,18 +98,44 @@ var codexModels = []string{"gpt-6-astra", "gpt-6-luna", "gpt-6-sol"}
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves.
 var claudeCodeModels = []string{"fable", "haiku", "opus", "sonnet"}
 
-// Models returns, sorted, the models that a provider serves. The codex models
-// are ones that ContextWindow knows. The claude-code aliases are names that the
-// CLI resolves, and the backend owns their window. It returns nil for a
-// provider with no curated list.
+// datedSnapshotPattern matches a trailing snapshot date of eight digits, with
+// or without hyphens.
+var datedSnapshotPattern = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2})$`)
+
+// Models returns, sorted, the models that a provider serves. The anthropic
+// and openai models are the chat entries of the generated tables, with a
+// dated snapshot folded into its undated alias when the table holds both. The
+// codex models are ones that ContextWindow knows. The claude-code aliases are
+// names that the CLI resolves, and the backend owns their window. It returns
+// nil for a provider with no curated list.
 func Models(provider string) []string {
 	switch provider {
+	case "anthropic":
+		return undatedKeys(anthropicContextWindows)
+	case "openai":
+		return undatedKeys(openaiContextWindows)
 	case codexProvider:
 		return slices.Clone(codexModels)
 	case claudeCodeProvider:
 		return slices.Clone(claudeCodeModels)
 	}
 	return nil
+}
+
+// undatedKeys returns the sorted keys of table without a dated snapshot whose
+// undated alias is also a key.
+func undatedKeys(table map[string]int) []string {
+	out := make([]string, 0, len(table))
+	for id := range table {
+		if base := datedSnapshotPattern.ReplaceAllString(id, ""); base != id {
+			if _, ok := table[base]; ok {
+				continue
+			}
+		}
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // claudeCodeProvider is the modelref.ModelRef.Provider value that selects
