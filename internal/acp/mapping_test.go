@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"testing"
@@ -179,6 +180,9 @@ func (n *noRuntimes) For(context.Context, string) (Runtime, error) {
 	return nil, errors.New("unexpected")
 }
 func (n *noRuntimes) Close(context.Context) error { return nil }
+func (n *noRuntimes) Blob(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, errors.New("unexpected")
+}
 
 func TestSessionNewAfterShutdownIsRefusedWithoutBuildingARuntime(t *testing.T) {
 	rts := &noRuntimes{}
@@ -236,5 +240,33 @@ func TestAnswerAfterACancelledRequestIsTheContextError(t *testing.T) {
 	}
 	if got, err := answer(t.Context(), harness.TurnResult{StopReason: protocol.StopCompleted}, false); err != nil || got.(map[string]string)["stopReason"] != "end_turn" {
 		t.Errorf("answer = %v, %v", got, err)
+	}
+}
+
+func TestDescribeCallMapsKindLocationAndDiff(t *testing.T) {
+	rows := []struct {
+		name, args, kind, title string
+		locs                    []location
+		diff                    bool
+	}{
+		{"read_file", `{"path":"a.go","offset":7}`, "read", "read_file a.go", []location{{"/w/a.go", 7}}, false},
+		{"read_file", `{"path":"/abs/a.go"}`, "read", "read_file /abs/a.go", []location{{"/abs/a.go", 0}}, false},
+		{"edit_file", `{"path":"a.go","old_string":"x","new_string":"y"}`, "edit", "edit_file a.go", []location{{"/w/a.go", 0}}, true},
+		{"write_file", `{"path":"a.go","content":""}`, "edit", "write_file a.go", []location{{"/w/a.go", 0}}, true},
+		{"Edit", `{"file_path":"a.go","old_string":"x","new_string":"y"}`, "edit", "Edit a.go", []location{{"/w/a.go", 0}}, true},
+		{"grep", `{"pattern":"x\ny","path":"src"}`, "search", "grep x", nil, false},
+		{"bash", `{"command":"ls\nrm"}`, "execute", "bash ls", nil, false},
+		{"WebFetch", `{}`, "fetch", "WebFetch", nil, false},
+		{"mcp__weather__forecast", `{"city":"Oslo"}`, "other", "mcp__weather__forecast", nil, false},
+		{"edit_file", `not json`, "edit", "edit_file", nil, false},
+	}
+	for _, r := range rows {
+		got := describeCall(protocol.LogPart{Type: protocol.LogPartToolCall, CallID: "c", Name: r.name, Arguments: json.RawMessage(r.args)}, "/w")
+		if got.ToolKind != r.kind || got.Title != r.title || !slices.Equal(got.Locations, r.locs) || (len(got.Content) == 1) != r.diff {
+			t.Errorf("describeCall(%s %s) = kind %q title %q locations %v content %v", r.name, r.args, got.ToolKind, got.Title, got.Locations, got.Content)
+		}
+		if got.Status != "in_progress" {
+			t.Errorf("describeCall(%s).Status = %q, want in_progress", r.name, got.Status)
+		}
 	}
 }

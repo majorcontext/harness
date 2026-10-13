@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -77,6 +78,18 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 	}
 	r.rts[cwd] = rt
 	return rt, nil
+}
+
+// Blob returns the blob key of a session from the shared Store. It fails
+// before the first For builds a Runtime, because the Store does not exist yet.
+func (r *Runtimes) Blob(ctx context.Context, session, key string) (io.ReadCloser, error) {
+	r.mu.Lock()
+	st := r.store
+	r.mu.Unlock()
+	if st == nil {
+		return nil, fmt.Errorf("%w: no store", harness.ErrBlobNotFound)
+	}
+	return st.GetBlob(ctx, session, key)
 }
 
 // Close closes every Runtime and returns every error.

@@ -43,6 +43,8 @@ type Runtimes interface {
 	// For returns the Runtime of cwd, which is an absolute path. A cwd that is
 	// not a directory fails with an error that matches harness.ErrInvalidRequest.
 	For(ctx context.Context, cwd string) (Runtime, error)
+	// Blob returns the bytes of the blob key of a session that a Runtime built by For runs.
+	Blob(ctx context.Context, session, key string) (io.ReadCloser, error)
 	// Close closes every Runtime that For built.
 	Close(ctx context.Context) error
 }
