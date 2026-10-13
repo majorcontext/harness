@@ -445,8 +445,9 @@ Children: a `task` child shows as the parent's tool call. The child text does no
 | Option | `category` | Backed by |
 | --- | --- | --- |
 | `model` | `model` | `Runtime.Models()` as `provider/model`; `Session.Update(SettingsPatch{Model})` |
-| `effort` | `thought_level` | the efforts of the model; `SettingsPatch{Effort}` |
-| `service_tier` | other | `SettingsPatch{ServiceTier}` |
+| `effort` | `thought_level` | the fixed values `default`, `off`, `minimal`, `low`, `medium`, `high`, for every model; `SettingsPatch{Effort}` |
+
+The `service_tier` option is not built. A model with no curated list has one value, its current model.
 
 `Runtime.Models()` needs no session. The adapter lists values and never branches on a provider.
 
@@ -679,6 +680,7 @@ Tracks: C (core), A (ACP), W (wasm and browser). One concern per PR.
 | A8 | Elicitation for `question` requests. | scenario: question round trip | capability appears only with the scenario green |
 | A9 | v2 layer. | v2 wire scenarios; `--protocol-version 2` | v1 goldens unchanged |
 | A10 (follow-up) | The prompt answer precedes every update of a later turn. The event pump owns this order; it needs a spec line and a decision of Andy. Not built. | a row whose frames hold the goal-turn text after the prompt response on every host | the `schedulerOrder` flag leaves the table |
+| A5 follow-up | A useful model list for providers with no catalog needs a new Runtime list. | Andy decision | none yet |
 | W1 | `cmd/harness-wasm` skeleton (it builds; `harnessConnect` follows in W3), the `ws_dial` tag, the `GOOS=js` build in the Static job, the size budget. | build check | the module builds in CI; the budget fails on growth |
 | W2 | Transport failure classification: the `Permanent()` detection and `MarkPermanent` in `provider.Do`. `FetchError` and the readable JS error text move to W3. Independent of the ACP track. | runtime-only rows with a double `ModelTransport`: a permanent error is one attempt and the turn ends `permanent`; an ordinary transport error keeps both retry layers; a canceled request stays an abort | rows pass natively; the Turn retry bullet is edited |
 | W3 | `harnessConnect`, the frame channel, `fetchRT` (abort tied to `ctx`, self-releasing `js.Func`), `FetchError` with readable error text, JS tools, `proxy.headers`, Node wasm host with `DiskStore` on a temporary directory, the Node job in `ci.yml`. Needs W1, A2. | the Node wasm host runs the scenario subset (no `needsExec`, no `needsMCP`): `requests`, `wire`, `sessions`; a `FetchError` text has no `<object>` | subset equals the binary host goldens; the job fails, not skips, when Node is missing |

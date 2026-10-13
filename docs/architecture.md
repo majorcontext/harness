@@ -924,14 +924,14 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 ### Config options
 
-- `session/new` answers `configOptions` with two `select` options. `model` has the category `model`. Its values are the `provider/model` references that the runtime serves, and its current value is the model of the session. A model of the session that the runtime does not list is added to the values. `effort` has the category `thought_level`. Its values are `default`, `off`, `minimal`, `low`, `medium`, and `high`. `default` is an effort that is not set.
+- `session/new` answers `configOptions` with two `select` options. `model` has the category `model`. Its values are the `provider/model` references that `Runtime.Models` lists, and its current value is the model of the session. A model of the session that `Runtime.Models` does not list is added to the values. `effort` has the category `thought_level`. Its values are `default`, `off`, `minimal`, `low`, `medium`, and `high`. `default` is an effort that is not set.
 - `session/set_config_option` takes a `configId` and a string `value`. It changes the setting of the session and answers the complete list of options. A `configId` other than `model` and `effort`, a `value` that the option does not list, and a boolean `value` are `-32602`.
-- Each `settings.changed` event of the session is a `config_option_update` with the complete list of options. This includes a change by `/model`, by `/thinking`, and by the `model` tool. The update of a `session/set_config_option` reaches the client before the answer.
+- When the model or the effort of the session changes, the agent sends a `config_option_update` with the complete list of options. A `settings.changed` event that leaves both as they were sends none. This includes a change by `/model`, by `/thinking`, and by the `model` tool. The update of a `session/set_config_option` reaches the client before the answer.
 
 ### Commands
 
 - After the answer to `session/new`, the agent sends an `available_commands_update`. It lists each command that the runtime can run from a typed line. The `description` is the summary of the command. The `input.hint` is its argument hint, and is omitted when the command has none.
-- A prompt that is exactly one `text` block whose text starts with `/` is typed text. The runtime runs the slash command. The status text of the command is an `agent_message_chunk`, and the prompt answers `end_turn`. A line that names no command goes to the model as text. A prompt that has other blocks next to the text is not typed text.
+- A prompt that is exactly one `text` block whose text starts with `/` is typed text. The runtime runs the slash command. The status text of the command is an `agent_message_chunk`, and the prompt answers `end_turn`. A command that the runtime ends as interrupted answers `cancelled`. A line that names no command goes to the model as text. A prompt that has other blocks next to the text is not typed text.
 
 ### Usage and session info
 
