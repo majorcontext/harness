@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -31,6 +33,10 @@ type codexScenario struct {
 	bareKey bool
 	// alsoOpenAI configures the endpoint under provider "openai" as well as "codex".
 	alsoOpenAI bool
+	// auth, when set, replaces the API key of the codex entry with the stored Codex login.
+	auth *codexAuth
+	// env is added to the environment of the host.
+	env map[string]string
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -121,6 +127,11 @@ func bareOpenAIKey(cfg map[string]any) map[string]any {
 func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	t.Helper()
 	sc.opts.APIKey = codexAPIKey
+	var ca *codexAuthRun
+	if sc.auth != nil {
+		ca = startCodexAuth(t, *sc.auth)
+		sc.opts.Credentials, sc.opts.AccountID = ca.accepts, codexAccount
+	}
 	o := harnesstest.NewOpenAI(t, sc.opts, sc.model...)
 	extra := maps.Clone(sc.config)
 	if sc.mcpSchema != "" {
@@ -138,8 +149,13 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 		providers := cfg["providers"].(map[string]any)
 		providers["openai"] = providers["codex"]
 	}
+	if ca != nil {
+		ca.configure(cfg)
+	}
+	drv := codexDriver(t, h, ca, sc.env, o.URL(), cfg)
 	r := &run{
-		drv:    h.newDriver(t, o.URL(), cfg),
+		codex:  ca,
+		drv:    drv,
 		fake:   o.Server,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
@@ -165,7 +181,11 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 			t.Errorf("journal: %s", v)
 		}
 	}
-	return normalizeRun(o.Requests(), sessions, r.calls, r.ids, r.drv.Workdir())
+	reqs := o.Requests()
+	if sc.concurrent {
+		slices.SortStableFunc(reqs, func(a, b harnesstest.Request) int { return strings.Compare(a.LastUserText(), b.LastUserText()) })
+	}
+	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runCodexScenarios(t *testing.T, table []codexScenario) {
@@ -218,7 +238,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexNoToolCallRows(), codexPluginRows(t)))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexNoToolCallRows(), codexPluginRows(t)))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -462,4 +482,25 @@ func codexRetryRows() []codexScenario {
 			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "content_filter"}, "odd_again": {Incomplete: "content_filter"}}},
 		},
 	}
+}
+
+// codexDriver opens h on the config, with the project file of the login row when it has one.
+func codexDriver(t *testing.T, h host, ca *codexAuthRun, env map[string]string, modelURL string, cfg map[string]any) driver {
+	t.Helper()
+	path := writeGoalConfigWith(t, modelURL, scenarioConfig(cfg))
+	if ca != nil {
+		ca.configPath = path
+	}
+	if ca == nil || ca.spec.project == nil {
+		return h.openIn(t, path, t.TempDir(), env)
+	}
+	work := t.TempDir()
+	body, err := json.Marshal(ca.spec.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".harness.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return h.openIn(t, path, work, env)
 }

@@ -33,6 +33,20 @@ type OpenAIOptions struct {
 	// HoldPrewarm makes the server hold the first websocket prewarm without an
 	// answer until the client closes its connection.
 	HoldPrewarm bool
+	// Credentials, when set, replaces APIKey: it returns the label of an accepted
+	// bearer token, which the wire events report. Any other token gets HTTP 401,
+	// which is no wire-contract violation.
+	Credentials func(token string) (label string, ok bool)
+	// AccountID, when set with Credentials, is the chatgpt-account-id header that
+	// every request must carry, with an originator header.
+	AccountID string
+	// RedirectTo, when set, answers every request to the Responses path with a 307
+	// to this path on the same host. Redirected counts the requests that follow it.
+	RedirectTo string
+	// Secret, when set, is a value that no request header may hold. SawSecret reports a request that did.
+	Secret string
+	// OnReject runs after the server rejects a bearer token, before it answers.
+	OnReject func()
 }
 
 // CodexReply is what a Step reply can ask for beyond Reply.
@@ -99,6 +113,27 @@ type WireEvent struct {
 	RejectedSchemaKeywords []string `json:"rejected_schema_keywords,omitempty"`
 	// ReasoningItems counts the reasoning items that the request replays.
 	ReasoningItems int `json:"reasoning_items,omitempty"`
+	// Credential is the label of the bearer token of the request, from OpenAIOptions.Credentials.
+	Credential string `json:"credential,omitempty"`
+	// AccountID is the chatgpt-account-id header of the request.
+	AccountID string `json:"chatgpt_account_id,omitempty"`
+	// Originator is the originator header of the request.
+	Originator string `json:"originator,omitempty"`
+	// SessionHeader reports a session-id header equal to the x-client-request-id header.
+	SessionHeader bool `json:"session_header,omitempty"`
+}
+
+// stamp copies the identity headers of r into w.
+func (o *OpenAI) stamp(w WireEvent, r *http.Request) WireEvent {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if o.opts.Credentials != nil {
+		w.Credential, _ = o.opts.Credentials(token)
+	}
+	w.AccountID = r.Header.Get("chatgpt-account-id")
+	w.Originator = r.Header.Get("originator")
+	id := r.Header.Get("session-id")
+	w.SessionHeader = id != "" && id == r.Header.Get("x-client-request-id")
+	return w
 }
 
 func newWireEvent(transport, event string, conn int, b openAIBody) WireEvent {
@@ -126,6 +161,11 @@ type OpenAI struct {
 	known     map[string]bool   // "conn/response id" of every completed response
 	faults    []string
 	held      bool // a prewarm took the hold of HoldPrewarm
+
+	secretSeen   bool
+	rejected     map[string]int // rejected bearer tokens by transport
+	redirectHits int            // requests to RedirectTo
+	redirectAuth bool           // one of them carried a credential header
 }
 
 const heldPrewarm = "prewarm"
@@ -219,6 +259,39 @@ func (o *OpenAI) holdPrewarm(ctx context.Context, conn *websocket.Conn) bool {
 	return true
 }
 
+// Rejections counts the requests that Credentials rejected, over the websocket and over SSE.
+func (o *OpenAI) Rejections() (ws, sse int) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.rejected["ws"], o.rejected["sse"]
+}
+
+// SawSecret reports whether a request carried OpenAIOptions.Secret in a header.
+func (o *OpenAI) SawSecret() bool {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.secretSeen
+}
+
+func headersHold(h http.Header, secret string) bool {
+	for _, vs := range h {
+		for _, v := range vs {
+			if strings.Contains(v, secret) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Redirected reports how many requests reached the target of RedirectTo and
+// whether one carried an Authorization or chatgpt-account-id header.
+func (o *OpenAI) Redirected() (hits int, credentials bool) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.redirectHits, o.redirectAuth
+}
+
 // PrewarmInstructions returns the instructions of each websocket prewarm, in
 // the order they arrived.
 func (o *OpenAI) PrewarmInstructions() []string {
@@ -240,12 +313,51 @@ func (o *OpenAI) logWire(w WireEvent) {
 }
 
 func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
+	if o.opts.Secret != "" && headersHold(r.Header, o.opts.Secret) {
+		o.wmu.Lock()
+		o.secretSeen = true
+		o.wmu.Unlock()
+	}
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if o.opts.RedirectTo != "" && r.URL.Path == o.opts.RedirectTo {
+		o.wmu.Lock()
+		o.redirectHits++
+		o.redirectAuth = o.redirectAuth || r.Header.Get("Authorization") != "" || r.Header.Get("chatgpt-account-id") != ""
+		o.wmu.Unlock()
+		writeError(w, http.StatusNotFound, "harnesstest: redirect target")
+		return
+	}
+	if o.opts.RedirectTo != "" && r.URL.Path == codexPath {
+		http.Redirect(w, r, o.opts.RedirectTo, http.StatusTemporaryRedirect)
+		return
+	}
+	accepted := false
+	if o.opts.Credentials != nil {
+		_, accepted = o.opts.Credentials(token)
+	}
 	switch {
 	case r.URL.Path != codexPath:
 		o.fault("request path %q, want %q", r.URL.Path, codexPath)
 		writeError(w, http.StatusNotFound, "harnesstest: unexpected path")
-	case token == "" || (o.opts.APIKey != "" && token != o.opts.APIKey):
+	case o.opts.Credentials != nil && !accepted:
+		kind := "sse"
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			kind = "ws"
+		}
+		o.wmu.Lock()
+		if o.rejected == nil {
+			o.rejected = map[string]int{}
+		}
+		o.rejected[kind]++
+		o.wmu.Unlock()
+		if o.opts.OnReject != nil {
+			o.opts.OnReject()
+		}
+		writeError(w, http.StatusUnauthorized, "harnesstest: token rejected")
+	case o.opts.AccountID != "" && (r.Header.Get("chatgpt-account-id") != o.opts.AccountID || r.Header.Get("originator") == ""):
+		o.fault("request without the expected chatgpt-account-id and originator headers")
+		writeError(w, http.StatusForbidden, "harnesstest: bad account headers")
+	case token == "" || (o.opts.Credentials == nil && o.opts.APIKey != "" && token != o.opts.APIKey):
 		o.fault("request without the expected bearer token")
 		writeError(w, http.StatusUnauthorized, "harnesstest: bad bearer token")
 	case strings.EqualFold(r.Header.Get("Upgrade"), "websocket"):
@@ -289,7 +401,7 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	wr := newWireEvent("sse", "request", 0, b)
+	wr := o.stamp(newWireEvent("sse", "request", 0, b), r)
 	wr.ContentEncoding = r.Header.Get("Content-Encoding")
 	o.logWire(wr)
 	step, ok := o.pick(o.request(b))
@@ -348,9 +460,9 @@ func (o *OpenAI) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	n := o.nextConn()
-	o.logWire(WireEvent{Transport: "ws", Event: "dial", Conn: n,
+	o.logWire(o.stamp(WireEvent{Transport: "ws", Event: "dial", Conn: n,
 		ResponsesWebsockets: strings.HasPrefix(r.Header.Get("openai-beta"), "responses_websockets="),
-	})
+	}, r))
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil || !o.serveCreate(ctx, conn, n, data) {

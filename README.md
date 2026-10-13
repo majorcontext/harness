@@ -590,6 +590,48 @@ The model ref `vendor/some-model` sends `some-model` as the model ID. Set
 `responses_path` is also valid on the built-in `openai` entry, and nowhere
 else.
 
+### Use your ChatGPT subscription (Codex)
+
+A ChatGPT plan can pay for the model calls of the Codex lane. Sign in once:
+
+```bash
+harness login codex
+```
+
+The command prints a sign-in URL and opens it in your browser. After you sign in, the browser returns to a page on `localhost` and the command exits. On a machine with no browser, run `harness login codex --device`: it prints a code and a link, and you enter the code on another device. `harness login codex --status` prints the account and when the access token ends. It never prints a token. `harness logout codex` deletes the login.
+
+Harness keeps its own login in `auth/codex.json` beside the user config (`~/.harness/auth/codex.json` by default). The file has mode 0600. Harness never reads or writes `~/.codex`, so a login with the Codex CLI and a login with Harness are separate. Harness refreshes the access token before it ends. `harness logout codex` deletes the file; it does not revoke the tokens at OpenAI. The file lock is an exclusive lock on unix only; on Windows it does nothing, so run one Harness process at a time on a login there. If two processes refresh at once, run `harness login codex` again.
+
+Then add an entry that uses the login in place of an API key:
+
+```json
+{
+  "model": "codex/gpt-5.3-codex",
+  "providers": {
+    "codex": {
+      "type": "openai",
+      "auth": "chatgpt",
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "responses_path": "/responses",
+      "omit_response_params": ["max_output_tokens", "temperature", "top_p", "metadata"],
+      "sanitize_tool_schemas": true
+    }
+  }
+}
+```
+
+`auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
+
+To use it in Zed, add Harness as a custom agent server in your Zed settings, run `harness login codex` once in a terminal, and put the entry above in `~/.harness/config.json`:
+
+```json
+{
+  "agent_servers": {
+    "Harness": { "command": "harness", "args": ["acp"] }
+  }
+}
+```
+
 ### Context windows
 
 Automatic compaction needs the context window of the model. A model that is

@@ -16,6 +16,9 @@ func (c *Config) ApplyEnv(getenv func(string) string) error {
 		f := v.Type().Field(i)
 		key, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		name := "HARNESS_" + strings.ToUpper(key)
+		if f.Tag.Get("env") == "-" {
+			continue
+		}
 		t := f.Type
 		if t.Kind() == reflect.Pointer {
 			t = t.Elem()

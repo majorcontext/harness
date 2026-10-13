@@ -72,6 +72,7 @@ func pluginProbeCmd(args []string) error {
 		return err
 	}
 	defaultPluginCache(cfg)
+	defaultCodexAuth(cfg)
 	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv})
 	if err != nil {
 		return err

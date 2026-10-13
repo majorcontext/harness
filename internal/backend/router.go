@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/backend/modelapi"
+	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
@@ -63,10 +65,13 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			cfg.Providers[name] = config.Provider{}
 		}
 	}
+	codex := sync.OnceValue(func() *codexauth.Source {
+		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
+	})
 	for name, p := range cfg.Providers {
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
-		} else if c := client(name, p, transport, env, cfg.RequestMaxRetriesValue()); c != nil {
+		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			backends[name] = modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 		}
 	}
@@ -76,16 +81,22 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 // client returns the model API client of entry name, or nil for an entry
 // that names no model API. An entry keyed by a native family may leave Type
 // empty. A transport may supply the credentials, so the key variable may be unset.
-func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, retries int) provider.Provider {
+func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, codex func() *codexauth.Source, retries int) provider.Provider {
 	var hc *http.Client
 	if transport != nil {
 		if rt := transport(name); rt != nil {
 			hc = &http.Client{Transport: rt}
 		}
 	}
+	if p.Auth == config.AuthChatGPT {
+		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath))
+	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
-		key, reason := env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+		key, reason := "", "the entry uses the "+p.Auth+" login"
+		if p.Auth == "" {
+			key, reason = env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
@@ -99,6 +110,18 @@ func client(name string, p config.Provider, transport func(provider string) http
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
+}
+
+// codexClient wraps hc so that the Codex login reaches the Responses endpoint of the entry and no other URL.
+// The client follows no redirect, so a 3xx answer ends the request and no header goes to its target.
+func codexClient(hc *http.Client, src *codexauth.Source, endpoint string) *http.Client {
+	out := &http.Client{}
+	if hc != nil {
+		out = &http.Client{Transport: hc.Transport, Jar: hc.Jar, Timeout: hc.Timeout}
+	}
+	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	out.Transport = codexauth.NewTransport(src, out.Transport, endpoint)
+	return out
 }
 
 // key returns the API key in variable name, and why it is empty for the error of an empty key.

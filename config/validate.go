@@ -27,6 +27,7 @@ func (c *Config) validateFile() error {
 		c.validateTaskLimits(),
 		validateMaxTokens(c.MaxTokens),
 		validateRetries(c.RequestMaxRetries, c.StreamMaxRetries),
+		validateCodexIssuer(c.CodexIssuer),
 	)
 }
 
@@ -111,6 +112,14 @@ func validateRetries(request, stream *int) error {
 	}
 	if stream != nil && *stream < 0 {
 		return fmt.Errorf("stream_max_retries must not be negative, got %d", *stream)
+	}
+	return nil
+}
+
+// validateCodexIssuer rejects a codex_issuer that would send the login over plain HTTP to a remote host.
+func validateCodexIssuer(issuer string) error {
+	if err := validateSecureURL(issuer); err != nil {
+		return fmt.Errorf("codex_issuer: %w", err)
 	}
 	return nil
 }

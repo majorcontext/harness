@@ -1,0 +1,26 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "secret": {
+      "status": 200,
+      "body": {
+        "sent_to_the_issuer": false,
+        "sent_to_the_model_server": false
+      }
+    }
+  }
+}

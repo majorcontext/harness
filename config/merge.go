@@ -1,5 +1,7 @@
 package config
 
+import "log/slog"
+
 // merge returns base overlaid with the non-zero fields of over. The result aliases no map or slice of either input.
 func merge(base, over *Config) *Config {
 	out := *base
@@ -136,6 +138,7 @@ func mergeProviders(out, base, over *Config) {
 		m[k] = copyProvider(v)
 	}
 	for k, v := range over.Providers {
+		v = dropUserOnlyProviderKeys(k, v, m[k])
 		if ex, ok := m[k]; ok {
 			m[k] = overlayProvider(ex, v)
 		} else {
@@ -143,6 +146,30 @@ func mergeProviders(out, base, over *Config) {
 		}
 	}
 	out.Providers = m
+}
+
+// dropUserOnlyProviderKeys removes from the project entry v the keys that only the user config
+// sets: auth, and base_url and responses_path of an entry whose user config sets auth. A project
+// file then cannot send the login to another URL. ex is the entry of the user config, if any.
+func dropUserOnlyProviderKeys(name string, v, ex Provider) Provider {
+	drop := func(key string) {
+		slog.Warn("config: a project file cannot set a key that moves the login; the key is ignored", "key", "providers."+name+"."+key)
+	}
+	if v.Auth != "" {
+		drop("auth")
+		v.Auth = ""
+	}
+	if ex.Auth != "" {
+		if v.BaseURL != "" {
+			drop("base_url")
+			v.BaseURL = ""
+		}
+		if v.ResponsesPath != "" {
+			drop("responses_path")
+			v.ResponsesPath = ""
+		}
+	}
+	return v
 }
 
 func copyProvider(v Provider) Provider {
@@ -168,6 +195,9 @@ func overlayProvider(ex, v Provider) Provider {
 	}
 	if v.APIKeyEnv != "" {
 		ex.APIKeyEnv = v.APIKeyEnv
+	}
+	if v.Auth != "" {
+		ex.Auth = v.Auth
 	}
 	if v.BaseURL != "" {
 		ex.BaseURL = v.BaseURL

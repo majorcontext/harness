@@ -36,6 +36,9 @@ func ParseRetryAfter(h http.Header, now time.Time) (d time.Duration, ok bool) {
 // Permanent method, so a wrapper that has one decides for the whole chain.
 type permanentDeclarer interface{ Permanent() bool }
 
+// DeclaresPermanent reports whether err, or an error it wraps, declares itself permanent.
+func DeclaresPermanent(err error) bool { return declaresPermanent(err) }
+
 func declaresPermanent(err error) bool {
 	var p permanentDeclarer
 	return errors.As(err, &p) && p.Permanent()

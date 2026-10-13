@@ -54,6 +54,10 @@ func main() {
 		err = pluginCmd(os.Args[2:])
 	case "acp":
 		err = acpCmd(os.Args[2:])
+	case "login":
+		err = loginCmd(os.Args[2:])
+	case "logout":
+		err = logoutCmd(os.Args[2:])
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "harness: unknown command %q\n", os.Args[1])
 		usage(os.Stderr)
@@ -92,6 +96,10 @@ func usage(w io.Writer) {
   harness acp                       serve ACP v1 over stdin and stdout
   harness plugin probe              probe the configured plugins and print
                                     their hooks
+  harness login codex [--device] [--no-browser] [--status]
+                                    sign in with a ChatGPT subscription, or
+                                    print the stored login
+  harness logout codex              delete the stored Codex login
   harness sessions [--json]         list persisted sessions
   harness version                   print version
 
@@ -151,6 +159,7 @@ func applyOverrides(cfg *config.Config, noInstructions bool, skillDirs, agentDef
 		return err
 	}
 	defaultPluginCache(cfg)
+	defaultCodexAuth(cfg)
 	if noInstructions {
 		off := false
 		cfg.Instructions = &off

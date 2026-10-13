@@ -152,7 +152,9 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	// path, so credential injection applies to both. Any failure falls through
 	// to the HTTP POST below. Codex HTTP changes only its wire encoding to zstd.
 	if c.UseWebSocketTransport && req.SessionKey != "" {
+		var permanent error
 		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
+			Permanent:  &permanent,
 			SessionKey: req.SessionKey,
 			URL:        url,
 			Headers:    headers,
@@ -163,6 +165,8 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 			Log:        c.Log,
 		}); ok {
 			return st, nil
+		} else if permanent != nil {
+			return nil, provider.MarkPermanent(permanent)
 		}
 	}
 
@@ -210,7 +214,9 @@ func (c *Client) Warm(ctx context.Context, req *provider.Request) error {
 	if err != nil {
 		return err
 	}
+	var permanent error
 	return c.wsPoolFor().warm(ctx, wsStreamRequest{
+		Permanent:  &permanent,
 		SessionKey: req.SessionKey,
 		URL:        prepared.url,
 		Headers:    prepared.headers,
@@ -245,6 +251,9 @@ func (c *Client) codexSubscriptionUsage(h http.Header) *message.SubscriptionUsag
 	}
 	return codexSubscriptionUsageFromHeaders(h)
 }
+
+// ResponsesURL is the URL of the Responses request of an entry with the base URL and the path.
+func ResponsesURL(base, path string) string { return responsesURL(base, path) }
 
 // responsesURL joins a base URL and a request path with exactly one slash.
 // The join is string-level, not url.JoinPath, which re-encodes segments. A

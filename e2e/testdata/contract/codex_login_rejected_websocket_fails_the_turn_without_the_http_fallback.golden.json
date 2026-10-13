@@ -1,0 +1,39 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_login.a": {
+      "status": 200,
+      "body": {
+        "dir_mode": "-rwx------",
+        "error_says_login": true,
+        "file_exists": true,
+        "file_mode": "-rw-------",
+        "secret_in_error_or_log": false,
+        "stored_account": "acct-1",
+        "turn#1": null,
+        "turn#2": "failed"
+      }
+    },
+    "fallback": {
+      "status": 200,
+      "body": {
+        "http_fallback_attempted": false,
+        "websocket_rejected": true
+      }
+    }
+  }
+}
