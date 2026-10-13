@@ -170,4 +170,4 @@ First tagged release.
 
 ### Fixed
 
-- **Ended child goal** (`internal/session`) — `CancelForEnd` ends the goal of the session with state `cleared` and reason `ended`, whether the session runs a turn or is idle, so an ended child starts no further goal turn.
+- **Ended child goal** (`internal/session`) — `CancelForEnd` ends the goal of the session with state `cleared` and reason `ended`, for an active, paused, or blocked goal, whether the session runs a turn, an evaluation, or a compaction, or is idle, so an ended child starts no further goal turn.

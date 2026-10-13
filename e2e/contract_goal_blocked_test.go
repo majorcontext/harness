@@ -78,6 +78,9 @@ func TestContractGoalBlocked(t *testing.T) {
 
 		t.Run("a_goal_set_while_the_queue_is_held_blocks", func(t *testing.T) { goalSetOnHeldQueueBlocks(t, h) })
 		t.Run("ending_a_parent_ends_the_goal_of_a_child_with_a_running_turn", func(t *testing.T) { endingParentEndsChildGoal(t, h) })
+		for _, state := range []protocol.GoalState{protocol.GoalPaused, protocol.GoalBlocked} {
+			t.Run("ending_a_parent_ends_the_"+string(state)+"_goal_of_a_child_that_compacts", func(t *testing.T) { endingParentEndsCompactingChildGoal(t, h, state) })
+		}
 	})
 }
 
@@ -136,6 +139,64 @@ func endingParentEndsChildGoal(t *testing.T, h host) {
 	for _, r := range fake.Requests() {
 		if isEvaluator(r) {
 			t.Error("the evaluator judged the turn of an ended child")
+		}
+	}
+	if v.Status != protocol.StatusIdle {
+		t.Errorf("status of the ended child = %s, want idle", v.Status)
+	}
+}
+
+func endingParentEndsCompactingChildGoal(t *testing.T, h host, state protocol.GoalState) {
+	t.Parallel()
+	call := harnesstest.ToolCall{ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"}}
+	d, fake := startOn(t, h, runtimeWorkdir(t, nil), map[string]any{"compaction_keep_turns": 1},
+		harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{call}}},
+		harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "partial"}},
+		harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+		harnesstest.Step{Name: "report", Match: harnesstest.LastUserText("A background task you started has finished"), Reply: harnesstest.Reply{Text: "noted"}, Repeat: true},
+		harnesstest.Step{Name: "held", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist", Block: true}},
+	)
+	parent := d.Create(t)
+	d.Submit(t, parent, "delegate")
+	d.WaitIdle(t, parent)
+	var kid string
+	for _, id := range d.sessionIDs(t) {
+		if id != parent {
+			kid = id
+		}
+	}
+	d.WaitIdle(t, kid)
+	d.halt(t)
+	goal := protocol.GoalChanged{State: state, Reason: "no_driver"}
+	if state == protocol.GoalPaused {
+		goal = protocol.GoalChanged{State: state, Reason: "provider_exhausted", RetryAt: time.Now().Add(time.Hour)}
+	}
+	d.seed(t, kid, seedInput("seed_in2", "user", "more"), protocol.TurnStarted{TurnID: "turn2", InputIDs: []string{"seed_in2"}},
+		protocol.ItemCompleted{ItemID: "m2", TurnID: "turn2", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "done"}}}},
+		protocol.TurnEnded{TurnID: "turn2", StopReason: protocol.StopCompleted},
+		protocol.GoalSet{Condition: "finish the child work"}, goal)
+	d.start(t)
+	d.WaitIdle(t, parent)
+	compacted := make(chan struct{})
+	go func() {
+		defer close(compacted)
+		d.Compact(t, kid)
+	}()
+	if !fake.AwaitBlocked("held", waitBound) {
+		t.Fatalf("waited %s for the child to compact", waitBound)
+	}
+	d.EndSession(t, parent)
+	if !fake.AwaitCanceled("held", waitBound) {
+		t.Errorf("waited %s for the compaction of the ended child to stop", waitBound)
+	}
+	<-compacted
+	v := d.view(t, kid)
+	if v.Goal == nil || v.Goal.State != "cleared" || v.Goal.Reason != "ended" {
+		t.Errorf("goal of the ended child = %+v, want cleared with reason ended", v.Goal)
+	}
+	for _, r := range fake.Requests() {
+		if isEvaluator(r) {
+			t.Error("the evaluator judged the ended child")
 		}
 	}
 	if v.Status != protocol.StatusIdle {
