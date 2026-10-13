@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/majorcontext/harness/internal/mcp"
@@ -95,6 +99,30 @@ func TestMCPServerRefusesWhenUnavailable(t *testing.T) {
 	srv.SetAvailable(false)
 	if err := connect(); err == nil {
 		t.Fatal("initialize succeeded on an unavailable server")
+	}
+}
+
+func TestMCPServerListensOutsideTheEphemeralPortRange(t *testing.T) {
+	srv := NewMCPServer(t, mcpTestSpec())
+	u, err := url.Parse(srv.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port < mcpPortBase || port >= mcpPortBase+mcpPortSpan {
+		t.Fatalf("port %d is outside [%d, %d)", port, mcpPortBase, mcpPortBase+mcpPortSpan)
+	}
+	srv.Close()
+	conn, err := net.Dial("tcp", u.Host)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatalf("dial %s succeeded after Close", u.Host)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("dial error = %v, want connection refused", err)
 	}
 }
 

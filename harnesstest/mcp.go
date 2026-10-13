@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -360,10 +362,41 @@ func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{},
 		held: make(chan struct{}, 64), abandoned: make(chan struct{}, 64)}
 	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
+	if ln, err := listenQuiet(); err == nil {
+		_ = s.srv.Listener.Close()
+		s.srv.Listener = ln
+	}
 	s.srv.Config.SetKeepAlivesEnabled(false)
 	s.srv.Start()
 	t.Cleanup(s.srv.Close)
 	return s
+}
+
+const (
+	mcpPortBase = 20000
+	mcpPortSpan = 10000
+)
+
+var (
+	mcpNextPort  atomic.Uint32
+	mcpPortStart = sync.OnceFunc(func() { mcpNextPort.Store(rand.Uint32N(mcpPortSpan)) })
+)
+
+// listenQuiet listens on a loopback port below the ephemeral range of Linux
+// and macOS. The process takes ports in sequence, and a listener that the OS
+// places with bind(0) never gets one, so no server of the process takes the
+// port of a closed server, and a later request is refused.
+func listenQuiet() (net.Listener, error) {
+	mcpPortStart()
+	var err error
+	for range 200 {
+		var ln net.Listener
+		ln, err = net.Listen("tcp4", "127.0.0.1:"+strconv.Itoa(mcpPortBase+int(mcpNextPort.Add(1)%mcpPortSpan)))
+		if err == nil {
+			return ln, nil
+		}
+	}
+	return nil, err
 }
 
 // URL is the MCP endpoint.
