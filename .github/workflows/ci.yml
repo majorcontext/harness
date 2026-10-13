@@ -7,8 +7,8 @@ on:
   pull_request: {}
 
 jobs:
-  test:
-    name: Test
+  static:
+    name: Static
     runs-on: ubuntu-latest
     env:
       GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
@@ -35,19 +35,10 @@ jobs:
             exit 1
           fi
 
-      - run: go build ./...
-
       - name: Protocol drift
         run: |
           go generate ./protocol
           git diff --exit-code -- protocol/
-
-      - name: Unit tests
-        # -count=1 keeps a cached e2e result from skipping the coverage table.
-        # Only the e2e package reads HARNESS_E2E_COVER.
-        env:
-          HARNESS_E2E_COVER: '1'
-        run: go test -race -count=1 -skip '^TestRepository$' ./...
 
       - run: go vet ./...
 
@@ -60,11 +51,6 @@ jobs:
         with:
           version: v2.14
           only-new-issues: true
-
-      - name: Runtime contract
-        # Runs the contract rows on harness.Runtime in process by their
-        # dispositions in e2e/runtime_rows_test.go.
-        run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$'
 
       - name: Startup budget
         # AGENTS.md: startup speed is a CI-enforced budget. Best-of-5 keeps
@@ -83,3 +69,62 @@ jobs:
           done
           echo "best-of-5 startup: ${best}ms (budget: 50ms)"
           [ "$best" -le 50 ]
+
+  unit:
+    name: Unit
+    runs-on: ubuntu-latest
+    env:
+      GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Production dependencies must remain pure Go. Module caching covers
+          # both production adapters and test-only support packages.
+          cache: true
+
+      - name: Unit tests
+        # The e2e package runs in its own jobs.
+        run: go test -race -count=1 -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$')
+
+  contract:
+    name: Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Production dependencies must remain pure Go. Module caching covers
+          # both production adapters and test-only support packages.
+          cache: true
+
+      - name: Contract
+        # -count=1 keeps a cached e2e result from skipping the coverage table.
+        # Only the e2e package reads HARNESS_E2E_COVER.
+        env:
+          HARNESS_E2E_COVER: '1'
+        run: go test -race -count=1 ./e2e/
+
+  runtime:
+    name: Runtime contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Production dependencies must remain pure Go. Module caching covers
+          # both production adapters and test-only support packages.
+          cache: true
+
+      - name: Runtime contract
+        # Runs the contract rows on harness.Runtime in process by their
+        # dispositions in e2e/runtime_rows_test.go.
+        run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$'
