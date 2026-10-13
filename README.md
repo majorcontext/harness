@@ -8,9 +8,22 @@ A fast, extensible, composable agent harness in Go.
 - **Extensible** — plugins in Go (in process or as a process) and in any language over stdio (TypeScript SDK included)
 - **Composable** — headless runtime, event streams, client/server, MCP servers
 
+## Before you start
+
+- Go 1.27.1 or later, to install the CLI and to build Go plugins and programs.
+- An API key for one model provider. The default model is Anthropic's
+  (`ANTHROPIC_API_KEY`). With an OpenAI or OpenRouter key, choose a model of
+  that provider, as [Choose a model](#choose-a-model) shows.
+- A directory you can reset, such as a git repository. Harness has no approval
+  prompts: the model reads and edits files and runs shell commands in the
+  current directory without asking. Use a [plugin](#block-tool-calls-with-a-plugin)
+  to block the calls you do not want.
+
 ## Quickstart
 
-Install the CLI:
+Install the CLI. `go install` puts it in `$(go env GOBIN)`, or in
+`$(go env GOPATH)/bin` when `GOBIN` is empty. That directory must be on your
+`PATH`:
 
 ```bash
 go install github.com/majorcontext/harness/cmd/harness@latest
@@ -18,15 +31,33 @@ go install github.com/majorcontext/harness/cmd/harness@latest
 
 ### Run a prompt
 
-The default model is Anthropic's. Set its key, then run a prompt in your project:
+Set the key, then run a prompt in your project:
 
 ```bash
 export ANTHROPIC_API_KEY=...
 harness run -p "Find the TODOs in this repo and fix the easy ones"
 ```
 
-Harness reads files, edits them, and runs commands in the current directory.
-It saves each session.
+The reply goes to standard output. The tool calls, the session ID, and JSON log
+lines go to standard error. Run `harness --help` for every `run` flag.
+
+### Choose a model
+
+Model refs are `provider/model`. `-model` picks the model for one run:
+
+```bash
+export OPENAI_API_KEY=...
+harness run -model openai/gpt-5-mini -p "Find the TODOs in this repo"
+```
+
+To change the default, set `model` in a config file (see
+[Config files](#config-files)):
+
+```json
+{"model": "openai/gpt-5-mini"}
+```
+
+[Configuration](#configuration) shows OpenRouter, Ollama, and other endpoints.
 
 ### Continue the session
 
@@ -35,6 +66,9 @@ It saves each session.
 ```bash
 harness run -c -p "Now write a test for each fix"
 ```
+
+The most recent session is the newest one of all your projects, not only the
+current directory's.
 
 ### Go back to an older session
 
@@ -56,10 +90,21 @@ harness run -r ses_ctqgq5qegmlzj2xub2rq5qewqj -p "What did we change?"
 Sessions are in `~/.harness/sessions`. `harness sessions --json` prints the
 same list as JSON.
 
+### Config files
+
+Harness reads two JSON files, and both are optional:
+
+- `~/.harness/config.json` holds your settings for every project. Create it
+  when you need it. Set `$HARNESS_CONFIG` to use another file.
+- `.harness.json` in the project directory overlays it.
+
+See `config.Config` for every field. The next steps add keys to
+`.harness.json`.
+
 ### Give the model more tools
 
-Add an MCP server to `.harness.json` in your project. This one lets the model
-fetch web pages. It needs [uv](https://docs.astral.sh/uv/).
+This MCP server lets the model fetch web pages. It needs
+[uv](https://docs.astral.sh/uv/).
 
 ```json
 {
@@ -78,15 +123,11 @@ For a remote server, set `url` and `headers` in place of `command`.
 ### Work toward a goal
 
 `-goal` runs turns until an independent evaluator model judges the condition
-met. Name the evaluator in `.harness.json`:
+met. Add the evaluator to `.harness.json`. It needs the key of its own
+provider:
 
 ```json
-{
-  "goal_evaluator_model": "anthropic/claude-fable-5",
-  "mcp_servers": {
-    "fetch": {"command": ["uvx", "mcp-server-fetch"]}
-  }
-}
+{"goal_evaluator_model": "anthropic/claude-fable-5"}
 ```
 
 ```bash
@@ -96,13 +137,119 @@ harness run -goal "go test ./... passes"
 The command exits 0 when the goal is met, 3 when it is not, and 1 when a turn
 fails.
 
+### Block tool calls with a plugin
+
+A plugin runs before each tool call and can deny it. This one is a Go program
+that blocks `rm` in shell commands. Make a module for it:
+
+```bash
+mkdir guard-plugin && cd guard-plugin
+go mod init example.com/guard-plugin
+go get github.com/majorcontext/harness@latest
+```
+
+Write `main.go`:
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"strings"
+
+	"github.com/majorcontext/harness/plugin"
+)
+
+var guard = &plugin.Plugin{
+	Name: "guard",
+	ToolExecuteBefore: &plugin.ToolBefore{
+		DenyOnFailure: true,
+		Run:           check,
+	},
+}
+
+func check(ctx context.Context, c *plugin.Client, req *plugin.ToolExecuteBeforeRequest) (*plugin.ToolExecuteBeforeResponse, error) {
+	if req.Tool != "bash" {
+		return nil, nil
+	}
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(req.Args, &args); err != nil {
+		return nil, err
+	}
+	for _, word := range strings.Fields(args.Command) {
+		if word == "rm" {
+			return &plugin.ToolExecuteBeforeResponse{Deny: "rm is blocked"}, nil
+		}
+	}
+	return nil, nil
+}
+
+func main() {
+	if err := plugin.Serve(guard); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+`Run` returns nil to let the call run, or a `Deny` message, which the model
+gets as the error result of the call. With `DenyOnFailure`, a hook that
+returns an error, panics, or misses its deadline also denies the call, so a
+broken guard does not let a call through. `plugin.Serve` speaks the protocol
+on standard input and output, so the plugin must log only to standard error.
+
+Install it. The binary takes the last element of the module path,
+`guard-plugin`:
+
+```bash
+go install .
+```
+
+Add it to the `plugins` key of `.harness.json` in your project. `name` must
+equal `Plugin.Name`, and `command` is found on your `PATH`:
+
+```json
+{"plugins": [{"name": "guard", "command": ["guard-plugin"]}]}
+```
+
+Check that Harness finds it. The probe prints each plugin and its hooks:
+
+```console
+$ harness plugin probe
+guard: tool.execute.before
+```
+
+Then ask for a call it blocks. The tool lines show the call and the deny
+message:
+
+```console
+$ echo scratch > scratch.txt
+$ harness run -p "Delete scratch.txt with the bash tool"
+[tool bash] {"command":"rm scratch.txt"}
+[tool bash failed] rm is blocked
+```
+
+The guard reads the text of a command. It is not a sandbox: the model can try
+another command to get the same result, such as a Python script that deletes
+the file. After a rebuild, the next run or probe sees the new binary. A plugin can also
+change requests and results, add tools, and call back into the host. A plugin
+in another language speaks the same protocol over stdio. See the
+[`plugin` package reference](https://pkg.go.dev/github.com/majorcontext/harness/plugin),
+the [TypeScript SDK](sdk/typescript/README.md), the
+[protocol](internal/plugin/PROTOCOL.md), and
+[`examples/guardrail`](examples/guardrail).
+
 ### Serve it over HTTP
 
 ```bash
 harness serve
 ```
 
-In another terminal, create a session, send it a prompt, and stream its events:
+In another terminal, create a session, send it a prompt, and stream its events.
+The last command streams until you stop it with Ctrl-C:
 
 ```bash
 curl -X POST localhost:4096/sessions -d '{"id": "demo"}'
@@ -111,9 +258,10 @@ curl -X POST localhost:4096/sessions/demo/inputs \
 curl -N -H 'Accept: text/event-stream' localhost:4096/sessions/demo/events
 ```
 
+To choose the model, add `"model": "openai/gpt-5-mini"` to the create request.
 With no `HARNESS_RUN_TOKEN` set, the server needs no token on `localhost`.
-Run `harness --help` for the commands and the `run` flags, and
-`harness serve -h` for the `serve` flags.
+`harness serve -h` lists the flags, and
+[`protocol/openapi.json`](protocol/openapi.json) describes every route.
 
 ## Embed Harness in Go
 
@@ -130,53 +278,72 @@ Create a runtime and a session, send the session a prompt, and read the events
 of its turn:
 
 ```go
-ctx := context.Background()
-rt, err := harness.New(harness.Options{
-	Store:   store.NewMemStore(),
-	WorkDir: ".",
-	Getenv:  os.Getenv,
-})
-if err != nil {
-	log.Fatal(err)
-}
-defer func() { _ = rt.Close(ctx) }()
+package main
 
-s, err := rt.Create(ctx, protocol.CreateSession{})
-if err != nil {
-	log.Fatal(err)
-}
-turn, err := s.Prompt(ctx, protocol.Input{
-	ID:    "prompt-1",
-	Parts: []protocol.Part{{Type: protocol.PartText, Text: "List the files in this directory."}},
-})
-if err != nil {
-	log.Fatal(err)
-}
-for e, err := range turn.Events(ctx) {
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
+)
+
+func main() {
+	ctx := context.Background()
+	rt, err := harness.New(harness.Options{
+		Store:   store.NewMemStore(),
+		WorkDir: ".",
+		Getenv:  os.Getenv,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	if e.Kind == protocol.KindItemDelta {
-		var f protocol.ItemFrame
-		if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
-			fmt.Print(f.Text)
+	defer func() { _ = rt.Close(ctx) }()
+
+	s, err := rt.Create(ctx, protocol.CreateSession{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	turn, err := s.Prompt(ctx, protocol.Input{
+		ID:    "prompt-1",
+		Parts: []protocol.Part{{Type: protocol.PartText, Text: "List the files in this directory."}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for e, err := range turn.Events(ctx) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		if e.Kind == protocol.KindItemDelta {
+			var f protocol.ItemFrame
+			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
+				fmt.Print(f.Text)
+			}
 		}
 	}
-}
-res, err := turn.Wait(ctx)
-if err != nil {
-	log.Fatal(err)
-}
-if res.StopReason == protocol.StopFailed {
-	log.Fatal(res.Error)
+	fmt.Println()
+	res, err := turn.Wait(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if res.StopReason == protocol.StopFailed {
+		log.Fatal(res.Error)
+	}
 }
 ```
 
 `Getenv` lets the runtime read the API-key variables of the model providers.
 Without it, a provider has no key unless `ModelTransport` supplies the
-credentials. `WorkDir` gives each session the built-in tools, bash among them.
-Leave it empty for a session with no file access. A failed turn does not end
-`Events` with an error, so check `turn.Wait`.
+credentials. `protocol.CreateSession{Model: "openai/gpt-5-mini"}` picks the
+model of the session; empty selects the default. `WorkDir` gives each session
+the built-in tools, bash among them. Leave it empty for a session with no file
+access. A failed turn does not end `Events` with an error, so check
+`turn.Wait`.
 
 ### Continue the session
 
@@ -196,11 +363,16 @@ text fails with `harness.ErrInputConflict`.
 ### Keep sessions across restarts
 
 `store.NewMemStore` loses its sessions when the process exits. Use a disk store,
-and open the session by its ID. Create it on the first run:
+and open the session by its ID. Create it on the first run. Keep the store
+outside `WorkDir`, or the model can read and change it:
 
 ```go
+dir, err := os.UserCacheDir()
+if err != nil {
+	log.Fatal(err)
+}
 rt, err := harness.New(harness.Options{
-	Store:   store.NewDiskStore("sessions"),
+	Store:   store.NewDiskStore(filepath.Join(dir, "my-app", "sessions")),
 	WorkDir: ".",
 	Getenv:  os.Getenv,
 })
@@ -216,9 +388,12 @@ if err != nil {
 }
 ```
 
+This adds the imports `errors` and `path/filepath`.
+
 ### Give the model your own tools
 
-A `harness.Tool` is a spec for the model and a Go function to run:
+A `harness.Tool` is a spec for the model and a Go function to run. This one
+uses `math/rand/v2` and `strconv`:
 
 ```go
 type rollDice struct{}
@@ -247,49 +422,33 @@ Give it to the runtime:
 
 ```go
 rt, err := harness.New(harness.Options{
-	Store:   store.NewDiskStore("sessions"),
+	Store:   store.NewMemStore(),
 	WorkDir: ".",
 	Getenv:  os.Getenv,
 	Tools:   []harness.Tool{rollDice{}},
 })
 ```
 
-### Guard tool calls with a plugin
+### Run a plugin in the process
 
-A `plugin.Plugin` hooks into the runtime. This one denies a force push before
-the bash tool runs it:
+The `guard` value of [the plugin step](#block-tool-calls-with-a-plugin) also
+runs inside your program, with no separate process and no config entry. Copy
+its `guard` variable and `check` function into your program, add the imports
+`strings` and `github.com/majorcontext/harness/plugin`, and pass it to the
+runtime:
 
 ```go
-var guard = &plugin.Plugin{
-	Name: "guard",
-	ToolExecuteBefore: &plugin.ToolBefore{
-		DenyOnFailure: true,
-		Run: func(ctx context.Context, c *plugin.Client, req *plugin.ToolExecuteBeforeRequest) (*plugin.ToolExecuteBeforeResponse, error) {
-			if req.Tool == "bash" && strings.Contains(string(req.Args), "push --force") {
-				return &plugin.ToolExecuteBeforeResponse{Deny: "force push is blocked"}, nil
-			}
-			return nil, nil
-		},
-	},
-}
+rt, err := harness.New(harness.Options{
+	Store:   store.NewMemStore(),
+	WorkDir: ".",
+	Getenv:  os.Getenv,
+	Plugins: []*plugin.Plugin{guard},
+})
 ```
 
-Give it to the runtime with `Plugins: []*plugin.Plugin{guard}`. The model gets
-the deny message as an error result. `DenyOnFailure` also denies the call when
-the hook fails, so a broken guard does not let the call run.
-
-To run the same value as a separate process, call `plugin.Serve(guard)` from
-`main` and add the binary to the `plugins` key of `.harness.json`:
-
-```json
-{"plugins": [{"name": "guard", "command": ["guard-plugin"]}]}
-```
-
-A plugin in another language speaks the same protocol over stdio. See the
-[TypeScript SDK](sdk/typescript/README.md), the
-[protocol](internal/plugin/PROTOCOL.md), and the
-[`plugin` package reference](https://pkg.go.dev/github.com/majorcontext/harness/plugin)
-for the other hooks, custom tools, and the client calls.
+The runtime applies the same hook order, deadlines, and `DenyOnFailure` rule
+as for a process plugin. It runs config plugins first and the plugins of
+`Options.Plugins` last.
 
 ### Serve over HTTP
 
@@ -307,7 +466,13 @@ everything else.
 
 ## Examples
 
-[examples/](examples) holds small programs that run:
+[examples/](examples) holds small programs that run. Clone the repository and
+run them from its root:
+
+```bash
+git clone https://github.com/majorcontext/harness && cd harness
+ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
+```
 
 - [`prompt`](examples/prompt): send one prompt and stream the reply.
 - [`custom-tool`](examples/custom-tool): give the model a Go function to call.
@@ -318,12 +483,9 @@ everything else.
 
 ## Configuration
 
-Config lives at `~/.harness/config.json`. Set `$HARNESS_CONFIG` to use another
-file. A per-project `.harness.json` overlays it. See `config.Config` for every
-field.
-
-Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
-`openai`, `openrouter`) or a key from `providers`.
+These keys go in either [config file](#config-files). In a model ref
+`provider/model`, `provider` is a built-in family (`anthropic`, `openai`,
+`openrouter`) or a key from `providers`.
 
 ### OpenAI-compatible endpoints
 
@@ -335,13 +497,19 @@ if your server does not check it:
 export OLLAMA_API_KEY=ollama
 ```
 
-Start Ollama with the context window Harness will assume:
+Quit the Ollama app first, because it serves port 11434 without the next
+setting. Start Ollama with the context window Harness will assume. It runs in
+the foreground:
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=131072 ollama serve
 ```
 
-Quit the Ollama app first. It serves port 11434 without this setting.
+In another terminal, pull a model:
+
+```bash
+ollama pull llama3.1
+```
 
 Then add the entry:
 
@@ -358,13 +526,16 @@ Then add the entry:
 }
 ```
 
+The key becomes the provider name, so the model ref is `ollama/llama3.1`:
+
+```bash
+harness run -model ollama/llama3.1 -p "Summarize README.md"
+```
+
 Keep `context_window_tokens` equal to the server's window, not the model's
 maximum. If the server's window is smaller, it drops context before Harness
-compacts.
-
-The key becomes the provider name, so the model ref is `ollama/llama3.1`.
-Optional fields: `family` (the wire-quirk tag, defaults to the key) and
-`extra_headers` (sent on every request).
+compacts. Optional fields: `family` (the wire-quirk tag, defaults to the key)
+and `extra_headers` (sent on every request).
 
 ### OpenRouter
 
@@ -411,7 +582,7 @@ any key. `responses_path` points it at an endpoint that does not serve
 ```
 
 The model ref `vendor/some-model` sends `some-model` as the model ID. Set
-`context_window_tokens` to your model's context window.
+`context_window_tokens` as [Context windows](#context-windows) says.
 `responses_path` is also valid on the built-in `openai` entry, and nowhere
 else.
 
