@@ -20,7 +20,17 @@ jobs:
           go-version-file: go.mod
           # Production dependencies must remain pure Go. Module caching covers
           # both production adapters and test-only support packages.
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-static-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-static-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - name: Check formatting
         run: |
@@ -75,6 +85,16 @@ jobs:
           echo "best-of-5 time to initialize: ${best}ms (budget: 50ms)"
           [ "$best" -le 50 ]
 
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-static-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+
   gates:
     name: Gates
     runs-on: ubuntu-latest
@@ -88,7 +108,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-gates-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-gates-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - name: Gates
         env:
@@ -96,6 +126,16 @@ jobs:
         run: |
           set -o pipefail
           go test -race -count=1 -json -run '^TestRepository$' ./internal/gates/ | go run ./internal/testtime -title Gates -job gates
+
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-gates-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
   wasm:
     name: WebAssembly
@@ -106,13 +146,33 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - name: Build and size budget
         # Builds cmd/harness-wasm for GOOS=js GOARCH=wasm and fails when the
         # module is larger than testdata/wasm-size-budget.txt. The steps that
         # run the module in a JavaScript host belong in this job.
         run: go run ./internal/wasmsize
+
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
   unit:
     name: Unit
@@ -129,7 +189,17 @@ jobs:
           go-version-file: go.mod
           # Production dependencies must remain pure Go. Module caching covers
           # both production adapters and test-only support packages.
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-unit-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-unit-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - name: Unit tests
         # The e2e package runs in its own jobs.
@@ -139,6 +209,16 @@ jobs:
         run: |
           set -o pipefail
           go test -race -count=1 -json -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$') | go run ./internal/testtime -title Unit -job unit
+
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-unit-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
   contract:
     name: Contract
@@ -151,7 +231,17 @@ jobs:
           go-version-file: go.mod
           # Production dependencies must remain pure Go. Module caching covers
           # both production adapters and test-only support packages.
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-contract-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-contract-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - name: Contract
         # -count=1 keeps a cached e2e result from skipping the coverage table.
@@ -161,6 +251,16 @@ jobs:
         run: |
           set -o pipefail
           go test -race -count=1 -json ./e2e/ | go run ./internal/testtime -title Contract -job contract
+
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-contract-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
   runtime:
     name: Runtime contract
@@ -173,7 +273,17 @@ jobs:
           go-version-file: go.mod
           # Production dependencies must remain pure Go. Module caching covers
           # both production adapters and test-only support packages.
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-runtime-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-runtime-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - name: Runtime contract
         # Runs the contract rows on harness.Runtime in process by their
@@ -184,6 +294,16 @@ jobs:
           set -o pipefail
           HARNESS_E2E_RUNTIME=1 go test -race -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract' -job runtime
 
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-runtime-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+
   node-wasm:
     name: Node wasm
     runs-on: ubuntu-latest
@@ -193,7 +313,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore the Go caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-node-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-node-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
 
       - uses: actions/setup-node@v5
         with:
@@ -204,3 +334,13 @@ jobs:
         env:
           HARNESS_E2E_NODE: '1'
         run: go test -race -count=1 ./e2e/ -run '^(TestACPScenarios|TestNodeWasm.*)$' -skip '^TestACPScenarios/[^/]+/(binary|in-process)$'
+
+      - name: Save the Go caches
+        # Only main saves, so every job restores the newest build of main.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-node-wasm-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
