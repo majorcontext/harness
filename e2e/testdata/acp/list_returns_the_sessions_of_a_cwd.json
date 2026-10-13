@@ -1,0 +1,420 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [],
+    "b": []
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "anthropic/claude-fable-5",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "default",
+                  "value": "default"
+                },
+                {
+                  "name": "off",
+                  "value": "off"
+                },
+                {
+                  "name": "minimal",
+                  "value": "minimal"
+                },
+                {
+                  "name": "low",
+                  "value": "low"
+                },
+                {
+                  "name": "medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "high",
+                  "value": "high"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:second\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "anthropic/claude-fable-5",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "default",
+                  "value": "default"
+                },
+                {
+                  "name": "off",
+                  "value": "off"
+                },
+                {
+                  "name": "minimal",
+                  "value": "minimal"
+                },
+                {
+                  "name": "low",
+                  "value": "low"
+                },
+                {
+                  "name": "medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "high",
+                  "value": "high"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:b\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:b\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {}
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessions": [
+            {
+              "cwd": "\u003cdir:main\u003e",
+              "sessionId": "\u003csession:a\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            },
+            {
+              "cwd": "\u003cdir:second\u003e",
+              "sessionId": "\u003csession:b\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {
+          "cwd": "\u003cdir:second\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessions": [
+            {
+              "cwd": "\u003cdir:second\u003e",
+              "sessionId": "\u003csession:b\u003e",
+              "title": null,
+              "updatedAt": "\u003ctime\u003e"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {
+          "cwd": "\u003cdir:empty\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "result": {
+          "sessions": []
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 6,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {
+          "cwd": "relative/dir"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "cwd must be an absolute path"
+          },
+          "message": "Invalid params"
+        },
+        "id": 6,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 7,
+        "jsonrpc": "2.0",
+        "method": "session/list",
+        "params": {
+          "cursor": "nosuchsession"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "invalid_request"
+          },
+          "message": "harness: invalid request"
+        },
+        "id": 7,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

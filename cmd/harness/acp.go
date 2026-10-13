@@ -38,6 +38,7 @@ func acpCmd(args []string) error {
 // the runtimes of the acp command. The first work directory decides the session
 // directory and the owner epoch.
 func acpRuntimes(logger *slog.Logger) *cwdruntimes.Runtimes {
+	dir, _ := os.Getwd()
 	return cwdruntimes.New(cwdruntimes.Options{
 		Config: func(cwd string) (*config.Config, error) {
 			cfg, err := config.LoadProject(userConfigPath(), cwd)
@@ -54,8 +55,9 @@ func acpRuntimes(logger *slog.Logger) *cwdruntimes.Runtimes {
 			owner, _ := replication(first)
 			return store.NewDiskStore(dir), owner, nil
 		},
-		Version: version,
-		Getenv:  os.Getenv,
-		Logger:  logger,
+		DefaultDir: dir,
+		Version:    version,
+		Getenv:     os.Getenv,
+		Logger:     logger,
 	})
 }

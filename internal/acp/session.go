@@ -42,12 +42,10 @@ type prompt struct {
 	cancelled bool
 }
 
-// heldConfig is what the connection knows of a session it took. snap is the
-// state of the session at the head of the log, where the pump starts, and models
-// is the model list of its runtime. notices says that the client takes notices.
+// heldConfig is what the connection knows of a session it took. models is the
+// model list of its runtime. notices says that the client takes notices.
 type heldConfig struct {
 	cwd       string
-	snap      protocol.Session
 	models    []protocol.Model
 	notices   bool
 	log       *slog.Logger
@@ -55,18 +53,26 @@ type heldConfig struct {
 	toolImage func(context.Context, string) (io.ReadCloser, error)
 }
 
-// newHeld starts the event pump of sess at the head of its log, which is
-// c.snap.HeadSeq. The pump is the only reader of the events.
-func newHeld(ctx context.Context, sess *harness.Session, c heldConfig) *held {
-	ctx, stop := context.WithCancel(ctx)
-	h := &held{id: sess.ID(), sess: sess, cwd: c.cwd, models: c.models, notices: c.notices, log: c.log, send: c.send, toolImage: c.toolImage,
-		stop: stop, stopped: make(chan struct{}), wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
-	go h.pump(ctx, c.snap)
-	return h
+// newHeld returns the session id of the connection, with no pump. A replay can
+// use it before the session is open; start then binds the session.
+func newHeld(id string, c heldConfig) *held {
+	return &held{id: id, cwd: c.cwd, models: c.models, notices: c.notices, log: c.log, send: c.send, toolImage: c.toolImage,
+		stopped: make(chan struct{}), wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
+}
+
+// start binds sess and starts its event pump after seq after, which is the
+// head of the log that st describes. The pump is the only reader of the events.
+func (h *held) start(base context.Context, sess *harness.Session, st *pumpState, after uint64) {
+	ctx, stop := context.WithCancel(base)
+	h.sess, h.stop, h.done = sess, stop, after
+	go h.pump(ctx, st, after)
 }
 
 // close stops the pump and waits for it.
 func (h *held) close() {
+	if h.stop == nil {
+		return
+	}
 	h.stop()
 	<-h.stopped
 }
@@ -81,11 +87,16 @@ type pumpState struct {
 	last  lastSent
 }
 
-func (h *held) pump(ctx context.Context, snap protocol.Session) {
+// newPumpState returns the state of a pump that starts at the head of the log
+// that snap describes.
+func newPumpState(snap protocol.Session) *pumpState {
+	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap)}
+}
+
+func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 	defer close(h.stopped)
 	defer h.finish()
-	st := &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap)}
-	for e, err := range h.sess.Events(ctx, snap.HeadSeq) {
+	for e, err := range h.sess.Events(ctx, after) {
 		if err != nil {
 			if ctx.Err() == nil {
 				h.log.Info("acp: event stream ended", "session", h.id, "error", err.Error())
@@ -284,7 +295,26 @@ func (h *held) admitted(p *prompt, t *harness.Turn) (cancelled bool) {
 func (h *held) end(p *prompt) {
 	h.mu.Lock()
 	delete(h.prompts, p)
+	close(h.wake)
+	h.wake = make(chan struct{})
 	h.mu.Unlock()
+}
+
+// idle waits until no prompt is in flight, or ctx ends.
+func (h *held) idle(ctx context.Context) {
+	for {
+		h.mu.Lock()
+		ready, wake := len(h.prompts) == 0, h.wake
+		h.mu.Unlock()
+		if ready {
+			return
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // cancel marks every prompt in flight as cancelled and cancels the turns that

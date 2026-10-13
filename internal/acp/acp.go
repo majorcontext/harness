@@ -49,6 +49,10 @@ type Runtimes interface {
 	// FindToolImage does not accept for the log of the session fails with
 	// harness.ErrBlobNotFound.
 	ToolImage(ctx context.Context, session, key string) (io.ReadCloser, error)
+	// Default returns the Runtime that serves a request with no cwd: one that For
+	// built, else the one of the work directory of the host process. It fails with
+	// an error that matches harness.ErrInvalidRequest when the host has none.
+	Default(ctx context.Context) (Runtime, error)
 	// Close closes every Runtime that For built.
 	Close(ctx context.Context) error
 }
@@ -56,6 +60,9 @@ type Runtimes interface {
 // Runtime is what the adapter uses of a harness.Runtime.
 type Runtime interface {
 	Create(ctx context.Context, req protocol.CreateSession, opts ...harness.SessionOption) (*harness.Session, error)
+	Open(ctx context.Context, id string, opts ...harness.SessionOption) (*harness.Session, error)
+	Read(ctx context.Context, id string) (harness.Reader, error)
+	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 	Models() []protocol.Model
 	Commands(ctx context.Context) (protocol.Commands, error)
 }
@@ -95,6 +102,14 @@ func (a *agent) Request(ctx context.Context, method string, params json.RawMessa
 		return a.initialize(params)
 	case "session/new":
 		return a.newSession(ctx, params)
+	case "session/load":
+		return a.loadSession(ctx, params)
+	case "session/resume":
+		return a.resumeSession(ctx, params)
+	case "session/list":
+		return a.listSessions(ctx, params)
+	case "session/close":
+		return a.closeSession(ctx, params)
 	case "session/prompt":
 		return a.prompt(ctx, params)
 	case "session/set_config_option":
@@ -175,9 +190,9 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 		"protocolVersion": version,
 		"agentInfo":       map[string]any{"name": "harness", "title": "Harness", "version": a.cfg.Version},
 		"agentCapabilities": map[string]any{
-			"loadSession":         false,
+			"loadSession":         true,
 			"mcpCapabilities":     map[string]any{"http": a.cfg.MCP, "sse": false},
-			"sessionCapabilities": map[string]any{},
+			"sessionCapabilities": map[string]any{"list": map[string]any{}, "resume": map[string]any{}, "close": map[string]any{}},
 		},
 		"authMethods": []any{},
 	}, nil

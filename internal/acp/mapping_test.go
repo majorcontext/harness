@@ -180,7 +180,8 @@ func (n *noRuntimes) For(context.Context, string) (Runtime, error) {
 	n.calls++
 	return nil, errors.New("unexpected")
 }
-func (n *noRuntimes) Close(context.Context) error { return nil }
+func (n *noRuntimes) Default(context.Context) (Runtime, error) { return nil, errors.New("unexpected") }
+func (n *noRuntimes) Close(context.Context) error              { return nil }
 func (n *noRuntimes) ToolImage(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("unexpected")
 }
