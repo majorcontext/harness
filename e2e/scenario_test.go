@@ -15,7 +15,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-var updateGoldens = flag.Bool("update", false, "rewrite the e2e/testdata/runtime goldens from the serve host")
+var updateGoldens = flag.Bool("update", false, "rewrite the e2e/testdata/contract goldens of same rows and the e2e/testdata/runtime goldens of re-golden rows, both from the serve host")
 
 type scenario struct {
 	name       string

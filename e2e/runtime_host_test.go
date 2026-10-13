@@ -133,6 +133,10 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) (name string, se
 					t.Parallel()
 				}
 				obs := run(t, sc)
+				if row.kind == rowSame && !h.runtime && !pending {
+					compareGoldenAt(t, filepath.Join("testdata", "contract", name+".golden.json"), obs, *updateGoldens)
+					return
+				}
 				if row.kind == rowSame || pending {
 					compareSame(t, name, obs)
 					return
