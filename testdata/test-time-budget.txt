@@ -12,7 +12,7 @@
 # e2e@runtime            24 s      36 s
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
-# gates                 7.6 s      12 s
+# gates                 24 s       36 s (cold build of the fake CLI)
 # server                7.5 s      12 s
 # any other              <6 s      10 s
 leaf 10
@@ -21,7 +21,7 @@ package e2e 77
 package e2e@runtime 36
 package internal/backend/claudecode 21
 package internal/imageclamp 13
-package internal/gates 12
+package internal/gates 36
 package internal/server 12
 
 # The gates run the whole repository against the merge base.
@@ -41,3 +41,6 @@ test e2e TestContractServeStopReportsCrashed 15
 test e2e TestContractRuntimeSessionMCP 15
 # Rows that run git on a fixture repository (9 s under load locally).
 test e2e TestContractWorkspace 15
+
+# Builds the fake CLI; a cold build cache makes it 7 s to 21 s on CI (24 s for the package).
+test internal/gates TestWireDoublesMatchTheRealWire 32
