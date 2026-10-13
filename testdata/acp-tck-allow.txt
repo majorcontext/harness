@@ -1,0 +1,4 @@
+# MANDATORY requirements of the ACP TCK that `harness acp` may fail, one per line:
+# the requirement id, a space, and the reason. internal/acptck fails the job on a
+# failing MANDATORY requirement that is not listed here, and on a listed one that
+# no longer fails.
