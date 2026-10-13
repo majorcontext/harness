@@ -32,6 +32,8 @@ type acpScenario struct {
 	config  map[string]any
 	dirs    map[string]map[string]string
 	allowed []string
+	// files are the files of the "main" directory.
+	files map[string]string
 	// wireOnly leaves the requests and the sessions out of the golden, for a row whose model traffic depends on timing.
 	wireOnly bool
 	steps    []acpStep
@@ -101,7 +103,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
@@ -235,7 +237,7 @@ func TestACPScenarios(t *testing.T) {
 				in, out, stop := host.start(t, env)
 				c := newACPConn(t, schema, in, out)
 				c.fake, c.env = fake, env
-				c.dirs["main"] = t.TempDir()
+				c.dirs["main"] = writeACPDir(t, sc.files)
 				for name, files := range sc.dirs {
 					c.dirs[name] = writeACPDir(t, files)
 				}

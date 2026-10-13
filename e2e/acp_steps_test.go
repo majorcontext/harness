@@ -54,6 +54,10 @@ type acpPrompt struct {
 // acpAwaitText reads frames until the agent has sent a message chunk with text.
 type acpAwaitText struct{ text string }
 
+// acpAwaitUpdate reads frames until the agent has sent a session/update of the
+// kind, with the status when it is not empty.
+type acpAwaitUpdate struct{ kind, status string }
+
 // acpCancel sends the session/cancel notification.
 type acpCancel struct{ as string }
 
@@ -158,6 +162,21 @@ func (s acpAwaitText) run(t *testing.T, c *acpConn) {
 		if update["sessionUpdate"] == "agent_message_chunk" {
 			text, _ := content["text"].(string)
 			got.WriteString(text)
+		}
+	}
+}
+
+func (s acpAwaitUpdate) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	for {
+		f := c.read()
+		if f["method"] != "session/update" {
+			t.Fatalf("waiting for a %s update, got %v", s.kind, f)
+		}
+		params, _ := f["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		if update["sessionUpdate"] == s.kind && (s.status == "" || update["status"] == s.status) {
+			return
 		}
 	}
 }

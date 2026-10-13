@@ -305,6 +305,53 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
+            "kind": "other",
+            "name": "goal",
+            "rawInput": {
+              "action": "set",
+              "condition": "say done"
+            },
+            "sessionUpdate": "tool_call",
+            "status": "in_progress",
+            "title": "goal",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "content": {
+                  "text": "{\"active\":true,\"condition\":\"say done\"}",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "rawOutput": "{\"active\":true,\"condition\":\"say done\"}",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
             "content": {
               "text": "went",
               "type": "text"

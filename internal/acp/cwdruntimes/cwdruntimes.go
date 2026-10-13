@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -77,6 +78,27 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 	}
 	r.rts[cwd] = rt
 	return rt, nil
+}
+
+// ToolImage returns a tool-result image of a session from the shared Store. It
+// reads the log of the session to find the key, and fails with
+// harness.ErrBlobNotFound for any other key. It also fails before the first For
+// builds a Runtime, because the Store does not exist yet.
+func (r *Runtimes) ToolImage(ctx context.Context, session, key string) (io.ReadCloser, error) {
+	r.mu.Lock()
+	st := r.store
+	r.mu.Unlock()
+	if st == nil {
+		return nil, fmt.Errorf("%w: no store", harness.ErrBlobNotFound)
+	}
+	found, err := acp.FindToolImage(harness.ReadEvents(ctx, st, session, 0), key)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: %s", harness.ErrBlobNotFound, key)
+	}
+	return st.GetBlob(ctx, session, key)
 }
 
 // Close closes every Runtime and returns every error.

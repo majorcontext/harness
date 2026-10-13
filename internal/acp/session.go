@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -15,10 +16,12 @@ import (
 // held is one session of the connection: its handle, its event pump, and the
 // prompts in flight.
 type held struct {
-	id   string
-	sess *harness.Session
-	log  *slog.Logger
-	send func(method string, params any) error
+	id        string
+	sess      *harness.Session
+	cwd       string
+	log       *slog.Logger
+	send      func(method string, params any) error
+	toolImage func(ctx context.Context, key string) (io.ReadCloser, error)
 
 	stop    context.CancelFunc
 	stopped chan struct{}
@@ -39,9 +42,9 @@ type prompt struct {
 
 // newHeld starts the event pump of sess at after, the head of the log when the
 // connection took the session. The pump is the only reader of the events.
-func newHeld(ctx context.Context, sess *harness.Session, after uint64, log *slog.Logger, send func(string, any) error) *held {
+func newHeld(ctx context.Context, sess *harness.Session, cwd string, after uint64, log *slog.Logger, send func(string, any) error, toolImage func(context.Context, string) (io.ReadCloser, error)) *held {
 	ctx, stop := context.WithCancel(ctx)
-	h := &held{id: sess.ID(), sess: sess, log: log, send: send, stop: stop, stopped: make(chan struct{}),
+	h := &held{id: sess.ID(), sess: sess, cwd: cwd, log: log, send: send, toolImage: toolImage, stop: stop, stopped: make(chan struct{}),
 		wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
 	go h.pump(ctx, after)
 	return h
@@ -55,10 +58,17 @@ func (h *held) close() {
 
 type chunkKey struct{ item, kind string }
 
+// pumpState is what the pump has sent and still needs: the chunk text of each
+// item, and the content of each tool call that waits for its result.
+type pumpState struct {
+	sent  map[chunkKey]string
+	diffs map[string][]any
+}
+
 func (h *held) pump(ctx context.Context, after uint64) {
 	defer close(h.stopped)
 	defer h.finish()
-	sent := map[chunkKey]string{}
+	st := &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}}
 	for e, err := range h.sess.Events(ctx, after) {
 		if err != nil {
 			if ctx.Err() == nil {
@@ -66,7 +76,7 @@ func (h *held) pump(ctx context.Context, after uint64) {
 			}
 			return
 		}
-		if err := h.forward(e, sent); err != nil {
+		if err := h.forward(ctx, e, st); err != nil {
 			return
 		}
 		if !e.Ephemeral {
@@ -75,7 +85,8 @@ func (h *held) pump(ctx context.Context, after uint64) {
 	}
 }
 
-func (h *held) forward(e protocol.Event, sent map[chunkKey]string) error {
+func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) error {
+	sent := st.sent
 	switch e.Kind {
 	case protocol.KindItemDelta:
 		var f protocol.ItemFrame
@@ -88,6 +99,8 @@ func (h *held) forward(e protocol.Event, sent map[chunkKey]string) error {
 		}
 		sent[chunkKey{f.ItemID, f.Type}] += f.Text
 		return h.chunk(kind, f.ItemID, f.Text)
+	case protocol.KindTurnEnded:
+		clear(st.diffs)
 	case protocol.KindItemDiscarded:
 		var f protocol.ItemFrame
 		if json.Unmarshal(e.Data, &f) == nil {
@@ -100,31 +113,46 @@ func (h *held) forward(e protocol.Event, sent map[chunkKey]string) error {
 			return nil
 		}
 		done, ok := p.(*protocol.ItemCompleted)
-		if !ok || done.Message.Role != protocol.RoleAssistant {
+		if !ok {
 			return nil
 		}
-		for _, typ := range []string{protocol.LogPartReasoning, protocol.LogPartText} {
-			var b strings.Builder
-			for _, part := range done.Message.Parts {
-				if part.Type == typ {
-					b.WriteString(part.Text)
-				}
-			}
-			key := chunkKey{done.ItemID, typ}
-			full := b.String()
-			text, resend := tailOf(sent[key], full)
-			delete(sent, key)
-			if text == "" {
-				continue
-			}
-			id := done.ItemID
-			if resend {
-				h.log.Warn("acp: item text differs from the chunks sent; sending it whole", "session", h.id, "item", id)
-				id += "_full"
-			}
-			if err := h.chunk(chunkUpdate(typ), id, text); err != nil {
+		switch done.Message.Role {
+		case protocol.RoleAssistant:
+			if err := h.assistantText(done, sent); err != nil {
 				return err
 			}
+			return h.toolCall(done.Message, st)
+		case protocol.RoleTool:
+			return h.toolResult(ctx, done.Message, st)
+		}
+	}
+	return nil
+}
+
+// assistantText sends the text and the reasoning of a completed assistant item
+// that the deltas did not cover.
+func (h *held) assistantText(done *protocol.ItemCompleted, sent map[chunkKey]string) error {
+	for _, typ := range []string{protocol.LogPartReasoning, protocol.LogPartText} {
+		var b strings.Builder
+		for _, part := range done.Message.Parts {
+			if part.Type == typ {
+				b.WriteString(part.Text)
+			}
+		}
+		key := chunkKey{done.ItemID, typ}
+		full := b.String()
+		text, resend := tailOf(sent[key], full)
+		delete(sent, key)
+		if text == "" {
+			continue
+		}
+		id := done.ItemID
+		if resend {
+			h.log.Warn("acp: item text differs from the chunks sent; sending it whole", "session", h.id, "item", id)
+			id += "_full"
+		}
+		if err := h.chunk(chunkUpdate(typ), id, text); err != nil {
+			return err
 		}
 	}
 	return nil

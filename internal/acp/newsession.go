@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 
 	"github.com/majorcontext/harness"
@@ -49,7 +50,9 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	h := newHeld(a.base, sess, sess.Snapshot().HeadSeq, a.cfg.Logger, a.conn.Notify)
+	id := sess.ID()
+	h := newHeld(a.base, sess, filepath.Clean(p.CWD), sess.Snapshot().HeadSeq, a.cfg.Logger, a.conn.Notify,
+		func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.ToolImage(ctx, id, key) })
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
