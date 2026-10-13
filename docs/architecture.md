@@ -938,6 +938,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - A required field of a content block or of an `mcpServers` entry that is omitted or null is `-32602`. Two header names that differ only in case are one name.
 - A prompt for a session that the connection does not hold answers `-32002`.
 - The updates of a turn reach the client before the answer: the answer waits until the event pump has sent every update through the end of the turn.
+- A prompt's answer follows every update of its turn and precedes every update of a later turn.
 - A turn that starts with no `session/prompt` open, such as a goal turn, sends its updates as notifications.
 - The stop reasons are: `completed` and `awaiting_input` are `end_turn`; `interrupted` is `cancelled`. After `session/cancel`, the prompt that runs answers `cancelled`, after every update that it has pending. A prompt that a cancel withdraws before a turn takes it answers `cancelled`.
 - A turn that fails answers `-32603` with `data.code` `internal` and `data.error_class`; the message is the masked error of the turn.

@@ -81,6 +81,9 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		return map[string]string{"stopReason": "cancelled"}, nil
 	}
 	in := protocol.Input{ID: newULID(), Parts: parts, Delivery: protocol.DeliveryQueue}
+	h.mu.Lock()
+	pr.input = in.ID
+	h.mu.Unlock()
 	if isTyped(p.Prompt, parts) {
 		in.Source = protocol.SourceTyped
 	}
@@ -93,14 +96,24 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	}
 	res, err := turn.Wait(ctx)
 	if ctx.Err() != nil {
+		h.release(pr)
 		h.interrupt(ctx, turn)
 		return nil, ctx.Err()
 	}
 	if err = waitFailure(err, h.cancelled(pr)); err != nil {
+		h.release(pr)
 		return nil, h.failure(ctx, err)
 	}
-	h.flush(ctx, h.sess.Snapshot().HeadSeq)
-	return answer(ctx, res, h.cancelled(pr))
+	if res.TurnID == "" {
+		h.flush(ctx, h.sess.Snapshot().HeadSeq)
+	} else {
+		h.reached(ctx, pr)
+	}
+	v, err := answer(ctx, res, h.cancelled(pr))
+	if ctx.Err() != nil {
+		return nil, err
+	}
+	return h.handOff(pr, v, err)
 }
 
 // isTyped says that a prompt is a typed line: exactly one text block whose text

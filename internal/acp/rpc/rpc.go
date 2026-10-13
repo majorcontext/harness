@@ -61,8 +61,8 @@ type Admitter interface {
 	Admit(ctx context.Context, method string, params json.RawMessage) context.Context
 }
 
-// Follower is an optional interface of a result. Serve calls AfterSent once,
-// in the goroutine of the request, after it queued the response. A message that
+// Follower is an optional interface of a result or of an error. Serve calls
+// AfterSent once, in the goroutine of the request, after it queued the response. A message that
 // AfterSent queues reaches the peer after the response.
 type Follower interface{ AfterSent() }
 
@@ -484,10 +484,16 @@ func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGro
 		}()
 		result, err := c.invoke(rctx, h, *m.Method, m.Params)
 		switch {
-		case err != nil && errors.Is(context.Cause(rctx), errRequestCancelled):
-			c.sendError(m.ID, &Error{Code: CodeCancelled, Message: "Request cancelled"})
 		case err != nil:
-			c.sendError(m.ID, toError(err))
+			if errors.Is(context.Cause(rctx), errRequestCancelled) {
+				c.sendError(m.ID, &Error{Code: CodeCancelled, Message: "Request cancelled"})
+			} else {
+				c.sendError(m.ID, toError(err))
+			}
+			var f Follower
+			if errors.As(err, &f) {
+				c.afterSent(f)
+			}
 		default:
 			if result == nil {
 				result = struct{}{}

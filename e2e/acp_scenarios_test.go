@@ -40,10 +40,8 @@ type acpScenario struct {
 	wireOnly bool
 	steps    []acpStep
 	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
-	// one that passes an mcpServers entry. schedulerOrder marks one whose
-	// frames interleave by goroutine scheduling, which the single thread of the
-	// wasm module orders differently. The Node wasm host skips all three.
-	needsExec, needsMCP, schedulerOrder bool
+	// one that passes an mcpServers entry. The Node wasm host skips both.
+	needsExec, needsMCP bool
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -252,7 +250,7 @@ func (sc acpScenario) runsOn(host string) bool {
 	case "binary":
 		return len(sc.allowed) == 0
 	case nodeHostName:
-		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder
+		return !sc.needsExec && !sc.needsMCP
 	}
 	return true
 }
