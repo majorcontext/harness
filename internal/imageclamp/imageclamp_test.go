@@ -253,16 +253,11 @@ func TestClampLeavesURLBlobUntouched(t *testing.T) {
 	}
 }
 
-func tallPNGToolResult(t *testing.T) *message.ToolResult {
-	t.Helper()
-	return &message.ToolResult{
+func TestClampRecursesIntoToolResult(t *testing.T) {
+	tr := &message.ToolResult{
 		CallID:  "call_1",
 		Content: message.Parts{&message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}},
 	}
-}
-
-func TestClampRecursesIntoToolResult(t *testing.T) {
-	tr := tallPNGToolResult(t)
 	in := []message.Message{{ID: "m1", Role: message.RoleTool, Parts: message.Parts{tr}}}
 	out := Clamp(in, baseLimits())
 	gotTR := out[0].Parts[0].(*message.ToolResult)
