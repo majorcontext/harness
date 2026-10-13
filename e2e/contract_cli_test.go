@@ -548,3 +548,56 @@ func TestContractCLIRunRefusesANegativeMaxTokens(t *testing.T) {
 		})
 	}
 }
+
+func TestContractCLIHelpPrintsUsageOnStdoutAndExitsZero(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil)
+	for _, args := range [][]string{
+		{"-h"}, {"--help"}, {"help"}, {"version", "-h"}, {"version", "--help"}, {"-v", "-h"}, {"plugin", "-h"}, {"plugin", "--help"}, {"plugin", "help"},
+		{"run", "-h"}, {"run", "--help"}, {"serve", "-h"}, {"serve", "--help"},
+		{"sessions", "-h"}, {"sessions", "--help"}, {"plugin", "probe", "-h"}, {"plugin", "probe", "--help"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, errOut, code := h.run(args...)
+			if code != 0 || !strings.Contains(out, "usage:") || errOut != "" || strings.Contains(out+errOut, "help requested") {
+				t.Fatalf("harness %v = %d, want exit 0, usage on stdout, and nothing on stderr\nstdout: %s\nstderr: %s", args, code, out, errOut)
+			}
+		})
+	}
+}
+
+func TestContractCLIUsageErrorPrintsUsageOnStderrAndExitsTwo(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil)
+	for _, c := range []struct {
+		args []string
+		line string
+	}{
+		{nil, ""},
+		{[]string{"bogus"}, `harness: unknown command "bogus"`},
+		{[]string{"version", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"--version", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"serve", "-addr", "127.0.0.1:0", "help"}, `harness: unexpected argument "help"`},
+		{[]string{"serve", "-addr", "127.0.0.1:0", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"sessions", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"sessions", "help"}, `harness: unexpected argument "help"`},
+		{[]string{"run", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"run", "help"}, `harness: unexpected argument "help"`},
+		{[]string{"plugin", "probe", "help"}, `harness: unexpected argument "help"`},
+		{[]string{"plugin", "probe", "extra"}, `harness: unexpected argument "extra"`},
+		{[]string{"plugin", "bogus"}, `harness: plugin: unknown subcommand "bogus"`},
+		{[]string{"plugin"}, "harness: plugin: missing subcommand"},
+		{[]string{"serve", "-addr", "127.0.0.1:0", "-bogus"}, "harness: flag provided but not defined: -bogus"},
+		{[]string{"sessions", "-bogus"}, "harness: flag provided but not defined: -bogus"},
+	} {
+		args := c.args
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, errOut, code := h.run(args...)
+			if code != 2 || out != "" || !strings.Contains(errOut, "usage:") || !strings.Contains(errOut, c.line) {
+				t.Fatalf("harness %v = %d, want exit 2, the line %q and the usage on stderr, and nothing on stdout\nstdout: %s\nstderr: %s", args, code, c.line, out, errOut)
+			}
+		})
+	}
+}

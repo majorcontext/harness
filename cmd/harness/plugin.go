@@ -18,16 +18,23 @@ import (
 // probeBound bounds the probe of each plugin.
 const probeBound = 30 * time.Second
 
+const pluginUsage = "usage: harness plugin probe"
+
 // pluginCmd dispatches `harness plugin <subcommand>`.
 func pluginCmd(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: harness plugin probe")
+		_, _ = fmt.Fprintf(os.Stderr, "harness: plugin: missing subcommand\n%s\n", pluginUsage)
+		return errUsage
 	}
 	switch args[0] {
 	case "probe":
 		return pluginProbeCmd(args[1:])
+	case "-h", "--help", "help":
+		fmt.Println(pluginUsage)
+		return errHelp
 	default:
-		return fmt.Errorf("unknown plugin subcommand %q (want: probe)", args[0])
+		_, _ = fmt.Fprintf(os.Stderr, "harness: plugin: unknown subcommand %q\n%s\n", args[0], pluginUsage)
+		return errUsage
 	}
 }
 
@@ -46,8 +53,7 @@ func defaultPluginCache(cfg *config.Config) {
 // the cache after a plugin is rebuilt.
 func pluginProbeCmd(args []string) error {
 	fs := flag.NewFlagSet("plugin probe", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	cfg, err := loadConfig()
