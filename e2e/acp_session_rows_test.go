@@ -53,6 +53,18 @@ var acpSessionScenarios = []acpScenario{
 		},
 	},
 	{
+		name:     "cancel_right_after_the_prompt_is_not_lost",
+		cite:     "A `session/cancel` that follows a `session/prompt` on the wire reaches that prompt.",
+		model:    []harnesstest.Step{{Name: "slow", Reply: harnesstest.Reply{Text: "partial", Block: true}, Repeat: true}},
+		wireOnly: true,
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPromptStart{as: "a", text: "go"},
+			acpCancel{as: "a"},
+			acpResult{id: "a", stop: "cancelled"},
+		},
+	},
+	{
 		name:  "failed_turn_answers_an_internal_error",
 		cite:  "A turn that fails answers `-32603` with `data.code` `internal` and `data.error_class`; the message is the masked error of the turn.",
 		model: []harnesstest.Step{{Name: "bad", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "scripted bad request"}}},

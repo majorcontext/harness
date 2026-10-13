@@ -898,8 +898,10 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 
 ### Prompts
 
+- A `session/cancel` that follows a `session/prompt` on the wire reaches that prompt. This holds also when the prompt has not started to run.
 - `session/prompt` runs one turn and sends the text of the model as `agent_message_chunk` updates before it answers `end_turn`. The reasoning of the model is `agent_thought_chunk` updates. A text delta is a chunk; the rest of an item that the deltas did not cover is one more chunk when the item completes. When a slow reader missed a delta, the chunks sent are not the start of the item text, and ACP version 1 cannot retract a chunk. Then the whole item text is sent as one more message, with the `messageId` `msg_` and the item ID and `_full`. The `messageId` of a message chunk is `msg_` and the item ID, and that of a thought chunk is `thought_` and the item ID.
 - The agent mints the ID of the input, and sends the input with the delivery `queue`: a prompt that arrives during a turn waits for the next turn. A prompt block other than `text` and `resource_link` is `-32602`. So is a prompt with no block. A `resource_link` is the text of its name and URI.
+- A required field of a content block or of an `mcpServers` entry that is omitted or null is `-32602`. Two header names that differ only in case are one name.
 - A prompt for a session that the connection does not hold answers `-32002`.
 - The updates of a turn reach the client before the answer: the answer waits until the event pump has sent every update through the end of the turn.
 - A turn that starts with no `session/prompt` open, such as a goal turn, sends its updates as notifications.

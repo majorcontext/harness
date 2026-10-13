@@ -193,3 +193,48 @@ func TestSessionNewAfterShutdownIsRefusedWithoutBuildingARuntime(t *testing.T) {
 		t.Errorf("For calls = %d, sessions = %d, want none", rts.calls, len(a.sessions))
 	}
 }
+
+func TestSessionServersTreatHeaderNamesAsCaseInsensitive(t *testing.T) {
+	_, err := sessionServers([]json.RawMessage{json.RawMessage(`{"type":"http","name":"h","url":"https://h","headers":[{"name":"Authorization","value":"1"},{"name":"authorization","value":"2"}]}`)})
+	if e, ok := err.(*rpc.Error); !ok || e.Code != rpc.CodeInvalidParams {
+		t.Errorf("err = %v, want -32602", err)
+	}
+	got, err := sessionServers([]json.RawMessage{json.RawMessage(`{"type":"http","name":"h","url":"https://h","headers":[{"name":"x-token","value":"1"}]}`)})
+	if err != nil || got["h"].Headers["X-Token"] != "1" {
+		t.Errorf("headers = %+v, %v; want the canonical name X-Token", got["h"].Headers, err)
+	}
+}
+
+func TestRequiredFieldsMustBePresent(t *testing.T) {
+	for _, raw := range []string{
+		`{"name":"a","command":"/bin/a","env":[]}`,
+		`{"name":"a","command":"/bin/a","args":null,"env":[]}`,
+		`{"name":"a","command":"/bin/a","args":[]}`,
+		`{"name":"a","command":"/bin/a","args":[],"env":[{"name":"K"}]}`,
+		`{"type":"http","name":"h","url":"https://h"}`,
+		`{"type":"http","name":"h","url":"https://h","headers":[{"value":"v"}]}`,
+	} {
+		if _, err := sessionServers([]json.RawMessage{json.RawMessage(raw)}); err == nil {
+			t.Errorf("sessionServers accepted %s", raw)
+		}
+	}
+	for _, raw := range []string{`{"type":"text"}`, `{"type":"text","text":null}`, `{"type":"resource_link","uri":"u"}`, `{"type":"resource_link","name":"n"}`, `{"text":"x"}`} {
+		if _, err := promptParts([]json.RawMessage{json.RawMessage(raw)}); err == nil {
+			t.Errorf("promptParts accepted %s", raw)
+		}
+	}
+	if _, err := promptParts([]json.RawMessage{json.RawMessage(`{"type":"text","text":""}`)}); err != nil {
+		t.Errorf("an empty text is present: %v", err)
+	}
+}
+
+func TestAnswerAfterACancelledRequestIsTheContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := answer(ctx, harness.TurnResult{StopReason: protocol.StopCompleted}, false); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if got, err := answer(t.Context(), harness.TurnResult{StopReason: protocol.StopCompleted}, false); err != nil || got.(map[string]string)["stopReason"] != "end_turn" {
+		t.Errorf("answer = %v, %v", got, err)
+	}
+}

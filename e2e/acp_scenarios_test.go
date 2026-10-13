@@ -32,7 +32,9 @@ type acpScenario struct {
 	config  map[string]any
 	dirs    map[string]map[string]string
 	allowed []string
-	steps   []acpStep
+	// wireOnly leaves the requests and the sessions out of the golden, for a row whose model traffic depends on timing.
+	wireOnly bool
+	steps    []acpStep
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -200,6 +202,14 @@ func acpObserve(t *testing.T, c *acpConn) acpGolden {
 	return acpGolden{Requests: obs.Requests, Sessions: obs.Sessions, Wire: c.goldenWire()}
 }
 
+func acpGoldenOf(t *testing.T, c *acpConn, wireOnly bool) acpGolden {
+	t.Helper()
+	if wireOnly {
+		return acpGolden{Wire: c.goldenWire()}
+	}
+	return acpObserve(t, c)
+}
+
 func acpHosts() []acpHost {
 	return []acpHost{
 		{name: "binary", start: startACPBinary},
@@ -234,7 +244,7 @@ func TestACPScenarios(t *testing.T) {
 				}
 				c.finish(stop)
 				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0)
-				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpObserve(t, c), update)
+				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpGoldenOf(t, c, sc.wireOnly), update)
 			})
 		}
 	}

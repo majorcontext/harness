@@ -28,19 +28,25 @@ func promptParts(blocks []json.RawMessage) ([]protocol.Part, error) {
 	var parts []protocol.Part
 	for i, raw := range blocks {
 		var b struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			Name string `json:"name"`
-			URI  string `json:"uri"`
+			Type string  `json:"type"`
+			Text *string `json:"text"`
+			Name *string `json:"name"`
+			URI  *string `json:"uri"`
 		}
 		if err := json.Unmarshal(raw, &b); err != nil {
 			return nil, invalidParams(fmt.Sprintf("prompt[%d] is not a content block", i))
 		}
 		switch b.Type {
 		case "text":
-			parts = append(parts, protocol.Part{Type: protocol.PartText, Text: b.Text})
+			if b.Text == nil {
+				return nil, invalidParams(fmt.Sprintf("prompt[%d] has no text", i))
+			}
+			parts = append(parts, protocol.Part{Type: protocol.PartText, Text: *b.Text})
 		case "resource_link":
-			parts = append(parts, protocol.Part{Type: protocol.PartText, Text: b.Name + " (" + b.URI + ")"})
+			if b.Name == nil || b.URI == nil {
+				return nil, invalidParams(fmt.Sprintf("prompt[%d] needs name and uri", i))
+			}
+			parts = append(parts, protocol.Part{Type: protocol.PartText, Text: *b.Name + " (" + *b.URI + ")"})
 		default:
 			return nil, invalidParams(fmt.Sprintf("prompt[%d] has the unsupported type %q", i, b.Type))
 		}
@@ -64,7 +70,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	pr := h.begin()
+	pr, _ := ctx.Value(promptKey{}).(*prompt)
+	if pr == nil {
+		pr = h.begin()
+	}
 	defer h.end(pr)
 	if h.cancelled(pr) {
 		return map[string]string{"stopReason": "cancelled"}, nil
@@ -85,7 +94,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		return nil, rpcError(err)
 	}
 	h.flush(ctx, h.sess.Snapshot().HeadSeq)
-	return promptResult(res, h.cancelled(pr))
+	return answer(ctx, res, h.cancelled(pr))
 }
 
 // interrupt ends the turn of a prompt whose request ended before the turn did.
@@ -106,6 +115,15 @@ func waitFailure(err error, cancelled bool) error {
 	return err
 }
 
+// answer returns the result of a prompt, or the error of ctx when the peer
+// cancelled the request while the updates flushed, so the rpc layer answers -32800.
+func answer(ctx context.Context, res harness.TurnResult, cancelled bool) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return promptResult(res, cancelled)
+}
+
 // promptResult maps the outcome of a turn to the answer of session/prompt.
 func promptResult(res harness.TurnResult, cancelled bool) (any, error) {
 	if res.Withdrawn || (cancelled && (res.StopReason == protocol.StopFailed || res.StopReason == "")) {
@@ -123,4 +141,26 @@ func promptResult(res harness.TurnResult, cancelled bool) (any, error) {
 	}
 	return nil, &rpc.Error{Code: rpc.CodeInternal, Message: msg, Data: map[string]any{
 		"code": string(protocol.CodeInternal), "error_class": string(res.ErrorClass)}}
+}
+
+type promptKey struct{}
+
+// Admit runs in the reader goroutine of the connection, in wire order, before
+// the handler of a request starts. It registers a session/prompt, so a
+// session/cancel that follows on the wire finds the prompt.
+func (a *agent) Admit(ctx context.Context, method string, params json.RawMessage) context.Context {
+	if method != "session/prompt" {
+		return ctx
+	}
+	var p struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ctx
+	}
+	h, err := a.held(p.SessionID)
+	if err != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, promptKey{}, h.begin())
 }
