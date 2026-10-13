@@ -16,7 +16,6 @@ func TestContractModelTool(t *testing.T) {
 				"codex":       map[string]any{"type": "openai", "api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
 				"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": "claude"},
 				"openai":      map[string]any{"api_key_env": "ANTHROPIC_API_KEY"},
-				"openrouter":  map[string]any{"api_key_env": "ANTHROPIC_API_KEY"},
 				"gateway":     map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
 			},
 		},
@@ -73,8 +72,7 @@ func TestContractTaskSpawnModelAndEffort(t *testing.T) {
 		config: map[string]any{
 			"aliases": map[string]any{"quick": "anthropic/claude-quick-1"},
 			"providers": map[string]any{
-				"openai":     map[string]any{"api_key_env": "ANTHROPIC_API_KEY"},
-				"openrouter": map[string]any{"api_key_env": "ANTHROPIC_API_KEY"},
+				"openai": map[string]any{"api_key_env": "ANTHROPIC_API_KEY"},
 			},
 		},
 		model: steps,

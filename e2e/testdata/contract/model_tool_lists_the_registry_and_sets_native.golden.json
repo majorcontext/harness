@@ -84,7 +84,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"}]}",
               "tool_name": "model",
               "tool_use_id": "toolu#1"
             }
@@ -126,7 +126,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}"
+            "content": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
           }
         ]
       },
@@ -152,7 +152,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"model\":\"openai/gpt-native-1\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}"
+            "content": "{\"model\":\"openai/gpt-native-1\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
           }
         ]
       }

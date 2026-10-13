@@ -4,7 +4,6 @@
 //
 //	ANTHROPIC_API_KEY=... go run ./examples/switch-model
 //	ANTHROPIC_API_KEY=... OPENAI_API_KEY=... go run ./examples/switch-model -then openai/gpt-5
-//	OPENAI_API_KEY=... OPENROUTER_API_KEY=... go run ./examples/switch-model -first openai/gpt-5 -then openrouter/anthropic/claude-sonnet-5
 package main
 
 import (

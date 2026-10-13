@@ -182,51 +182,8 @@ func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
 	}
 }
 
-// TestProviderNativeDefaultKeyOnlyOverride verifies that an "openrouter"
-// entry may set only the field it needs
-// (api_key_env here) and inherit type/base_url from the built-in default
-// (Defaults().Providers) — it is a complete, valid entry without ever
-// naming type or base_url itself.
-func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
-	c := &Config{Providers: map[string]Provider{
-		"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"},
-	}}
-	merged, err := mergeAndValidate(c, &Config{})
-	if err != nil {
-		t.Fatalf("mergeAndValidate: %v", err)
-	}
-	pr := merged.Providers["openrouter"]
-	if pr.Type != TypeOpenAICompat {
-		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
-	}
-	if pr.BaseURL != Defaults().Providers["openrouter"].BaseURL {
-		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
-	}
-	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
-		t.Errorf("APIKeyEnv = %q, want the entry's own override", pr.APIKeyEnv)
-	}
-}
-
-func TestResolvedProviders(t *testing.T) {
-	c := &Config{Providers: map[string]Provider{"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"}}}
-	got := c.ResolvedProviders()["openrouter"]
-	if got.Type != TypeOpenAICompat {
-		t.Errorf("Type = %q, want inherited %q", got.Type, TypeOpenAICompat)
-	}
-	if got.BaseURL != Defaults().Providers["openrouter"].BaseURL {
-		t.Errorf("BaseURL = %q, want inherited default", got.BaseURL)
-	}
-	if got.APIKeyEnv != "MY_OPENROUTER_KEY" {
-		t.Errorf("APIKeyEnv = %q, want preserved override", got.APIKeyEnv)
-	}
-	if c.Providers["openrouter"].Type != "" {
-		t.Error("ResolvedProviders changed the providers of the Config")
-	}
-}
-
 // TestProviderPartialEntryUnknownKeyFails covers the "partial entry for an
-// unknown key" case explicitly: a key with no built-in default gets no
-// free pass just because another key (openrouter) does.
+// unknown key" case explicitly: a key that is not native needs a type.
 func TestProviderPartialEntryUnknownKeyFails(t *testing.T) {
 	c := &Config{Providers: map[string]Provider{
 		"unknown-provider": {APIKeyEnv: "SOME_KEY"},
@@ -910,38 +867,8 @@ func TestLoadProject(t *testing.T) {
 			t.Errorf("anthropic base_url = %q, want project override", got.BaseURL)
 		}
 	})
-	// Neither file's providers.openrouter
-	// entry is complete on its own (the user file has no type/base_url at
-	// all — it relies on the native default — and the project file
-	// overrides only api_key_env), but LoadProject merges the two layers
-	// and the native default, then validates the result.
-	t.Run("layered partial provider override merges then validates", func(t *testing.T) {
-		userPath := filepath.Join(t.TempDir(), "config.json")
-		writeFile(t, userPath, `{
-			"providers": {"openrouter": {"api_key_env": "USER_OR_KEY"}}
-		}`)
-		projDir := t.TempDir()
-		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
-			"providers": {"openrouter": {"api_key_env": "PROJECT_OR_KEY"}}
-		}`)
-		c, err := LoadProject(userPath, projDir)
-		if err != nil {
-			t.Fatalf("LoadProject: %v", err)
-		}
-		pr := c.Providers["openrouter"]
-		if pr.Type != TypeOpenAICompat {
-			t.Errorf("Type = %q, want inherited native default %q", pr.Type, TypeOpenAICompat)
-		}
-		if pr.BaseURL != Defaults().Providers["openrouter"].BaseURL {
-			t.Errorf("BaseURL = %q, want inherited native default", pr.BaseURL)
-		}
-		if pr.APIKeyEnv != "PROJECT_OR_KEY" {
-			t.Errorf("APIKeyEnv = %q, want project override", pr.APIKeyEnv)
-		}
-	})
 	// A project-only providers entry naming an unknown key with no type is
-	// still rejected once merged — the native default only applies to
-	// Defaults().Providers keys.
+	// rejected once merged.
 	t.Run("project layer cannot smuggle in an incomplete non-default provider", func(t *testing.T) {
 		userPath := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)

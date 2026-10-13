@@ -75,10 +75,9 @@ func rejectSharedPlugins(user, proj *Config, userPath, projPath string) error {
 	return nil
 }
 
-// mergeAndValidate merges, fills provider defaults, and validates.
+// mergeAndValidate merges and validates.
 func mergeAndValidate(base, over *Config) (*Config, error) {
 	out := merge(base, over)
-	applyProviderDefaults(out.Providers)
 	return out, out.Validate()
 }
 

@@ -24,8 +24,6 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-const defaultOpenRouter = "openrouter"
-
 // ErrUnavailable reports a model that no configured provider serves.
 var ErrUnavailable = &protocol.Error{Code: protocol.CodeModelUnavailable, Message: "harness: model unavailable"}
 
@@ -51,7 +49,7 @@ type Env struct {
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
-// need no entry: the native anthropic and openai, and the default openrouter.
+// need no entry: the native anthropic and openai.
 // The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper, env Env) *Router {
 	env.Log = cmp.Or(env.Log, slog.Default())
@@ -60,12 +58,12 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
-	for _, name := range []string{anthropic.Family, responses.Family, defaultOpenRouter} {
+	for _, name := range []string{anthropic.Family, responses.Family} {
 		if _, ok := cfg.Providers[name]; !ok {
 			cfg.Providers[name] = config.Provider{}
 		}
 	}
-	for name, p := range cfg.ResolvedProviders() {
+	for name, p := range cfg.Providers {
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport, env, cfg.RequestMaxRetriesValue()); c != nil {

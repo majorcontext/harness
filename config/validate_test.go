@@ -15,7 +15,7 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{name: "the zero config"},
-		{name: "an openrouter entry that names only api_key_env", cfg: Config{Providers: map[string]Provider{"openrouter": {APIKeyEnv: "X"}}}},
+		{name: "an openrouter entry that names only api_key_env", cfg: Config{Providers: map[string]Provider{"openrouter": {APIKeyEnv: "X"}}}, want: "type is required"},
 		{name: "an openai entry without base_url", cfg: Config{Providers: map[string]Provider{"work": {Type: TypeOpenAI}}}, want: "base_url is required"},
 		{name: "an unknown provider type", cfg: Config{Providers: map[string]Provider{"work": {Type: "bogus"}}}, want: "unknown type"},
 		{name: "a plugin without command", cfg: Config{Plugins: []PluginSpec{{Name: "p"}}}, want: "plugins[0] (p): command is required"},
