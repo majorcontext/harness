@@ -3,11 +3,15 @@ package e2e
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
@@ -25,6 +29,10 @@ func TestContractRuntimeErrors(t *testing.T) {
 		{"every_sentinel_has_the_status_of_its_code", rowEverySentinelHasTheStatusOfItsCode},
 		{"a_log_that_does_not_replay_fails_with_session_unreplayable", rowALogThatDoesNotReplayFailsWithSessionUnreplayable},
 		{"new_refuses_a_bad_option_with_a_plain_error", rowNewRefusesABadOptionWithAPlainError},
+		{"a_transport_error_that_declares_itself_permanent_makes_one_attempt_and_ends_the_turn_permanent", rowAPermanentTransportErrorMakesOneAttempt},
+		{"a_permanent_transport_error_inside_a_wrapping_error_makes_one_attempt", rowAPermanentTransportErrorInsideAWrappingErrorMakesOneAttempt},
+		{"an_ordinary_transport_error_keeps_both_retry_layers", rowAnOrdinaryTransportErrorKeepsBothRetryLayers},
+		{"a_canceled_request_with_a_permanent_transport_error_stays_an_abort", rowACanceledRequestWithAPermanentTransportErrorStaysAnAbort},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -154,5 +162,103 @@ func rowAStopCauseReachesAClientInTheErrorFrameOfTheEventStream(t *testing.T) {
 	}
 	if !errors.Is(last, harness.ErrSessionReleased) || !errors.Is(last, harness.ErrSessionNotOwned) || errors.Is(last, harness.ErrSessionEnded) {
 		t.Errorf("stream ended with %v, want a match for ErrSessionReleased and not ErrSessionEnded", last)
+	}
+}
+
+type declaredError struct {
+	msg       string
+	permanent bool
+}
+
+func (e declaredError) Error() string   { return e.msg }
+func (e declaredError) Permanent() bool { return e.permanent }
+
+type failingTransport struct {
+	err      error
+	attempts atomic.Int64
+	// arrived, when set, receives once per request; the request then waits for
+	// its context to end before it fails with err.
+	arrived chan struct{}
+}
+
+func (f *failingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.attempts.Add(1)
+	if f.arrived != nil {
+		f.arrived <- struct{}{}
+		<-req.Context().Done()
+	}
+	return nil, f.err
+}
+
+func transportTurn(t *testing.T, err error) (harness.TurnResult, *failingTransport) {
+	t.Helper()
+	ft := &failingTransport{err: err}
+	return waitTurn(t, promptTurn(t, transportSession(t, ft), textInput("a", "go"))), ft
+}
+
+func transportSession(t *testing.T, ft *failingTransport) *harness.Session {
+	t.Helper()
+	r, nerr := harness.New(harness.Options{
+		Store:          store.NewMemStore(),
+		Getenv:         os.Getenv,
+		ModelTransport: func(string) http.RoundTripper { return ft },
+		Config: config.Config{
+			ContextWindowTokens: 100000,
+			RequestMaxRetries:   new(1),
+			StreamMaxRetries:    new(1),
+			Providers:           map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://model.invalid", APIKeyEnv: "HARNESS_E2E_KEY"}},
+		},
+	})
+	if nerr != nil {
+		t.Fatal(nerr)
+	}
+	t.Cleanup(func() { _ = r.Close(t.Context()) })
+	s, cerr := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+	return s
+}
+
+func rowAPermanentTransportErrorMakesOneAttempt(t *testing.T) {
+	res, ft := transportTurn(t, declaredError{msg: "fetch failed", permanent: true})
+	if n := ft.attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1", n)
+	}
+	if res.StopReason != protocol.StopFailed || res.ErrorClass != protocol.ErrorPermanent {
+		t.Errorf("result = %+v, want a failed turn of class permanent", res)
+	}
+}
+
+func rowAPermanentTransportErrorInsideAWrappingErrorMakesOneAttempt(t *testing.T) {
+	res, ft := transportTurn(t, fmt.Errorf("dial layer: %w", declaredError{msg: "fetch failed", permanent: true}))
+	if n := ft.attempts.Load(); n != 1 || res.ErrorClass != protocol.ErrorPermanent {
+		t.Errorf("attempts = %d, class = %q, want 1 and permanent", n, res.ErrorClass)
+	}
+}
+
+func rowAnOrdinaryTransportErrorKeepsBothRetryLayers(t *testing.T) {
+	res, ft := transportTurn(t, declaredError{msg: "connection reset"})
+	if n := ft.attempts.Load(); n != 4 {
+		t.Errorf("attempts = %d, want 4 (2 requests in each of 2 model calls)", n)
+	}
+	if res.StopReason != protocol.StopFailed || res.ErrorClass == protocol.ErrorPermanent {
+		t.Errorf("result = %+v, want a failed turn of a retryable class", res)
+	}
+}
+
+func rowACanceledRequestWithAPermanentTransportErrorStaysAnAbort(t *testing.T) {
+	ft := &failingTransport{err: declaredError{msg: "fetch aborted", permanent: true}, arrived: make(chan struct{}, 4)}
+	turn := promptTurn(t, transportSession(t, ft), textInput("a", "go"))
+	<-ft.arrived
+	if err := turn.Cancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	res := waitTurn(t, turn)
+	if n := ft.attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1", n)
+	}
+	if res.StopReason != protocol.StopInterrupted || res.ErrorClass == protocol.ErrorPermanent {
+		t.Errorf("result = %+v, want an interrupted turn that is not permanent", res)
 	}
 }
