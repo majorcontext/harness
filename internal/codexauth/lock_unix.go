@@ -34,3 +34,6 @@ func lockFile(ctx context.Context, f *os.File) error {
 		wait = min(2*wait, 50*time.Millisecond)
 	}
 }
+
+// otherUsersCanRead reports whether the mode lets the group or other users read the file.
+func otherUsersCanRead(mode os.FileMode) bool { return mode.Perm()&0o077 != 0 }

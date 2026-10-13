@@ -20,6 +20,10 @@ type codexAuth struct {
 	label    string
 	lifetime time.Duration
 	issuer   harnesstest.CodexIssuerOptions
+	// readOnly makes the directory of the file refuse a write after the seed.
+	readOnly bool
+	// project is a .harness.json of the work dir.
+	project map[string]any
 }
 
 // codexAuthRun is a started codexAuth.
@@ -62,6 +66,19 @@ func startCodexAuth(t *testing.T, spec codexAuth) *codexAuthRun {
 	if spec.label != "" {
 		a.write(t, spec.label, spec.lifetime, harnesstest.CodexInitialRefresh)
 	}
+	if spec.readOnly {
+		if os.Geteuid() == 0 {
+			t.Skip("a root user writes to a read-only directory")
+		}
+		dir := filepath.Dir(a.path)
+		if err := os.WriteFile(a.path+".lock", nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	}
 	return a
 }
 
@@ -78,6 +95,39 @@ func (a *codexAuthRun) configure(cfg map[string]any) {
 	entry["auth"] = "chatgpt"
 	cfg["codex_auth_file"] = a.path
 	cfg["codex_issuer"] = a.issuer.URL()
+}
+
+// awaitIssuerRefresh waits until a refresh grant is held at the issuer.
+type awaitIssuerRefresh struct{}
+
+func (awaitIssuerRefresh) run(t *testing.T, _ *run) {
+	t.Fatal("awaitIssuerRefresh runs only under runCodexScenario")
+}
+func (awaitIssuerRefresh) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
+	if !r.codex.issuer.AwaitRefresh(waitBound) {
+		t.Fatalf("no refresh reached the issuer within %s", waitBound)
+	}
+}
+
+// releaseIssuerRefresh lets the held refresh grant answer.
+type releaseIssuerRefresh struct{}
+
+func (releaseIssuerRefresh) run(t *testing.T, _ *run) {
+	t.Fatal("releaseIssuerRefresh runs only under runCodexScenario")
+}
+func (releaseIssuerRefresh) runWire(_ *testing.T, r *run, _ *harnesstest.OpenAI) {
+	r.codex.issuer.ReleaseRefresh()
+}
+
+// recordRedirect records how many requests reached the target of the redirect and whether one carried a credential.
+type recordRedirect struct{}
+
+func (recordRedirect) run(t *testing.T, _ *run) {
+	t.Fatal("recordRedirect runs only under runCodexScenario")
+}
+func (recordRedirect) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	hits, creds := o.Redirected()
+	r.record(t, "redirect", "", callResult{Status: 200, Body: map[string]any{"target_requests": hits, "target_got_credentials": creds}})
 }
 
 // rewriteCodexAuth replaces the stored login, as another process that signs in again does.
@@ -173,6 +223,38 @@ func codexAuthRows() []codexScenario {
 		{
 			scenario: scenario{name: "codex_login_refresh_failure_fails_the_turn_with_guidance", actions: codexSession(codexTurn("a", "hello"), record)},
 			auth:     &codexAuth{label: "seed", lifetime: time.Minute, issuer: harnesstest.CodexIssuerOptions{RefreshStatus: 400}},
+		},
+		{
+			scenario: scenario{
+				name:  "codex_login_cancel_during_refresh_keeps_the_rotated_token",
+				model: codexHi,
+				actions: codexSession([]action{submit{as: "a", text: "first"}}, []action{awaitIssuerRefresh{}, interrupt{as: "a"}, awaitTurnEnd{as: "a"}, releaseIssuerRefresh{}},
+					codexTurn("a", "hello"), record),
+			},
+			auth: &codexAuth{label: "seed", lifetime: 2 * time.Minute, issuer: harnesstest.CodexIssuerOptions{Rotate: true, HoldRefresh: true}},
+		},
+		{
+			scenario: scenario{name: "codex_login_unsaved_refresh_stays_in_memory", model: []harnesstest.Step{step("one", "1"), step("two", "2")},
+				actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), record)},
+			auth: &codexAuth{label: "seed", lifetime: 2 * time.Minute, readOnly: true, issuer: harnesstest.CodexIssuerOptions{Rotate: true}},
+		},
+		{
+			scenario: scenario{name: "codex_login_transient_refresh_failure_does_not_retry_on_every_request",
+				model:   []harnesstest.Step{step("one", "1"), step("two", "2"), step("three", "3")},
+				actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), codexTurn("a", "three"), record)},
+			auth: &codexAuth{label: "seed", lifetime: 2 * time.Minute, issuer: harnesstest.CodexIssuerOptions{RefreshStatus: 503}},
+		},
+		{
+			scenario: scenario{name: "codex_login_redirect_from_the_bound_url_is_refused", actions: codexSession(codexTurn("a", "hello"), []action{recordRedirect{}}, record)},
+			opts:     harnesstest.OpenAIOptions{RedirectTo: "/backend-api/codex/stolen"},
+			auth:     &codexAuth{label: "seed", lifetime: time.Hour},
+		},
+		{
+			scenario: scenario{name: "codex_login_project_file_cannot_move_the_login_to_another_url", model: codexHi, actions: codexSession(codexTurn("a", "hello"), record)},
+			auth: &codexAuth{label: "seed", lifetime: time.Hour, project: map[string]any{"providers": map[string]any{
+				"codex": map[string]any{"base_url": "http://127.0.0.1:1/evil", "responses_path": "/evil"},
+				"evil":  map[string]any{"type": "openai", "auth": "chatgpt", "base_url": "http://127.0.0.1:1"},
+			}}},
 		},
 		{
 			scenario: scenario{name: "codex_login_missing_fails_the_turn_with_guidance", actions: codexSession(codexTurn("a", "hello"), record)},

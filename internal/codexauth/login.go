@@ -21,6 +21,8 @@ const (
 	// browserPort is the redirect port that the Codex OAuth client registers.
 	// Source: codex-rs/login/src/server.rs DEFAULT_PORT.
 	browserPort = "1455"
+	// fallbackPort is the second redirect port, for when browserPort is busy. Source: codex-rs/login/src/server.rs FALLBACK_PORT.
+	fallbackPort = "1457"
 	// scope is the scope that the Codex CLI asks for. Source: codex-rs/login/src/server.rs build_authorize_url.
 	scope         = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 	deviceTimeout = 15 * time.Minute
@@ -76,16 +78,12 @@ func LoginBrowser(ctx context.Context, o LoginOptions) error {
 		return err
 	}
 	sum := sha256.Sum256([]byte(verifier))
-	// Only the default issuer knows the registered redirect port. Another issuer is a test issuer.
-	port := "0"
-	if o.issuer() == DefaultIssuer {
-		port = browserPort
-	}
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+	ln, err := listenCallback(o.issuer())
 	if err != nil {
-		return fmt.Errorf("codex login: the callback port is busy: %w (run `%s --device` instead)", err, LoginCommand)
+		return fmt.Errorf("codex login: the callback ports are busy: %w (run `%s --device` instead)", err, LoginCommand)
 	}
-	redirect := "http://localhost:" + portOf(ln) + "/auth/callback"
+	// The Codex CLI redirects to 127.0.0.1 (codex-rs/login/src/server.rs:194).
+	redirect := "http://127.0.0.1:" + portOf(ln) + "/auth/callback"
 	signIn := o.issuer() + "/oauth/authorize?" + url.Values{
 		"response_type":              {"code"},
 		"client_id":                  {ClientID},
@@ -111,6 +109,23 @@ func LoginBrowser(ctx context.Context, o LoginOptions) error {
 	return exchange(ctx, o, "authorization_code", code, verifier, redirect)
 }
 
+// listenCallback listens for the browser callback on loopback. Only the default
+// issuer knows the registered redirect ports, so another issuer (a test issuer) gets a free port.
+func listenCallback(issuer string) (net.Listener, error) {
+	ports := []string{"0"}
+	if issuer == DefaultIssuer {
+		ports = []string{browserPort, fallbackPort}
+	}
+	var err error
+	for _, port := range ports {
+		var ln net.Listener
+		if ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", port)); err == nil {
+			return ln, nil
+		}
+	}
+	return nil, err
+}
+
 func portOf(ln net.Listener) string {
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	return port
@@ -131,21 +146,19 @@ func waitForCallback(ctx context.Context, ln net.Listener, state string) (string
 		}
 		q := r.URL.Query()
 		var res callbackResult
-		switch {
-		case q.Get("error") != "":
-			res.err = fmt.Errorf("codex login: the sign-in was refused: %s", q.Get("error"))
-		case subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1:
-			res.err = errors.New("codex login: the callback is from another sign-in (state mismatch)")
-		case q.Get("code") == "":
-			res.err = errors.New("codex login: the callback holds no code")
-		default:
-			res.code = q.Get("code")
-		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if res.err != nil {
+		switch {
+		case subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1, q.Get("code") == "" && q.Get("error") == "":
+			// A request from another sign-in, or a stray one, ends nothing: the real callback can still come.
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, "This is not the callback of the sign-in that is waiting.\n")
+			return
+		case q.Get("error") != "":
+			res.err = fmt.Errorf("codex login: the sign-in was refused: %q", q.Get("error"))
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, "Sign-in failed. Return to the terminal.\n")
-		} else {
+		default:
+			res.code = q.Get("code")
 			_, _ = io.WriteString(w, "Signed in. You can close this tab.\n")
 		}
 		select {

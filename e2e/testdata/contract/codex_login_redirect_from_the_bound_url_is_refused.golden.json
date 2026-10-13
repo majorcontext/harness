@@ -1,0 +1,47 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_login.a": {
+      "status": 200,
+      "body": {
+        "dir_mode": "-rwx------",
+        "error_says_login": false,
+        "file_mode": "-rw-------",
+        "refreshes": 0,
+        "secret_in_error_or_log": false,
+        "stored_access": "seed",
+        "stored_account": "acct-1",
+        "stored_refresh": "refresh-0",
+        "turn#1": null,
+        "turn#2": "failed"
+      }
+    },
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": null
+      }
+    },
+    "redirect": {
+      "status": 200,
+      "body": {
+        "target_got_credentials": false,
+        "target_requests": 0
+      }
+    }
+  }
+}

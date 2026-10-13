@@ -137,6 +137,10 @@ func TestContractCLILoginBrowserCallbackStoresTheLogin(t *testing.T) {
 	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{})
 	signIn, wait := browserLogin(t, h)
 	q := signIn.Query()
+	issuer.ExpectChallenge(q.Get("code_challenge"))
+	if !strings.HasPrefix(q.Get("redirect_uri"), "http://127.0.0.1:") {
+		t.Errorf("redirect_uri = %q, want a 127.0.0.1 address", q.Get("redirect_uri"))
+	}
 	for k, want := range map[string]string{
 		"client_id": harnesstest.CodexClientID, "response_type": "code", "code_challenge_method": "S256",
 		"originator": "harness", "codex_cli_simplified_flow": "true", "id_token_add_organizations": "true",
@@ -162,18 +166,39 @@ func TestContractCLILoginBrowserCallbackStoresTheLogin(t *testing.T) {
 	}
 }
 
-func TestContractCLILoginBrowserCallbackWithAnotherStateStoresNothing(t *testing.T) {
+func TestContractCLILoginBrowserCallbackWithAnotherStateKeepsWaiting(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{})
 	signIn, wait := browserLogin(t, h)
+	issuer.ExpectChallenge(signIn.Query().Get("code_challenge"))
 	if got := callback(t, signIn, harnesstest.CodexAuthCode, "other"); got != http.StatusBadRequest {
 		t.Errorf("callback status = %d, want 400", got)
 	}
-	if code := wait(); code != 1 {
-		t.Errorf("login exit = %d, want 1", code)
-	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) || issuer.Exchanges() != 0 {
-		t.Errorf("file %v, exchanges %d, want no file and no exchange", err, issuer.Exchanges())
+		t.Errorf("file %v, exchanges %d, want no file and no exchange after the wrong state", err, issuer.Exchanges())
 	}
+	if got := callback(t, signIn, harnesstest.CodexAuthCode, signIn.Query().Get("state")); got != http.StatusOK {
+		t.Fatalf("second callback status = %d, want 200", got)
+	}
+	if code := wait(); code != 0 {
+		t.Errorf("login exit = %d, want 0", code)
+	}
+}
+
+func TestContractCLILoginRefusesAFileThatOthersCanRead(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h, _, file := loginHost(t, harnesstest.CodexIssuerOptions{})
+	if _, errOut, code := h.run("login", "codex", "--device"); code != 0 {
+		t.Fatalf("login = %d\n%s", code, errOut)
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := h.run("login", "codex", "--status")
+	if code != 1 || !strings.Contains(out+errOut, "chmod 600") {
+		t.Errorf("status = %d %q %q, want 1 and the chmod 600 advice", code, out, errOut)
+	}
+	noSecret(t, "status output", out+errOut)
 }

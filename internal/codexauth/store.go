@@ -21,6 +21,9 @@ func (s Store) Load() (Credentials, error) {
 	if s.Path == "" {
 		return Credentials{}, &LoginRequiredError{Reason: "the config sets no codex_auth_file"}
 	}
+	if info, err := os.Stat(s.Path); err == nil && otherUsersCanRead(info.Mode()) {
+		return Credentials{}, &LoginRequiredError{Reason: s.Path + " can be read by other users; run chmod 600 on it, or sign in again"}
+	}
 	raw, err := os.ReadFile(s.Path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Credentials{}, &LoginRequiredError{Reason: "no login file at " + s.Path}
@@ -76,8 +79,14 @@ func (s Store) Save(c Credentials) error {
 	return nil
 }
 
-// Remove deletes the file. A missing file is no error.
-func (s Store) Remove() error {
+// Remove deletes the file under the lock, so a refresh that writes it does not run beside it.
+// A missing file is no error.
+func (s Store) Remove(ctx context.Context) error {
+	unlock, err := s.Lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := os.Remove(s.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("codex login: %w", err)
 	}

@@ -600,7 +600,7 @@ harness login codex
 
 The command prints a sign-in URL and opens it in your browser. After you sign in, the browser returns to a page on `localhost` and the command exits. On a machine with no browser, run `harness login codex --device`: it prints a code and a link, and you enter the code on another device. `harness login codex --status` prints the account and when the access token ends. It never prints a token. `harness logout codex` deletes the login.
 
-Harness keeps its own login in `auth/codex.json` beside the user config (`~/.harness/auth/codex.json` by default). The file has mode 0600. Harness never reads or writes `~/.codex`, so a login with the Codex CLI and a login with Harness are separate. Harness refreshes the access token before it ends.
+Harness keeps its own login in `auth/codex.json` beside the user config (`~/.harness/auth/codex.json` by default). The file has mode 0600. Harness never reads or writes `~/.codex`, so a login with the Codex CLI and a login with Harness are separate. Harness refreshes the access token before it ends. `harness logout codex` deletes the file; it does not revoke the tokens at OpenAI. On Windows the file lock does nothing, so run one Harness process at a time on a login there. If two processes refresh at once, run `harness login codex` again.
 
 Then add an entry that uses the login in place of an API key:
 

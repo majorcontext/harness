@@ -57,10 +57,20 @@ func (c Credentials) Expiry() (t time.Time, ok bool) {
 	return time.Unix(int64(claims.Exp), 0), true
 }
 
-// expiring reports whether the access token ends within the refresh skew of now. A token without exp is expiring.
+// expiring reports whether the access token ends within the refresh skew of now.
+// A token without exp has an unknown expiry: only a 401 refreshes it.
 func (c Credentials) expiring(now time.Time) bool {
 	exp, ok := c.Expiry()
-	return !ok || !exp.After(now.Add(refreshSkew))
+	return ok && !exp.After(now.Add(refreshSkew))
+}
+
+// remaining is the time until the access token ends. ok is false when the expiry is unknown or past.
+func (c Credentials) remaining(now time.Time) (d time.Duration, ok bool) {
+	exp, known := c.Expiry()
+	if !known || !exp.After(now) {
+		return 0, false
+	}
+	return exp.Sub(now), true
 }
 
 // AccountFromToken reads the chatgpt_account_id claim of a token.
@@ -90,6 +100,8 @@ func jwtClaims(token string, v any) bool {
 type LoginRequiredError struct {
 	// Reason says why, with no token in it.
 	Reason string
+
+	refreshRejected bool
 }
 
 func (e *LoginRequiredError) Error() string {

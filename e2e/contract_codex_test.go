@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -148,9 +150,10 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	if ca != nil {
 		ca.configure(cfg)
 	}
+	drv := codexDriver(t, h, ca, o.URL(), cfg)
 	r := &run{
 		codex:  ca,
-		drv:    h.newDriver(t, o.URL(), cfg),
+		drv:    drv,
 		fake:   o.Server,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
@@ -477,4 +480,21 @@ func codexRetryRows() []codexScenario {
 			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"odd": {Incomplete: "content_filter"}, "odd_again": {Incomplete: "content_filter"}}},
 		},
 	}
+}
+
+// codexDriver opens h on the config, with the project file of the login row when it has one.
+func codexDriver(t *testing.T, h host, ca *codexAuthRun, modelURL string, cfg map[string]any) driver {
+	t.Helper()
+	if ca == nil || ca.spec.project == nil {
+		return h.newDriver(t, modelURL, cfg)
+	}
+	work := t.TempDir()
+	body, err := json.Marshal(ca.spec.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".harness.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return h.openIn(t, writeGoalConfigWith(t, modelURL, scenarioConfig(cfg)), work, nil)
 }

@@ -97,7 +97,10 @@ func client(name string, p config.Provider, transport func(provider string) http
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
-		key, reason := env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+		key, reason := "", "the entry uses the "+p.Auth+" login"
+		if p.Auth == "" {
+			key, reason = env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
@@ -114,11 +117,13 @@ func client(name string, p config.Provider, transport func(provider string) http
 }
 
 // codexClient wraps hc so that the Codex login reaches the Responses endpoint of the entry and no other URL.
+// The client follows no redirect, so a 3xx answer ends the request and no header goes to its target.
 func codexClient(hc *http.Client, src *codexauth.Source, endpoint string) *http.Client {
 	out := &http.Client{}
 	if hc != nil {
-		out = &http.Client{Transport: hc.Transport, CheckRedirect: hc.CheckRedirect, Jar: hc.Jar, Timeout: hc.Timeout}
+		out = &http.Client{Transport: hc.Transport, Jar: hc.Jar, Timeout: hc.Timeout}
 	}
+	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	out.Transport = codexauth.NewTransport(src, out.Transport, endpoint)
 	return out
 }

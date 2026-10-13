@@ -9,3 +9,6 @@ import (
 
 // lockFile does nothing: without flock, two processes are not fenced. The Source of one process still fences its goroutines.
 func lockFile(context.Context, *os.File) error { return nil }
+
+// otherUsersCanRead is false: the mode bits of this platform say nothing about other users.
+func otherUsersCanRead(os.FileMode) bool { return false }

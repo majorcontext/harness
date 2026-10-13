@@ -1,6 +1,7 @@
 package harnesstest
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -21,10 +22,11 @@ const (
 	// CodexAuthCode is the authorization code that the issuer accepts from a browser sign-in.
 	CodexAuthCode = "browser-code"
 	// CodexUserCode is the user code of the device flow.
-	CodexUserCode = "ABCD-1234"
-	codexDeviceID = "device-1"
-	codexDeviceCd = "device-code"
-	authClaim     = "https://api.openai.com/auth"
+	CodexUserCode       = "ABCD-1234"
+	codexDeviceID       = "device-1"
+	codexDeviceCd       = "device-code"
+	codexDeviceVerifier = "device-verifier"
+	authClaim           = "https://api.openai.com/auth"
 )
 
 // CodexIssuerOptions scripts a CodexIssuer.
@@ -39,6 +41,8 @@ type CodexIssuerOptions struct {
 	DevicePending int
 	// AccountID is the chatgpt_account_id claim. Empty is "acct-1".
 	AccountID string
+	// HoldRefresh makes a refresh grant wait for ReleaseRefresh before it answers.
+	HoldRefresh bool
 }
 
 // CodexIssuer is a scripted OpenAI OAuth issuer for the Codex sign-in: the
@@ -55,12 +59,15 @@ type CodexIssuer struct {
 	polls        int
 	valid        map[string]bool // refresh tokens that a refresh grant accepts
 	lastRedirect string
+	challenge    string // the code_challenge that a browser sign-in sent
+	arrived      chan struct{}
+	gate         chan struct{}
 }
 
 // NewCodexIssuer starts an issuer that t closes.
 func NewCodexIssuer(t testing.TB, opts CodexIssuerOptions) *CodexIssuer {
 	t.Helper()
-	i := &CodexIssuer{opts: opts, valid: map[string]bool{CodexInitialRefresh: true}}
+	i := &CodexIssuer{opts: opts, valid: map[string]bool{CodexInitialRefresh: true}, arrived: make(chan struct{}), gate: make(chan struct{})}
 	i.srv = httptest.NewServer(http.HandlerFunc(i.serve))
 	t.Cleanup(i.srv.Close)
 	return i
@@ -79,6 +86,40 @@ func (i *CodexIssuer) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// ExpectChallenge sets the code_challenge of the browser sign-in. The issuer
+// accepts the browser code only with a verifier whose S256 hash is the challenge.
+func (i *CodexIssuer) ExpectChallenge(challenge string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.challenge = challenge
+}
+
+// AwaitRefresh reports whether a refresh grant is waiting at the issuer within bound. It needs HoldRefresh.
+func (i *CodexIssuer) AwaitRefresh(bound time.Duration) bool {
+	select {
+	case <-i.arrived:
+		return true
+	case <-time.After(bound):
+		return false
+	}
+}
+
+// ReleaseRefresh lets the held refresh grants answer.
+func (i *CodexIssuer) ReleaseRefresh() { closeOnceCh(i.gate) }
+
+func closeOnceCh(c chan struct{}) {
+	select {
+	case <-c:
+	default:
+		close(c)
+	}
+}
+
+func s256(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // URL is the base URL of the issuer.
@@ -175,8 +216,6 @@ func oauthError(w http.ResponseWriter, status int, code string) {
 }
 
 func (i *CodexIssuer) token(w http.ResponseWriter, r *http.Request) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
 	var f map[string]string
 	if r.Header.Get("Content-Type") == "application/json" {
 		_ = json.NewDecoder(r.Body).Decode(&f)
@@ -191,6 +230,12 @@ func (i *CodexIssuer) token(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusBadRequest, "invalid_client")
 		return
 	}
+	if f["grant_type"] == "refresh_token" && i.opts.HoldRefresh {
+		closeOnceCh(i.arrived)
+		<-i.gate
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	switch f["grant_type"] {
 	case "refresh_token":
 		i.refreshes++
@@ -209,7 +254,11 @@ func (i *CodexIssuer) token(w http.ResponseWriter, r *http.Request) {
 			i.issue(w, next)
 		}
 	case "authorization_code":
-		if (f["code"] != CodexAuthCode && f["code"] != codexDeviceCd) || f["code_verifier"] == "" || f["redirect_uri"] == "" {
+		want := i.challenge
+		if f["code"] == codexDeviceCd {
+			want = s256(codexDeviceVerifier)
+		}
+		if (f["code"] != CodexAuthCode && f["code"] != codexDeviceCd) || want == "" || s256(f["code_verifier"]) != want || f["redirect_uri"] == "" {
 			oauthError(w, http.StatusBadRequest, "invalid_grant")
 			return
 		}
@@ -248,5 +297,5 @@ func (i *CodexIssuer) devicePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"authorization_code": codexDeviceCd, "code_challenge": "challenge", "code_verifier": "verifier"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"authorization_code": codexDeviceCd, "code_challenge": s256(codexDeviceVerifier), "code_verifier": codexDeviceVerifier})
 }

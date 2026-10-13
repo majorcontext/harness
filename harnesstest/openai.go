@@ -40,6 +40,9 @@ type OpenAIOptions struct {
 	// AccountID, when set with Credentials, is the chatgpt-account-id header that
 	// every request must carry, with an originator header.
 	AccountID string
+	// RedirectTo, when set, answers every request to the Responses path with a 307
+	// to this path on the same host. Redirected counts the requests that follow it.
+	RedirectTo string
 	// OnReject runs after the server rejects a bearer token, before it answers.
 	OnReject func()
 }
@@ -156,6 +159,9 @@ type OpenAI struct {
 	known     map[string]bool   // "conn/response id" of every completed response
 	faults    []string
 	held      bool // a prewarm took the hold of HoldPrewarm
+
+	redirectHits int  // requests to RedirectTo
+	redirectAuth bool // one of them carried a credential header
 }
 
 const heldPrewarm = "prewarm"
@@ -249,6 +255,14 @@ func (o *OpenAI) holdPrewarm(ctx context.Context, conn *websocket.Conn) bool {
 	return true
 }
 
+// Redirected reports how many requests reached the target of RedirectTo and
+// whether one carried an Authorization or chatgpt-account-id header.
+func (o *OpenAI) Redirected() (hits int, credentials bool) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.redirectHits, o.redirectAuth
+}
+
 // PrewarmInstructions returns the instructions of each websocket prewarm, in
 // the order they arrived.
 func (o *OpenAI) PrewarmInstructions() []string {
@@ -271,6 +285,18 @@ func (o *OpenAI) logWire(w WireEvent) {
 
 func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if o.opts.RedirectTo != "" && r.URL.Path == o.opts.RedirectTo {
+		o.wmu.Lock()
+		o.redirectHits++
+		o.redirectAuth = o.redirectAuth || r.Header.Get("Authorization") != "" || r.Header.Get("chatgpt-account-id") != ""
+		o.wmu.Unlock()
+		writeError(w, http.StatusNotFound, "harnesstest: redirect target")
+		return
+	}
+	if o.opts.RedirectTo != "" && r.URL.Path == codexPath {
+		http.Redirect(w, r, o.opts.RedirectTo, http.StatusTemporaryRedirect)
+		return
+	}
 	accepted := false
 	if o.opts.Credentials != nil {
 		_, accepted = o.opts.Credentials(token)

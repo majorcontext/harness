@@ -122,7 +122,7 @@ func logoutCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := store.Remove(); err != nil {
+	if err := store.Remove(context.Background()); err != nil {
 		return err
 	}
 	fmt.Println("Signed out of Codex.")
