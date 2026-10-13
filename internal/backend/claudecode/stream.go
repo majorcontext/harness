@@ -130,7 +130,7 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}
-		if r.steer && len(r.calls) > 0 {
+		if r.steer && len(r.calls) > 0 && r.question == nil {
 			if err := r.steered(); err != nil {
 				return err
 			}

@@ -129,6 +129,19 @@ func TestContractClaudeCodeSteer(t *testing.T) {
 			},
 		},
 		{
+			name:   "claudecode_cli_exit_before_answering_a_steer_fails_the_turn",
+			driver: claudeLaneDriver("steer_unanswered"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitToolCall{as: "a", callID: "toolu_r"},
+				enqueue{as: "a", text: "second"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			},
+		},
+		{
 			name:   "claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn",
 			driver: claudeLaneDriver("steer_untaken"),
 			actions: []action{

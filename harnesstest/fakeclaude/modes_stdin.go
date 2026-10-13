@@ -16,6 +16,7 @@ var stdinModes = map[string]mode{
 	"queue_injection":      queueInjection,
 	"steer":                steer,
 	"steer_final_text":     steerFinalText,
+	"steer_unanswered":     steerUnanswered,
 	"steer_untaken":        steerUntaken,
 	"steer_text_then_tool": steerTextThenTool,
 }
@@ -133,4 +134,12 @@ func steerTextThenTool(f *fake) {
 		awaitGate()
 	}
 	steer(f)
+}
+
+// steerUnanswered takes a message, ends the turn with its result, and exits
+// without a second result.
+func steerUnanswered(f *fake) {
+	f.emit(assistant(toolUse("toolu_r", "Bash", obj{"command": "sleep 1"})))
+	awaitQueued(f)
+	f.emit(say("tool done"), success("tool done", 5, 5))
 }

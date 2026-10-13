@@ -231,7 +231,7 @@ func claudeRuns(modes []string) []claudeRun {
 		case mode == "mirror":
 			one.env = []string{"FAKE_CLAUDE_MIRROR_FIXTURE=" + claudeMirrorDir + "run1.stdout.jsonl," + claudeMirrorDir + "run2.stdout.jsonl"}
 			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}}, {stdin: []string{claudeUserLine}}}
-		case slices.Contains([]string{"queue_injection", "steer", "steer_final_text", "steer_untaken", "steer_text_then_tool"}, mode):
+		case slices.Contains([]string{"queue_injection", "steer", "steer_final_text", "steer_unanswered", "steer_untaken", "steer_text_then_tool"}, mode):
 			one.spawns = []claudeSpawn{{stdin: queued}}
 		}
 		runs = append(runs, one)
