@@ -59,21 +59,27 @@ func target(targets map[string]func(args []string) error, args []string) error {
 	return run(args[1:])
 }
 
-// claudeBinary is the CLI of the first claude-code-cli entry of the user config, else claude.
-func claudeBinary() string {
-	if cfg, err := config.Load(userConfigPath()); err == nil {
-		if bin, ok := cfg.ClaudeCLI(); ok {
-			return bin
-		}
+// claudeBinary is the CLI of the user config. A config that does not load is an error: no other program runs in its place.
+func claudeBinary() (string, error) {
+	cfg, err := config.Load(userConfigPath())
+	if err != nil {
+		return "", err
 	}
-	return config.Provider{}.CLIBinary()
+	if bin, ok := cfg.ClaudeCLI(); ok {
+		return bin, nil
+	}
+	return config.Provider{}.CLIBinary(), nil
 }
 
 // runClaude runs the Claude Code CLI with the terminal of this process. The CLI keeps its own credentials; Harness never reads them.
 func runClaude(args ...string) error {
+	bin, err := claudeBinary()
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	cmd := exec.CommandContext(ctx, claudeBinary(), args...) //nolint:gosec // operator config
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator config
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

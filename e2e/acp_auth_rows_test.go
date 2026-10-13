@@ -159,7 +159,7 @@ func (l *acpLoginRun) auth(env acpEnv) acp.Auth {
 	return acpauth.New(acpauth.Options{
 		Config: func(cwd string) (*config.Config, error) {
 			if cwd == "" {
-				return config.Load(env.configPath)
+				cwd = env.defaultDir
 			}
 			return config.LoadProject(env.configPath, cwd)
 		},
@@ -457,7 +457,7 @@ var acpAuthScenarios = []acpScenario{
 	},
 	{
 		name:  "claude_code_logged_out_session_new_is_auth_required",
-		cite:  "A Claude Code provider has no login when `claude auth status --json` reports `loggedIn` false.",
+		cite:  "A Claude Code provider has no login when `claude auth status --json` reports `loggedIn` false, and only when `initialize` advertised the method `claude-code`",
 		login: &acpLoginSpec{claude: true, claudeOut: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
@@ -512,6 +512,21 @@ var acpAuthScenarios = []acpScenario{
 					t.Errorf("the CLI calls = %q, want none", calls)
 				}
 			}),
+		},
+	},
+	{
+		name:  "project_only_claude_code_provider_raises_no_auth_required_without_a_method",
+		cite:  "a provider that only a project file adds, in a directory that `initialize` did not see, raises no auth-required error.",
+		login: &acpLoginSpec{chatgpt: true, stored: true, claude: false, claudeOut: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				project := `{"model":"claude-code/sonnet","providers":{"claude-code":{"type":"claude-code-cli","binary_path":"` + fakeClaudePath() + `"}}}`
+				if err := os.WriteFile(filepath.Join(c.dir("main"), ".harness.json"), []byte(project), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}),
+			acpNew{as: "a"},
 		},
 	},
 	{

@@ -146,6 +146,7 @@ const (
 	// reasonLostToRestart is the reason of a child whose turn a restart ended before it recorded an outcome.
 	reasonLostToRestart = "lost to restart: turn was in flight when the process last stopped"
 	reasonPermanent     = "turn failed with a permanent provider error and cannot succeed on retry"
+	reasonLoginRequired = "turn failed because the login of the provider is missing or was rejected; only the user can sign in again"
 	reasonUnrecovered   = "turn failed and did not recover"
 )
 
@@ -170,7 +171,9 @@ func failReason(last protocol.TurnEnded) string {
 		return detail
 	case last.ErrorClass == protocol.ErrorTimedOut:
 		return "timed out"
-	case last.ErrorClass == protocol.ErrorPermanent, last.ErrorClass == protocol.ErrorLoginRequired:
+	case last.ErrorClass == protocol.ErrorLoginRequired:
+		return reasonLoginRequired + ": " + detail
+	case last.ErrorClass == protocol.ErrorPermanent:
 		return reasonPermanent + ": " + detail
 	case last.ErrorClass == protocol.ErrorUnrecovered:
 		return reasonUnrecovered + ": " + detail

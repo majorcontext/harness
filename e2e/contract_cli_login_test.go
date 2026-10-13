@@ -296,3 +296,26 @@ func TestContractCLILoginClaudeCodeRunsTheConfiguredCLI(t *testing.T) {
 		t.Errorf("login state = %q, want out", s)
 	}
 }
+
+func TestContractCLILoginClaudeCodeRefusesAConfigThatDoesNotLoad(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil)
+	calls := filepath.Join(h.dir, "calls")
+	h.env = map[string]string{"FAKE_CLAUDE_AUTH_LOG": calls}
+	if err := os.WriteFile(h.config, []byte(`{"providers":{"claude-code":{"type":"claude-code-cli","binary_path":7}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(fakeClaudePath(), filepath.Join(h.dir, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	h.env["PATH"] = h.dir
+	for _, args := range [][]string{{"login", "claude-code"}, {"login", "claude-code", "--status"}, {"logout", "claude-code"}} {
+		if _, errOut, code := h.run(args...); code != 1 || errOut == "" {
+			t.Errorf("%v = %d %q, want 1 and an error", args, code, errOut)
+		}
+	}
+	if _, err := os.Stat(calls); !os.IsNotExist(err) {
+		t.Errorf("a program ran although the config did not load: %v", err)
+	}
+}

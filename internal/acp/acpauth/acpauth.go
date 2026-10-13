@@ -41,7 +41,7 @@ const (
 
 // Options holds what the host injects.
 type Options struct {
-	// Config returns the effective config of a work directory. An empty cwd asks for the user config alone.
+	// Config returns the effective config of a work directory. An empty cwd asks for the config of the work directory of the process, which is what initialize advertises from.
 	Config func(cwd string) (*config.Config, error)
 	// Open opens the sign-in URL of the ChatGPT login in a browser. Nil opens none.
 	Open func(url string) error
@@ -214,7 +214,7 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 		if _, err := store(cfg).Load(); codexauth.IsLoginRequired(err) {
 			return &acp.AuthRequiredError{Message: err.Error()}
 		}
-	case p.UsesClaudeCLI():
+	case p.UsesClaudeCLI() && a.userTargets().claude != "":
 		if ok, known := a.loggedIn(ctx, p.CLIBinary(), fresh); known && !ok {
 			return &acp.AuthRequiredError{Message: "not logged in to Claude Code; run `harness login claude-code`"}
 		}
