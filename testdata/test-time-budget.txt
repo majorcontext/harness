@@ -1,0 +1,46 @@
+# Time budgets for go test, read by internal/testtime.
+#   leaf SECONDS                  a test that has no subtests
+#   package PATH|default SECONDS  wall time of one package; PATH@JOB sets it for one job
+#   test PATH NAME SECONDS        tests of PATH whose name starts with NAME
+# Rule: a package budget is 1.5 times the slowest of six CI runs on 2026-10-13, with a floor of 10 s.
+# A leaf budget is 10 s; a slower test has a test line with its reason. A test with subtests is not
+# checked, because parallel parents report the time of the whole package. A change that makes a test
+# or package slower raises its number in the same diff and states why.
+#
+# Package        slowest CI run  budget
+# e2e (Contract)         51 s      77 s
+# e2e@runtime            24 s      36 s
+# claudecode             14 s      21 s
+# imageclamp            8.3 s      13 s
+# gates                 24 s       36 s (cold build of the fake CLI)
+# server                7.5 s      12 s
+# any other              <6 s      10 s
+leaf 10
+package default 10
+package e2e 77
+package e2e@runtime 36
+package internal/backend/claudecode 21
+package internal/imageclamp 13
+package internal/gates 36
+package internal/server 12
+
+# The gates run the whole repository against the merge base.
+test internal/gates TestRepository 12
+
+# The first test of the package to start a runtime builds the fake CLI (12 s on CI, budget 1.5 times).
+test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
+# Each row restarts a runtime over a CLI-backed session and replays a large saved state (16 s on CI).
+test e2e TestContractRuntimeClaudeCodeStateChunks 24
+# Rows that build a large transcript for a goal evaluator (7-12 s on CI).
+test e2e TestContractGoalEvaluatorTranscript 18
+# Rows that wait for a real hook timeout (6 s on CI).
+test e2e TestContractPluginHookTimeouts 15
+# Rows that stop a server and wait for its sync report (5 s on CI).
+test e2e TestContractServeStopReportsCrashed 15
+# Rows that start a real MCP server process (5 s on CI).
+test e2e TestContractRuntimeSessionMCP 15
+# Rows that run git on a fixture repository (9 s under load locally).
+test e2e TestContractWorkspace 15
+
+# Builds the fake CLI; a cold build cache makes it 7 s to 21 s on CI (24 s for the package).
+test internal/gates TestWireDoublesMatchTheRealWire 32
