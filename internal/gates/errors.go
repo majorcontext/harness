@@ -187,3 +187,28 @@ func CheckErrorCodes(s ErrorCodeSources) []Violation {
 	}
 	return out
 }
+
+// CheckACPErrorCodes reports each protocol error code that the Error mapping
+// table of the spec lacks, each code whose JSON-RPC code differs from the
+// mapping function of the adapter, and each row of a code that does not exist.
+func CheckACPErrorCodes(constants []string, spec map[string]int, mapped func(code string) int) []Violation {
+	var out []Violation
+	add := func(code, detail string) {
+		out = append(out, Violation{Path: code, Rule: "acp_error_codes", Detail: detail})
+	}
+	for _, c := range constants {
+		want, ok := spec[c]
+		switch {
+		case !ok:
+			add(c, "is a protocol code and is not a row of the Error mapping table of the spec")
+		case mapped(c) != want:
+			add(c, fmt.Sprintf("maps to %d in internal/acp and %d in the Error mapping table of the spec", mapped(c), want))
+		}
+	}
+	for _, c := range slices.Sorted(maps.Keys(spec)) {
+		if !slices.Contains(constants, c) {
+			add(c, "is a row of the Error mapping table of the spec and is not a protocol code")
+		}
+	}
+	return out
+}

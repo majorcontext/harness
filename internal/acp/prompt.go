@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -80,11 +81,11 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		h.interrupt(ctx, turn)
 		return nil, ctx.Err()
 	}
-	if err != nil {
+	if err = waitFailure(err, h.cancelled(pr)); err != nil {
 		return nil, rpcError(err)
 	}
 	h.flush(ctx, h.sess.Snapshot().HeadSeq)
-	return promptResult(res)
+	return promptResult(res, h.cancelled(pr))
 }
 
 // interrupt ends the turn of a prompt whose request ended before the turn did.
@@ -92,11 +93,22 @@ func (h *held) interrupt(ctx context.Context, t *harness.Turn) {
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptBudget)
 	defer cancel()
 	h.cancelTurn(bg, t)
+	h.flush(bg, h.sess.Snapshot().HeadSeq)
+}
+
+// waitFailure returns the error of Turn.Wait to report. After a session/cancel
+// the agent must answer cancelled, so any failure except lost ownership
+// becomes nil and promptResult answers cancelled.
+func waitFailure(err error, cancelled bool) error {
+	if err != nil && cancelled && !errors.Is(err, harness.ErrSessionNotOwned) {
+		return nil
+	}
+	return err
 }
 
 // promptResult maps the outcome of a turn to the answer of session/prompt.
-func promptResult(res harness.TurnResult) (any, error) {
-	if res.Withdrawn {
+func promptResult(res harness.TurnResult, cancelled bool) (any, error) {
+	if res.Withdrawn || (cancelled && (res.StopReason == protocol.StopFailed || res.StopReason == "")) {
 		return map[string]string{"stopReason": "cancelled"}, nil
 	}
 	switch res.StopReason {

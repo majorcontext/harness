@@ -40,7 +40,7 @@ func sessionServers(raw []json.RawMessage) (map[string]config.MCPServerSpec, err
 		}
 		var spec config.MCPServerSpec
 		switch s.Type {
-		case "":
+		case "", "stdio":
 			if s.Command == "" {
 				return nil, invalidParams(fmt.Sprintf("mcpServers[%d] has no command", i))
 			}

@@ -125,3 +125,48 @@ func TestNewULIDHasTheULIDShape(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestTailSendsOnlyTheUnsentSuffix(t *testing.T) {
+	rows := []struct {
+		name, sent, full, text string
+		resend                 bool
+	}{
+		{"nothing sent", "", "hello", "hello", false},
+		{"prefix sent", "hel", "hello", "lo", false},
+		{"all sent", "hello", "hello", "", false},
+		{"multi-byte rune before the cut", "a\u20ac", "a\u20acb\u20acc", "b\u20acc", false},
+		{"a dropped frame leaves a hole", "ab", "a\u20acb", "a\u20acb", true},
+		{"more sent than the item holds", "hello!", "hello", "hello", true},
+		{"sent ends inside a rune", "a\xe2\x82", "a\u20acb", "a\u20acb", true},
+	}
+	for _, r := range rows {
+		text, resend := tailOf(r.sent, r.full)
+		if text != r.text || resend != r.resend {
+			t.Errorf("%s: tailOf(%q, %q) = %q, %v; want %q, %v", r.name, r.sent, r.full, text, resend, r.text, r.resend)
+		}
+	}
+}
+
+func TestSessionServersTakeAnExplicitStdioType(t *testing.T) {
+	got, err := sessionServers([]json.RawMessage{json.RawMessage(`{"type":"stdio","name":"a","command":"/bin/a","args":[],"env":[]}`)})
+	if err != nil || !slices.Equal(got["a"].Command, []string{"/bin/a"}) {
+		t.Errorf("got %+v, %v", got, err)
+	}
+}
+
+func TestPromptResultAfterACancelIsCancelled(t *testing.T) {
+	failed := harness.TurnResult{StopReason: protocol.StopFailed, Error: "boom", ErrorClass: protocol.ErrorPermanent}
+	got, err := promptResult(failed, true)
+	if err != nil || got.(map[string]string)["stopReason"] != "cancelled" {
+		t.Errorf("a failed turn after a cancel = %v, %v; want cancelled", got, err)
+	}
+	if _, err := promptResult(failed, false); err == nil {
+		t.Error("a failed turn without a cancel must be an error")
+	}
+	if got := waitFailure(errors.New("model closed"), true); got != nil {
+		t.Errorf("waitFailure after a cancel = %v, want nil", got)
+	}
+	if got := waitFailure(harness.ErrOwnershipLost, true); got == nil {
+		t.Error("lost ownership after a cancel must stay an error")
+	}
+}

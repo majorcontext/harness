@@ -1,4 +1,8 @@
 {
+  "requests": null,
+  "sessions": {
+    "a": []
+  },
   "wire": [
     {
       "dir": "client",

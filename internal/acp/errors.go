@@ -26,17 +26,22 @@ func rpcError(err error) error {
 			data["cause"] = cause
 		}
 	}
-	e := &rpc.Error{Code: rpc.CodeInternal, Message: "Internal error", Data: data}
-	switch code {
-	case protocol.CodeInvalidRequest, protocol.CodeInputConflict, protocol.CodeRequestNotPending:
-		e.Code = rpc.CodeInvalidParams
-	case protocol.CodeSessionNotFound, protocol.CodeBlobNotFound:
-		e.Code = codeNotFound
-	}
+	e := &rpc.Error{Code: RPCCode(code), Message: "Internal error", Data: data}
 	if ok && code != protocol.CodeInternal && code != protocol.CodeSessionUnreplayable {
 		e.Message = pe.Message
 	}
 	return e
+}
+
+// RPCCode returns the JSON-RPC code of a protocol error code, as the Error mapping table of the spec lists it.
+func RPCCode(code protocol.Code) int {
+	switch code {
+	case protocol.CodeInvalidRequest, protocol.CodeInputConflict, protocol.CodeRequestNotPending:
+		return rpc.CodeInvalidParams
+	case protocol.CodeSessionNotFound, protocol.CodeBlobNotFound:
+		return codeNotFound
+	}
+	return rpc.CodeInternal
 }
 
 func invalidParams(reason string) error {

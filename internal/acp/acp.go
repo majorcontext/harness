@@ -61,7 +61,7 @@ func Serve(ctx context.Context, rts Runtimes, r io.Reader, w io.Writer, cfg Conf
 	conn := rpc.New(r, w, cfg.Logger)
 	a := &agent{cfg: cfg, rts: rts, conn: conn, base: ctx, sessions: map[string]*held{}}
 	err := conn.Serve(ctx, a)
-	return errors.Join(err, a.shutdown(ctx))
+	return errors.Join(err, a.closeErr)
 }
 
 type agent struct {
@@ -72,6 +72,7 @@ type agent struct {
 
 	mu       sync.Mutex
 	sessions map[string]*held
+	closeErr error
 }
 
 func (a *agent) Request(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -111,8 +112,10 @@ func (a *agent) held(id string) (*held, error) {
 	return nil, rpcError(harness.ErrSessionNotFound)
 }
 
-// shutdown releases every held session, then closes the runtimes, within
-// shutdownBudget and also after ctx ended.
+// EndOfInput releases every held session, which ends the turns that run, then
+// closes the runtimes, within shutdownBudget, also after the base context ended.
+func (a *agent) EndOfInput() { a.closeErr = a.shutdown(a.base) }
+
 func (a *agent) shutdown(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
 	defer cancel()
@@ -122,10 +125,10 @@ func (a *agent) shutdown(ctx context.Context) error {
 	a.mu.Unlock()
 	var errs []error
 	for _, h := range sessions {
-		h.close()
 		if err := h.sess.Release(ctx); err != nil && !errors.Is(err, harness.ErrSessionNotOwned) {
 			errs = append(errs, err)
 		}
+		h.close()
 	}
 	if a.rts != nil {
 		errs = append(errs, a.rts.Close(ctx))

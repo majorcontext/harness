@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
@@ -57,7 +58,7 @@ type chunkKey struct{ item, kind string }
 func (h *held) pump(ctx context.Context, after uint64) {
 	defer close(h.stopped)
 	defer h.finish()
-	sent := map[chunkKey]int{}
+	sent := map[chunkKey]string{}
 	for e, err := range h.sess.Events(ctx, after) {
 		if err != nil {
 			if ctx.Err() == nil {
@@ -74,7 +75,7 @@ func (h *held) pump(ctx context.Context, after uint64) {
 	}
 }
 
-func (h *held) forward(e protocol.Event, sent map[chunkKey]int) error {
+func (h *held) forward(e protocol.Event, sent map[chunkKey]string) error {
 	switch e.Kind {
 	case protocol.KindItemDelta:
 		var f protocol.ItemFrame
@@ -85,7 +86,7 @@ func (h *held) forward(e protocol.Event, sent map[chunkKey]int) error {
 		if kind == "" {
 			return nil
 		}
-		sent[chunkKey{f.ItemID, f.Type}] += len(f.Text)
+		sent[chunkKey{f.ItemID, f.Type}] += f.Text
 		return h.chunk(kind, f.ItemID, f.Text)
 	case protocol.KindItemDiscarded:
 		var f protocol.ItemFrame
@@ -110,16 +111,35 @@ func (h *held) forward(e protocol.Event, sent map[chunkKey]int) error {
 				}
 			}
 			key := chunkKey{done.ItemID, typ}
-			full, n := b.String(), sent[key]
+			full := b.String()
+			text, resend := tailOf(sent[key], full)
 			delete(sent, key)
-			if n < len(full) {
-				if err := h.chunk(chunkUpdate(typ), done.ItemID, full[n:]); err != nil {
-					return err
-				}
+			if text == "" {
+				continue
+			}
+			id := done.ItemID
+			if resend {
+				h.log.Warn("acp: item text differs from the chunks sent; sending it whole", "session", h.id, "item", id)
+				id += "_full"
+			}
+			if err := h.chunk(chunkUpdate(typ), id, text); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// tailOf returns the text to send at the end of an item whose chunks sent
+// already went out. A full subscriber can drop a delta frame, so sent may not be
+// a prefix of full. Then the client text cannot be repaired, because ACP v1 has
+// no retraction, and tailOf returns the whole of full with resend set: the
+// caller sends it as a new message.
+func tailOf(sent, full string) (text string, resend bool) {
+	if !utf8.ValidString(sent) || !strings.HasPrefix(full, sent) {
+		return full, true
+	}
+	return full[len(sent):], false
 }
 
 func chunkUpdate(partType string) string {

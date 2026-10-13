@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // acpStep is one action of an ACP scenario.
@@ -162,7 +165,39 @@ var acpWireScenarios = []acpScenario{
 }
 
 type acpGolden struct {
-	Wire []acpFrame `json:"wire"`
+	Requests []normRequest            `json:"requests"`
+	Sessions map[string][]normMessage `json:"sessions"`
+	Wire     []acpFrame               `json:"wire"`
+}
+
+// acpObserve reads what the wire does not show: the normalized model requests,
+// and the final transcript of each session, read from the store after the
+// connection closed, with no ACP replay.
+func acpObserve(t *testing.T, c *acpConn) acpGolden {
+	t.Helper()
+	st := store.NewDiskStore(c.env.sessDir)
+	sessions := map[string][]transcriptMessage{}
+	for alias, id := range c.sessions {
+		v, err := harness.OpenView(t.Context(), st, id)
+		if err != nil {
+			t.Fatalf("view %s: %v", alias, err)
+		}
+		var msgs []transcriptMessage
+		for before := uint64(0); ; {
+			page, err := v.Messages(t.Context(), before, protocol.MaxMessageLimit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			msgs = append(transcriptOfPage(t, page.Messages), msgs...)
+			if !page.HasMore {
+				break
+			}
+			before = page.FirstSeq
+		}
+		sessions[alias] = msgs
+	}
+	obs := normalizeRun(c.fake.Requests(), sessions, nil, c.sessions, c.dirs["main"])
+	return acpGolden{Requests: obs.Requests, Sessions: obs.Sessions, Wire: c.goldenWire()}
 }
 
 func acpHosts() []acpHost {
@@ -199,7 +234,7 @@ func TestACPScenarios(t *testing.T) {
 				}
 				c.finish(stop)
 				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0)
-				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpGolden{Wire: c.goldenWire()}, update)
+				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), acpObserve(t, c), update)
 			})
 		}
 	}

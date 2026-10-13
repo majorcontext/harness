@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"sort"
@@ -61,6 +62,9 @@ type acpCancelRequest struct{ id string }
 
 // acpTakeoverStep opens the session in a runtime of the test, which takes it from the agent.
 type acpTakeoverStep struct{ as string }
+
+// acpCloseInput closes the input of the agent and keeps reading its output.
+type acpCloseInput struct{}
 
 // acpCheck runs a function on the connection, for what the wire does not show.
 type acpCheck func(t *testing.T, c *acpConn)
@@ -171,6 +175,13 @@ func (s acpCancelRequest) run(t *testing.T, c *acpConn) {
 func (s acpTakeoverStep) run(t *testing.T, c *acpConn) {
 	t.Helper()
 	acpTakeover(t, c.env, c.dir(""), c.session(s.as))
+}
+
+func (acpCloseInput) run(t *testing.T, c *acpConn) {
+	t.Helper()
+	if closer, ok := c.in.(io.Closer); ok {
+		_ = closer.Close()
+	}
 }
 
 func (s acpCheck) run(t *testing.T, c *acpConn) {

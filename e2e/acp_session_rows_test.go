@@ -114,6 +114,18 @@ var acpSessionScenarios = []acpScenario{
 		},
 	},
 	{
+		name:  "end_of_input_during_a_turn_ends_the_prompt",
+		cite:  "At the end of the input, the agent releases its sessions first, so a prompt that runs answers `-32603` with `data.code` `session_not_owned`.",
+		model: acpBlockedText("partial"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPromptStart{as: "a", text: "go"},
+			acpAwaitText{text: "partial"},
+			acpCloseInput{},
+			acpResult{id: "a", code: acpInternal, dataCode: "session_not_owned"},
+		},
+	},
+	{
 		name:  "second_cwd_uses_its_own_project_config",
 		cite:  "A `session/new` with another `cwd` runs on another runtime, which uses the project config of that `cwd`.",
 		model: acpRepeatText("ok"),

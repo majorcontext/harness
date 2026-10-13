@@ -99,11 +99,12 @@ Recommendation: C. The test client validates every frame against the pinned `sch
 | --- | --- | --- |
 | `harness` | Runtime, Session, Turn, providers, store interface, seams | unchanged |
 | `internal/acp` | Mapping from the Go API to ACP, version layers, per-connection state, the default tool set of a host | `harness`, `harness/protocol`, `harness/config`. Never `cmd`, never an internal runtime package. |
-| `cmd/harness` | The `acp` command: the composition root. It builds one `Runtime` for each `cwd` on demand, over one shared `Store` and one shared `Owner`, and calls `acp.Serve(ctx, runtimes, in, out)`. | adds `internal/acp` |
+| `internal/acp/cwdruntimes` | The `Runtimes` of the adapter: one `Runtime` for each `cwd` on demand, over one shared `Store` and one shared `Owner`. The host injects the config loading and the shared `Store` and `Owner`, so the package reads no file and no variable. | `harness`, `config`, `internal/acp`. Never `cmd`. |
+| `cmd/harness` | The `acp` command: the composition root. It wires the real config loading, session directory, and owner into `cwdruntimes` and calls `acp.Serve(ctx, runtimes, in, out, cfg)`. | adds `internal/acp`, `internal/acp/cwdruntimes` |
 | `cmd/harness-wasm` | The wasm entry and its JS glue (build tag `js`): `fetchRT`, JS tools, the frame channel | `harness`, `internal/acp` |
 | `sdk/embed` | The JS package: one client API, two transports (section 5.8). It also owns the store lock (5.5). | the official ACP TypeScript SDK |
 
-`internal/acp` declares the interfaces that it needs in its own package, so a double and the real types both satisfy them (rule 3): `Runtimes` (`For(ctx, cwd) (Runtime, error)`) and `Runtime` (`Create`, `Open`, `Read`, `List`, `Models`, `Commands`). `cmd/harness` implements `Runtimes`; `internal/acp` never builds a `Runtime` or loads config.
+`internal/acp` declares the interfaces that it needs in its own package, so a double and the real types both satisfy them (rule 3): `Runtimes` (`For(ctx, cwd) (Runtime, error)`) and `Runtime` (`Create`, `Open`, `Read`, `List`, `Models`, `Commands`). `internal/acp/cwdruntimes` implements `Runtimes`, and the e2e in-process host uses it too; `internal/acp` never builds a `Runtime` or loads config. `Runtimes` also has `Close(ctx)`.
 
 ## 4. The capability seam
 
@@ -671,7 +672,7 @@ Tracks: C (core), A (ACP), W (wasm and browser). One concern per PR.
 | A2 | `Runtimes` in `cmd/harness`, `session/new`, `session/prompt`, `session/cancel`, the event pump, text and thought chunks, stop reasons, the error table, `Config.AllowedTools`. Needs C1, A1. | scenarios: prompt, cancel, failed turn, `$/cancel_request`, goal turn with no prompt, ownership lost, a second `cwd`, MCP server in `session/new`, a default tool set | pass on both native hosts, race-clean |
 | A3 | `tool_call`, `tool_call_update`: kinds, locations, diffs, images. | scenarios: tool call, edit diff, cancel during a tool | schema-valid frames; golden transcripts |
 | A4 | TCK job (advisory). | the job | MANDATORY tier has no failure outside a written list |
-| A5 | Config options, `available_commands_update`, `usage_update`, `session_info_update`, slash commands as typed text. | scenarios: `/compact`, `/model`, option change, usage | the TCK config-option tests pass |
+| A5 | Config options, `available_commands_update`, `usage_update`, `session_info_update`, slash commands as typed text, and the lost-ownership `notice` (7.6, 8; only with the client capability `session.notices`). | scenarios: `/compact`, `/model`, option change, usage, ownership lost with and without `session.notices` | the TCK config-option tests pass |
 | A6 | `session/load`, `session/resume`, `session/list`, `session/close`. | scenarios: replay equality, list with `cwd`, close | the TCK CAPABILITY tier for these passes |
 | A7 | TCK required. | the job | one release cycle green on `main` |
 | A8 | Elicitation for `question` requests. | scenario: question round trip | capability appears only with the scenario green |
