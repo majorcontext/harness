@@ -1,8 +1,8 @@
 # harness-plugin (TypeScript / JavaScript SDK)
 
 A zero-dependency Node.js ESM SDK for writing [harness](../../README.md)
-plugins. It is the JavaScript counterpart of the Go fixture plugin
-(`github.com/majorcontext/harness/internal/plugin`, used by the harness tests); both speak exactly the same wire
+plugins. It is the JavaScript counterpart of the Go package
+`github.com/majorcontext/harness/plugin`; both speak exactly the same wire
 protocol, documented in [`internal/plugin/PROTOCOL.md`](../../internal/plugin/PROTOCOL.md).
 
 - **Zero npm dependencies.** `harness-plugin.mjs` uses only Node.js
@@ -87,7 +87,7 @@ plugins:
 See [`examples/plugins/redactor.mjs`](../../examples/plugins/redactor.mjs) for
 the full reference version of the example above, and
 [`internal/plugin/typescript_conformance_test.go`](../../internal/plugin/typescript_conformance_test.go)
-for it being driven end-to-end through the real Go `plugin.Host`.
+for it being driven end-to-end through the real Go host.
 
 ## API
 
@@ -124,7 +124,7 @@ be `async`. Returning `undefined`/`null` means "no changes", matching the Go
 SDK's `nil` response convention — the harness sends an empty object on your
 behalf. Request/response field names match the wire protocol exactly
 (snake_case, e.g. `session_id`, `call_id`) so they map 1:1 onto
-`internal/plugin/PROTOCOL.md` and the Go structs in `internal/plugin/hooks.go`.
+`internal/plugin/PROTOCOL.md` and the Go structs in `plugin/types.go`.
 
 | Hook | Fires on | Return to mutate |
 |---|---|---|
@@ -139,6 +139,27 @@ behalf. Request/response field names match the wire protocol exactly
 Only hooks you provide are declared in the manifest and dispatched to your
 plugin — an unsubscribed hook is simply never sent.
 
+### Deny on failure and hook timeouts
+
+```js
+createPlugin({
+  name: 'guard',
+  hooks: { toolExecuteBefore, chatParams },
+  denyOnFailure: ['toolExecuteBefore'],
+  hookTimeouts: { toolExecuteBefore: 2000, chatParams: 10000 },
+});
+```
+
+`denyOnFailure` lists the hook keys whose failure makes the host deny the
+call. Only `toolExecuteBefore` is valid, and it needs a function in `hooks`.
+The manifest lists it as `deny_on_failure`.
+
+`hookTimeouts` sets the dispatch deadline of a hook, in whole milliseconds
+from 1 to 600000. `onEvent` has no deadline. Each key needs a function in
+`hooks`. A hook with no entry keeps the host default. The manifest lists the
+values as `hook_timeouts`, keyed by wire hook name. `createPlugin` throws for
+a value the host would reject.
+
 ### Tools
 
 ```js
@@ -151,7 +172,7 @@ tools: [
 ```
 
 Throwing inside `execute` becomes an `is_error` tool result sent back to the
-model — never a protocol-level failure, matching the Go fixture.
+model — never a protocol-level failure, matching the Go package.
 
 ### `ctx` (the `PluginContext`)
 
@@ -164,15 +185,15 @@ Passed to every hook and tool call; mirrors the wire protocol's client API (`Ini
 | `ctx.httpHeaders` | `InitializeParams.HTTPHeaders` |
 | `ctx.fetch(url, init)` | fetch that stamps `httpHeaders` on every request (SDK helper) |
 | `await ctx.sessionMessages(sessionId)` | `client/session.messages` |
-| `await ctx.mcpCall(server, tool, args)` | `client/mcp.call` (`Client.MCPCall`) |
-| `await ctx.generate(req)` | `client/generate` |
+| `await ctx.mcpCall(server, tool, args)` | `client/mcp.call` (`Client.MCPCall`); resolves with `{ content, is_error }` |
+| `await ctx.generate(req)` | `client/generate` (`Client.Generate`); resolves with `{ message, usage }` |
 
 These calls flow back to the harness over the same connection — including
-while your hook is still in flight, exactly like the Go fixture.
+while your hook is still in flight, exactly like the Go package.
 
 ### Message content (`Part[]`)
 
-Tool outputs and `generate` results use the canonical `message.Parts`
+Tool outputs and `generate` messages use the canonical `message.Parts`
 encoding: a plain JS array of objects with a `type` discriminator, e.g.:
 
 ```js
@@ -185,7 +206,7 @@ types (`text`, `blob`, `tool_call`, `tool_result`, `reasoning`).
 ## Protocol version
 
 `PROTOCOL_VERSION` is exported and currently `1`, matching
-`plugin.ProtocolVersion` in the Go fixture. A mismatch is rejected as an
+`plugin.ProtocolVersion` in the Go package. A mismatch is rejected as an
 `initialize` error, same as the Go side.
 
 ## Testing
@@ -203,7 +224,7 @@ host over in-memory streams (no real harness process): handshake, manifest
 shape, hook mutation, tool execution/errors, event delivery, and bidirectional
 client-API calls mid-hook.
 
-For an end-to-end check against the real Go `plugin.Host` (spawns `node` and
+For an end-to-end check against the real Go host (spawns `node` and
 talks the real protocol), see the Go test:
 
 ```sh

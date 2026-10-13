@@ -270,6 +270,12 @@ func (s *Server) AwaitCanceled(stepName string, bound time.Duration) bool {
 	return s.awaitClosed(s.canceledCh(stepName), bound)
 }
 
+// AwaitBlocked reports whether a request for the named Block step is waiting
+// within bound.
+func (s *Server) AwaitBlocked(stepName string, bound time.Duration) bool {
+	return s.awaitClosed(s.blockedCh(stepName), bound)
+}
+
 func (s *Server) awaitClosed(ch <-chan struct{}, bound time.Duration) bool {
 	timer := time.NewTimer(bound)
 	defer timer.Stop()

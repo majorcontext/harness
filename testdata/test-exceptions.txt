@@ -5,15 +5,23 @@ runtime_test.go fake-backend helpers of the synctest race tests; New refuses run
 session_test.go live frames are ephemeral and goldens hold none; a full subscriber dropping deltas is a race
 tools_test.go Options.Tools and Restrict are Go API with no serve equivalent; an embedder tool name cannot be written in the serve config, so no contract row reaches the New collision with a built-in name
 mcp_test.go AllowedTools at Create has no serve oracle: the scenario create action carries no allowed tools; the retry wait of a down server needs the fake clock of a synctest bubble, which a serve binary cannot take
-plugin_test.go plugin start failures surface at Create in the Go API and at the first Create or Open in serve; Create after Close is Go API
+plugin_test.go plugin start failures surface at Create in the Go API and at the first Create or Open in serve; Create after Close is Go API; a cache file that an invalid manifest must not create needs the Go API plugin cache option
+plugin/inprocess_test.go an in-process plugin exists only in Go API, and the 5 s deadline needs a synctest bubble; Close with a client/generate call in flight needs the in-process plugin and a Close context that a scenario action cannot time, and a scenario row that restarts the host sends extra model requests after the restart
 reads_test.go both hosts open each session with work at start, so no row isolates a read that must not open a session
 goaltool_test.go the adjust-keeps-the-turn-limit row waits on the condition that the evaluator reads after an adjust inside a goal turn
 internal/prompt/guidance_test.go goldens reduce the system prompt to a flag, so the base prompt text reaches no row
 internal/prompt/prompt_test.go an empty Options.WorkDir is Go API: no file is read
 internal/tool/builtin/builtin_test.go an empty Options.WorkDir is Go API: no built-in tool exists
-internal/tool/mcpsrc/mcpsrc_test.go AllowedTools has no serve oracle; MCP search scoring is a pure table
+internal/tool/mcpsrc/mcpsrc_test.go AllowedTools has no serve oracle; MCP search scoring is a pure table; a caller that waits for the dial lock of a server needs a held lock, which a scenario cannot hold
 internal/toolresult/toolresult_test.go pure secret-mask table with many edge cases (spec Tool-result retention)
 internal/modelref/model_test.go the model ref parser is pure code, moved with its tests from internal/message
 internal/prompt/engine_context_test.go the engine-context sentinel functions are pure code, moved with their tests from internal/message
 protocol/sse_test.go DecodeSSE is a pure decoder of an io.Reader; a serve binary cannot cut a frame or fail a read
 httpsync/apply_test.go the receiver rules of ApplySync are a pure table over a MemStore; a serve binary cannot cut a batch or hold the receiver epoch
+internal/plugin/plugin_test.go an interrupt lands while a plugin hook is in flight only with a synctest bubble: no scenario action can fire at that point; a live manifest that disagrees with the cache needs a plugin whose manifest differs from its probe; a malformed hook or tool response needs a plugin that sends one, which the contract fixture does not; a per-hook deadline that outlasts a slow start needs a fake clock and a plugin whose dial takes time; a sub-millisecond HookTimeouts value cannot come from the JSON fixture
+internal/plugin/wire/wire_test.go the JSON-RPC transport is pure stream code; its tests need a peer on a net.Pipe and no host or scenario
+plugin/part_test.go a Part round trip is pure JSON code that no contract row isolates
+plugin/serve_test.go no contract fixture has a hook that panics, and a context that ends when the connection closes is not observable from a scenario row; the client headers need a pipe peer
+internal/plugin/typescript_conformance_test.go the TypeScript SDK manifest needs a real node process running the SDK file, which no scenario row starts
+examples/guardrail/internal/guard/guard_test.go an example's matcher table; no contract row runs examples
+internal/turn/turn_test.go the window between the before hook and the context check of runTool cannot be scheduled from a contract row; the test needs a hook that cancels the turn context inside it

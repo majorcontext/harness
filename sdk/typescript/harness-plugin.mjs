@@ -2,7 +2,7 @@
 //
 // Plugins are separate processes speaking JSON-RPC 2.0 over stdio, one
 // message per line (NDJSON). This module is the TypeScript/JavaScript
-// counterpart of the Go SDK (github.com/majorcontext/harness/internal/plugin); see
+// counterpart of the Go SDK (github.com/majorcontext/harness/plugin); see
 // internal/plugin/PROTOCOL.md in the harness repo for the versioned wire spec that
 // this file implements. Log to stderr — stdout belongs to the protocol.
 //
@@ -90,6 +90,13 @@ const METHOD_GENERATE = 'client/generate';
  * @property {string} [version]
  * @property {Hooks} [hooks]
  * @property {Tool[]} [tools]
+ * @property {string[]} [denyOnFailure] Hook keys whose failure makes the
+ *   host deny the call. Only `toolExecuteBefore` is valid, and it needs a
+ *   function in `hooks`. The manifest lists it as `deny_on_failure`.
+ * @property {Object<string,number>} [hookTimeouts] Dispatch deadline in
+ *   milliseconds for each hook key, an integer from 1 to 600000. `onEvent`
+ *   has no deadline. Each key needs a function in `hooks`. The manifest
+ *   lists them as `hook_timeouts`, keyed by wire hook name.
  */
 
 class RpcError extends Error {
@@ -110,6 +117,39 @@ const HOOK_WIRE_NAMES = [
   ['toolExecuteBefore', 'tool.execute.before'],
   ['toolExecuteAfter', 'tool.execute.after'],
 ];
+
+const MAX_HOOK_TIMEOUT_MS = 600000;
+
+function wireName(key) {
+  const entry = HOOK_WIRE_NAMES.find(([k]) => k === key);
+  return entry && entry[1];
+}
+
+function validateDefinition(def) {
+  const hooks = def.hooks || {};
+  if (def.denyOnFailure !== undefined && !Array.isArray(def.denyOnFailure)) {
+    throw new Error('denyOnFailure must be an array of hook keys');
+  }
+  for (const key of def.denyOnFailure || []) {
+    if (key !== 'toolExecuteBefore') {
+      throw new Error(`denyOnFailure: ${key} is valid only for toolExecuteBefore`);
+    }
+    if (typeof hooks[key] !== 'function') {
+      throw new Error(`denyOnFailure: ${key} has no hook`);
+    }
+  }
+  for (const [key, ms] of Object.entries(def.hookTimeouts || {})) {
+    if (!wireName(key) || typeof hooks[key] !== 'function') {
+      throw new Error(`hookTimeouts: ${key} has no hook`);
+    }
+    if (key === 'onEvent') {
+      throw new Error('hookTimeouts is not valid for onEvent');
+    }
+    if (!Number.isInteger(ms) || ms < 1 || ms > MAX_HOOK_TIMEOUT_MS) {
+      throw new Error(`hookTimeouts: ${key} must be an integer from 1 to ${MAX_HOOK_TIMEOUT_MS}`);
+    }
+  }
+}
 
 function hookList(hooks) {
   const out = [];
@@ -176,10 +216,13 @@ export class PluginContext {
   }
 
   /**
-   * Invokes a tool on one of the harness's configured MCP servers.
+   * Invokes a tool on one of the harness's configured MCP servers. Resolves
+   * with `{content, is_error}`: `content` holds the tool's result parts, and
+   * `is_error` is true when the tool reported an error.
    * @param {string} server
    * @param {string} tool
    * @param {any} [args]
+   * @returns {Promise<{content: Part[], is_error?: boolean}>}
    */
   async mcpCall(server, tool, args) {
     return this._conn.call(METHOD_MCP_CALL, { server, tool, args });
@@ -188,12 +231,14 @@ export class PluginContext {
   /**
    * Makes an LLM call through the harness provider layer: plugins inherit
    * model routing, credentials, and observability, and never carry API
-   * keys.
+   * keys. Resolves with `{message, usage}`: `message` is the assistant
+   * reply, and `usage` holds `input_tokens` and `output_tokens`, with
+   * `cache_read_tokens` and `cache_write_tokens` when the model reports them.
    * @param {{model: string, system?: string, messages: object[], max_tokens?: number}} req
+   * @returns {Promise<{message: object, usage: {input_tokens: number, output_tokens: number, cache_read_tokens?: number, cache_write_tokens?: number}}>}
    */
-  async generate(req) {
-    const resp = await this._conn.call(METHOD_GENERATE, req);
-    return resp && resp.message;
+  generate(req) {
+    return this._conn.call(METHOD_GENERATE, req);
   }
 }
 
@@ -294,6 +339,8 @@ class PluginServer {
     this.name = definition.name;
     this.version = definition.version;
     this.hooks = definition.hooks || {};
+    this.denyOnFailure = definition.denyOnFailure || [];
+    this.hookTimeouts = definition.hookTimeouts || {};
     this.toolsByName = new Map();
     for (const t of definition.tools || []) {
       this.toolsByName.set(t.def.name, t);
@@ -303,7 +350,7 @@ class PluginServer {
   }
 
   manifest() {
-    return {
+    const m = {
       name: this.name,
       version: this.version,
       protocol_version: PROTOCOL_VERSION,
@@ -314,6 +361,14 @@ class PluginServer {
         input_schema: t.def.inputSchema,
       })),
     };
+    if (this.denyOnFailure.length > 0) {
+      m.deny_on_failure = this.denyOnFailure.map(wireName);
+    }
+    const timeouts = Object.entries(this.hookTimeouts);
+    if (timeouts.length > 0) {
+      m.hook_timeouts = Object.fromEntries(timeouts.map(([k, ms]) => [wireName(k), ms]));
+    }
+    return m;
   }
 
   /** @param {string} method @param {any} params @param {Connection} conn */
@@ -398,6 +453,7 @@ class Plugin {
     if (!definition || !definition.name) {
       throw new Error('harness-plugin: manifest name is required');
     }
+    validateDefinition(definition);
     this.definition = definition;
   }
 

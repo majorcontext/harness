@@ -3,8 +3,14 @@ package mcpsrc_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
@@ -140,5 +146,90 @@ func TestSearchScoresEachField(t *testing.T) {
 	got, _ := run(s.Toolset(bg, nil, nil, ""), call("mcp", `{"action":"search","query":"weather forecast"}`))
 	if first := `{"matches":[{"name":"mcp__weather__weather"`; !strings.HasPrefix(got, first) {
 		t.Errorf("search = %s, want a name and server match (55) above two description matches and a server match (25)", got)
+	}
+}
+
+func TestCallEndsWithItsContextWhileAnotherDialHoldsTheServer(t *testing.T) {
+	dialing, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		once.Do(func() { close(dialing) })
+		<-release
+	}))
+	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"slow": {URL: srv.URL, ConnectTimeoutS: 3600}}}, nil)
+	t.Cleanup(func() {
+		close(release)
+		s.Close()
+		srv.Close()
+	})
+	go s.Toolset(bg, nil, nil, "")
+	<-dialing
+	ctx, cancel := context.WithCancel(bg)
+	cancel()
+	if _, err := s.Call(ctx, "slow", "forecast", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Call err = %v, want the cause of the canceled context", err)
+	}
+}
+
+func attemptsOf(t *testing.T, s *mcpsrc.Source, server string) int {
+	t.Helper()
+	out, _ := run(s.Toolset(bg, nil, nil, ""), call("mcp", `{"action":"status"}`))
+	var st struct {
+		Servers []struct {
+			Name     string
+			Attempts int
+			Parked   bool
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatalf("status = %q: %v", out, err)
+	}
+	for _, sv := range st.Servers {
+		if sv.Name == server {
+			return sv.Attempts
+		}
+	}
+	t.Fatalf("status = %q has no server %q", out, server)
+	return 0
+}
+
+func TestCallFailsFastOnADownServerAndNeverDialsIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		url := srv.URL
+		srv.Close()
+		s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"down": {URL: url}}}, nil)
+		defer s.Close()
+		if got := attemptsOf(t, s, "down"); got != 1 {
+			t.Fatalf("attempts after the first connect = %d, want 1", got)
+		}
+		_, err := s.Call(bg, "down", "forecast", nil)
+		if err == nil || !strings.Contains(err.Error(), "retrying in the background") {
+			t.Fatalf("Call while backing off = %v, want the retrying reason", err)
+		}
+		if got := attemptsOf(t, s, "down"); got != 1 {
+			t.Errorf("attempts after a Call while backing off = %d, want 1", got)
+		}
+		timer := time.NewTimer(time.Minute)
+		<-timer.C
+		before := attemptsOf(t, s, "down")
+		_, err = s.Call(bg, "down", "forecast", nil)
+		if err == nil || !strings.Contains(err.Error(), "parked until the mcp tool connects it") {
+			t.Fatalf("Call on a parked server = %v, want the parked reason", err)
+		}
+		if got := attemptsOf(t, s, "down"); got != before || before != 4 {
+			t.Errorf("attempts = %d after the Call, %d before, want 4 and unchanged", got, before)
+		}
+	})
+}
+
+func TestCallDialsAServerThatNothingHasTried(t *testing.T) {
+	s, _ := source(t, nil)
+	res, err := s.Call(bg, "weather", "forecast", nil)
+	if err != nil || res.Text != "Oslo: 3C, snow" {
+		t.Fatalf("Call = %+v, %v, want the forecast from a first-use dial", res, err)
+	}
+	if got := attemptsOf(t, s, "weather"); got != 1 {
+		t.Errorf("attempts = %d, want 1", got)
 	}
 }

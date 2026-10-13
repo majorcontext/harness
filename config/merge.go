@@ -219,18 +219,11 @@ func overlayProvider(ex, v Provider) Provider {
 }
 
 func mergeSpecs(out, base, over *Config) {
-	// Plugins override wholesale, like SkillsDirs: a non-empty project list
-	// replaces the user list entirely (config order is significant — the
-	// sync-hook chain runs in this order — so merging entry-by-entry would
-	// silently reorder or interleave two unrelated plugin lists).
-	pSrc := out.Plugins
-	if len(over.Plugins) > 0 {
-		pSrc = over.Plugins
-	}
-	if len(pSrc) > 0 {
-		out.Plugins = append([]PluginSpec(nil), pSrc...)
-	} else {
-		out.Plugins = nil
+	out.Plugins = nil
+	if n := len(base.Plugins) + len(over.Plugins); n > 0 {
+		out.Plugins = make([]PluginSpec, 0, n)
+		out.Plugins = append(out.Plugins, over.Plugins...)
+		out.Plugins = append(out.Plugins, base.Plugins...)
 	}
 	if n := len(base.PluginHTTPHeaders) + len(over.PluginHTTPHeaders); n > 0 {
 		m := make(map[string]string, n)

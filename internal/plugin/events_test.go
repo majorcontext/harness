@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+
+	pub "github.com/majorcontext/harness/plugin"
 )
 
 // TestEventOrderingPerPlugin proves that, for any given call id, a
@@ -20,9 +22,9 @@ import (
 func TestEventOrderingPerPlugin(t *testing.T) {
 	const iterations = 2000 // meaningful count to give -race a chance to catch interleaving bugs
 
-	got := make(chan Event, iterations*2)
-	recorder := testPlugin(t, "recorder", &Hooks{
-		Event: func(_ context.Context, _ *Client, events []Event) {
+	got := make(chan pub.Event, iterations*2)
+	recorder := testPlugin(t, "recorder", &pub.Plugin{
+		Event: func(_ context.Context, _ *pub.Client, events []pub.Event) {
 			for _, ev := range events {
 				got <- ev
 			}
@@ -32,8 +34,8 @@ func TestEventOrderingPerPlugin(t *testing.T) {
 
 	for i := 0; i < iterations; i++ {
 		id := fmt.Sprintf("call-%d", i)
-		h.Emit([]Event{{Type: EventToolExecuteStart, SessionID: id}})
-		h.Emit([]Event{{Type: EventToolExecuteEnd, SessionID: id}})
+		h.Emit([]pub.Event{{Type: pub.EventToolExecuteStart, SessionID: id}})
+		h.Emit([]pub.Event{{Type: pub.EventToolExecuteEnd, SessionID: id}})
 	}
 
 	// Block directly on the channel for the exact expected count; the
@@ -43,9 +45,9 @@ func TestEventOrderingPerPlugin(t *testing.T) {
 	for i := 0; i < iterations*2; i++ {
 		ev := <-got
 		switch ev.Type {
-		case EventToolExecuteStart:
+		case pub.EventToolExecuteStart:
 			seenStart[ev.SessionID] = true
-		case EventToolExecuteEnd:
+		case pub.EventToolExecuteEnd:
 			if !seenStart[ev.SessionID] {
 				t.Fatalf("tool.execute.end for %q arrived before its tool.execute.start", ev.SessionID)
 			}
@@ -79,7 +81,7 @@ func TestEventQueueFullDropsWithoutBlocking(t *testing.T) {
 
 		const queueSize = 4
 		spec := Spec{
-			Manifest: Manifest{Name: "wedged", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookEvent}},
+			Manifest: pub.Manifest{Name: "wedged", ProtocolVersion: pub.ProtocolVersion, Hooks: []pub.Hook{pub.HookEvent}},
 			dial: func() (io.ReadWriteCloser, error) {
 				return hostSide, nil
 			},
@@ -100,7 +102,7 @@ func TestEventQueueFullDropsWithoutBlocking(t *testing.T) {
 		// blocked on a full queue this loop would hang.
 		const sent = 500
 		for i := 0; i < sent; i++ {
-			h.Emit([]Event{{Type: EventToolExecuteStart, SessionID: fmt.Sprintf("call-%d", i)}})
+			h.Emit([]pub.Event{{Type: pub.EventToolExecuteStart, SessionID: fmt.Sprintf("call-%d", i)}})
 		}
 
 		dropped := h.EventsDropped("wedged")
@@ -127,8 +129,8 @@ func TestEventOrderingConcurrentEmitters(t *testing.T) {
 	count := 0
 	const wantEvents = goroutines * 2
 
-	recorder := testPlugin(t, "recorder", &Hooks{
-		Event: func(_ context.Context, _ *Client, events []Event) {
+	recorder := testPlugin(t, "recorder", &pub.Plugin{
+		Event: func(_ context.Context, _ *pub.Client, events []pub.Event) {
 			mu.Lock()
 			defer mu.Unlock()
 			for _, ev := range events {
@@ -148,8 +150,8 @@ func TestEventOrderingConcurrentEmitters(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id := fmt.Sprintf("call-%d", i)
-			h.Emit([]Event{{Type: EventToolExecuteStart, SessionID: id}})
-			h.Emit([]Event{{Type: EventToolExecuteEnd, SessionID: id}})
+			h.Emit([]pub.Event{{Type: pub.EventToolExecuteStart, SessionID: id}})
+			h.Emit([]pub.Event{{Type: pub.EventToolExecuteEnd, SessionID: id}})
 		}(i)
 	}
 	wg.Wait()
@@ -159,8 +161,8 @@ func TestEventOrderingConcurrentEmitters(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for id, seq := range arrival {
-		if len(seq) != 2 || seq[0] != EventToolExecuteStart || seq[1] != EventToolExecuteEnd {
-			t.Errorf("call %s: arrival order = %v, want [%s %s]", id, seq, EventToolExecuteStart, EventToolExecuteEnd)
+		if len(seq) != 2 || seq[0] != pub.EventToolExecuteStart || seq[1] != pub.EventToolExecuteEnd {
+			t.Errorf("call %s: arrival order = %v, want [%s %s]", id, seq, pub.EventToolExecuteStart, pub.EventToolExecuteEnd)
 		}
 	}
 }
@@ -177,8 +179,8 @@ func TestEventOrderingConcurrentEmitters(t *testing.T) {
 func TestEventSenderStopStartRace(t *testing.T) {
 	const trials = 200
 	for trial := 0; trial < trials; trial++ {
-		recorder := testPlugin(t, "recorder", &Hooks{
-			Event: func(_ context.Context, _ *Client, _ []Event) {},
+		recorder := testPlugin(t, "recorder", &pub.Plugin{
+			Event: func(_ context.Context, _ *pub.Client, _ []pub.Event) {},
 		})
 		h, err := NewHost(Options{EventQueueSize: 4}, recorder)
 		if err != nil {
@@ -190,7 +192,7 @@ func TestEventSenderStopStartRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 20; i++ {
-				h.Emit([]Event{{Type: EventToolExecuteStart, SessionID: "x"}})
+				h.Emit([]pub.Event{{Type: pub.EventToolExecuteStart, SessionID: "x"}})
 			}
 		}()
 		go func() {

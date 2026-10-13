@@ -7,6 +7,8 @@ import (
 	"net"
 	"testing"
 	"testing/synctest"
+
+	pub "github.com/majorcontext/harness/plugin"
 )
 
 // testInstance finds the named instance inside a Host, for tests that need
@@ -45,7 +47,7 @@ func TestPluginsDoesNotBlockOnWedgedSpawn(t *testing.T) {
 		spawning := make(chan struct{})
 		release := make(chan struct{})
 		spec := Spec{
-			Manifest: Manifest{Name: "wedged", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+			Manifest: pub.Manifest{Name: "wedged", ProtocolVersion: pub.ProtocolVersion, Hooks: []pub.Hook{pub.HookShellEnv}},
 			dial: func() (io.ReadWriteCloser, error) {
 				close(spawning)
 				<-release // held for the life of the test: simulates a wedged spawn
@@ -63,8 +65,8 @@ func TestPluginsDoesNotBlockOnWedgedSpawn(t *testing.T) {
 		// Dispatch on its own goroutine: it spawns "wedged" and blocks for
 		// the life of the test inside dial(), holding inst.mu throughout
 		// (instance.start's documented behavior).
-		go h.ShellEnv(context.Background(), &ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"}) //nolint:errcheck
-		<-spawning                                                                                          // wait until the spawn goroutine is inside dial(), holding inst.mu
+		go h.ShellEnv(context.Background(), &pub.ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"}) //nolint:errcheck
+		<-spawning                                                                                              // wait until the spawn goroutine is inside dial(), holding inst.mu
 
 		// The read must return promptly and report a non-running state,
 		// even though inst.mu stays held for the rest of the test.
@@ -93,11 +95,11 @@ func TestPluginsDoesNotBlockOnWedgedSpawn(t *testing.T) {
 func TestPluginsReportsErroredAfterPostSpawnDeath(t *testing.T) {
 	hostSide, pluginSide := net.Pipe()
 	spec := Spec{
-		Manifest: Manifest{Name: "flaky", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+		Manifest: pub.Manifest{Name: "flaky", ProtocolVersion: pub.ProtocolVersion, Hooks: []pub.Hook{pub.HookShellEnv}},
 		dial: func() (io.ReadWriteCloser, error) {
-			go serve(pluginSide, Manifest{Name: "flaky"}, &Hooks{ //nolint:errcheck
-				ShellEnv: func(_ context.Context, _ *Client, _ *ShellEnvRequest) (*ShellEnvResponse, error) {
-					return &ShellEnvResponse{}, nil
+			go pub.ServeConn(pluginSide, &pub.Plugin{Name: "flaky", //nolint:errcheck
+				ShellEnv: func(_ context.Context, _ *pub.Client, _ *pub.ShellEnvRequest) (*pub.ShellEnvResponse, error) {
+					return &pub.ShellEnvResponse{}, nil
 				},
 			})
 			return hostSide, nil
@@ -105,7 +107,7 @@ func TestPluginsReportsErroredAfterPostSpawnDeath(t *testing.T) {
 	}
 	h := newTestHost(t, Options{}, spec)
 
-	h.ShellEnv(context.Background(), &ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
+	h.ShellEnv(context.Background(), &pub.ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
 	if got := h.Plugins()[0].State; got != PluginRunning {
 		t.Fatalf("state after spawn = %q, want %q", got, PluginRunning)
 	}
@@ -122,7 +124,7 @@ func TestPluginsReportsErroredAfterPostSpawnDeath(t *testing.T) {
 	if err := pluginSide.Close(); err != nil {
 		t.Fatal(err)
 	}
-	<-c.closed // block on the actual death signal, not a sleep or a poll loop
+	<-c.Done() // block on the actual death signal, not a sleep or a poll loop
 
 	if got := h.Plugins()[0].State; got != PluginErrored {
 		t.Errorf("state after the plugin process died = %q, want %q", got, PluginErrored)
@@ -141,7 +143,7 @@ func TestPluginsReportsErroredAfterPostSpawnDeath(t *testing.T) {
 // reported state to "stopped".
 func TestNeverSpawnedStaysNotSpawnedAfterClose(t *testing.T) {
 	spec := Spec{
-		Manifest: Manifest{Name: "idle", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+		Manifest: pub.Manifest{Name: "idle", ProtocolVersion: pub.ProtocolVersion, Hooks: []pub.Hook{pub.HookShellEnv}},
 		dial: func() (io.ReadWriteCloser, error) {
 			t.Fatal("idle plugin must never spawn in this test")
 			return nil, nil
@@ -175,14 +177,14 @@ func TestNeverSpawnedStaysNotSpawnedAfterClose(t *testing.T) {
 // stopped.
 func TestErroredStaysErroredAfterClose(t *testing.T) {
 	spec := Spec{
-		Manifest: Manifest{Name: "broken", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+		Manifest: pub.Manifest{Name: "broken", ProtocolVersion: pub.ProtocolVersion, Hooks: []pub.Hook{pub.HookShellEnv}},
 		dial: func() (io.ReadWriteCloser, error) {
 			return nil, fmt.Errorf("simulated spawn failure")
 		},
 	}
 	h := newTestHost(t, Options{}, spec)
 
-	h.ShellEnv(context.Background(), &ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
+	h.ShellEnv(context.Background(), &pub.ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
 	if got := h.Plugins()[0].State; got != PluginErrored {
 		t.Fatalf("state after failed spawn = %q, want %q", got, PluginErrored)
 	}
@@ -216,11 +218,11 @@ func TestErroredStaysErroredAfterClose(t *testing.T) {
 func TestErroredAfterPostSpawnDeathStaysErroredAfterClose(t *testing.T) {
 	hostSide, pluginSide := net.Pipe()
 	spec := Spec{
-		Manifest: Manifest{Name: "flaky3", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+		Manifest: pub.Manifest{Name: "flaky3", ProtocolVersion: pub.ProtocolVersion, Hooks: []pub.Hook{pub.HookShellEnv}},
 		dial: func() (io.ReadWriteCloser, error) {
-			go serve(pluginSide, Manifest{Name: "flaky3"}, &Hooks{ //nolint:errcheck
-				ShellEnv: func(_ context.Context, _ *Client, _ *ShellEnvRequest) (*ShellEnvResponse, error) {
-					return &ShellEnvResponse{}, nil
+			go pub.ServeConn(pluginSide, &pub.Plugin{Name: "flaky3", //nolint:errcheck
+				ShellEnv: func(_ context.Context, _ *pub.Client, _ *pub.ShellEnvRequest) (*pub.ShellEnvResponse, error) {
+					return &pub.ShellEnvResponse{}, nil
 				},
 			})
 			return hostSide, nil
@@ -228,7 +230,7 @@ func TestErroredAfterPostSpawnDeathStaysErroredAfterClose(t *testing.T) {
 	}
 	h := newTestHost(t, Options{}, spec)
 
-	h.ShellEnv(context.Background(), &ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
+	h.ShellEnv(context.Background(), &pub.ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
 	inst := testInstance(h, "flaky3")
 	c := inst.liveConn.Load()
 	if c == nil {
@@ -240,7 +242,7 @@ func TestErroredAfterPostSpawnDeathStaysErroredAfterClose(t *testing.T) {
 	if err := pluginSide.Close(); err != nil {
 		t.Fatal(err)
 	}
-	<-c.closed // block on the actual death signal, not a sleep or a poll loop
+	<-c.Done() // block on the actual death signal, not a sleep or a poll loop
 
 	if got := h.Plugins()[0].State; got != PluginErrored {
 		t.Fatalf("state after the plugin process died = %q, want %q", got, PluginErrored)

@@ -1051,24 +1051,6 @@ func TestLoadPluginHTTPHeaders(t *testing.T) {
 	}
 }
 
-func TestMergePlugins(t *testing.T) {
-	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
-		base := &Config{Plugins: []PluginSpec{{Name: "user-plug", Command: []string{"a"}}}}
-		over := &Config{Plugins: []PluginSpec{{Name: "proj-plug", Command: []string{"b"}}}}
-		merged := merge(base, over)
-		if len(merged.Plugins) != 1 || merged.Plugins[0].Name != "proj-plug" {
-			t.Errorf("merged Plugins = %+v, want [proj-plug]", merged.Plugins)
-		}
-	})
-	t.Run("unset project inherits user", func(t *testing.T) {
-		base := &Config{Plugins: []PluginSpec{{Name: "user-plug", Command: []string{"a"}}}}
-		merged := merge(base, &Config{})
-		if len(merged.Plugins) != 1 || merged.Plugins[0].Name != "user-plug" {
-			t.Errorf("merged Plugins = %+v, want inherited [user-plug]", merged.Plugins)
-		}
-	})
-}
-
 func TestMergePluginHTTPHeaders(t *testing.T) {
 	base := &Config{PluginHTTPHeaders: map[string]string{"X-A": "1", "X-B": "2"}}
 	over := &Config{PluginHTTPHeaders: map[string]string{"X-B": "override"}}

@@ -34,19 +34,36 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// LoadProject merges <dir>/.harness.json over the config file at userPath and validates the result once.
-// A non-empty project value overrides; maps merge by key; AppendSystemPrompt adds the project
-// segments after the user segments. A missing file is an empty Config.
+// LoadProject merges <dir>/.harness.json over the config file at userPath and validates the result
+// once. A non-empty project value overrides; maps merge by key; AppendSystemPrompt adds the project
+// segments after the user segments; Plugins list the project plugins, then the user plugins, and a
+// name in both files is an error. A missing file is an empty Config.
 func LoadProject(userPath, dir string) (*Config, error) {
 	user, err := Load(userPath)
 	if err != nil {
 		return nil, err
 	}
-	proj, err := Load(filepath.Join(dir, ".harness.json"))
+	projPath := filepath.Join(dir, ".harness.json")
+	proj, err := Load(projPath)
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectSharedPlugins(user, proj, userPath, projPath); err != nil {
+		return nil, err
+	}
 	return mergeAndValidate(user, proj)
+}
+
+// rejectSharedPlugins fails when a plugin name is in both layers, so a project cannot shadow a user plugin.
+func rejectSharedPlugins(user, proj *Config, userPath, projPath string) error {
+	for _, u := range user.Plugins {
+		for _, p := range proj.Plugins {
+			if u.Name != "" && u.Name == p.Name {
+				return fmt.Errorf("plugins: plugin %q is in both %s and %s", u.Name, userPath, projPath)
+			}
+		}
+	}
+	return nil
 }
 
 // mergeAndValidate merges, fills provider defaults, and validates.

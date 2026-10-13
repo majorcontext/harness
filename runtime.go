@@ -30,6 +30,7 @@ import (
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/tree"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -121,6 +122,10 @@ type Options struct {
 	// the newest message of the session when its first request left. Empty:
 	// no banner.
 	Version string
+	// Plugins run in this process, after Config.Plugins. A name and a tool name
+	// must be unique. Close waits for their calls; a call that ignores its
+	// context holds Close until the context of Close ends.
+	Plugins []*plugin.Plugin
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
 }
@@ -234,13 +239,16 @@ func New(opts Options) (*Runtime, error) {
 		}
 	}
 	r.mcp = mcpsrc.New(opts.Config, r.log)
-	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob, opts.ServeURL, opts.RunToken, r.log)
+	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
+	}
+	if err := r.checkPlugins(opts.Config.Plugins, opts.Plugins); err != nil {
+		return nil, err
 	}
 	if r.owner == nil {
 		r.owner = NewLocalOwner(1)
@@ -619,11 +627,12 @@ func (r *Runtime) startPlugins(ctx context.Context, refresh bool) error {
 	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) }, refresh)
 }
 
-// ProbePlugins probes each configured plugin, as the first Create or Open
-// does, and stores the manifests in the plugin cache. It returns each plugin
-// with its tools and hooks. It fails as that Create or Open fails. It returns
-// nil with no plugin. It refreshes the cache only before the first Create or
-// Open of the runtime; after that it returns the started plugins unchanged.
+// ProbePlugins probes each plugin of Config.Plugins, as the first Create or
+// Open does, and stores the manifests in the plugin cache. It returns each
+// plugin of Config.Plugins and Options.Plugins with its tools and hooks. It
+// fails as that Create or Open fails. It returns nil with no plugin. It
+// refreshes the cache only before the first Create or Open of the runtime;
+// after that it returns the started plugins unchanged.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error) {
 	if err := r.startPlugins(ctx, true); err != nil {
 		return nil, err
