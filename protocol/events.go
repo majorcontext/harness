@@ -89,6 +89,7 @@ type GoalState string
 const (
 	GoalActive    GoalState = "active"
 	GoalPaused    GoalState = "paused"
+	GoalBlocked   GoalState = "blocked"
 	GoalAchieved  GoalState = "achieved"
 	GoalFailed    GoalState = "failed"
 	GoalExhausted GoalState = "exhausted"
@@ -316,7 +317,8 @@ type GoalEvaluated struct {
 	Guidance string  `json:"guidance,omitempty"`
 }
 
-// GoalChanged moves the goal to another state. A paused goal resumes at RetryAt.
+// GoalChanged moves the goal to another state. A paused goal resumes at
+// RetryAt. A blocked goal has no RetryAt and resumes at an input.
 type GoalChanged struct {
 	State   GoalState `json:"state"`
 	Reason  string    `json:"reason,omitempty"`

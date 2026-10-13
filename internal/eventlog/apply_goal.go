@@ -7,12 +7,13 @@ import (
 )
 
 var goalFrom = map[protocol.GoalState][]protocol.GoalState{
-	protocol.GoalActive:    {protocol.GoalPaused},
+	protocol.GoalActive:    {protocol.GoalPaused, protocol.GoalBlocked},
+	protocol.GoalBlocked:   {protocol.GoalActive},
 	protocol.GoalPaused:    {protocol.GoalActive},
 	protocol.GoalAchieved:  {protocol.GoalActive},
 	protocol.GoalFailed:    {protocol.GoalActive},
 	protocol.GoalExhausted: {protocol.GoalActive},
-	protocol.GoalCleared:   {protocol.GoalActive, protocol.GoalPaused, protocol.GoalAchieved, protocol.GoalFailed, protocol.GoalExhausted},
+	protocol.GoalCleared:   {protocol.GoalActive, protocol.GoalPaused, protocol.GoalBlocked, protocol.GoalAchieved, protocol.GoalFailed, protocol.GoalExhausted},
 }
 
 func (s *State) applyGoalSet(e protocol.GoalSet) error {

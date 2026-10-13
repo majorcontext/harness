@@ -39,6 +39,8 @@ const (
 	goalMaxPauses        = 6
 	goalRetriesExhausted = "retries_exhausted"
 	goalInterrupted      = "interrupted"
+	goalEnded            = "ended"
+	goalNoDriver         = "no_driver"
 	// partBytes bounds one part of the transcript of the evaluator, which
 	// keeps the newest messages within a share of the window of the evaluator
 	// model: transcriptShare of the window less transcriptReserve tokens, at
@@ -53,9 +55,9 @@ const (
 
 var (
 	errGoalCleared = errors.New("harness: goal cleared")
-	// ErrGoalActive reports a StartGoal while a goal is active or paused.
+	// ErrGoalActive reports a StartGoal while a goal is active, paused, or blocked.
 	ErrGoalActive = errors.New("harness: a goal is already active")
-	// ErrNoGoal reports an AdjustGoal with no active or paused goal.
+	// ErrNoGoal reports an AdjustGoal with no active, paused, or blocked goal.
 	ErrNoGoal = errors.New("harness: no active goal")
 )
 
@@ -71,8 +73,8 @@ func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) err
 // StartGoal is SetGoal with no turn limit that always admits the
 // condition: while a turn runs, the condition waits, and the goal judges
 // no turn before it; the condition posts after the turn of
-// the goal tool. It fails with ErrGoalActive while a goal is active or
-// paused.
+// the goal tool. It fails with ErrGoalActive while a goal is active, paused,
+// or blocked.
 func (a *Actor) StartGoal(ctx context.Context, condition string) error {
 	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*protocol.GoalSet, bool, error) {
 		if live {
@@ -82,11 +84,11 @@ func (a *Actor) StartGoal(ctx context.Context, condition string) error {
 	})
 }
 
-// AdjustGoal replaces the condition of the active or paused goal. It keeps
+// AdjustGoal replaces the condition of the active, paused, or blocked goal. It keeps
 // max_turns and the turn count, so an adjust never extends the turn limit.
 // The same condition changes nothing. A condition that still waits in the
 // queue is replaced by the new one. It fails with ErrNoGoal when no goal is
-// active or paused.
+// active, paused, or blocked.
 func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error) {
 		switch {
@@ -103,13 +105,13 @@ func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 }
 
 // setGoal appends the goal that set returns for the current goal, and
-// whether that goal is active or paused. A nil goal appends nothing. When
+// whether that goal is active, paused, or blocked. A nil goal appends nothing. When
 // set reports post, the condition is an input even while the session is
 // busy.
 func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*protocol.GoalSet, bool, error)) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		g, _ := a.state.Goal()
-		gs, post, err := set(g, g.State == protocol.GoalActive || g.State == protocol.GoalPaused)
+		gs, post, err := set(g, liveGoal(g.State))
 		if err != nil || gs == nil {
 			reply(struct{}{}, err)
 			return
@@ -124,9 +126,18 @@ func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool
 		if err == nil && idle && a.run == nil {
 			err = a.next(true)
 		}
+		if err == nil {
+			err = a.blockUndriven()
+		}
 		reply(struct{}{}, err)
 	})
 	return err
+}
+
+// liveGoal reports whether a goal in state s still pursues its condition,
+// or waits for an input to pursue it.
+func liveGoal(s protocol.GoalState) bool {
+	return s == protocol.GoalActive || s == protocol.GoalPaused || s == protocol.GoalBlocked
 }
 
 // ClearGoal clears the goal and withdraws its queued inputs. A running goal
@@ -168,9 +179,10 @@ func (a *Actor) withdrawGoal() []protocol.Payload {
 	return events
 }
 
-// resumed returns the goal change of an input: any input resumes a paused goal.
+// resumed returns the goal change of an input: any input resumes a paused or
+// blocked goal.
 func (a *Actor) resumed() []protocol.Payload {
-	if g, _ := a.state.Goal(); g.State == protocol.GoalPaused {
+	if g, _ := a.state.Goal(); g.State == protocol.GoalPaused || g.State == protocol.GoalBlocked {
 		return []protocol.Payload{protocol.GoalChanged{State: protocol.GoalActive}}
 	}
 	return nil
@@ -194,7 +206,28 @@ func (a *Actor) settle(check bool) error {
 		a.judge(g)
 		return nil
 	}
-	return a.next(check)
+	if err := a.next(check); err != nil {
+		return err
+	}
+	return a.blockUndriven()
+}
+
+// blockUndriven blocks an active goal that nothing drives: no run, no open
+// turn or request, no queued input that starts, and no
+// turn left to judge. It starts no turn and calls no model.
+func (a *Actor) blockUndriven() error {
+	g, _ := a.state.Goal()
+	if g.State != protocol.GoalActive || a.run != nil || len(a.releasing) > 0 || len(a.state.Requests()) > 0 || a.judgeable() {
+		return nil
+	}
+	if _, busy := a.state.Turn(); busy {
+		return nil
+	}
+	q := a.state.Queue()
+	if len(q) > 0 && !a.waitsForInput() {
+		return nil
+	}
+	return a.append(protocol.GoalChanged{State: protocol.GoalBlocked, Reason: goalNoDriver})
 }
 
 // judge runs the evaluator on the session history as the run of the actor.

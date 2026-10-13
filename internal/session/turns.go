@@ -408,9 +408,26 @@ func (a *Actor) cancel(ctx context.Context, why error) error {
 				return
 			}
 		}
+		if err := a.stopIdleGoal(why); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
 		a.interrupt("", why, reply)
 	})
 	return err
+}
+
+// stopIdleGoal settles the goal of a session that runs nothing after a cancel
+// withdrew its queue: the end of the session ends the goal, and any other
+// cancel blocks an active goal that nothing drives.
+func (a *Actor) stopIdleGoal(why error) error {
+	if a.run != nil {
+		return nil
+	}
+	if a.goalStopped(why) {
+		return a.endGoal(why)
+	}
+	return a.blockUndriven()
 }
 
 func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error)) {
@@ -433,19 +450,31 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	}
 }
 
-// goalStopped reports whether a stop for why ends an active goal.
+// goalStopped reports whether a stop for why ends the goal: a user stop ends
+// an active goal, and the end of the session ends every live goal.
 func (a *Actor) goalStopped(why error) bool {
 	g, _ := a.state.Goal()
-	return errors.Is(why, errStopTurn) && g.State == protocol.GoalActive
+	switch {
+	case errors.Is(why, errEndTurn):
+		return liveGoal(g.State)
+	case errors.Is(why, errStopTurn):
+		return g.State == protocol.GoalActive
+	}
+	return false
 }
 
-// endGoal clears an active goal when a user stop ends the run of the actor,
-// and withdraws the queued goal inputs, so no goal turn starts after the stop.
+// endGoal clears the goal that goalStopped names, stops its retry timer, and
+// withdraws the queued goal inputs, so no goal turn starts after the stop.
 func (a *Actor) endGoal(why error) error {
 	if !a.goalStopped(why) {
 		return nil
 	}
-	return a.append(append(a.withdrawGoal(), protocol.GoalChanged{State: protocol.GoalCleared, Reason: goalInterrupted})...)
+	reason := goalInterrupted
+	if errors.Is(why, errEndTurn) {
+		reason = goalEnded
+	}
+	a.stopRetry()
+	return a.append(append(a.withdrawGoal(), protocol.GoalChanged{State: protocol.GoalCleared, Reason: reason})...)
 }
 
 // Release hands the session off: it suspends the running turn at an item

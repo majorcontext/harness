@@ -14,6 +14,7 @@ First tagged release.
 
 ### Added
 
+- **Blocked goal** (`protocol`, `harness`) — a new goal state `blocked` marks an `active` goal that nothing drives: no run, no open turn, no queued input that starts, and no turn left to judge. One check moves such a goal to `blocked` with reason `no_driver` at `Open`, after each run settles, after `SetGoal` on a held queue, after a dismissed request, and after a cancel of an idle session. The check starts no turn and calls no model. Any input, `SetGoal`, or `AdjustGoal` makes the goal `active` again. A blocked goal does not make a session resumable, so a host can let the session sleep.
 - **Plugin failure log line** (`harness`) — a plugin hook that fails open writes one `plugin: hook failed` Warn line through the runtime logger, with the plugin name, the hook, and the error text with secrets masked.
 - **Guardrail example** (`examples/guardrail`) — one `plugin.Plugin` value that denies a force push, `rm -rf` on a broad target, and a `read_file` call on a `.env` file. `go run ./examples/guardrail` runs it in the host process, and `examples/guardrail/cmd/guardrail-plugin` serves it as a plugin process.
 - **TypeScript plugin SDK flags** (`sdk/typescript`) — `createPlugin` takes `denyOnFailure: ['toolExecuteBefore']` and `hookTimeouts: { <hookKey>: ms }`, and writes `deny_on_failure` and `hook_timeouts` to the manifest. It throws for a value the host would reject.
@@ -166,3 +167,7 @@ First tagged release.
 - **Owner refusals** (`harness`) — a failure of `Owner.Acquire` is `ErrSessionNotOwned` that wraps the cause, so the HTTP handler answers `session_not_owned`; a call that waits for ownership when `Runtime.Close` starts fails with `ErrDraining` (`draining`, 503). `ErrBusy` is no longer exported. `Runtime.Commands` returns the `op` of each command and no route, and `GET /commands` names each route.
 - **One submit** (`harness`, `protocol`) — `Session.Admit` is gone. `Session.Submit` returns `protocol.Admitted`, and `Admitted.Repeat` (not on the wire) is true when the session had admitted the input before.
 - **Window before the first measurement** (`harness`, `internal/modelmeta`) — `OpenView`, `ReadHandler`, `harness sessions`, and `harness run` have no backend, so they read the context window only from the log. A session that they read reports window 0 until its first `context.measured` event, whatever its model. A live Claude Code session also reports window 0 before its first turn, because its backend reports the window during a turn. Separately, `modelmeta.ContextWindow` no longer answers for a `claude-code` ref: a model API provider that is keyed `claude-code` gets the default window of 128000, marked as an estimate, instead of window 0.
+
+### Fixed
+
+- **Ended child goal** (`internal/session`) — `CancelForEnd` ends the goal of the session with state `cleared` and reason `ended`, for an active, paused, or blocked goal, whether the session runs a turn, an evaluation, or a compaction, or is idle, so an ended child starts no further goal turn.

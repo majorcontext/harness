@@ -109,7 +109,7 @@ func goalStatus(g *protocol.GoalView) (protocol.ToolResult, error) {
 		Active    bool   `json:"active"`
 		Condition string `json:"condition"`
 	}
-	if g != nil && (g.State == "active" || g.State == "paused") {
+	if g != nil && (g.State == "active" || g.State == "paused" || g.State == "blocked") {
 		out.Active, out.Condition = true, g.Condition
 	}
 	b, err := json.Marshal(out)

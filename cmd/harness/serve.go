@@ -174,7 +174,7 @@ func startWork(ctx context.Context, rt *harness.Runtime, store harness.Store, lo
 }
 
 // openStored opens each stored session that has work to resume: a turn that
-// runs or is suspended, a queued input, an active or paused goal, a command
+// runs or is suspended, a queued input, an active or paused goal (not a blocked one), a command
 // that no owner finished, or a child that has not settled. A session with
 // none stays closed, and a log that does not replay is skipped.
 func openStored(ctx context.Context, rt *harness.Runtime, store harness.Store, logger *slog.Logger) {

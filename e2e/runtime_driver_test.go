@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/httpapi"
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -657,3 +659,55 @@ func decodeEvent[T any](t *testing.T, ev protocol.Event) T {
 }
 
 var _ driver = (*runtimeDriver)(nil)
+
+// halt stops the host and leaves its store as it is.
+func (d *runtimeDriver) halt(t *testing.T) {
+	t.Helper()
+	if d.serve {
+		d.proc.terminate(t)
+		return
+	}
+	d.stop(t, t.Context())
+}
+
+// seed appends events to the log of session id in the store of the halted host.
+func (d *runtimeDriver) seed(t *testing.T, id string, events ...protocol.Payload) {
+	t.Helper()
+	st := store.NewDiskStore(d.store)
+	head, err := st.Head(t.Context(), id)
+	if err != nil {
+		t.Fatalf("head of %s: %v", id, err)
+	}
+	for _, ev := range events {
+		head++
+		data, err := eventlog.Envelope{Seq: head, Time: time.Now(), Event: ev}.Encode()
+		if err != nil {
+			t.Fatalf("encode %T: %v", ev, err)
+		}
+		if err := st.Append(t.Context(), id, head-1, data); err != nil {
+			t.Fatalf("append %T: %v", ev, err)
+		}
+	}
+}
+
+// resumable reads the log of session id with no host, as a box does before it wakes the session.
+func (d *runtimeDriver) resumable(t *testing.T, id string) bool {
+	t.Helper()
+	v, err := harness.OpenView(t.Context(), store.NewDiskStore(d.store), id)
+	if err != nil {
+		t.Fatalf("view %s: %v", id, err)
+	}
+	return v.Resumable()
+}
+
+// count returns the number of events of kind in the log of session id.
+func (d *runtimeDriver) count(t *testing.T, id string, kind string) int {
+	t.Helper()
+	n := 0
+	for _, e := range d.events(t, id) {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
