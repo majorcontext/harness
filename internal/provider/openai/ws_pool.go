@@ -1,9 +1,11 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -111,6 +113,7 @@ type wsStreamRequest struct {
 	Family     string
 	HTTPClient *http.Client
 	Prewarm    bool
+	Log        *slog.Logger
 }
 
 // stream returns a session WebSocket stream after it reads its first event.
@@ -154,6 +157,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		p.invalidate(entry)
 		newConn, _, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
 		if err != nil {
+			cmp.Or(req.Log, slog.Default()).Debug("openai: websocket dial failed; using HTTP", "error", err)
 			p.recordFailure(entry)
 			p.release(entry)
 			return nil, false

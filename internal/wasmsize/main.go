@@ -63,9 +63,13 @@ func readBudget(path string) (sizes, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		key, val, ok := strings.Cut(line, " ")
-		n, perr := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
-		if !ok || perr != nil {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return sizes{}, fmt.Errorf("%s: bad line %q", path, line)
+		}
+		key := fields[0]
+		n, perr := strconv.ParseInt(fields[1], 10, 64)
+		if perr != nil {
 			return sizes{}, fmt.Errorf("%s: bad line %q", path, line)
 		}
 		switch key {
@@ -90,7 +94,7 @@ func measure() (sizes, error) {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	out := filepath.Join(dir, "harness.wasm")
-	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", out, "./cmd/harness-wasm")
+	cmd := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", out, "./cmd/harness-wasm")
 	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm", "CGO_ENABLED=0")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

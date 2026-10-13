@@ -160,6 +160,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 			Model:      req.Model,
 			Family:     c.family(),
 			HTTPClient: hc,
+			Log:        c.Log,
 		}); ok {
 			return st, nil
 		}
@@ -217,6 +218,7 @@ func (c *Client) Warm(ctx context.Context, req *provider.Request) error {
 		Model:      req.Model,
 		Family:     c.family(),
 		HTTPClient: prepared.client,
+		Log:        c.Log,
 		Prewarm:    true,
 	}, func(st provider.Stream) error {
 		for {

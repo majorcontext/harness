@@ -1148,7 +1148,7 @@ Every capability that the host supplies is a field of `harness.Options`. The mod
 | Model transport | `Options.ModelTransport` | The host sets it. The default `net/http` transport on js cannot cancel a response body, and under Node it is off. |
 | Store | `harness.Store` | `store.DiskStore` on the `fs` object of the host, or `store.MemStore`. |
 | Owner | `Options.Owner` | `NewLocalOwner`. `flock` does not exist on js, so the store does not fence two instances (see Store). The host gives one writer to each store. |
-| Tools | `Options.Tools`, `CreateSession.AllowedTools` | The built-in file and search tools run on the `fs` object. `bash`, `process`, and `WorkspaceChanges` fail with `exec: executable file not found`. A host hides them with `AllowedTools` and adds its own tools in `Options.Tools`. |
+| Tools | `Options.Tools`, `CreateSession.AllowedTools` | The built-in file and search tools run on the `fs` object. `bash` and `process` fail with `exec: executable file not found`. A host hides them with `AllowedTools` and adds its own tools in `Options.Tools`. The wasm host does not call `Runtime.WorkspaceChanges`, which runs `git`. |
 | Logger | `Options.Logger` | Any `slog.Logger`. |
 | Getenv and config | `Options.Getenv`, `Options.Config` | Host closures and a `config.Config` value. |
 

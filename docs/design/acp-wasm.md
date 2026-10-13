@@ -564,9 +564,9 @@ Rows (the browser scenario subset, plus rows that exist only in the browser):
 | blob rename | a tool-result blob and an attachment survive a reload |
 | crash durability | a Worker kill after an acknowledged append loses no record |
 | direct Anthropic with the `extra_headers` entry (W9) | the header reaches the fake server |
-| size and load | brotli size under the budget; cold boot under a bound with CDP throttling at 50 Mbps |
+| size and load | the module is under the budget (`go run ./internal/wasmsize`); the row reports the brotli size for information only; cold boot under a bound with CDP throttling at 50 Mbps |
 
-The size budget is the measured brotli size plus 5% at the time of the W1 PR (the build and the budget); the spike's value is 3.58 MB. A bound on boot time is a regression guard, not a promise. Chromium only runs in CI first; the Playwright fixture takes the browser as a parameter, so Firefox and WebKit are one workflow line each when a consumer needs them.
+The size budget is the raw and `gzip -9` size of the module, each the measured size plus 3% (rounded up to 50,000 bytes), set by the W1 PR and checked by `go run ./internal/wasmsize`. Brotli needs a module outside the standard library, so it is not a budget; the spike's brotli value is 3.58 MB. A bound on boot time is a regression guard, not a promise. Chromium only runs in CI first; the Playwright fixture takes the browser as a parameter, so Firefox and WebKit are one workflow line each when a consumer needs them.
 
 ## 10. Spec changes, by PR
 
@@ -680,7 +680,7 @@ Tracks: C (core), A (ACP), W (wasm and browser). One concern per PR.
 | W2 | Transport failure classification: `FetchError`, the `Permanent()` detection and `MarkPermanent` in `provider.Do`, readable JS error text. Independent of the ACP track. | runtime-only rows with a double `ModelTransport`: a permanent error is one attempt and the turn ends `permanent`; an ordinary transport error keeps both retry layers; the text has no `<object>` | rows pass natively; the Turn retry bullet is edited |
 | W3 | `harnessConnect`, the frame channel, `fetchRT` (abort tied to `ctx`, self-releasing `js.Func`), JS tools, Node wasm host with `DiskStore` on a temporary directory, the Node job in `ci.yml`. Needs W1, A2. | the Node wasm host runs the scenario subset (no `needsExec`, no `needsMCP`): `requests`, `wire`, `sessions` | subset equals the binary host goldens; the job fails, not skips, when Node is missing |
 | W4 | `sdk/embed` with the Worker transport: page API, Worker, `postMessage` frames, tool round trip; `sdk/AGENTS.md` scoping and `sdk/embed/AGENTS.md`. Needs W3. | TypeScript tests of the client API over the Worker | the Worker runs a tool turn through the SDK |
-| W5 | Playwright job with headless Chromium, the fake CORS server, and the rows of 9.6 that need only a memory store. Needs W4. | `e2e/browser_test.go` | green on `main`; CORS, cancel, preflight, header, and file-tool rows pass; the job fails, not skips, when Chromium is missing |
+| W5 | Playwright job with headless Chromium, the fake CORS server, and the rows of 9.6 that need only a memory store. Needs W4. | `e2e/browser_test.go` | green on `main`; the size row reports brotli for information and the raw and gzip -9 budget stays in `go run ./internal/wasmsize`; CORS, cancel, preflight, header, and file-tool rows pass; the job fails, not skips, when Chromium is missing |
 | W6 | Store lock, ZenFS shim with `fsync`, `DiskStore` on `globalThis.fs`, the exclusive Node directory. Needs W5. | rows: reload; two tabs one store; two tabs different new sessions; blob rename; Worker kill; hand-off | every row passes; the spec states the durability that the rows prove |
 | W7 | Default tool set for a host (`harnessConnect({builtinTools})`, `sdk/embed` default). Needs W4. | row: the first request lists no `bash` and no `process`; file tools on ZenFS | row passes in the browser and in Node |
 | W8 | `sdk/embed` subprocess transport (`spawn harness acp`). Needs W4, A2. | the same TypeScript tests over both transports | one client API test suite passes on wasm and on the subprocess |
