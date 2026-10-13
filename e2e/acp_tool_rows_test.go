@@ -23,9 +23,10 @@ var acpToolScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "tool_kind_comes_from_the_tool_name",
-		cite:  "The `kind` of a tool comes from a table of tool names:",
-		model: acpToolCall("bash", map[string]any{"command": "echo hi"}),
+		name:      "tool_kind_comes_from_the_tool_name",
+		needsExec: true,
+		cite:      "The `kind` of a tool comes from a table of tool names:",
+		model:     acpToolCall("bash", map[string]any{"command": "echo hi"}),
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "run it", stop: "end_turn"},
@@ -79,8 +80,9 @@ var acpToolScenarios = []acpScenario{
 		},
 	},
 	{
-		name: "cancel_during_a_tool_fails_the_call_before_the_answer",
-		cite: "A tool call that the cancel of a turn cut short has an error result in the log, so its update is `failed`, and it reaches the client before the `cancelled` answer.",
+		name:      "cancel_during_a_tool_fails_the_call_before_the_answer",
+		needsExec: true,
+		cite:      "A tool call that the cancel of a turn cut short has an error result in the log, so its update is `failed`, and it reaches the client before the `cancelled` answer.",
 		model: []harnesstest.Step{
 			{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "sleep 300"}}}}},
 		},

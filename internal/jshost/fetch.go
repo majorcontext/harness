@@ -1,6 +1,6 @@
 //go:build js
 
-package main
+package jshost
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type FetchError struct {
 
 func (e *FetchError) Error() string {
 	return fmt.Sprintf("fetch %s %s: %s; the browser blocked the request or the host is unreachable (CORS, DNS, TLS, or offline)",
-		e.Method, e.Origin, (&jsError{name: e.Name, message: e.Message}).Error())
+		e.Method, e.Origin, (&JSError{Name: e.Name, Message: e.Message}).Error())
 }
 
 // Permanent says that no retry can help while the host reports online: a
@@ -33,10 +33,10 @@ func (e *FetchError) Error() string {
 // reports offline, or reports nothing, keeps the retry.
 func (e *FetchError) Permanent() bool { return e.Online }
 
-// fetchRT is the http.RoundTripper of the model transport. It calls the fetch
+// FetchRT is the http.RoundTripper of the model transport. It calls the fetch
 // of the global scope, so the Worker or Node supplies the network. headers go
 // on every request unless the request sets them.
-type fetchRT struct{ headers map[string]string }
+type FetchRT struct{ Headers map[string]string }
 
 func online() bool {
 	nav := js.Global().Get("navigator")
@@ -47,12 +47,13 @@ func online() bool {
 	return v.Type() == js.TypeBoolean && v.Bool()
 }
 
-func (f fetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
+// RoundTrip sends req through fetch and returns the response with a streaming body.
+func (f FetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 	opt := js.Global().Get("Object").New()
 	opt.Set("method", req.Method)
 	h := js.Global().Get("Object").New()
-	for k, v := range f.headers {
+	for k, v := range f.Headers {
 		if req.Header.Get(k) == "" {
 			h.Set(k, v)
 		}
@@ -76,15 +77,15 @@ func (f fetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	ac := js.Global().Get("AbortController").New()
 	opt.Set("signal", ac.Get("signal"))
 	stop := context.AfterFunc(ctx, func() { ac.Call("abort") })
-	res, err := await(ctx, js.Global().Call("fetch", req.URL.String(), opt))
+	res, err := Await(ctx, js.Global().Call("fetch", req.URL.String(), opt))
 	if err != nil {
 		stop()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if je, ok := errors.AsType[*jsError](err); ok {
+		if je, ok := errors.AsType[*JSError](err); ok {
 			return nil, &FetchError{Method: req.Method, Origin: req.URL.Scheme + "://" + req.URL.Host,
-				Name: je.name, Message: je.message, Online: online()}
+				Name: je.Name, Message: je.Message, Online: online()}
 		}
 		return nil, err
 	}
@@ -125,11 +126,11 @@ func (s *streamBody) Read(p []byte) (int, error) {
 		return 0, s.err
 	}
 	if len(s.pending) == 0 {
-		v, err := await(s.ctx, s.r.Call("read"))
+		v, err := Await(s.ctx, s.r.Call("read"))
 		if err != nil {
 			if s.ctx.Err() != nil {
 				err = s.ctx.Err()
-			} else if je, ok := errors.AsType[*jsError](err); ok {
+			} else if je, ok := errors.AsType[*JSError](err); ok {
 				err = fmt.Errorf("fetch: reading the response: %w", je)
 			}
 			s.err = err

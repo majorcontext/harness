@@ -75,6 +75,15 @@ linters:
           allow:
             - $gostd
             - github.com/majorcontext/harness/internal/acp/rpc
+        jshost-seam:
+          files:
+            - "**/internal/jshost/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness
+            - github.com/majorcontext/harness/internal/jshost
+            - github.com/majorcontext/harness/protocol
         selftool-seam:
           files:
             - "**/internal/selftool/**"

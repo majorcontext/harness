@@ -1,7 +1,9 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
@@ -83,6 +86,9 @@ type nodeHostOptions struct {
 	BuiltinTools []string          `json:"builtinTools,omitempty"`
 	Online       *bool             `json:"online,omitempty"`
 	EchoTool     bool              `json:"echoTool,omitempty"`
+	JSTools      []string          `json:"jsTools,omitempty"`
+	Connect      map[string]any    `json:"connect,omitempty"`
+	CyclicConfig bool              `json:"cyclicConfig,omitempty"`
 }
 
 // startACPNode runs the wasm module under Node, with the config, the store
@@ -142,11 +148,12 @@ const (
 	nodeMCPOn  = `"mcpCapabilities":{"http":true`
 )
 
-// alignNodeMCP rewrites the one capability in which the wasm host differs from
-// the native hosts, so the rest of its frames compare with the shared golden:
-// the wasm host starts no MCP server and advertises none. It fails when an
-// initialize answer advertises MCP.
-func alignNodeMCP(t *testing.T, g acpGolden) acpGolden {
+// alignNodeGolden rewrites the two texts in which the wasm host differs from
+// the native hosts, so the rest of its golden compares with the shared one. The
+// wasm host starts no MCP server and advertises none; the check fails when an
+// initialize answer advertises MCP. The js file system writes the ENOENT text
+// with a capital letter.
+func alignNodeGolden(t *testing.T, g acpGolden) acpGolden {
 	t.Helper()
 	for i, f := range g.Wire {
 		text := string(f.Frame)
@@ -159,7 +166,15 @@ func alignNodeMCP(t *testing.T, g acpGolden) acpGolden {
 		}
 		g.Wire[i].Frame = json.RawMessage(strings.Replace(text, nodeMCPOff, nodeMCPOn, 1))
 	}
-	return g
+	b, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out acpGolden
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(string(b), "No such file or directory", "no such file or directory")), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // TestNodeWasmFetchFailureIsPermanentWhileOnline pins the sentence of the
@@ -220,4 +235,145 @@ func TestNodeWasmRunsAJavaScriptTool(t *testing.T) {
 		t.Errorf("the second request does not hold the tool result: %s", got)
 	}
 	c.finish(stop)
+}
+
+func (o nodeHostOptions) withBase(env acpEnv) nodeHostOptions {
+	o.ConfigPath, o.StoreDir = env.configPath, env.sessDir
+	o.Env = map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}
+	return o
+}
+
+// TestNodeWasmBadOptionFailsTheFirstSession pins the sentence of the
+// WebAssembly section on options: an option that is present and has the wrong
+// type fails the first session/new as an invalid request.
+func TestNodeWasmBadOptionFailsTheFirstSession(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	rows := map[string]nodeHostOptions{
+		"primitive config":                 {Connect: map[string]any{"config": 5}},
+		"cyclic config":                    {CyclicConfig: true},
+		"array config":                     {Connect: map[string]any{"config": []any{}}},
+		"env with an array":                {Connect: map[string]any{"env": []any{1}}},
+		"env with a number":                {Connect: map[string]any{"env": map[string]any{"K": 1}}},
+		"proxy that is a number":           {Connect: map[string]any{"proxy": 5}},
+		"proxy header that is a number":    {Connect: map[string]any{"proxy": map[string]any{"headers": map[string]any{"h": 1}}}},
+		"builtinTools with a number":       {Connect: map[string]any{"builtinTools": []any{1}}},
+		"builtinTools that is a string":    {Connect: map[string]any{"builtinTools": "read_file"}},
+		"array-like tools":                 {Connect: map[string]any{"tools": map[string]any{"length": 1, "0": map[string]any{"name": "x"}}}},
+		"store directory that is a number": {Connect: map[string]any{"storeDir": 3}},
+	}
+	for name, row := range rows {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fake := harnesstest.NewAnthropic(t)
+			env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), nil), sessDir: t.TempDir()}
+			in, out, stop := startACPNodeOpts(t, row.withBase(env))
+			c := newACPConn(t, loadACPSchema(t), in, out)
+			c.fake, c.env = fake, env
+			c.dirs["main"] = t.TempDir()
+			acpNew{as: "a", code: acpInvalidParams}.run(t, c)
+			c.finish(stop)
+		})
+	}
+}
+
+// TestNodeWasmJSToolFailuresAreReadable pins the sentence of the WebAssembly
+// section on tools: a JavaScript value that cannot become JSON, and a rejection
+// that is not an Error, give an error result with readable text and no object marker.
+func TestNodeWasmJSToolFailuresAreReadable(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t,
+		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "c1", Name: "js_cyclic", Input: map[string]any{}},
+			{ID: "c2", Name: "js_reject", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), nil), sessDir: t.TempDir()}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{JSTools: []string{"js_cyclic", "js_reject"}}.withBase(env))
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a"}.run(t, c)
+	acpPrompt{as: "a", text: "go", stop: "end_turn"}.run(t, c)
+	got := requestText(acpRequests(t, c, 2)[1])
+	for _, want := range []string{"circular", "non-Error rejection of type object"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the second request lacks %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "[object") || strings.Contains(got, "<object>") {
+		t.Errorf("the second request holds an object marker: %s", got)
+	}
+	c.finish(stop)
+}
+
+// TestNodeStoreLockTakeoverHasOneWinner starts several processes that find the
+// same stale lock at the same moment. Exactly one gets the lock, the others see
+// it in use, and its release leaves no lock file.
+func TestNodeStoreLockTakeoverHasOneWinner(t *testing.T) {
+	skipShort(t)
+	node := nodePath(t)
+	t.Parallel()
+	lock, err := filepath.Abs(filepath.Join("..", "cmd", "harness-wasm", "node", "storelock.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".embed.lock"), []byte("999999999\nstale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prog := fmt.Sprintf(`
+import { acquireStoreLock } from %q;
+const start = Number(process.argv[2]);
+while (Date.now() < start) {}
+try {
+  const release = acquireStoreLock(%q);
+  console.log("won");
+  await new Promise((r) => setTimeout(r, 1500));
+  release();
+} catch (err) {
+  console.log("busy");
+}
+`, "file://"+lock, dir)
+	script2 := filepath.Join(t.TempDir(), "takeover.mjs")
+	if err := os.WriteFile(script2, []byte(prog), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := fmt.Sprint(time.Now().Add(1500 * time.Millisecond).UnixMilli())
+	const procs = 8
+	results := make([]string, procs)
+	var wg sync.WaitGroup
+	for i := range procs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			cmd := exec.Command(node, script2, start)
+			cmd.Stdout = &buf
+			cmd.Stderr = &buf
+			if err := cmd.Run(); err != nil {
+				buf.WriteString(err.Error())
+			}
+			results[i] = strings.TrimSpace(buf.String())
+		}()
+	}
+	wg.Wait()
+	won := 0
+	for _, r := range results {
+		switch r {
+		case "won":
+			won++
+		case "busy":
+		default:
+			t.Errorf("a process printed %q", r)
+		}
+	}
+	if won != 1 {
+		t.Errorf("%d processes won the lock, want 1 (%v)", won, results)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".embed.lock")); !os.IsNotExist(err) {
+		t.Errorf("the lock file stays after the release: %v", err)
+	}
 }

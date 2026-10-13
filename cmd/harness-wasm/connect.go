@@ -9,13 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"syscall/js"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/jshost"
 	"github.com/majorcontext/harness/store"
 )
 
@@ -33,46 +33,56 @@ type options struct {
 }
 
 // readOptions reads {config, storeDir, env, tools, builtinTools, proxy: {headers},
-// onFrame, onLog}. A bad value does not throw: it fails the first session/new
-// as an invalid request.
+// onFrame, onLog}. Every option that is present must have its type. A bad value
+// does not throw: the first error fails the first session/new as an invalid
+// request.
 func readOptions(o js.Value) *options {
-	opts := &options{
-		storeDir: stringField(o, "storeDir"),
-		env:      stringMap(o.Get("env")),
-		onFrame:  o.Get("onFrame"),
-		logger:   slog.New(slog.DiscardHandler),
-	}
-	if fn := o.Get("onLog"); fn.Type() == js.TypeFunction {
-		opts.logger = slog.New(slog.NewJSONHandler(logWriter{fn}, nil))
-	}
-	text := "{}"
-	if c := o.Get("config"); c.Type() == js.TypeObject {
-		var err error
-		if text, err = jsonText(c); err != nil {
-			opts.err = fmt.Errorf("config: %w", err)
+	opts := &options{onFrame: o.Get("onFrame"), logger: slog.New(slog.DiscardHandler)}
+	var errs []error
+	keep := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
-	if opts.err == nil {
-		opts.user, opts.err = config.Parse("the config of harnessConnect", []byte(text))
+	var err error
+	opts.storeDir, err = jshost.StringField(o, "storeDir")
+	keep(err)
+	opts.env, err = jshost.StringMap("env", o.Get("env"))
+	keep(err)
+	opts.builtinTools, err = jshost.StringList("builtinTools", o.Get("builtinTools"))
+	keep(err)
+	opts.tools, err = jshost.ReadTools(o.Get("tools"))
+	keep(err)
+	proxy := o.Get("proxy")
+	if proxy.Type() != js.TypeUndefined && proxy.Type() != js.TypeNull && proxy.Type() != js.TypeObject {
+		keep(errors.New("proxy must be an object"))
+	} else {
+		opts.proxyHeaders, err = jshost.StringMap("proxy.headers", jshost.Object(proxy, "headers"))
+		keep(err)
 	}
-	if opts.err == nil {
-		opts.tools, opts.err = readTools(o.Get("tools"))
+	if fn := o.Get("onLog"); fn.Type() == js.TypeFunction {
+		opts.logger = slog.New(slog.NewJSONHandler(jshost.LogWriter{Fn: fn}, nil))
 	}
-	opts.builtinTools = stringList(o.Get("builtinTools"))
-	if proxy := o.Get("proxy"); proxy.Type() == js.TypeObject {
-		opts.proxyHeaders = stringMap(proxy.Get("headers"))
-	}
+	opts.user, err = readConfig(o.Get("config"))
+	keep(err)
+	opts.err = errors.Join(errs...)
 	return opts
 }
 
-// logWriter sends each log line to the onLog function of the host.
-type logWriter struct{ fn js.Value }
-
-func (w logWriter) Write(p []byte) (int, error) {
-	if err := call(w.fn, strings.TrimSuffix(string(p), "\n")); err != nil {
-		return 0, err
+// readConfig reads the user config: an object, or an absent value for an empty config.
+func readConfig(c js.Value) (*config.Config, error) {
+	text := "{}"
+	switch c.Type() {
+	case js.TypeUndefined, js.TypeNull:
+	case js.TypeObject:
+		var err error
+		if text, err = jshost.JSONText(c); err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
+	default:
+		return nil, errors.New("config must be an object")
 	}
-	return len(p), nil
+	return config.Parse("the config of harnessConnect", []byte(text))
 }
 
 // runtimes builds the Runtimes of the connection: one Runtime for each work
@@ -94,7 +104,7 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 		Version:        "wasm",
 		Getenv:         func(k string) string { return o.env[k] },
 		Logger:         o.logger,
-		ModelTransport: func(string) http.RoundTripper { return fetchRT{headers: o.proxyHeaders} },
+		ModelTransport: func(string) http.RoundTripper { return jshost.FetchRT{Headers: o.proxyHeaders} },
 		Tools:          o.tools,
 	})
 }
@@ -114,12 +124,12 @@ func harnessConnect(_ js.Value, args []js.Value) any {
 	opts := readOptions(o)
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	queue := newFrameQueue()
-	go queue.drain(inW)
+	queue := jshost.NewFrameQueue()
+	go queue.Drain(inW)
 	outDone := make(chan struct{})
 	go func() {
 		defer close(outDone)
-		pumpFrames(outR, opts.onFrame, func(err error) { opts.logger.Error("onFrame", "error", err.Error()) })
+		jshost.PumpFrames(outR, opts.onFrame, func(err error) { opts.logger.Error("onFrame", "error", err.Error()) })
 	}()
 	done := make(chan struct{})
 	go func() {
@@ -135,28 +145,13 @@ func harnessConnect(_ js.Value, args []js.Value) any {
 	handle := js.Global().Get("Object").New()
 	handle.Set("send", js.FuncOf(func(_ js.Value, a []js.Value) any {
 		if len(a) > 0 && a[0].Type() == js.TypeString {
-			queue.push(a[0].String())
+			queue.Push(a[0].String())
 		}
 		return nil
 	}))
 	handle.Set("close", js.FuncOf(func(js.Value, []js.Value) any {
-		queue.close()
-		return settleWhen(done)
+		queue.Close()
+		return jshost.SettleWhen(done)
 	}))
 	return handle
-}
-
-// settleWhen returns a promise that resolves when done closes.
-func settleWhen(done <-chan struct{}) js.Value {
-	var executor js.Func
-	executor = js.FuncOf(func(_ js.Value, a []js.Value) any {
-		resolve := a[0]
-		go func() {
-			<-done
-			resolve.Invoke()
-		}()
-		go executor.Release()
-		return nil
-	})
-	return js.Global().Get("Promise").New(executor)
 }

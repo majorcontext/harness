@@ -5,7 +5,8 @@
 //
 // The options file holds the harnessConnect options that Node supplies
 // (configPath, which the host reads into config, storeDir, env, builtinTools),
-// echoTool, which adds a JavaScript tool, and online, which sets navigator.onLine.
+// echoTool and jsTools, which add JavaScript tools, connect, which overrides
+// harnessConnect options, cyclicConfig, and online, which sets navigator.onLine.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -44,20 +45,30 @@ const echoTool = {
   run: async (input) => "echo:" + input.text,
 };
 
+const jsTools = {
+  js_cyclic: { name: "js_cyclic", description: "Returns a cyclic object.", run: async () => { const o = {}; o.self = o; return o; } },
+  js_reject: { name: "js_reject", description: "Rejects with a plain object.", run: async () => Promise.reject({ code: 1 }) },
+};
+
 let config = {};
 try {
   config = JSON.parse(fs.readFileSync(options.configPath, "utf8"));
 } catch (err) {
   if (err.code !== "ENOENT") throw err;
 }
+if (options.cyclicConfig) {
+  config = {};
+  config.self = config;
+}
 const conn = globalThis.harnessConnect({
   config,
   storeDir: options.storeDir,
   env: options.env,
   builtinTools: options.builtinTools,
-  tools: options.echoTool ? [echoTool] : undefined,
+  tools: [...(options.echoTool ? [echoTool] : []), ...(options.jsTools ?? []).map((name) => jsTools[name])],
   onFrame: (frame) => process.stdout.write(frame + "\n"),
   onLog: (line) => process.stderr.write(line + "\n"),
+  ...options.connect,
 });
 
 let closing;

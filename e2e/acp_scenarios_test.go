@@ -37,11 +37,11 @@ type acpScenario struct {
 	// wireOnly leaves the requests and the sessions out of the golden, for a row whose model traffic depends on timing.
 	wireOnly bool
 	steps    []acpStep
-	// needsMCP marks a row that passes an mcpServers entry. schedulerOrder
-	// marks one whose frames interleave by goroutine scheduling, which the
-	// single thread of the wasm module orders differently. The Node wasm host
-	// skips both.
-	needsMCP, schedulerOrder bool
+	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
+	// one that passes an mcpServers entry. schedulerOrder marks one whose
+	// frames interleave by goroutine scheduling, which the single thread of the
+	// wasm module orders differently. The Node wasm host skips all three.
+	needsExec, needsMCP, schedulerOrder bool
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -240,7 +240,7 @@ func (sc acpScenario) runsOn(host string) bool {
 	case "binary":
 		return len(sc.allowed) == 0
 	case nodeHostName:
-		return !sc.needsMCP && !sc.schedulerOrder
+		return !sc.needsExec && !sc.needsMCP && !sc.schedulerOrder
 	}
 	return true
 }
@@ -275,7 +275,7 @@ func TestACPScenarios(t *testing.T) {
 				update := *updateGoldens && (host.name == "binary" || len(sc.allowed) > 0 && host.name == "in-process")
 				got := acpGoldenOf(t, c, sc.wireOnly)
 				if host.name == nodeHostName {
-					got = alignNodeMCP(t, got)
+					got = alignNodeGolden(t, got)
 				}
 				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), got, update)
 			})

@@ -1,6 +1,6 @@
 //go:build js
 
-package main
+package jshost
 
 import (
 	"context"
@@ -21,36 +21,58 @@ type jsTool struct {
 	obj  js.Value
 }
 
-// readTools reads the tools array of the harnessConnect options.
-func readTools(list js.Value) ([]harness.Tool, error) {
-	if list.Type() != js.TypeObject {
+// ReadTools reads the tools array of the harnessConnect options. An absent value
+// is no tools. A value that is not an array, or an element without a name and a
+// run function, is an error.
+func ReadTools(list js.Value) ([]harness.Tool, error) {
+	if !present(list) {
 		return nil, nil
+	}
+	if !isArray(list) {
+		return nil, errors.New("tools must be an array")
 	}
 	var tools []harness.Tool
 	for i := 0; i < list.Length(); i++ {
-		o := list.Index(i)
-		name := stringField(o, "name")
-		if name == "" || o.Get("run").Type() != js.TypeFunction {
-			return nil, fmt.Errorf("tools[%d] needs a name and a run function", i)
+		t, err := readTool(list.Index(i))
+		if err != nil {
+			return nil, fmt.Errorf("tools[%d]: %w", i, err)
 		}
-		schema := `{"type":"object"}`
-		switch s := o.Get("schema"); s.Type() {
-		case js.TypeString:
-			schema = s.String()
-		case js.TypeObject:
-			text, err := jsonText(s)
-			if err != nil {
-				return nil, fmt.Errorf("tool %s: schema: %w", name, err)
-			}
-			schema = text
-		}
-		if !json.Valid([]byte(schema)) {
-			return nil, fmt.Errorf("tool %s: schema is not JSON", name)
-		}
-		tools = append(tools, jsTool{obj: o, spec: protocol.ToolSpec{
-			Name: name, Description: stringField(o, "description"), InputSchema: json.RawMessage(schema)}})
+		tools = append(tools, t)
 	}
 	return tools, nil
+}
+
+func readTool(o js.Value) (harness.Tool, error) {
+	if o.Type() != js.TypeObject {
+		return nil, errors.New("must be an object")
+	}
+	name, err := StringField(o, "name")
+	if err != nil {
+		return nil, err
+	}
+	desc, err := StringField(o, "description")
+	if err != nil {
+		return nil, err
+	}
+	if name == "" || o.Get("run").Type() != js.TypeFunction {
+		return nil, errors.New("needs a name and a run function")
+	}
+	schema := `{"type":"object"}`
+	switch s := o.Get("schema"); s.Type() {
+	case js.TypeString:
+		schema = s.String()
+	case js.TypeObject:
+		if schema, err = JSONText(s); err != nil {
+			return nil, fmt.Errorf("schema: %w", err)
+		}
+	case js.TypeUndefined, js.TypeNull:
+	default:
+		return nil, errors.New("schema must be an object or a JSON string")
+	}
+	if !json.Valid([]byte(schema)) {
+		return nil, errors.New("schema is not JSON")
+	}
+	return jsTool{obj: o, spec: protocol.ToolSpec{Name: name, Description: desc, InputSchema: json.RawMessage(schema)}}, nil
 }
 
 func (t jsTool) Spec() protocol.ToolSpec { return t.spec }
@@ -60,14 +82,13 @@ func (t jsTool) Spec() protocol.ToolSpec { return t.spec }
 // the signal of its second argument.
 func (t jsTool) Run(ctx context.Context, call harness.Call) (res protocol.ToolResult, err error) {
 	defer func() {
-		if r := recover(); r != nil {
-			e, ok := r.(js.Error)
-			if !ok {
-				panic(r)
+		if err != nil {
+			if je, ok := errors.AsType[*JSError](err); ok {
+				err = fmt.Errorf("tool %s: %w", t.spec.Name, je)
 			}
-			err = fmt.Errorf("tool %s: %w", t.spec.Name, errorOf(e.Value))
 		}
 	}()
+	defer recovered(&err)
 	args := call.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
@@ -79,11 +100,8 @@ func (t jsTool) Run(ctx context.Context, call harness.Call) (res protocol.ToolRe
 	stop := context.AfterFunc(ctx, func() { ac.Call("abort") })
 	defer stop()
 	ret := t.obj.Call("run", input, opts)
-	v, err := await(ctx, js.Global().Get("Promise").Call("resolve", ret))
+	v, err := Await(ctx, js.Global().Get("Promise").Call("resolve", ret))
 	if err != nil {
-		if je, ok := errors.AsType[*jsError](err); ok {
-			return protocol.ToolResult{}, fmt.Errorf("tool %s: %w", t.spec.Name, je)
-		}
 		return protocol.ToolResult{}, err
 	}
 	return resultOf(v)
@@ -101,7 +119,7 @@ func resultOf(v js.Value) (protocol.ToolResult, error) {
 			return protocol.ToolResult{Text: text.String(), IsError: v.Get("isError").Truthy()}, nil
 		}
 	}
-	text, err := jsonText(v)
+	text, err := JSONText(v)
 	if err != nil {
 		return protocol.ToolResult{}, err
 	}
