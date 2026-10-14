@@ -111,6 +111,9 @@ func (a *Actor) onRun(r *running, f func() error) error {
 func (t *turnRun) Ask(callID, kind string, payload json.RawMessage) error {
 	a := t.a
 	return a.onRun(t.r, func() error {
+		if !t.r.ownsLoop && !a.questions() {
+			return turn.ErrNoQuestions
+		}
 		i := slices.IndexFunc(a.state.OpenToolCalls(), func(c eventlog.OpenToolCall) bool { return c.CallID == callID })
 		if i < 0 {
 			return fmt.Errorf("session: tool call %s is not open", callID)

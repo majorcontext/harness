@@ -36,12 +36,12 @@ type actorTools struct {
 	r *running
 }
 
-func (s actorTools) Toolset(_ context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
+func (s actorTools) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	if s.a.cfg.Backend.Capabilities(model).OwnsLoop {
 		return turn.Toolset{Tools: []turn.Tool{historyTool{s.a}}}
 	}
 	var ts turn.Toolset
-	if s.r.asks {
+	if s.mayAsk(ctx) {
 		ts.Tools = turn.Restrict([]turn.Tool{turn.NewAskTool()}, allowed)
 	}
 	if s.a.cfg.Retain {
@@ -50,6 +50,13 @@ func (s actorTools) Toolset(_ context.Context, _ []protocol.LogMessage, allowed 
 		}
 	}
 	return ts
+}
+
+// mayAsk reports whether the session may ask a question now. A goal that
+// becomes active during a turn takes the permission away for the later model calls.
+func (s actorTools) mayAsk(ctx context.Context) bool {
+	ok, _ := call(ctx, s.a, func(reply func(bool, error)) { reply(s.a.run == s.r && s.a.questions(), nil) })
+	return ok
 }
 
 func (actorTools) Before(_ context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {

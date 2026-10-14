@@ -30,6 +30,14 @@ func laneOf(t *testing.T, r *run) laneHost {
 	return d
 }
 
+// awaitCall waits until the log of the session holds the tool call callID.
+type awaitCall struct{ as, callID string }
+
+func (a awaitCall) run(t *testing.T, r *run) {
+	t.Helper()
+	laneOf(t, r).awaitToolCall(t, r.id(t, a.as), a.callID)
+}
+
 // answerQuestion answers the open question call callID with answers.
 type answerQuestion struct {
 	as, callID string
@@ -293,4 +301,40 @@ func (a requestHolds) run(t *testing.T, r *run) {
 		}
 	}
 	t.Fatalf("the newest request does not hold %q", a.text)
+}
+
+func TestContractModelAPIQuestionStops(t *testing.T) {
+	ask := harnesstest.Step{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{askCall("toolu_ask", "Which?")}}}
+	rest := harnesstest.Step{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}
+	runScenarios(t, []scenario{
+		{
+			name:    "model_api_interrupt_during_the_before_hook_of_a_question_opens_no_request",
+			driver:  askLaneWith(pluginConfig(t, map[string]any{"before_delay_ms": 3000})),
+			model:   []harnesstest.Step{ask, rest},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitCall{as: "a", callID: "toolu_ask"}, interrupt{as: "a"}, awaitTurnEnd{as: "a"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name:   "model_api_goal_set_during_a_model_call_refuses_the_question",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{askCall("toolu_ask", "Which?")}, Block: true}},
+				{Name: "after", Match: harnesstest.LastToolResult("ask_user_question"), Reply: harnesstest.Reply{Text: "ok"}},
+				evaluatorStep("judge", "MET: ok", true), rest,
+			},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitRequests{n: 1}, setGoal{as: "a", condition: "say ok", maxTurns: 3},
+				release{step: "ask"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name:   "model_api_handoff_while_a_sibling_tool_runs_opens_no_request",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				{Name: "calls", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_slow", Name: "bash", Input: map[string]any{"command": "touch tool-running; sleep 1"}},
+					askCall("toolu_ask", "Which?"),
+				}}},
+				rest,
+			},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitFile{path: "tool-running"}, restart{}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+	})
 }

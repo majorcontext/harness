@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/majorcontext/harness/protocol"
 )
+
+// ErrNoQuestions is the error of Sink.Ask when the session may not ask a question now.
+var ErrNoQuestions = errors.New("you cannot ask the user a question now; continue without asking")
 
 // AskTool is the name of the tool that lets a model of the harness loop ask
 // the user a question.
@@ -169,7 +173,10 @@ func splitAsks(t runner, calls []protocol.ToolCall) (asks, rest []protocol.ToolC
 // an error result. Otherwise it opens the request of that call, and the call
 // stays open. Every later call gets an error result. It reports whether a
 // request opened.
-func openAsk(ctx context.Context, t runner, to Sink, asks []protocol.ToolCall, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
+func openAsk(ctx, step context.Context, t runner, to Sink, asks []protocol.ToolCall, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
+	if err := cmp.Or(context.Cause(ctx), context.Cause(step)); err != nil {
+		return false, err
+	}
 	opened := false
 	for i, c := range asks {
 		deny, args := "Only one question is open at a time. Ask this question again after the user answers.", c.Arguments
@@ -180,18 +187,25 @@ func openAsk(ctx context.Context, t runner, to Sink, asks []protocol.ToolCall, r
 				run, deny = t.hooks.Before(ctx, c)
 				args = run.Arguments
 			}
+			if err := cmp.Or(context.Cause(ctx), context.Cause(step)); err != nil {
+				return false, err
+			}
 			if err := checkAsk(args); deny == "" && err != nil {
 				deny = err.Error()
 			}
 			if deny == "" {
-				if err := to.Ask(c.ID, protocol.RequestQuestion, args); err != nil {
+				err := to.Ask(c.ID, protocol.RequestQuestion, args)
+				if err == nil {
+					opened = true
+					continue
+				}
+				if !errors.Is(err, ErrNoQuestions) {
 					return false, err
 				}
-				opened = true
-				continue
+				deny = err.Error()
 			}
 		}
-		if err := record(c, protocol.ToolResult{Text: deny, IsError: true}); err != nil {
+		if err := record(c, t.join(ctx, c, protocol.ToolResult{Text: deny, IsError: true})); err != nil {
 			return opened, err
 		}
 	}
@@ -199,10 +213,11 @@ func openAsk(ctx context.Context, t runner, to Sink, asks []protocol.ToolCall, r
 }
 
 // answerAsks records the result of each question call of req.History that has
-// no result and that the user answered. It reads the questions from the
-// payload of the request, which the hooks may have rewritten. It runs before
-// the pins of the first model call, so that no pin comes between a call and its result.
-func answerAsks(ctx context.Context, src Source, to Sink, req *Request, record func(protocol.ToolCall, protocol.ToolResult) error) error {
+// no result and that the user answered, between the hooks of t. The hooks see
+// the call with the input of the request, which a before hook may have
+// rewritten. It runs before the pins of the first model call, so that no pin
+// comes between a call and its result.
+func answerAsks(ctx context.Context, t runner, to Sink, req *Request, record func(protocol.ToolCall, protocol.ToolResult) error) error {
 	done := map[string]bool{}
 	for _, m := range req.History {
 		for _, p := range m.Parts {
@@ -211,7 +226,6 @@ func answerAsks(ctx context.Context, src Source, to Sink, req *Request, record f
 			}
 		}
 	}
-	var t *runner
 	for _, m := range slices.Clone(req.History) {
 		for _, p := range m.Parts {
 			if p.Type != protocol.LogPartToolCall || p.Name != AskTool || done[p.CallID] {
@@ -221,18 +235,11 @@ func answerAsks(ctx context.Context, src Source, to Sink, req *Request, record f
 			if !ok || res.Resolution != protocol.ResolutionAnswered {
 				continue
 			}
-			if t == nil {
-				var ts Toolset
-				if src != nil {
-					ts = src.Toolset(ctx, req.History, req.AllowedTools, req.Model)
-				}
-				t = &runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
-			}
 			args, ok := to.Asked(p.CallID)
 			if !ok {
 				args = p.Arguments
 			}
-			c := protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: p.Arguments}
+			c := protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: args}
 			r := protocol.ToolResult{Text: answerText(args, res.Answer)}
 			if t.hooks != nil {
 				r = t.hooks.After(ctx, c, r)

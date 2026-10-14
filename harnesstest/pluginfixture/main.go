@@ -112,7 +112,7 @@ var config struct {
 	BeforeFail string `json:"before_fail"`
 	// HookTimeouts sets hook_timeouts in the manifest, in milliseconds by hook name.
 	HookTimeouts map[string]int `json:"hook_timeouts"`
-	// BeforeDelayMS makes a bash before hook wait this many milliseconds before it answers.
+	// BeforeDelayMS makes a bash or ask_user_question before hook wait this many milliseconds before it answers.
 	BeforeDelayMS int `json:"before_delay_ms"`
 	// HostCalls adds the tools fixture_mcp and fixture_generate, which call the host.
 	HostCalls bool `json:"host_calls"`
@@ -396,6 +396,9 @@ func before(params json.RawMessage) (any, *rpcError) {
 		} `json:"args"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if req.Tool == "ask_user_question" && config.BeforeDelayMS > 0 {
+		time.Sleep(time.Duration(config.BeforeDelayMS) * time.Millisecond)
+	}
 	if req.Tool == "ask_user_question" && config.DenyAsk != "" && strings.Contains(string(params), config.DenyAsk) {
 		return map[string]any{"deny": "denied by " + cmp.Or(config.Name, "fixture")}, nil
 	}

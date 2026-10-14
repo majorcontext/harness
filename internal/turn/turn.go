@@ -273,16 +273,18 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err
 		}
-		if first && !caps.OwnsLoop {
-			if err := answerAsks(ctx, src, to, &req, record); err != nil {
-				return err
-			}
-		}
 		s, call := &sink{Turn: to, log: cmp.Or(lim.Log, slog.Default())}, req
 		if err := applyParams(step, b, caps, req, &call); err != nil {
 			return err
 		}
-		t := describe(step, &call, src, to, caps.OwnsLoop)
+		ts := toolsetOf(step, &call, src)
+		if first && !caps.OwnsLoop {
+			if err := answerAsks(ctx, runner{hooks: ts.Hooks}, to, &req, record); err != nil {
+				return err
+			}
+			call.History = req.History
+		}
+		t := describe(&call, ts, to, caps.OwnsLoop)
 		err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
@@ -302,7 +304,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
 			return err
 		}
-		if opened, err := openAsk(ctx, t, to, asks, record); opened || err != nil {
+		if opened, err := openAsk(ctx, step, t, to, asks, record); opened || err != nil {
 			return err
 		}
 		in, err := to.Steer()
