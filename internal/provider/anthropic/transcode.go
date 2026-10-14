@@ -262,9 +262,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// KNOWN LIMITATION (live-gated), the ENABLE direction: turning thinking ON
 	// does not synthesize a leading thinking block for a prior assistant turn
 	// that made tool calls without one. The API can reject a request that
-	// continues such a turn ("thinking blocks expected before tool_use"). (The
-	// OFF direction — a stored thinking block replayed with thinking disabled —
-	// IS fixed, by the strip in transcodeParts below.)
+	// continues such a turn ("thinking blocks expected before tool_use").
 	//
 	// The general trigger is any mid-turn enable, not only abort. The turn loop
 	// rebuilds the request with the effort of the session FRESH on every tool
@@ -280,7 +278,6 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// API — the turn completed, no reject — so this limitation is
 	// theoretical, not confirmed. No fix is warranted unless a probe
 	// reproduces a reject.
-	// (The OFF direction, by contrast, DID wedge and is fixed below.)
 	//
 	// A model that takes the level as an effort field gets output_config.effort
 	// with the level. A model with that field and no budget gets adaptive
