@@ -158,8 +158,9 @@ var acpCompactionScenarios = []acpScenario{
 		}),
 	},
 	{
-		name: "a_cancelled_compaction_ends_the_entity_cancelled",
-		cite: "A `status` frame with `compaction_canceled` sends one with the status `cancelled`.",
+		name:     "a_cancelled_compaction_ends_the_entity_cancelled",
+		wireOnly: true,
+		cite:     "A `status` frame with `compaction_canceled` sends one with the status `cancelled`.",
 		model: []harnesstest.Step{
 			{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "ok"}},
 			{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "ok", Usage: harnesstest.Usage{Input: 900, Output: 1}}},
