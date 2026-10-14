@@ -341,7 +341,7 @@ func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path != codexPath && r.URL.Path != codexModelsPath:
-		o.fault("request path %q, want %q", r.URL.Path, codexPath)
+		o.fault("request path %q, want %q (from %s, user agent %q)", r.URL.Path, codexPath, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusNotFound, "harnesstest: unexpected path")
 	case o.opts.Credentials != nil && !accepted:
 		kind := "sse"
