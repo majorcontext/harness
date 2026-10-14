@@ -42,4 +42,4 @@ jobs:
         env:
           HARNESS_E2E_BROWSER: '1'
           HARNESS_E2E_SOAK: '1'
-        run: go test -count=1 -timeout 15m ./e2e/ -run '^TestBrowserSoak$'
+        run: go test -race -count=1 -timeout 15m ./e2e/ -run '^TestBrowserSoak$'

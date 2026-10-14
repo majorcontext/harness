@@ -252,6 +252,9 @@ func TestBrowserSoak(t *testing.T) {
 		t.Errorf("grep turn = %q with %d tool calls, want end_turn and 1", r.Grep.StopReason, len(r.Grep.Tools))
 	}
 	for name, p := range r.Phases {
+		if p.PageHeapMB <= 0 || p.WasmMB <= 0 {
+			t.Errorf("phase %s: a memory read failed: %+v", name, p)
+		}
 		if p.PageHeapMB > soakMemoryBound || p.WasmMB > soakMemoryBound {
 			t.Errorf("phase %s: memory %+v above %.0f MB", name, p, soakMemoryBound)
 		}
