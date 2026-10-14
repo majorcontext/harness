@@ -111,12 +111,11 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			if o.err != nil {
 				return nil, o.err
 			}
-			cfg, err := config.MergeProject(o.user, "the config of harnessConnect", cwd)
+			cfg, err := config.MergeProject(o.user, "the config of harnessConnect", cwd, o.proxyBase)
 			if err != nil {
 				return nil, err
 			}
-			out := cfg.WithProxyBase(o.proxyBase)
-			return &out, nil
+			return cfg, nil
 		},
 		Shared: func(*config.Config) (harness.Store, harness.Owner, error) {
 			if o.storeDir == "" {

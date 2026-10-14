@@ -427,7 +427,7 @@ func (k *browserKit) failureRows() {
 // headerRows adds the headers of the browser and of the proxy.
 func (k *browserKit) headerRows() {
 	t := k.t
-	text, unused, add, noFailure := k.text, k.unused, k.add, k.noFailure
+	text, add, noFailure := k.text, k.add, k.noFailure
 	{
 		f := newBrowserFront(t, nil, text("ok"))
 		headers := map[string]string{
@@ -464,6 +464,26 @@ func (k *browserKit) headerRows() {
 			}
 			if got := p.header.Get("X-Custom"); got != "kept" {
 				t.Errorf("X-Custom = %q, want kept", got)
+			}
+		})
+	}
+}
+
+// proxyRows adds the direct Anthropic header and the headers of the proxy.
+func (k *browserKit) proxyRows() {
+	t := k.t
+	text, unused, add, noFailure := k.text, k.unused, k.add, k.noFailure
+	{
+		f := newBrowserFront(t, nil, text("direct"))
+		headers := map[string]string{"anthropic-dangerous-direct-browser-access": "true"}
+		add("the direct Anthropic header reaches the model server", map[string]any{"kind": "turn", "baseURL": f.URL, "extraHeaders": headers}, func(t *testing.T, res browserResult, _ string) {
+			noFailure(t, res)
+			if res.StopReason != "end_turn" {
+				t.Fatalf("stopReason = %q, error %+v", res.StopReason, res.Error)
+			}
+			posts := f.requests(http.MethodPost)
+			if len(posts) != 1 || posts[0].header.Get("Anthropic-Dangerous-Direct-Browser-Access") != "true" {
+				t.Errorf("model server requests = %+v, want one with the direct browser access header", posts)
 			}
 		})
 	}
@@ -520,6 +540,7 @@ func TestBrowserRows(t *testing.T) {
 	k.streamRows()
 	k.failureRows()
 	k.headerRows()
+	k.proxyRows()
 	k.storeRows()
 	k.fsRows()
 	specs := make([]map[string]any, len(k.rows))
