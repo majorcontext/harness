@@ -337,6 +337,9 @@ type EffortControl struct {
 	// ThinksByDefault is true when a request that omits the thinking field
 	// runs adaptive thinking.
 	ThinksByDefault bool
+	// OffDisables is true when the model thinks by default and lists off, so
+	// that off needs an explicit disabled thinking field.
+	OffDisables bool
 }
 
 // AnthropicEfforts returns the effort control of an Anthropic model id, with
@@ -350,6 +353,7 @@ func AnthropicEfforts(model string) (EffortControl, bool) {
 	model = stripBedrockVersionSuffix(model)
 	c, ok := controlOf(anthropicInfo, model)
 	c.ThinksByDefault = ok && c.Field && !c.Budget && !thinkingOffByDefault[model]
+	c.OffDisables = c.ThinksByDefault && slices.Contains(c.Levels, "off")
 	return c, ok
 }
 

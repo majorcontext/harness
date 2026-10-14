@@ -54,7 +54,7 @@ type apiOutputConfig struct {
 }
 
 // apiThinking enables Anthropic extended thinking: type "enabled" with a token
-// budget, or type "adaptive" with none. The API requires max_tokens strictly
+// budget, type "adaptive" with none, or type "disabled". The API requires max_tokens strictly
 // greater than budget_tokens, and rejects an explicit temperature or top_p
 // while thinking is enabled — transcodeRequest enforces both.
 type apiThinking struct {
@@ -292,6 +292,8 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		out.MaxTokens = max(out.MaxTokens, adaptiveOutputFloor(req.Effort))
 		out.Temperature = nil
 		out.TopP = nil
+	case req.Effort == modelref.EffortOff && req.OffDisables:
+		out.Thinking = &apiThinking{Type: "disabled"}
 	case thinkingEnabled:
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
 		if out.MaxTokens < budget+thinkingCompletionMargin {
@@ -333,7 +335,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
-		blocks, err := transcodeParts(m.Parts, out.Thinking != nil || req.ThinksByDefault, true)
+		blocks, err := transcodeParts(m.Parts, thinksOnWire(out.Thinking, req.ThinksByDefault), true)
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
@@ -357,6 +359,15 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
 
 	return out, nil
+}
+
+// thinksOnWire reports whether a request thinks: it sends thinking other than
+// disabled, or omits the field on a model that thinks by default.
+func thinksOnWire(t *apiThinking, byDefault bool) bool {
+	if t == nil {
+		return byDefault
+	}
+	return t.Type != "disabled"
 }
 
 // transcodeParts renders parts to wire blocks. thinkingEnabled reports whether

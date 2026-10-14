@@ -55,7 +55,7 @@ func TestContractEffortLevels(t *testing.T) {
 			actions: effortTurns("anthropic/bedrock_mantle/anthropic.claude-opus-5-5-v1:0", "max"),
 		},
 		{
-			name:    "thinking_off_on_a_model_that_lists_off_sends_no_thinking",
+			name:    "thinking_off_on_a_model_that_lists_off_sends_thinking_disabled",
 			model:   effortSteps("off"),
 			actions: effortTurns("anthropic/claude-sonnet-5", "off"),
 		},
@@ -111,6 +111,11 @@ func TestContractEffortStoredThinking(t *testing.T) {
 			name:    "stored_thinking_leaves_the_history_of_a_model_with_thinking_off_by_default",
 			model:   steps,
 			actions: turns("anthropic/claude-opus-4-7", ""),
+		},
+		{
+			name:    "stored_thinking_leaves_the_history_when_thinking_is_disabled_on_a_model_that_thinks_by_default",
+			model:   steps,
+			actions: turns("anthropic/claude-sonnet-5", "off"),
 		},
 		{
 			name:    "stored_thinking_leaves_the_history_when_a_budget_model_has_thinking_off",
