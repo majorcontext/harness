@@ -394,7 +394,7 @@ func (k *browserKit) streamRows() {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("module %d bytes raw, %d bytes brotli (information only), boot %.0f ms at 50 Mbps and 40 ms", info.Size(), res.BrotliBytes, res.BootMs)
+			t.Logf("module %d bytes raw, %d bytes brotli at quality 9 (information only), boot %.0f ms at 50 Mbps and 40 ms", info.Size(), res.BrotliBytes, res.BootMs)
 			if res.StopReason != "end_turn" {
 				t.Errorf("stopReason = %q, error %+v", res.StopReason, res.Error)
 			}

@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"os"
@@ -22,10 +23,52 @@ const browserWorkDir = "/work"
 // set of sdk/embed and the page tool js_echo.
 var browserDefaultTools = []string{"edit_file", "glob", "grep", "js_echo", "ls", "read_file", "read_tool_result", "session_info", "write_file"}
 
-// startACPBrowser runs the harness module in a Worker of headless Chromium
-// and speaks ACP on stdio through sdk/embed/test/browser-host.mjs. The model
-// origin is the scripted server of the row behind a CORS wrapper.
-func startACPBrowser(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func()) {
+// startSharedChromium runs one headless Chromium for all rows of t, through
+// sdk/embed/test/browser-server.mjs, and returns its WebSocket endpoint. Each row
+// works in a browser context of its own, so no row shares storage, OPFS, or Web
+// Locks with another. The process ends when t and its subtests end.
+func startSharedChromium(t *testing.T) string {
+	t.Helper()
+	node, embed := browserTools(t)
+	cmd := exec.Command(node, filepath.Join(embed, "test", "browser-server.mjs"))
+	cmd.Dir = embed
+	stderr := &lockedBuffer{}
+	cmd.Stderr = stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := startGroup(t, cmd)
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = g.stopGracefully(cleanupGrace)
+	})
+	line, err := bufio.NewReader(stdout).ReadBytes('\n')
+	if err != nil {
+		<-g.exited
+		if cmd.ProcessState.ExitCode() == browserMissingExit {
+			t.Fatalf("Chromium is not installed: run npx playwright install chromium\n%s", stderr.String())
+		}
+		t.Fatalf("browser-server.mjs ended with %s\n%s", cmd.ProcessState, stderr.String())
+	}
+	var ready struct {
+		WSEndpoint string `json:"wsEndpoint"`
+	}
+	if err := json.Unmarshal(line, &ready); err != nil || ready.WSEndpoint == "" {
+		t.Fatalf("browser-server.mjs output %q: %v", line, err)
+	}
+	return ready.WSEndpoint
+}
+
+// startACPBrowser runs the harness module in a Worker of a context of the shared
+// Chromium at wsEndpoint and speaks ACP on stdio through
+// sdk/embed/test/browser-host.mjs. The model origin is the scripted server of
+// the row behind a CORS wrapper.
+func startACPBrowser(t *testing.T, wsEndpoint string, env acpEnv) (io.WriteCloser, io.Reader, func()) {
 	t.Helper()
 	node, embed := browserTools(t)
 	wasm, execJS, err := buildNodeModule()
@@ -45,7 +88,7 @@ func startACPBrowser(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func(
 	provider["base_url"] = front.URL
 	delete(provider, "api_key_env")
 	page := browserPage(t, wasm, execJS, &sync.Map{})
-	b, err := json.Marshal(map[string]any{"origin": page.URL, "config": cfg})
+	b, err := json.Marshal(map[string]any{"origin": page.URL, "config": cfg, "wsEndpoint": wsEndpoint})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,5 +144,9 @@ func TestACPBrowserScenarios(t *testing.T) {
 	skipShort(t)
 	browserTools(t)
 	t.Parallel()
-	runACPScenarios(t, []acpHost{{name: browserHostName, start: startACPBrowser}})
+	wsEndpoint := startSharedChromium(t)
+	start := func(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func()) {
+		return startACPBrowser(t, wsEndpoint, env)
+	}
+	runACPScenarios(t, []acpHost{{name: browserHostName, start: start}})
 }
