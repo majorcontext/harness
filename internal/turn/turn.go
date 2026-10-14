@@ -80,9 +80,10 @@ type Request struct {
 	Settings  protocol.Settings
 	// Instructions is the system prompt of the call.
 	Instructions string
-	// Skills is the skill segment of the session prompt, and Sent reports the prompt that a backend sent, for a backend that builds its own prompt.
+	// Skills is the skill segment of the session prompt, for a backend that builds its own prompt.
 	Skills string
-	Sent   func(system string)
+	// Sent receives the system prompt that a backend sent, when it builds its own prompt. nil: none.
+	Sent func(system string)
 	// Input holds the inputs that started the turn, as user messages.
 	Input []protocol.LogMessage
 	// History is the conversation that the model sees, Input included.
@@ -99,8 +100,7 @@ type Request struct {
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
-	// Steered receives a value when a steer input waits for Sink.Steer. It
-	// is nil when the turn takes no steer input.
+	// Steered receives a value when a steer input waits for Sink.Steer. nil: no steer input.
 	Steered <-chan struct{}
 	// MCPServers are the session MCP servers, for a backend that owns MCP. Never log their env or headers.
 	MCPServers map[string]MCPServer

@@ -365,16 +365,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	default:
 		return nil, fmt.Errorf("%w: %w", ErrSessionNotOwned, err)
 	}
-	var c protocol.SessionCreated
-	if l.created != nil {
-		c = *l.created
-	} else if c, err = r.createdForOpen(ctx, id); err != nil {
-		session.Discard(own, id, r.log)
-		return nil, err
-	}
-	root, depth, err := r.tree.Lineage(ctx, id, c.ParentID)
+	c, root, depth, err := r.lineageOf(ctx, own, id, l)
 	if err != nil {
-		session.Discard(own, id, r.log)
 		return nil, err
 	}
 	plug := r.pluginSession(id)
@@ -395,17 +387,18 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Record:          sp.Recording,
 		Retain:          r.workDir != "",
 		Prompt:          sp.System,
-		Skills:          sp.SkillList(), Sent: sp.Sent,
-		Appended:  r.appended(id, plug),
-		Params:    chatParams(plug),
-		Sync:      r.sync,
-		Log:       r.log,
-		Limits:    r.limits,
-		MaxTokens: r.maxTokens,
-		Threshold: r.threshold,
-		KeepTurns: r.keep,
-		Base:      r.base,
-		Go:        r.group.Go,
+		Skills:          sp.SkillList(),
+		Sent:            sp.Sent,
+		Appended:        r.appended(id, plug),
+		Params:          chatParams(plug),
+		Sync:            r.sync,
+		Log:             r.log,
+		Limits:          r.limits,
+		MaxTokens:       r.maxTokens,
+		Threshold:       r.threshold,
+		KeepTurns:       r.keep,
+		Base:            r.base,
+		Go:              r.group.Go,
 		Done: func(closeDone func()) {
 			if a != nil && a.Rejected() {
 				r.syncStopped.Store(true)

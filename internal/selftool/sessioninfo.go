@@ -50,9 +50,10 @@ type Prompt struct {
 	read     prompt.Info
 	segments []string
 
-	mu   sync.Mutex
-	turn []string
-	call modelCall
+	mu       sync.Mutex
+	turn     []string
+	reported bool
+	call     modelCall
 }
 
 // modelCall is what the newest model call took from the Source: the names of
@@ -81,7 +82,7 @@ func (p *Prompt) SkillList() string { return p.read.SkillList }
 // segments of the session, for a backend that builds its own prompt.
 func (p *Prompt) Sent(system string) {
 	p.mu.Lock()
-	p.turn = []string{system}
+	p.turn, p.reported = []string{system}, true
 	p.mu.Unlock()
 }
 
@@ -96,7 +97,7 @@ func (p *Prompt) System() string {
 		}
 	}
 	p.mu.Lock()
-	p.turn = segs
+	p.turn, p.reported = segs, false
 	p.mu.Unlock()
 	return strings.Join(segs, "\n\n")
 }
@@ -122,12 +123,12 @@ func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, al
 }
 
 // sent returns the system segments and the sorted tool names of the newest
-// model call.
+// model call. A backend that reported its prompt sent no prompt of the call.
 func (p *Prompt) sent() (system, tools []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	system = slices.Clone(p.turn)
-	if p.call.prompt != "" {
+	if p.call.prompt != "" && !p.reported {
 		system = append(system, p.call.prompt)
 	}
 	tools = slices.Clone(p.call.tools)
