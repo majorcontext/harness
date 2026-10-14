@@ -497,7 +497,8 @@ everything else.
 
 [`sdk/embed`](sdk/embed/README.md) runs Harness as a WebAssembly module in a
 Worker, or spawns `harness acp` under Node. Either way, you get an ACP stream.
-The browser has no `bash` or `process` tool. Keep model keys behind a
+In the WebAssembly module, the default tools have no `bash` or `process`;
+`shellTool()` adds a shell for the browser. Keep model keys behind a
 same-origin proxy, never in the page.
 
 ## Examples
@@ -575,9 +576,9 @@ and `extra_headers` (sent on every request).
 
 To list the models of a gateway or a local server, set `models` on the entry:
 `"models": ["llama3.1", "qwen3"]`. `Runtime.Models`, `GET /models`, and the
-model picker of an ACP client then list exactly those ids, in order. An id that
-models.dev knows gets its name and effort levels from models.dev. An empty or duplicate id
-fails config loading.
+model picker of an ACP client then list those ids for that provider, in order.
+An id in the bundled model tables of Harness gets its name and effort levels
+from those tables. An empty or duplicate id fails config loading.
 
 ### OpenRouter
 
