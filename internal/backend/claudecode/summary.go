@@ -6,10 +6,10 @@ import (
 )
 
 var (
-	analysisLines    = regexp.MustCompile(`(?im)^[ \t]*<analysis>[ \t]*\r?\n[\s\S]*?\n[ \t]*</analysis>[ \t]*$`)
+	analysisLines    = regexp.MustCompile(`(?im)^[ \t]*<analysis>[ \t]*\r?\n[\s\S]*?\n[ \t]*</analysis>[ \t]*\r?$`)
 	analysisLeader   = regexp.MustCompile(`(?i)^\s*<analysis>[\s\S]*?</analysis>`)
 	summaryOpen      = regexp.MustCompile(`(?im)^[ \t]*<summary>[ \t]*\r?\n`)
-	summaryClose     = regexp.MustCompile(`(?im)^[ \t]*</summary>[ \t]*$`)
+	summaryClose     = regexp.MustCompile(`(?im)^[ \t]*</summary>[ \t]*\r?$`)
 	summaryOpenTag   = regexp.MustCompile(`(?i)<summary>`)
 	continuationLead = regexp.MustCompile(`(?i)^\s*This session is being continued from a previous conversation`)
 	persistedLead    = regexp.MustCompile(`^\s*This session is being continued from a previous conversation[^\n]*\n+Summary:[ \t]*\r?\n`)
@@ -24,21 +24,32 @@ var (
 // adds for the model. It returns "" for a continuationLead prompt with a framing
 // that it does not know, so that text for the model never reaches a reader.
 func plainSummary(raw string) string {
+	if continuationLead.MatchString(raw) {
+		return persistedSummary(raw)
+	}
 	text := analysisLines.ReplaceAllString(raw, "")
 	text = analysisLeader.ReplaceAllString(text, "")
 	if tagged, ok := taggedSummary(text); ok {
 		text = tagged
-	} else if continuationLead.MatchString(text) {
-		loc := persistedLead.FindStringIndex(text)
-		if loc == nil {
-			return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+// persistedSummary returns the body of a continuation prompt, or "" when its
+// opening or its closing is not one that the adapter knows.
+func persistedSummary(raw string) string {
+	loc := persistedLead.FindStringIndex(raw)
+	if loc == nil {
+		return ""
+	}
+	text, known := raw[loc[1]:], false
+	for _, tail := range persistedTail {
+		if loc := tail.FindStringIndex(text); loc != nil {
+			text, known = text[:loc[0]], true
 		}
-		text = text[loc[1]:]
-		for _, tail := range persistedTail {
-			if loc := tail.FindStringIndex(text); loc != nil {
-				text = text[:loc[0]]
-			}
-		}
+	}
+	if !known {
+		return ""
 	}
 	return strings.TrimSpace(text)
 }
