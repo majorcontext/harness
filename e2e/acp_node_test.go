@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -135,7 +136,33 @@ func startACPNodeOpts(t *testing.T, opts nodeHostOptions) (io.WriteCloser, io.Re
 	cmd := exec.Command(node, host, wasm, execJS, optsPath)
 	cmd.Dir = t.TempDir()
 	in, out, g, stderr := startACPCmd(t, cmd)
+	stallDumps.Store(t, func() string {
+		_ = syscall.Kill(g.cmd.Process.Pid, syscall.SIGUSR2)
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		deadline := time.NewTimer(3 * time.Second)
+		defer deadline.Stop()
+		state := "the host answered the state request"
+		for !strings.Contains(stderr.String(), "active resources:") {
+			select {
+			case <-tick.C:
+			case <-deadline.C:
+				state = "the host did not answer the state request; its event loop is blocked"
+			}
+			if strings.HasPrefix(state, "the host did not") {
+				break
+			}
+		}
+		report := state + "\nnode stderr:\n" + stderr.String()
+		g.kill()
+		return report
+	})
+	watchdog := time.AfterFunc(rowBound, func() {
+		t.Errorf("the Node host ran longer than %s%s", rowBound, stallReport(t))
+	})
 	t.Cleanup(func() {
+		watchdog.Stop()
+		stallDumps.Delete(t)
 		if t.Failed() {
 			t.Logf("node stderr:\n%s", stderr.String())
 		}

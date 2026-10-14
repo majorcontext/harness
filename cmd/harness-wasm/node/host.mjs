@@ -11,7 +11,14 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import v8 from "node:v8";
 import { acquireStoreLock } from "../../../sdk/embed/src/storelock.mjs";
+
+// Node 24 can deadlock in process.exit: the main thread joins the V8 worker
+// threads while a worker that compiles baseline code waits for a collection
+// that only the main thread can run. No concurrent baseline compile, no worker
+// that waits.
+v8.setFlagsFromString("--no-concurrent-sparkplug");
 
 const [wasmPath, execPath, optionsPath] = process.argv.slice(2);
 const options = JSON.parse(fs.readFileSync(optionsPath, "utf8"));
@@ -92,3 +99,12 @@ process.stdin.on("end", () => {
 });
 process.on("SIGINT", close);
 process.on("SIGTERM", close);
+
+process.on("SIGUSR2", () => {
+  const lines = [
+    "host state: closing=" + (closing !== undefined) + " pendingBytes=" + pending.length,
+    "stdin: ended=" + process.stdin.readableEnded + " destroyed=" + process.stdin.destroyed,
+    "active resources: " + process.getActiveResourcesInfo().join(","),
+  ];
+  process.stderr.write(lines.join("\n") + "\n");
+});
