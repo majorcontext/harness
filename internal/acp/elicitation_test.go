@@ -18,7 +18,9 @@ func TestFormOfMapsMultiSelectAndFreeTextQuestions(t *testing.T) {
 		"type": "object", "required": []string{"question_1", "question_2"},
 		"properties": map[string]any{
 			"question_1": map[string]any{"type": "array", "title": "Tools", "description": "Which tools?", "minItems": 1,
-				"items": map[string]any{"type": "string", "enum": []string{"lint", "test"}}},
+				"items": map[string]any{"anyOf": []any{
+					map[string]any{"const": "lint", "title": "lint"},
+					map[string]any{"const": "test", "title": "test", "description": "runs tests"}}}},
 			"question_2": map[string]any{"type": "string", "title": "Name it?", "description": "Name it?"},
 		},
 	}

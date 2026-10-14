@@ -69,10 +69,8 @@ func formOf(payload json.RawMessage) (questionForm, bool) {
 
 // optionProperty adds the options of a question to its property: a titled list for one answer, and a list of labels for more.
 func optionProperty(prop map[string]any, multi bool, options []questionOption) map[string]any {
-	labels := make([]string, len(options))
 	titled := make([]any, len(options))
 	for i, o := range options {
-		labels[i] = o.Label
 		option := map[string]any{"const": o.Label, "title": o.Label}
 		if o.Description != "" {
 			option["description"] = o.Description
@@ -81,7 +79,7 @@ func optionProperty(prop map[string]any, multi bool, options []questionOption) m
 	}
 	if multi {
 		prop["type"], prop["minItems"] = "array", 1
-		prop["items"] = map[string]any{"type": "string", "enum": labels}
+		prop["items"] = map[string]any{"anyOf": titled}
 		return prop
 	}
 	prop["oneOf"] = titled
@@ -195,7 +193,7 @@ func (h *held) elicitAsks(ctx context.Context, e protocol.Event, st *pumpState) 
 	}
 }
 
-// answered waits for the client to answer an elicitation, then resolves the request. An error of the client, and the end of the connection, leave the request open.
+// answered waits for the client to answer an elicitation, then resolves the request. The resolve outlives the pump, so an answer that arrived before a close is not lost. An error of the client, and the end of the connection, leave the request open.
 func (h *held) answered(ctx context.Context, pending *rpc.Pending, a ask) {
 	defer h.answers.Done()
 	var res struct {
@@ -225,7 +223,9 @@ func (h *held) answered(ctx context.Context, pending *rpc.Pending, a ask) {
 		h.log.Info("acp: elicitation action unknown; the question stays open", "session", h.id, "request", a.requestID, "action", res.Action)
 		return
 	}
-	if _, err := h.sess.Resolve(ctx, a.requestID, r); err != nil && !errors.Is(err, harness.ErrRequestNotPending) && ctx.Err() == nil {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptBudget)
+	defer cancel()
+	if _, err := h.sess.Resolve(rctx, a.requestID, r); err != nil && !errors.Is(err, harness.ErrRequestNotPending) {
 		h.log.Warn("acp: resolve of an elicitation failed", "session", h.id, "request", a.requestID, "error", err.Error())
 	}
 }

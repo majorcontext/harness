@@ -17,7 +17,6 @@ const (
 	// deferHook parks an AskUserQuestion call: the turn ends with stop_reason
 	// tool_deferred, and the CLI runs the call again on the next --resume.
 	deferHook  = `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}`
-	dismissed  = "The user dismissed this question without answering."
 	noApprover = "Permission denied: this session has no interactive approver."
 )
 
@@ -57,7 +56,7 @@ func resolve(req turn.Request, out turn.Sink, callID string) (*resolution, bool,
 	res, ok := out.Resolution(callID)
 	if !ok || res.Resolution != protocol.ResolutionAnswered || len(req.Input) > 0 {
 		return &resolution{callID: callID, dismiss: true,
-			decision: map[string]any{"behavior": "deny", "message": dismissed, "interrupt": true}}, false, nil
+			decision: map[string]any{"behavior": "deny", "message": protocol.DismissedQuestionText, "interrupt": true}}, false, nil
 	}
 	input, err := answeredInput(req.History, callID, res.Answer)
 	if err != nil {
