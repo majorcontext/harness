@@ -47,12 +47,12 @@ var plan = Profile{Name: "plan", Tools: readOnly,
 	Prompt: generalPurpose.Prompt + "\n\nInvestigate with your read-only tools, then give a clear, concrete implementation plan as your final message. " +
 		"You have no tool that edits a file or runs a command, so make no change."}
 
-// profileKeys are the agent frontmatter keys of Claude Code that a profile reads or ignores.
 // claudeToolNames maps the tool names of Claude Code to the harness tools that
 // do the same work, so one profile file serves every backend.
 var claudeToolNames = map[string]string{"Read": "read_file", "Write": "write_file", "Edit": "edit_file", "MultiEdit": "edit_file",
 	"Glob": "glob", "Grep": "grep", "LS": "ls", "Bash": "bash"}
 
+// profileKeys are the agent frontmatter keys of Claude Code that a profile reads or ignores.
 var profileKeys = []string{"name", "description", "tools", "model", "color"}
 
 // Profiles returns the built-in profiles and each valid *.md file of dirs in
