@@ -145,13 +145,19 @@ export function pageBridge({ tools, pageFetch, post, files = false }) {
     }
   }
 
-  async function runFetch({ fid, method, url, headers, body }) {
+  async function runFetch({ fid, method, url, headers, body, redirect }) {
     const ac = new AbortController();
     running.set("fetch:" + fid, ac);
     try {
       const init = { method, headers: Object.fromEntries(headers), signal: ac.signal };
       if (body) init.body = new Uint8Array(body);
+      if (redirect) init.redirect = redirect;
       const res = await pageFetch(url, init);
+      // A callback may ignore init.redirect. A request that must follow no redirect fails on a redirect answer.
+      if ((redirect === "manual" || redirect === "error") && (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400))) {
+        res.body?.cancel().catch(() => {});
+        throw new Error(`the page fetch answered ${res.status} (a redirect), which is not followed`);
+      }
       post({ fetchHead: { fid, status: res.status, statusText: res.statusText, headers: [...res.headers] } });
       if (res.body) {
         const reader = res.body.getReader();

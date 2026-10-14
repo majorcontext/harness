@@ -436,6 +436,35 @@ test("a redirect of the ChatGPT model endpoint is not followed", async () => {
   }
 });
 
+test("a redirect of the ChatGPT model endpoint does not get past the page fetch callback", async () => {
+  const sink = await fakeIssuer();
+  const redirecting = await fakeIssuer({ redirectTo: sink.url });
+  const dir = tempDir();
+  seedLogin(dir, chatgptToken(3600));
+  const seen = [];
+  const pageFetch = async (url, init) => {
+    seen.push(init.redirect);
+    if (String(url).startsWith("https://synthetic.test")) return new Response(null, { status: 302, headers: { location: sink.url } });
+    return fetch(url, { method: init.method, headers: init.headers, body: init.body, redirect: init.redirect });
+  };
+  try {
+    for (const base of [redirecting.url + "/codex", "https://synthetic.test/codex"]) {
+      const h = await harness({ config: { model: "codex/gpt-5.6-sol", request_max_retries: 0, stream_max_retries: 0 }, proxy: { providerBaseURLs: { codex: base } }, fetch: pageFetch, store: { persist: true, dir } });
+      try {
+        const c = acpClient(h);
+        await assert.rejects(c.prompt(await c.session(), "go"), /redirect/, base);
+      } finally {
+        await h.close();
+      }
+    }
+    assert.ok(seen.length >= 2 && seen.every((mode) => mode === "manual"), "the page callback did not get redirect: manual");
+    assert.deepEqual(sink.requests, [], "the redirect was followed");
+  } finally {
+    sink.close();
+    redirecting.close();
+  }
+});
+
 test("a malformed proxy URL leaves no Worker and no held store", async () => {
   const dir = tempDir();
   const files = moduleFiles();
