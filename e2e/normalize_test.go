@@ -69,6 +69,7 @@ type normRequest struct {
 	Model                  string           `json:"model,omitempty"`
 	ThinkingType           string           `json:"thinking_type,omitempty"`
 	ThinkingBudgetTokens   int              `json:"thinking_budget_tokens,omitempty"`
+	Effort                 string           `json:"effort,omitempty"`
 	ServiceTier            string           `json:"service_tier,omitempty"`
 	ReasoningEffort        string           `json:"reasoning_effort,omitempty"`
 	User                   string           `json:"user,omitempty"`
@@ -284,6 +285,7 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 			Model:                  r.Model,
 			ThinkingType:           r.ThinkingType,
 			ThinkingBudgetTokens:   r.ThinkingBudget,
+			Effort:                 r.Effort,
 			ServiceTier:            r.ServiceTier,
 			ReasoningEffort:        r.ReasoningEffort,
 			User:                   n.id(r.User),

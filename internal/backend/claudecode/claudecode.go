@@ -337,6 +337,10 @@ func effortArg(e modelref.Effort) (string, bool) {
 		return "medium", true
 	case modelref.EffortHigh:
 		return "high", true
+	case modelref.EffortXHigh:
+		return "xhigh", true
+	case modelref.EffortMax:
+		return "max", true
 	}
 	return "", false
 }

@@ -1,6 +1,9 @@
 package modelref
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Effort is a unified reasoning-effort level for one model request. It is the
 // canonical, provider-agnostic control the runtime carries. Each provider
@@ -13,11 +16,9 @@ import "fmt"
 // provider can (Anthropic: no thinking block); adapters that cannot disable
 // reasoning treat EffortOff the same as EffortUnset (send no control).
 //
-// Effort does NOT police which model accepts which level. That is a
-// provider-and-model fact the runtime cannot know from the model ref alone —
-// the adapter sends the requested level and the provider is the final judge.
-// A caller that must gate levels per model (a dashboard picker) holds its own
-// mapping; see the boxes bifrost catalog.
+// Effort does NOT police which model accepts which level. The model API
+// backend clamps a level to the levels that the facts of the model list; the
+// adapter sends the level it gets.
 type Effort string
 
 const (
@@ -30,17 +31,64 @@ const (
 	EffortLow     Effort = "low"
 	EffortMedium  Effort = "medium"
 	EffortHigh    Effort = "high"
+	// EffortXHigh is the level above high.
+	EffortXHigh Effort = "xhigh"
+	// EffortMax is the highest level.
+	EffortMax Effort = "max"
 )
+
+// reasoningEfforts are the levels that request reasoning, lowest first.
+var reasoningEfforts = []Effort{EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+
+func (e Effort) rank() int { return slices.Index(reasoningEfforts, e) }
+
+// Cap returns e, or top when e is above top. A level that does not request
+// reasoning is unchanged.
+func (e Effort) Cap(top Effort) Effort {
+	if e.rank() > top.rank() {
+		return top
+	}
+	return e
+}
+
+// ClampTo returns the level of levels that a request at e uses. It is e when
+// levels list it, else the highest listed level below e, else the lowest
+// listed level. A level that requests no reasoning, and an empty levels list,
+// leave e unchanged.
+func (e Effort) ClampTo(levels []string) Effort {
+	if !e.Reasoning() || slices.Contains(levels, string(e)) {
+		return e
+	}
+	best, lowest := EffortUnset, EffortUnset
+	for _, l := range levels {
+		c := Effort(l)
+		r := c.rank()
+		switch {
+		case r < 0:
+		case r < e.rank() && (best == EffortUnset || r > best.rank()):
+			best = c
+		case lowest == EffortUnset || r < lowest.rank():
+			lowest = c
+		}
+	}
+	if best != EffortUnset {
+		return best
+	}
+	if lowest != EffortUnset {
+		return lowest
+	}
+	return e
+}
 
 // ParseEffort validates s as an effort level. An empty string parses to
 // EffortUnset. An unknown value errors, naming the valid set.
 func ParseEffort(s string) (Effort, error) {
 	e := Effort(s)
 	switch e {
-	case EffortUnset, EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh:
+	case EffortUnset, EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return e, nil
 	default:
-		return EffortUnset, fmt.Errorf("message: invalid effort %q (want one of: off, minimal, low, medium, high, or empty)", s)
+		return EffortUnset, fmt.Errorf("message: invalid effort %q (want one of: off, minimal, low, medium, high, xhigh, max, or empty)", s)
 	}
 }
 
@@ -48,15 +96,10 @@ func ParseEffort(s string) (Effort, error) {
 func (e Effort) IsZero() bool { return e == EffortUnset }
 
 // Reasoning reports whether e requests any reasoning at all — true for the
-// four non-off levels, false for EffortUnset and EffortOff. Adapters use it to
+// non-off levels, false for EffortUnset and EffortOff. Adapters use it to
 // decide whether to emit a reasoning control at all.
 func (e Effort) Reasoning() bool {
-	switch e {
-	case EffortMinimal, EffortLow, EffortMedium, EffortHigh:
-		return true
-	default:
-		return false
-	}
+	return e.rank() >= 0
 }
 
 func (e Effort) String() string { return string(e) }

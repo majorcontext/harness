@@ -1,0 +1,74 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": []
+  },
+  "calls": {
+    "command.a": {
+      "status": 201,
+      "body": {
+        "command": "accepted",
+        "input_id": "in1",
+        "seq": 3
+      }
+    },
+    "command.a#2": {
+      "status": 201,
+      "body": {
+        "command": "accepted",
+        "input_id": "in2",
+        "seq": 5
+      }
+    },
+    "command.a#3": {
+      "status": 201,
+      "body": {
+        "command": "accepted",
+        "input_id": "in3",
+        "seq": 8
+      }
+    },
+    "command_records.a": {
+      "status": 200,
+      "body": [
+        {
+          "line": "/thinking max",
+          "name": "thinking",
+          "result": {
+            "context": {
+              "tokens": 0,
+              "window": 1000000
+            },
+            "created_at": "\u003ctime\u003e",
+            "effort": "max",
+            "head_seq": 4,
+            "id": "ses:a",
+            "model": "anthropic/claude-haiku-4-5",
+            "origin": "",
+            "status": "idle",
+            "subscription_usage": null,
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            },
+            "work_dir": "\u003cworkdir\u003e"
+          },
+          "status": "succeeded",
+          "text": "/thinking succeeded: max is not offered by anthropic/claude-haiku-4-5; using high"
+        },
+        {
+          "line": "/model anthropic/claude-opus-5-5",
+          "name": "model",
+          "status": "accepted"
+        },
+        {
+          "line": "/thinking max",
+          "name": "thinking",
+          "status": "accepted"
+        }
+      ]
+    }
+  }
+}

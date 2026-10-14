@@ -45,21 +45,28 @@ type apiRequest struct {
 	TopP        *float64     `json:"top_p,omitempty"`
 	Stream      bool         `json:"stream"`
 	Thinking    *apiThinking `json:"thinking,omitempty"`
+	// OutputConfig carries the effort of a model that takes the level as a field.
+	OutputConfig *apiOutputConfig `json:"output_config,omitempty"`
 }
 
-// apiThinking enables Anthropic extended thinking with a token budget. The API
-// requires max_tokens strictly greater than budget_tokens, and rejects an
-// explicit temperature or top_p while thinking is enabled — transcodeRequest
-// enforces both.
+type apiOutputConfig struct {
+	Effort string `json:"effort"`
+}
+
+// apiThinking enables Anthropic extended thinking: type "enabled" with a token
+// budget, or type "adaptive" with none. The API requires max_tokens strictly
+// greater than budget_tokens, and rejects an explicit temperature or top_p
+// while thinking is enabled — transcodeRequest enforces both.
 type apiThinking struct {
-	Type         string `json:"type"` // "enabled"
-	BudgetTokens int    `json:"budget_tokens"`
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 // thinkingBudget maps a unified reasoning-effort level to an Anthropic thinking
 // budget in tokens. It returns (0, false) for a level that requests no
 // reasoning (EffortUnset, EffortOff), so the caller emits no thinking block.
-// 1024 is the Anthropic minimum budget.
+// 1024 is the Anthropic minimum budget. A budget has no level above high, so
+// xhigh and max take the high budget.
 func thinkingBudget(e modelref.Effort) (int, bool) {
 	switch e {
 	case modelref.EffortMinimal:
@@ -68,11 +75,20 @@ func thinkingBudget(e modelref.Effort) (int, bool) {
 		return 4096, true
 	case modelref.EffortMedium:
 		return 8192, true
-	case modelref.EffortHigh:
+	case modelref.EffortHigh, modelref.EffortXHigh, modelref.EffortMax:
 		return 16384, true
 	default:
 		return 0, false
 	}
+}
+
+// effortField returns the wire effort of req, or "" when req sends none. The
+// API has no minimal level, so minimal sends a budget alone.
+func effortField(req *provider.Request) string {
+	if !req.EffortField || req.Effort == modelref.EffortMinimal || !req.Effort.Reasoning() {
+		return ""
+	}
+	return string(req.Effort)
 }
 
 // thinkingCompletionMargin is the minimum room left for the visible answer
@@ -245,8 +261,20 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// theoretical, not confirmed. No fix is warranted unless a probe
 	// reproduces a reject.
 	// (The OFF direction, by contrast, DID wedge and is fixed below.)
+	//
+	// A model that takes the level as an effort field gets output_config.effort
+	// with the level. A model with that field and no budget gets adaptive
+	// thinking in place of a budget, since the API rejects a budget there.
 	budget, thinkingEnabled := thinkingBudget(req.Effort)
-	if thinkingEnabled {
+	if e := effortField(req); e != "" {
+		out.OutputConfig = &apiOutputConfig{Effort: e}
+	}
+	switch {
+	case thinkingEnabled && req.EffortField && !req.BudgetTokens:
+		out.Thinking = &apiThinking{Type: "adaptive"}
+		out.Temperature = nil
+		out.TopP = nil
+	case thinkingEnabled:
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
 		if out.MaxTokens < budget+thinkingCompletionMargin {
 			out.MaxTokens = budget + thinkingCompletionMargin

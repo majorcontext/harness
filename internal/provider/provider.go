@@ -35,12 +35,12 @@ type Request struct {
 	Temperature *float64
 	TopP        *float64
 	MaxTokens   int
-	// Effort is the unified reasoning-effort level (modelref.Effort). The
-	// zero value (EffortUnset) sends no reasoning control. Each adapter maps
-	// a non-unset level to its own wire shape; a level the target model
-	// rejects surfaces as a provider error, since the adapter cannot know
-	// per-model support from the ref alone.
+	// Effort is the unified reasoning-effort level, clamped to the levels of the
+	// model. The zero value sends no reasoning control.
 	Effort modelref.Effort
+	// EffortField and BudgetTokens say that the model takes a wire effort field
+	// and a thinking budget. Both are false for an unknown model.
+	EffortField, BudgetTokens bool
 	// ServiceTier is an opaque, per-session speed-tier hint (e.g. Codex's
 	// "standard"/"fast"/"ultrafast"), forwarded to the provider verbatim as
 	// the wire "service_tier" field. The zero value (empty string) sends no

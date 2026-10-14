@@ -203,6 +203,8 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	if err != nil {
 		return nil, err
 	}
+	effort, _ = modelmeta.ClampEffort(ref, effort)
+	control, _ := modelmeta.Efforts(ref)
 	msgs := make([]message.Message, len(req.History))
 	for i, m := range req.History {
 		msgs[i], err = b.toMessage(ctx, req, m)
@@ -218,7 +220,7 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, ServiceTier: req.Settings.ServiceTier,
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ServiceTier: req.Settings.ServiceTier,
 		SessionKey:  req.SessionID,
 		Temperature: req.Temperature, TopP: req.TopP}
 	if req.Instructions != "" {

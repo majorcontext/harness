@@ -20,7 +20,7 @@ import (
 const SessionInfoName = "session_info"
 
 const sessionInfoDescription = "Report this session's own configuration: session id, current model, " +
-	"the reasoning-effort/thinking level (\"off\", \"minimal\", \"low\", \"medium\", \"high\", " +
+	"the reasoning-effort/thinking level (\"off\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\", " +
 	"or \"\" if unset — the provider default), cumulative token usage, the exact " +
 	"system-prompt segments you received this turn, the active tool names, the " +
 	"provenance of any injected project instructions (AGENTS.md path or \"none\"), " +

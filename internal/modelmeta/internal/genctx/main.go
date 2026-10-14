@@ -236,13 +236,17 @@ var infoTables = []struct{ varName, provider string }{
 const latestSuffix = " (latest)"
 
 // effortLevels are the effort levels of harness, in display order.
-var effortLevels = []string{"off", "minimal", "low", "medium", "high"}
+var effortLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// budgetLevels are the levels that a "budget_tokens" option takes. Harness
+// maps a level to a budget, and a budget has no level above high.
+var budgetLevels = effortLevels[:5]
 
 // efforts returns the effort levels of harness that a model supports. A
 // models.dev "none" value and a "toggle" option both mean that the model
-// runs without reasoning, which is "off". A "budget_tokens" option takes any
-// level, because harness maps a level to a budget. A level that harness
-// lacks is dropped.
+// runs without reasoning, which is "off". A "budget_tokens" option takes every
+// level up to high, because harness maps a level to a budget. A level that
+// harness lacks, such as ultra, is dropped.
 func efforts(opts []struct {
 	Type   string   `json:"type"`
 	Values []string `json:"values"`
@@ -253,7 +257,7 @@ func efforts(opts []struct {
 		case "toggle":
 			have["off"] = true
 		case "budget_tokens":
-			for _, l := range effortLevels {
+			for _, l := range budgetLevels {
 				have[l] = true
 			}
 		case "effort":
@@ -274,6 +278,23 @@ func efforts(opts []struct {
 	return out
 }
 
+// controls reports whether a model takes a level as a wire effort field
+// ("effort") and whether it takes a thinking budget ("budget_tokens").
+func controls(opts []struct {
+	Type   string   `json:"type"`
+	Values []string `json:"values"`
+}) (field, budget bool) {
+	for _, o := range opts {
+		switch o.Type {
+		case "effort":
+			field = true
+		case "budget_tokens":
+			budget = true
+		}
+	}
+	return field, budget
+}
+
 // effortLiteral is the Go literal of the efforts of a model. A model that
 // models.dev says has no reasoning has an empty list. A model with reasoning
 // and no usable option takes every level, as harness maps a level for it.
@@ -287,7 +308,7 @@ func effortLiteral(reasoning bool, opts []struct {
 	if e := efforts(opts); len(e) > 0 {
 		return fmt.Sprintf("%#v", e)
 	}
-	return fmt.Sprintf("%#v", effortLevels)
+	return fmt.Sprintf("%#v", budgetLevels)
 }
 
 // noImageLiteral is the struct field that marks a model whose models.dev
@@ -337,8 +358,16 @@ func generateInfo(catalogJSON []byte) ([]byte, error) {
 			m := prov.Models[id]
 			name := strings.TrimSuffix(strings.TrimSpace(m.Name), latestSuffix)
 			listed := m.ToolCall && m.Status != "deprecated"
-			fmt.Fprintf(&buf, "\t%q: {name: %q, description: %q, released: %q, efforts: %s, listed: %t%s},\n",
-				id, name, strings.TrimSpace(m.Description), m.ReleaseDate, effortLiteral(m.Reasoning, m.ReasoningOptions), listed, noImageLiteral(m.Modalities.Input))
+			field, budget := controls(m.ReasoningOptions)
+			var flags string
+			if m.Reasoning && field {
+				flags += " effortField: true,"
+			}
+			if m.Reasoning && budget {
+				flags += " budgetTokens: true,"
+			}
+			fmt.Fprintf(&buf, "\t%q: {name: %q, description: %q, released: %q, efforts: %s,%s listed: %t%s},\n",
+				id, name, strings.TrimSpace(m.Description), m.ReleaseDate, effortLiteral(m.Reasoning, m.ReasoningOptions), flags, listed, noImageLiteral(m.Modalities.Input))
 		}
 		buf.WriteString("}\n")
 	}

@@ -3,8 +3,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 16384,
+      "thinking_type": "adaptive",
+      "effort": "high",
       "tools": [
         "bash",
         "edit_file",

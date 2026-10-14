@@ -13,9 +13,9 @@ func TestParseEffort(t *testing.T) {
 		{"minimal", EffortMinimal, false},
 		{"low", EffortLow, false},
 		{"medium", EffortMedium, false},
-		{"high", EffortHigh, false},
+		{"high", EffortHigh, false}, {"xhigh", EffortXHigh, false}, {"max", EffortMax, false},
 		{"MEDIUM", EffortUnset, true}, // case-sensitive
-		{"xhigh", EffortUnset, true},
+		{"ultra", EffortUnset, true},
 		{"none", EffortUnset, true},
 		{"true", EffortUnset, true},
 	}
@@ -38,7 +38,7 @@ func TestParseEffort(t *testing.T) {
 }
 
 func TestEffortReasoning(t *testing.T) {
-	reasoning := []Effort{EffortMinimal, EffortLow, EffortMedium, EffortHigh}
+	reasoning := []Effort{EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 	for _, e := range reasoning {
 		if !e.Reasoning() {
 			t.Errorf("Effort(%q).Reasoning() = false, want true", e)
@@ -55,7 +55,7 @@ func TestEffortIsZero(t *testing.T) {
 	if !EffortUnset.IsZero() {
 		t.Error("EffortUnset.IsZero() = false")
 	}
-	for _, e := range []Effort{EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh} {
+	for _, e := range []Effort{EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
 		if e.IsZero() {
 			t.Errorf("Effort(%q).IsZero() = true", e)
 		}

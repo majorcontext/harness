@@ -3,8 +3,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -39,8 +39,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -90,7 +90,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -102,8 +102,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -153,7 +153,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -192,8 +192,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -243,7 +243,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -309,8 +309,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -360,7 +360,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -453,8 +453,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -504,7 +504,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -624,8 +624,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -675,7 +675,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -820,8 +820,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -871,7 +871,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -1038,8 +1038,8 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 8192,
+      "thinking_type": "adaptive",
+      "effort": "medium",
       "tools": [
         "bash",
         "edit_file",
@@ -1089,7 +1089,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -1380,7 +1380,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)"
+            "content": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)"
           }
         ]
       },

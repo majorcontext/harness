@@ -182,6 +182,15 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
+	"anthropic_effort_field_carries_xhigh_and_max":                                                             reGolden(specUpdate),
+	"anthropic_effort_field_clamps_xhigh_for_a_model_without_it":                                               reGolden(specUpdate),
+	"anthropic_budget_only_model_clamps_xhigh_and_max_to_the_high_budget":                                      reGolden(specUpdate),
+	"unknown_model_clamps_xhigh_and_max_to_high":                                                               reGolden(specUpdate),
+	"thinking_command_accepts_max_and_names_the_clamp":                                                         reGolden(specUpdate),
+	"bifrost_clamps_xhigh_and_max_to_high":                                                                     reGolden(specUpdate),
+	"codex_reasoning_effort_carries_xhigh_and_max":                                                             reGolden(specUpdate),
+	"codex_clamps_a_level_that_the_model_does_not_list":                                                        reGolden(specUpdate),
+	"claudecode_effort_flag_carries_xhigh_and_max":                                                             reGolden(specUpdate),
 	"mcp_connect_adds_tools_but_not_instructions":                                                              runtimeOnly(reasonRetryHeld),
 	"skills_listed_sorted_and_read_through_read_file":                                                          reGolden(specBlankJoin),
 	"skills_dirs_config_replaces_the_default_dir":                                                              reGolden(specBlankJoin),

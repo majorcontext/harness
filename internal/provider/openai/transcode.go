@@ -190,7 +190,7 @@ func rawJSONEqual(previous, current json.RawMessage) bool {
 }
 
 // apiReasoning is the OpenAI Responses reasoning control. Effort is one of
-// minimal, low, medium, high. Summary is optional (e.g. "auto" on Codex).
+// minimal, low, medium, high, xhigh, max. Summary is optional (e.g. "auto" on Codex).
 type apiReasoning struct {
 	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`

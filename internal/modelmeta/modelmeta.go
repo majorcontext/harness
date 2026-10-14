@@ -95,21 +95,24 @@ var codexModels = []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-lun
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves,
 // with the name that a client shows for each.
 var claudeCodeModels = []Model{
-	{ID: "fable", Name: "Claude Fable (Claude Code)", Efforts: allEfforts},
-	{ID: "haiku", Name: "Claude Haiku (Claude Code)", Efforts: allEfforts},
-	{ID: "opus", Name: "Claude Opus (Claude Code)", Efforts: allEfforts},
-	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: allEfforts},
+	{ID: "fable", Name: "Claude Fable (Claude Code)", Efforts: claudeCodeEfforts},
+	{ID: "haiku", Name: "Claude Haiku (Claude Code)", Efforts: claudeCodeEfforts},
+	{ID: "opus", Name: "Claude Opus (Claude Code)", Efforts: claudeCodeEfforts},
+	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: claudeCodeEfforts},
 }
 
-// allEfforts are the levels of a model whose backend decides what it takes.
-var allEfforts = []string{"off", "minimal", "low", "medium", "high"}
+// claudeCodeEfforts are the levels of a model whose backend decides what it takes.
+var claudeCodeEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // modelInfo holds the models.dev facts of one chat model. A model that is not
 // listed is deprecated or cannot call tools.
 type modelInfo struct {
 	name, description, released string
 	efforts                     []string
-	listed                      bool
+	// effortField is true when the model takes a level as a wire effort field,
+	// and budgetTokens is true when it takes a thinking budget.
+	effortField, budgetTokens bool
+	listed                    bool
 	// noImageInput is set when models.dev lists the input modalities of the model and image is not one.
 	noImageInput bool
 }
@@ -123,7 +126,7 @@ type Model struct {
 	// Description is one line about the model, or empty when unknown.
 	Description string
 	// Efforts are the effort levels that the model supports, from off to
-	// high. It is empty for a model that has no reasoning control.
+	// max. It is empty for a model that has no reasoning control.
 	Efforts []string
 }
 
@@ -321,4 +324,52 @@ func stripBedrockAnthropicPrefix(model string) (suffix string, isAnthropic bool)
 		return "", false
 	}
 	return rest, true
+}
+
+// EffortControl is how a model takes a reasoning level.
+type EffortControl struct {
+	// Levels are the levels that the model lists.
+	Levels []string
+	// Field is true when the model takes a level as a wire effort field.
+	Field bool
+	// Budget is true when the model takes a thinking budget.
+	Budget bool
+}
+
+// Efforts returns the effort control of the model of ref. It returns false
+// for a model that the tables do not hold, and for a ref that a Bedrock-style
+// id names.
+func Efforts(ref modelref.ModelRef) (EffortControl, bool) {
+	model := lastPathSegment(ref.Model)
+	var info modelInfo
+	var ok bool
+	switch ref.Provider {
+	case "anthropic":
+		if _, bedrock := stripBedrockAnthropicPrefix(model); !bedrock {
+			info, ok = anthropicInfo[stripBedrockVersionSuffix(model)]
+		}
+	case "openai", codexProvider:
+		model = strings.TrimPrefix(model, "openai.")
+		info, ok = openaiInfo[model]
+	case claudeCodeProvider:
+		return EffortControl{Levels: slices.Clone(claudeCodeEfforts)}, true
+	}
+	if !ok {
+		return EffortControl{}, false
+	}
+	return EffortControl{Levels: slices.Clone(info.efforts), Field: info.effortField, Budget: info.budgetTokens}, true
+}
+
+// ClampEffort returns the level that a request to ref sends for e. A model
+// with levels takes the nearest level that it lists, and a model that the
+// tables do not hold, or that lists none, takes at most high. It reports
+// whether the level differs from e.
+func ClampEffort(ref modelref.ModelRef, e modelref.Effort) (modelref.Effort, bool) {
+	c := e
+	if ctl, ok := Efforts(ref); ok && len(ctl.Levels) > 0 {
+		c = e.ClampTo(ctl.Levels)
+	} else {
+		c = e.Cap(modelref.EffortHigh)
+	}
+	return c, c != e
 }

@@ -18,7 +18,7 @@ import (
 const maxModelList = 1 << 20
 
 // effortOrder lists the harness effort levels in display order.
-var effortOrder = []string{"off", "minimal", "low", "medium", "high"}
+var effortOrder = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // ModelsURL returns the URL of the model list of the ChatGPT Codex backend at base.
 func ModelsURL(base string) string {

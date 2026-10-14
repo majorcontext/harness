@@ -271,7 +271,7 @@ var acpConfigScenarios = []acpScenario{
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpCheck(func(t *testing.T, c *acpConn) {
-				if got := acpEffortValues(acpNewOptions(c)[1]); strings.Join(got, ",") != "default,low,medium,high" {
+				if got := acpEffortValues(acpNewOptions(c)[1]); strings.Join(got, ",") != "default,low,medium,high,xhigh,max" {
 					t.Errorf("effort values of claude-fable-5 = %v", got)
 				}
 			}),
@@ -286,6 +286,36 @@ var acpConfigScenarios = []acpScenario{
 			acpCheck(func(t *testing.T, c *acpConn) {
 				if got := acpLastEffortValues(c); got != "default,off,minimal,low,medium,high" {
 					t.Errorf("effort values of claude-haiku-4-5 after /model = %v, want every level", got)
+				}
+			}),
+		},
+	},
+	{
+		name: "effort_option_offers_xhigh_and_max_only_for_models_that_list_them",
+		cite: "It is a flat list of `default` and the effort levels of the current model",
+		config: map[string]any{"providers": map[string]any{
+			"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+		}},
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpSetConfig{as: "a", id: "model", value: "anthropic/claude-opus-5-5"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,low,medium,high,xhigh,max" {
+					t.Errorf("effort values of claude-opus-5-5 = %v, want xhigh and max", got)
+				}
+			}),
+			acpSetConfig{as: "a", id: "effort", value: "max"},
+			acpSetConfig{as: "a", id: "model", value: "anthropic/claude-sonnet-4-6"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,off,minimal,low,medium,high,max" {
+					t.Errorf("effort values of claude-sonnet-4-6 = %v, want max and no xhigh", got)
+				}
+			}),
+			acpSetConfig{as: "a", id: "model", value: "anthropic/claude-haiku-4-5"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,off,minimal,low,medium,high,max" {
+					t.Errorf("effort values of claude-haiku-4-5 = %v, want the current effort and no other new level", got)
 				}
 			}),
 		},

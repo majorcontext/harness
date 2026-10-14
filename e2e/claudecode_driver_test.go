@@ -194,6 +194,9 @@ func argvFacts(argv []string) map[string]any {
 		"disallowed_tools":      value("--disallowedTools"),
 		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
 	}
+	if e := value("--effort"); e != nil {
+		facts["effort"] = e
+	}
 	settings, _ := value("--settings").(string)
 	if strings.Contains(settings, "defer") {
 		facts["defer_hook"] = true
