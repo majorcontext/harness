@@ -377,9 +377,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		session.Discard(own, id, r.log)
 		return nil, err
 	}
-	profile := r.profile(c.Agent, l.profile)
 	plug := r.pluginSession(id)
-	sp := selftool.NewPrompt(r.prompt(), c.Agent, profile, r.procs, r.workDir)
+	sp := selftool.NewPrompt(r.prompt(), c.Agent, r.profile(c.Agent, l.profile), r.procs, r.workDir)
 	sm := r.sessionSource(l.mcp)
 	var a *session.Actor
 	cfg := session.Config{
@@ -396,6 +395,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Record:          sp.Recording,
 		Retain:          r.workDir != "",
 		Prompt:          sp.System,
+		Skills:          sp.SkillList(),
 		Appended:        r.appended(id, plug),
 		Params:          chatParams(plug),
 		Sync:            r.sync,

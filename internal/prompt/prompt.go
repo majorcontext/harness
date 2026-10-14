@@ -43,6 +43,8 @@ type Info struct {
 	Instructions []string
 	// Skills are the skills in the prompt, sorted by name.
 	Skills []Skill
+	// SkillList is the skill segment, or empty when no skill is valid.
+	SkillList string
 }
 
 // toolBatching asks the model to put independent tool calls in one message.
@@ -80,7 +82,7 @@ func Describe(cfg config.Config, workDir string, log *slog.Logger) Info {
 			segs = append(segs, s)
 		}
 	}
-	return Info{Segments: segs, Instructions: names, Skills: skills}
+	return Info{Segments: segs, Instructions: names, Skills: skills, SkillList: list}
 }
 
 type file struct{ name, body string }

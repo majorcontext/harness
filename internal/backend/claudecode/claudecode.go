@@ -40,6 +40,13 @@ const continuation = "The previous turn was interrupted. " +
 const historyDirective = "You are continuing a conversation that happened on another model. " +
 	"Before responding, call the " + turn.HistoryTool + " tool to read what happened so far."
 
+// toolNames tells the CLI that its tools are the Harness tools. The CLI reads
+// instructions written for its own tools.
+const toolNames = "Your tools are the Harness tools. Where instructions name Read, Write, Edit, " +
+	"MultiEdit, Bash, Glob, Grep, or LS, use read_file, write_file, edit_file, bash, glob, grep, " +
+	"or ls. There is no Task, TodoWrite, WebFetch, WebSearch, or Skill tool. To use a skill, " +
+	"read its SKILL.md file with read_file."
+
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
 
@@ -190,13 +197,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if e, ok := effortArg(effort); ok {
 		args = append(args, "--effort", e)
 	}
-	system := b.system
-	if req.Foreign {
-		system = strings.Trim(system+"\n\n"+historyDirective, "\n")
-	}
-	if system != "" {
-		args = append(args, "--append-system-prompt", system)
-	}
+	args = append(args, "--append-system-prompt", b.systemPrompt(req))
 	env := os.Environ()
 	if b.p.SessionMirror {
 		dir, err := scratch(r.mirror)
@@ -211,6 +212,17 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	cmd.Env = env
 	cmd.Dir = b.workDir
 	return cmd, nil
+}
+
+// systemPrompt returns the --append-system-prompt value of a run: the tool
+// names, the entries of append_system_prompt, the skill segment of the
+// session, and the history directive of a session that another model began.
+func (b *Backend) systemPrompt(req turn.Request) string {
+	segs := []string{toolNames, b.system, req.Skills}
+	if req.Foreign {
+		segs = append(segs, historyDirective)
+	}
+	return strings.Join(slices.DeleteFunc(segs, func(s string) bool { return s == "" }), "\n\n")
 }
 
 // resumes reports whether a run resumes the external session of m. A

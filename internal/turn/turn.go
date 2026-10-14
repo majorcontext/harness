@@ -80,6 +80,8 @@ type Request struct {
 	Settings  protocol.Settings
 	// Instructions is the system prompt of the call.
 	Instructions string
+	// Skills is the skill segment of the session prompt, for a backend that builds its own prompt.
+	Skills string
 	// Input holds the inputs that started the turn, as user messages.
 	Input []protocol.LogMessage
 	// History is the conversation that the model sees, Input included.
