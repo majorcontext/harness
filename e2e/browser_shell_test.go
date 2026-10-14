@@ -20,7 +20,7 @@ func (k *browserKit) shellRows() {
 		ftTool("bash", ftArgs("command", "curl -s https://example.com")),
 		ftTool("bash", ftArgs("command", "while true; do :; done")),
 		ftTool("bash", ftArgs("command", "cat /work")),
-		ftTool("bash", ftArgs("command", "seq 1 90000 | sed 's/$/-padding-padding/' | sort -r | tee big.txt")),
+		ftTool("bash", ftArgs("command", "seq 1 30000 | sed 's/$/-padding-padding-padding-padding/' | sort -r | tee big.txt")),
 		ftTool("bash", ftArgs("command", "wc -c < big.txt")),
 	)
 	f := newBrowserFront(t, nil, steps...)
@@ -49,7 +49,7 @@ func (k *browserKit) shellRows() {
 			8:  "[exit 126]",
 			9:  "cat: /work: ",
 			10: "characters cut",
-			11: "1968894",
+			11: "1128894",
 		} {
 			if got := requestText(reqs[i]); !strings.Contains(got, want) {
 				t.Errorf("request %d lacks %q: %s", i, want, got)
