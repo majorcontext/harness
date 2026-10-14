@@ -13,7 +13,7 @@ import (
 //
 // The zero value EffortUnset sends NO reasoning control at all — the provider
 // runs its own default. EffortOff explicitly disables reasoning where a
-// provider can (Anthropic: no thinking block); adapters that cannot disable
+// provider can (Anthropic: thinking disabled or no field); adapters that cannot disable
 // reasoning treat EffortOff the same as EffortUnset (send no control).
 //
 // Effort does NOT police which model accepts which level. The model API
