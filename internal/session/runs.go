@@ -25,7 +25,9 @@ type running struct {
 	handoff  context.CancelCauseFunc
 	steering bool
 	ownsLoop bool
-	steered  chan struct{}
+	// asks is set when the turn may offer the question tool.
+	asks    bool
+	steered chan struct{}
 	// waiters receive the outcome of the run: the error of the run, and the
 	// error of the append that records its end.
 	waiters []func(runErr, appendErr error)

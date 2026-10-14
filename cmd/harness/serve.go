@@ -53,7 +53,7 @@ func serveFlags(args []string) (*serveOptions, error) {
 		return nil
 	})
 	fs.BoolVar(&o.unauthenticated, "unauthenticated", false, "serve without a bearer token on a non-loopback bind; for a deployment where a trusted external gate restricts reachability. Ignored when HARNESS_RUN_TOKEN is set. Also HARNESS_UNAUTHENTICATED=1")
-	fs.BoolVar(&o.ask, "ask-user-question", false, "offer the Claude Code AskUserQuestion tool to root claude-code sessions; set only when a client answers parked questions through POST /sessions/{id}/requests/{request}")
+	fs.BoolVar(&o.ask, "ask-user-question", false, "let root sessions ask the user a question; set only when a client answers parked questions through POST /sessions/{id}/requests/{request}")
 	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}

@@ -20,6 +20,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
+        "ask_user_question",
         "bash",
         "edit_file",
         "glob",
@@ -54,6 +55,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
+        "ask_user_question",
         "bash",
         "edit_file",
         "glob",
@@ -113,6 +115,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
+        "ask_user_question",
         "bash",
         "edit_file",
         "glob",

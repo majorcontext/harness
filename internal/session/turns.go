@@ -113,6 +113,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 		req.Steered = r.steered
 	}
 	req.Questions = a.questions()
+	r.asks = req.Questions && !r.ownsLoop
 	req.Banner, req.Pins = a.cfg.Banner, a.pins.Pinned()
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)

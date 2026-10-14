@@ -23,8 +23,9 @@ func (a *Actor) source(r *running) turn.Source {
 
 // actorTools are the tools that read the session itself. A turn of a backend
 // that owns its loop gets the history tool, which no allow list hides. A
-// harness-loop turn gets read_tool_result and retains each result in call
-// order, after the other hooks, so the blob holds the text that the model would see, unless
+// harness-loop turn gets ask_user_question when it may ask a question, and
+// read_tool_result with the retention of each result in call order, after the
+// other hooks, so the blob holds the text that the model would see, unless
 // Config.Retain is off or the allowed tools omit read_tool_result.
 type actorTools struct {
 	a *Actor
@@ -35,14 +36,16 @@ func (s actorTools) Toolset(_ context.Context, _ []protocol.LogMessage, allowed 
 	if s.a.cfg.Backend.Capabilities(model).OwnsLoop {
 		return turn.Toolset{Tools: []turn.Tool{historyTool{s.a}}}
 	}
-	if !s.a.cfg.Retain {
-		return turn.Toolset{}
+	var ts turn.Toolset
+	if s.r.asks {
+		ts.Tools = turn.Restrict([]turn.Tool{turn.NewAskTool()}, allowed)
 	}
-	tools := turn.Restrict([]turn.Tool{toolresult.NewTool(s.a)}, allowed)
-	if len(tools) == 0 {
-		return turn.Toolset{}
+	if s.a.cfg.Retain {
+		if tools := turn.Restrict([]turn.Tool{toolresult.NewTool(s.a)}, allowed); len(tools) > 0 {
+			ts.Tools, ts.Hooks = append(ts.Tools, tools...), s
+		}
 	}
-	return turn.Toolset{Tools: tools, Hooks: s}
+	return ts
 }
 
 func (actorTools) Before(_ context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {

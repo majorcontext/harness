@@ -46,7 +46,7 @@ type Config struct {
 
 // RuntimeOptions are the choices of the connection for a Runtime that it asks for.
 type RuntimeOptions struct {
-	// AskUserQuestion says that the client answers the question of a backend that owns its loop.
+	// AskUserQuestion says that the client answers the question of a session.
 	AskUserQuestion bool
 }
 

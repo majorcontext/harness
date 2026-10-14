@@ -113,11 +113,12 @@ type Options struct {
 	// built-in tool exists, and no session has the task tool.
 	// New makes a relative path absolute, and fails when it cannot.
 	WorkDir string
-	// AskUserQuestion declares that the embedder renders a question of a
-	// backend that owns its loop, such as AskUserQuestion of Claude Code, and
-	// answers it with Session.Resolve. A question that nothing answers parks
-	// the session, so without it no turn may ask. A child session and a
-	// session with an active goal never ask.
+	// AskUserQuestion lets a session ask the user a question: the tool
+	// ask_user_question of a model API session, and AskUserQuestion of Claude
+	// Code. The embedder renders the question and answers it with
+	// Session.Resolve. A question that nothing answers parks the session, so
+	// without it no turn may ask. A child session and a session with an
+	// active goal never ask.
 	AskUserQuestion bool
 	// Version is the build version that the engine banner names. Each model
 	// call of a harness-loop turn sends the banner as engine context, after

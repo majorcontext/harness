@@ -3,9 +3,11 @@ package e2e
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -97,6 +99,38 @@ func acpElicitations(c *acpConn) []map[string]any {
 var acpQuestionLogin = &acpLoginSpec{claude: true, claudeQuestion: true}
 
 var acpElicitationScenarios = []acpScenario{
+	{
+		name: "a_model_api_session_question_is_elicited_and_the_answer_reaches_the_model",
+		cite: "so a session of any backend can ask a question.",
+		model: []harnesstest.Step{
+			{Name: "ask", Match: assistantTurns(0), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_ask", Name: "ask_user_question", Input: map[string]any{"questions": []any{map[string]any{
+				"question": "Which database?", "header": "DB", "multiSelect": false,
+				"options": []any{
+					map[string]any{"label": "PostgreSQL", "description": "a"},
+					map[string]any{"label": "SQLite", "description": "b"},
+				},
+			}}}}}}},
+			{Name: "noted", Match: assistantTurns(1), Reply: harnesstest.Reply{Text: "Noted."}},
+		},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, elicitation: true},
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
+			acpAwaitElicitation{as: "q", check: func(t *testing.T, params map[string]any) {
+				if params["mode"] != "form" || params["message"] != "Which database?" || params["toolCallId"] != "toolu_ask" {
+					t.Errorf("params = %v, want mode form, the question as message, and toolCallId toolu_ask", params)
+				}
+			}},
+			acpAnswerElicitation{as: "q", action: "accept", content: map[string]any{"question_1": "SQLite"}},
+			acpAwaitText{text: "Noted."},
+			acpAwaitUpdate{kind: "session_info_update"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := requestText(acpRequests(t, c, 2)[1]); !strings.Contains(got, `"Which database?"="SQLite"`) {
+					t.Errorf("the second request does not hold the answer: %s", got)
+				}
+			}),
+		},
+	},
 	{
 		name:  "a_question_is_elicited_after_the_prompt_answer_and_the_answer_resumes_the_session",
 		cite:  "When the turn that opened it ends `awaiting_input` and the client has the capability, the agent sends the request `elicitation/create` for it.",

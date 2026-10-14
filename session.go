@@ -163,7 +163,7 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 // which hands the answer to the backend that asked. The receipt holds the seq of
 // the request.resolved record and says whether a turn started. A request that is not open
 // fails with ErrRequestNotPending. For a question of Claude Code the request
-// ID is the call ID of the AskUserQuestion item, and the answer maps each
+// ID is the call ID of the question item, and the answer maps each
 // question to the chosen label or free text.
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error) {
 	if err := res.Validate(); err != nil {
