@@ -55,6 +55,11 @@ func TestContractEffortLevels(t *testing.T) {
 			actions: effortTurns("anthropic/bedrock_mantle/anthropic.claude-opus-5-5-v1:0", "max"),
 		},
 		{
+			name:    "thinking_off_on_a_model_that_lists_off_sends_no_thinking",
+			model:   effortSteps("off"),
+			actions: effortTurns("anthropic/claude-sonnet-5", "off"),
+		},
+		{
 			name: "thinking_off_names_a_model_that_always_thinks",
 			actions: []action{
 				create{as: "a", model: "anthropic/claude-opus-5-5"},
