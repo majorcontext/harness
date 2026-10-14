@@ -206,7 +206,6 @@ func rowASyncRejectionDoesNotHideAReleaseErrorFromRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
 	if err != nil {
 		t.Fatal(err)

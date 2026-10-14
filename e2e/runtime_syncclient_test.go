@@ -638,7 +638,6 @@ func rowCatchUpReportsAReleaseErrorWhenOpenTakesTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	done := make(chan error, 1)
 	go func() { done <- r.CatchUp(t.Context()) }()
 	rcv.awaitCalls(t, 1)
