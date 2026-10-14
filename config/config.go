@@ -107,7 +107,7 @@ type Config struct {
 	OwnerEpoch int `json:"owner_epoch,omitempty"`
 	// PluginCache is the file that holds the probed manifest of each plugin. Only the user file sets it.
 	PluginCache string `json:"plugin_cache,omitempty"`
-	// CodexAuthFile is the file that holds the Codex login of `harness login codex`. Only the user file sets it. cmd/harness defaults it to auth/codex.json beside the user config.
+	// CodexAuthFile is the file that holds the Codex login of `harness login codex`. Only the user file sets it. cmd/harness defaults it to auth/codex.json beside $HARNESS_CONFIG, else in ~/.harness.
 	CodexAuthFile string `json:"codex_auth_file,omitempty"`
 	// CodexIssuer is the base URL of the OAuth issuer of the Codex login, https://auth.openai.com when empty.
 	// Only the user file sets it: no HARNESS_ variable does, so Validate sees the value that is used.

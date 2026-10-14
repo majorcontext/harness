@@ -1,4 +1,5 @@
-// Tests of the client API over the Worker transport. They run the real wasm
+// Tests of the client API over the Worker transport. The shared suite of
+// suite.mjs runs here too. They run the real wasm
 // module in a worker_threads Worker against a scripted model server. Run with
 // `node --test sdk/embed/test/*.test.mjs` after setting HARNESS_WASM and
 // HARNESS_WASM_EXEC (see support.mjs).
@@ -7,7 +8,10 @@ import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
 import { createHarness, defaultBuiltinTools, wasm } from "../src/index.mjs";
 import { workerBridge } from "../src/workerbridge.mjs";
+import { clientSuite } from "./suite.mjs";
 import { acpClient, bodyText, fakeModel, moduleFiles, tempDir, userConfig } from "./support.mjs";
+
+clientSuite((options) => harness(options));
 
 const echo = {
   name: "js_echo",
@@ -187,31 +191,8 @@ test("a store directory is exclusive to one harness and keeps the session", asyn
   await h2.close();
 });
 
-test("close ends the stream and a second close settles", async () => {
-  const h = await harness({ config: userConfig("http://127.0.0.1:1") });
-  const c = acpClient(h);
-  await c.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-  await h.close();
-  await c.done;
-  await h.close();
-});
-
 test("a transport that is not a Worker is refused", async () => {
   await assert.rejects(createHarness({ transport: wasm({ ...moduleFiles(), worker: false }) }), /Worker/);
-});
-
-test("a frame after the page cancels the readable does not throw, and the connection closes", async () => {
-  const model = await fakeModel([{ text: "late" }]);
-  const h = await harness({ config: userConfig(model.url) });
-  try {
-    const c = acpClient(h);
-    const sessionId = await c.session();
-    c.prompt(sessionId, "go").catch(() => {});
-    await c.cancelReader();
-    await h.close();
-  } finally {
-    model.close();
-  }
 });
 
 // failWorker ends the Worker that the next createHarness starts, the way a crash does.
@@ -238,14 +219,7 @@ test("close settles after a Worker failure and releases the store directory", as
   await again.close();
 });
 
-test("a write after close rejects", async () => {
-  const h = await harness({ config: userConfig("http://127.0.0.1:1") });
-  const writer = h.stream.writable.getWriter();
-  await h.close();
-  await assert.rejects(writer.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
-});
-
-test("aborting the writable closes the connection", async () => {
+test("aborting the writable releases the store directory", async () => {
   const dir = tempDir();
   const h = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
   await h.stream.writable.getWriter().abort(new Error("done"));

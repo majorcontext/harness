@@ -319,3 +319,26 @@ func TestContractCLILoginClaudeCodeRefusesAConfigThatDoesNotLoad(t *testing.T) {
 		t.Errorf("a program ran although the config did not load: %v", err)
 	}
 }
+
+func TestContractCLIConfigFileOverrideKeepsTheLoginBesideTheUserConfig(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{})
+	if _, errOut, code := h.run("login", "codex", "--device"); code != 0 {
+		t.Fatalf("login = %d\n%s", code, errOut)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("login stored no file: %v", err)
+	}
+	missing := writeGoalConfigWith(t, h.fake.URL(), scenarioConfig(map[string]any{"codex_issuer": issuer.URL(), "codex_auth_file": filepath.Join(t.TempDir(), "none.json")}))
+	h.env = map[string]string{"HARNESS_CONFIG_FILE": missing}
+	if out, errOut, code := h.run("login", "codex", "--status"); code != 1 || !strings.Contains(out+errOut, "not logged in") {
+		t.Errorf("status with a HARNESS_CONFIG_FILE that names another login file = %d %q %q, want 1 and not logged in", code, out, errOut)
+	}
+	other := writeGoalConfigWith(t, h.fake.URL(), scenarioConfig(map[string]any{"codex_issuer": issuer.URL()}))
+	h.env = map[string]string{"HARNESS_CONFIG_FILE": other}
+	out, errOut, code := h.run("login", "codex", "--status")
+	if code != 0 || !strings.Contains(out, "acct-1") {
+		t.Errorf("status with HARNESS_CONFIG_FILE = %d %q %q, want the login beside HARNESS_CONFIG", code, out, errOut)
+	}
+}

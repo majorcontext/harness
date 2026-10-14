@@ -286,7 +286,7 @@ A new package, separate from `sdk/typescript`. `sdk/typescript` is the zero-depe
 
 ```ts
 const h = await createHarness({
-  transport: wasm({ module, worker: true }),          // or spawn({ command: "harness", args: ["acp"] })
+  transport: wasm({ module, worker: true }),          // or subprocess({ command: "harness", args: ["acp"] })
   config,                                             // config.Config JSON; no keys
   proxy,                                              // browser: { baseURL, headers } of a same-origin proxy; serializable
   fetch,                                              // optional: a page fetch, bridged to the Worker by postMessage
@@ -298,6 +298,8 @@ const h = await createHarness({
 h.stream                                              // { readable, writable } of ACP messages
 h.close()
 ```
+
+A transport is an object `{kind, supports, defaultTools, start}`. `supports` names the options (`tools`, `builtinTools`, `proxy`, `fetch`) that the transport honors, and `createHarness` rejects any other option that the caller sets. `defaultTools` is the default tool set before the names of the page tools, or absent when the transport leaves the choice to the host. `start` returns the `Harness`. `createHarness` never branches on `kind`.
 
 `h.stream` is a `{readable, writable}` pair of parsed ACP messages, compatible with the `Stream` type of the ACP TypeScript SDK, and `sdk/embed` has no dependency on that SDK. The pair has no backpressure in either direction. The app connects `h.stream` to the official ACP TypeScript client (`libraries/typescript.md`). The SDK has no UI and no ACP client of its own. A web UI is bailey's surface.
 
