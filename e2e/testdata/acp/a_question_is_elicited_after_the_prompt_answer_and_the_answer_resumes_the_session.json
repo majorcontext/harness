@@ -366,11 +366,13 @@
                 "oneOf": [
                   {
                     "const": "PostgreSQL",
-                    "title": "PostgreSQL - a"
+                    "description": "a",
+                    "title": "PostgreSQL"
                   },
                   {
                     "const": "SQLite",
-                    "title": "SQLite - b"
+                    "description": "b",
+                    "title": "SQLite"
                   }
                 ],
                 "title": "DB",

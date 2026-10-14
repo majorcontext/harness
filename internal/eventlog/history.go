@@ -341,5 +341,5 @@ func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok b
 // open: what the model reads in the history.
 func dismissal(c OpenToolCall) protocol.LogMessage {
 	return protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{{Type: protocol.LogPartToolResult, CallID: c.CallID, Name: c.Name,
-		Text: "The user dismissed this question without answering.", IsError: true}}}
+		Text: protocol.DismissedQuestionText, IsError: true}}}
 }

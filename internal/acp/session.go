@@ -165,7 +165,7 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 	case protocol.KindRequestOpened:
 		h.opened(e, st)
 	case protocol.KindRequestResolved:
-		h.resolved(e, st)
+		return h.resolved(e, st)
 	case protocol.KindSettingsChanged:
 		return h.configUpdate(st)
 	case protocol.KindStatus:

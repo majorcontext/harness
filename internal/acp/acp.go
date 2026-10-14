@@ -55,7 +55,7 @@ type RuntimeOptions struct {
 type Runtimes interface {
 	// For returns the Runtime of cwd, which is an absolute path. A cwd that is
 	// not a directory fails with an error that matches harness.ErrInvalidRequest.
-	// The first call for a cwd decides its options.
+	// The first call for a cwd decides its options. That is safe because each connection has its own Runtimes (cmd/harness/acp.go, cmd/harness-wasm/connect.go), so the options of one client never reach the runtime of another.
 	For(ctx context.Context, cwd string, opts RuntimeOptions) (Runtime, error)
 	// ToolImage returns the bytes of a tool-result image of a session. A key that
 	// FindToolImage does not accept for the log of the session fails with

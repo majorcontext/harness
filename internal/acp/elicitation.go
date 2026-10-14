@@ -73,11 +73,11 @@ func optionProperty(prop map[string]any, multi bool, options []questionOption) m
 	titled := make([]any, len(options))
 	for i, o := range options {
 		labels[i] = o.Label
-		title := o.Label
+		option := map[string]any{"const": o.Label, "title": o.Label}
 		if o.Description != "" {
-			title += " - " + o.Description
+			option["description"] = o.Description
 		}
-		titled[i] = map[string]any{"const": o.Label, "title": title}
+		titled[i] = option
 	}
 	if multi {
 		prop["type"], prop["minItems"] = "array", 1
@@ -134,15 +134,15 @@ func (h *held) opened(e protocol.Event, st *pumpState) {
 	st.asks = append(st.asks, ask{requestID: req.RequestID, form: form})
 }
 
-// resolved ends what the client still owes for a request that the log resolved: it cancels the elicitation that has no answer.
-func (h *held) resolved(e protocol.Event, st *pumpState) {
+// resolved ends what the client still owes for a request that the log resolved: it cancels the elicitation that has no answer, and it fails the tool call of a dismissed question.
+func (h *held) resolved(e protocol.Event, st *pumpState) error {
 	p, err := e.Payload()
 	if err != nil {
-		return
+		return nil
 	}
 	res, ok := p.(*protocol.RequestResolved)
 	if !ok {
-		return
+		return nil
 	}
 	st.asks = removeAsk(st.asks, res.RequestID)
 	h.mu.Lock()
@@ -152,6 +152,11 @@ func (h *held) resolved(e protocol.Event, st *pumpState) {
 	if pending != nil {
 		pending.Cancel()
 	}
+	if res.Resolution != protocol.ResolutionDismissed {
+		return nil
+	}
+	return h.send("session/update", map[string]any{"sessionId": h.id, "update": toolUpdateBody{Kind: "tool_call_update", ID: res.RequestID,
+		Status: "failed", RawOutput: protocol.DismissedQuestionText, Content: []any{textItem(protocol.DismissedQuestionText)}}})
 }
 
 func removeAsk(asks []ask, id string) []ask {

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -25,12 +24,6 @@ type acpAnswerElicitation struct {
 
 // acpAwaitCancelRequest reads frames until the agent sends $/cancel_request for the elicitation kept under as.
 type acpAwaitCancelRequest struct{ as string }
-
-// acpAwaitResolution waits until the log of the session holds a request.resolved record with the resolution. The agent sends no frame for it, and the agent can be another process.
-type acpAwaitResolution struct {
-	as         string
-	resolution protocol.ResolutionKind
-}
 
 // acpCloseSession sends session/close and waits for its answer.
 type acpCloseSession struct{ as string }
@@ -84,22 +77,6 @@ func (s acpAwaitCancelRequest) run(t *testing.T, c *acpConn) {
 	}
 }
 
-func (s acpAwaitResolution) run(t *testing.T, c *acpConn) {
-	t.Helper()
-	st, id := store.NewDiskStore(c.env.sessDir), c.session(s.as)
-	testpoll.Until(t, waitBound, "the log holds no "+string(s.resolution)+" request", func() bool {
-		for e, err := range harness.ReadEvents(t.Context(), st, id, 0) {
-			if err != nil {
-				return false
-			}
-			if p, _ := e.Payload(); e.Kind == protocol.KindRequestResolved && p.(*protocol.RequestResolved).Resolution == s.resolution {
-				return true
-			}
-		}
-		return false
-	})
-}
-
 func (s acpCloseSession) run(t *testing.T, c *acpConn) {
 	t.Helper()
 	c.mustBeResult(c.response(c.request("session/close", map[string]any{"sessionId": c.session(s.as)})), "CloseSessionResponse")
@@ -135,8 +112,8 @@ var acpElicitationScenarios = []acpScenario{
 					"properties": map[string]any{"question_1": map[string]any{
 						"type": "string", "title": "DB", "description": "Which database?",
 						"oneOf": []any{
-							map[string]any{"const": "PostgreSQL", "title": "PostgreSQL - a"},
-							map[string]any{"const": "SQLite", "title": "SQLite - b"},
+							map[string]any{"const": "PostgreSQL", "title": "PostgreSQL", "description": "a"},
+							map[string]any{"const": "SQLite", "title": "SQLite", "description": "b"},
 						},
 					}},
 				}
@@ -180,7 +157,7 @@ var acpElicitationScenarios = []acpScenario{
 			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
 			acpAwaitElicitation{as: "q"},
 			acpAnswerElicitation{as: "q", action: "decline"},
-			acpAwaitResolution{as: "a", resolution: protocol.ResolutionDismissed},
+			acpAwaitUpdate{kind: "tool_call_update", status: "failed"},
 		},
 	},
 	{
@@ -194,6 +171,14 @@ var acpElicitationScenarios = []acpScenario{
 			acpCheck(func(t *testing.T, c *acpConn) {
 				if got := acpElicitations(c); len(got) != 0 {
 					t.Errorf("elicitations = %v, want none", got)
+				}
+				for e, err := range harness.ReadEvents(t.Context(), store.NewDiskStore(c.env.sessDir), c.session("a"), 0) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if e.Kind == protocol.KindRequestOpened {
+						t.Errorf("the log holds a request.opened record at seq %d, want no question to open", e.Seq)
+					}
 				}
 			}),
 		},
@@ -209,6 +194,17 @@ var acpElicitationScenarios = []acpScenario{
 			acpAwaitElicitation{as: "q"},
 			acpPrompt{as: "a", text: "never mind", stop: "end_turn"},
 			acpAwaitCancelRequest{as: "q"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				failed := 0
+				for _, u := range acpUpdatesOf(c, "tool_call_update") {
+					if u["toolCallId"] == "toolu_q" && u["status"] == "failed" {
+						failed++
+					}
+				}
+				if failed != 1 {
+					t.Errorf("failed updates of the question call = %d, want 1", failed)
+				}
+			}),
 			acpAnswerElicitation{as: "q", action: "accept", content: map[string]any{"question_1": "SQLite"}},
 		},
 	},

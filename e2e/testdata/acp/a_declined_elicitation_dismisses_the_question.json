@@ -357,11 +357,13 @@
                 "oneOf": [
                   {
                     "const": "PostgreSQL",
-                    "title": "PostgreSQL - a"
+                    "description": "a",
+                    "title": "PostgreSQL"
                   },
                   {
                     "const": "SQLite",
-                    "title": "SQLite - b"
+                    "description": "b",
+                    "title": "SQLite"
                   }
                 ],
                 "title": "DB",
@@ -385,6 +387,31 @@
         "jsonrpc": "2.0",
         "result": {
           "action": "decline"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "content": {
+                  "text": "The user dismissed this question without answering.",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "rawOutput": "The user dismissed this question without answering.",
+            "sessionUpdate": "tool_call_update",
+            "status": "failed",
+            "toolCallId": "toolu_q"
+          }
         }
       }
     }
