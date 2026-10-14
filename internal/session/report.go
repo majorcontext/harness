@@ -92,7 +92,7 @@ func (a *Actor) shown(rep *Report, big bigResult) (string, []protocol.Payload) {
 // bytes: it has the read_tool_result tool on a backend that runs it, and the
 // retained total stays inside the budget.
 func (a *Actor) canRetain(n int) bool {
-	if !a.cfg.Retain || a.ownsLoop() || len(turn.Restrict([]turn.Tool{toolresult.NewTool(a)}, a.state.AllowedTools())) == 0 {
+	if !a.cfg.Retain || len(turn.Restrict([]turn.Tool{toolresult.NewTool(a)}, a.state.AllowedTools())) == 0 {
 		return false
 	}
 	used, _ := a.retainedTotals()

@@ -32,7 +32,7 @@ var modes = mergeModes(basicModes, threadModes, stdinModes, childModes, partialM
 func normalTurn(f *fake) {
 	f.emit(
 		say("Let me check that."),
-		assistant(toolUse("toolu_1", "Bash", obj{"command": "echo hi"})),
+		assistant(toolUse("toolu_1", "mcp__harness__bash", obj{"command": "echo hi"})),
 		user(toolResult("toolu_1", "hi\n", false)),
 		say("Done — it printed hi."),
 		success("Done — it printed hi.", 0, 0).
@@ -43,7 +43,7 @@ func normalTurn(f *fake) {
 
 func parallelCalls(f *fake) {
 	bash := func(n, cmd string) obj {
-		return assistant(toolUse("toolu_"+n, "Bash", obj{"command": cmd})).inMessage("id", "msg_parallel")
+		return assistant(toolUse("toolu_"+n, "mcp__harness__bash", obj{"command": cmd})).inMessage("id", "msg_parallel")
 	}
 	note := func(s string) obj { return say(s).inMessage("id", "msg_parallel") }
 	f.emit(
@@ -65,7 +65,7 @@ func perCallUsage(f *fake) {
 			"cache_read_input_tokens": cacheRead, "output_tokens": output,
 		})
 	}
-	bash := func(n, cmd string) obj { return toolUse("toolu_"+n, "Bash", obj{"command": cmd}) }
+	bash := func(n, cmd string) obj { return toolUse("toolu_"+n, "mcp__harness__bash", obj{"command": cmd}) }
 	f.emit(
 		call("msg_1", bash("1", "echo one"), 5545, 10234, 16),
 		user(toolResult("toolu_1", "ok\n", false)),
@@ -122,7 +122,13 @@ func hang(f *fake) {
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
-	"parallel_calls":               parallelCalls,
+	"parallel_calls": parallelCalls,
+	"builtin_tool":   builtinTool,
+	"turn_calls": func(f *fake) {
+		f.emit(say("Let me check that."))
+		turnCalls(f)
+		f.emit(say("Done."), success("Done.", 0, 0))
+	},
 	"per_call_usage":               perCallUsage,
 	"compact_after_window":         perCallUsage,
 	"compact_boundary":             compactBoundary,
@@ -161,7 +167,7 @@ func hangAfterText(f *fake) {
 // as the CLI does, and hangs while the tool runs.
 func hangInTool(f *fake) {
 	f.emit(say("Working on it.").inMessage("id", "msg_0"), say("Checking.").inMessage("id", "msg_A"),
-		assistant(toolUse("toolu_h", "Bash", obj{"command": "sleep 60"})).inMessage("id", "msg_A"))
+		assistant(toolUse("toolu_h", "mcp__harness__bash", obj{"command": "sleep 60"})).inMessage("id", "msg_A"))
 	hang(f)
 }
 
@@ -170,10 +176,20 @@ func hangInTool(f *fake) {
 // and an empty list exits with no frame.
 // They reach the driver only after it stopped reading the turn.
 var onInterrupt = map[string][]obj{
-	"tool_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"}))},
-	"tool_result_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"})),
+	"tool_on_interrupt": {assistant(toolUse("toolu_i", "mcp__harness__bash", obj{"command": "sleep 60"}))},
+	"tool_result_on_interrupt": {assistant(toolUse("toolu_i", "mcp__harness__bash", obj{"command": "sleep 60"})),
 		user(toolResult("toolu_i", "ok\n", false))},
 	"success_on_interrupt":     {say("Finished anyway."), success("Finished anyway.", 7, 2)},
 	"placeholder_on_interrupt": {success("", 0, 0).set("num_turns", 0), failed(7, 2, interrupted)},
 	"exit_on_interrupt":        {},
+}
+
+// builtinTool runs a built-in tool that the init frame does not list, which a
+// CLI under --tools "" cannot do.
+func builtinTool(f *fake) {
+	f.emit(
+		assistant(toolUse("toolu_b", "Bash", obj{"command": "echo hi"})),
+		user(toolResult("toolu_b", "hi\n", false)),
+		success("done", 0, 0),
+	)
 }

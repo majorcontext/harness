@@ -81,7 +81,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }

@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 const toolUseMeta = "claudecode/toolUseId"
@@ -112,4 +115,66 @@ func hostedServer() (hostedEntry, bool) {
 		}
 	}
 	return hostedEntry{}, false
+}
+
+type hostedText struct {
+	Result struct {
+		Content []struct{ Text string }
+		IsError bool
+	}
+}
+
+func hostedCall(name string, args obj, id string) hostedText {
+	var out hostedText
+	_ = json.Unmarshal([]byte(hostedRPC("tools/call", obj{"name": name, "arguments": args, "_meta": obj{toolUseMeta: id}})), &out)
+	return out
+}
+
+func (h hostedText) text() string {
+	if len(h.Result.Content) == 0 {
+		return ""
+	}
+	return h.Result.Content[0].Text
+}
+
+type turnCall struct {
+	Name string `json:"name"`
+	Args obj    `json:"args"`
+}
+
+// turnCalls runs the batches of FAKE_CLAUDE_TURN_CALLS during the turn, as the
+// CLI does: each batch prints one tool_use frame per call, calls the tools of
+// the harness MCP server at once, and prints the tool_result frames. The text
+// $HANDLE in the arguments of a call stands for the first trh_N handle in the
+// result of the batch before it.
+func turnCalls(f *fake) {
+	var batches [][]turnCall
+	_ = json.Unmarshal([]byte(os.Getenv("FAKE_CLAUDE_TURN_CALLS")), &batches)
+	handle := regexp.MustCompile(`trh_\d+`)
+	last := ""
+	for b, batch := range batches {
+		results := make([]hostedText, len(batch))
+		ids := make([]string, len(batch))
+		for i, c := range batch {
+			ids[i] = fmt.Sprintf("toolu_t%d_%d", b, i)
+			args, _ := json.Marshal(c.Args)
+			args = []byte(strings.ReplaceAll(string(args), "$HANDLE", handle.FindString(last)))
+			batch[i].Args = obj{}
+			_ = json.Unmarshal(args, &batch[i].Args)
+			f.emit(assistant(toolUse(ids[i], "mcp__harness__"+c.Name, batch[i].Args)).inMessage("id", fmt.Sprintf("msg_t%d", b)))
+		}
+		var wg sync.WaitGroup
+		for i, c := range batch {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[i] = hostedCall(c.Name, c.Args, ids[i])
+			}()
+		}
+		wg.Wait()
+		for i := range batch {
+			f.emit(user(toolResult(ids[i], results[i].text(), results[i].Result.IsError)))
+		}
+		last = results[0].text()
+	}
 }

@@ -36,7 +36,7 @@ func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name,
 // knownIn is known for a session that has session MCP servers when session is true.
 func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
-	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || !caps.OwnsLoop && (r.builtin(name) || name == turn.AskTool) ||
+	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || !caps.OwnsLoop && name == turn.AskTool ||
 		(r.mcp != nil || session) && mcpsrc.Reserved(name) || r.owns(name)
 }
 
@@ -119,12 +119,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		taken := r.shadowed()
 		files := turn.Fixed(append(slices.DeleteFunc(builtin.Tools(r.workDir, env), func(t turn.Tool) bool { return slices.Contains(taken, t.Spec().Name) }),
 			selftool.NewSessionInfo(toolHost{r}, id, sp)))
-		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
-			if c.OwnsLoop {
-				return nil
-			}
-			return files
-		}})
+		srcs = append(srcs, files)
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {

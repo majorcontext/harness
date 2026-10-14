@@ -21,6 +21,7 @@
 //	FAKE_CLAUDE_SPAWN_MODES    "n=mode,..." runs mode in spawn n instead of FAKE_CLAUDE_MODE
 //	FAKE_CLAUDE_MCP_CONFIG_LOG append the --mcp-config file of each invocation as one line
 //	FAKE_CLAUDE_CALL_ARGS      JSON arguments of the FAKE_CLAUDE_CALL_TOOL call
+//	FAKE_CLAUDE_TURN_CALLS     JSON batches of harness tool calls that the "turn_calls" mode runs during the turn
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
@@ -220,7 +221,7 @@ func main() {
 		f.emit(failed(0, 0, "Not logged in · Please run /login"))
 		return
 	}
-	init := system("init", obj{"session_id": f.sessionID})
+	init := initFrame(f)
 	if mode == "per_call_usage" || mode == "compact_after_window" {
 		init["model"] = "claude-opus-5-5[1m]"
 	}

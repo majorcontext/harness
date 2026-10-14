@@ -273,7 +273,6 @@
       "body": [
         {
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
@@ -287,7 +286,10 @@
     "offered_tools.kid": {
       "status": 200,
       "body": [
-        "get_conversation_history"
+        "get_conversation_history",
+        "glob",
+        "grep",
+        "read_file"
       ]
     }
   }

@@ -29,7 +29,7 @@ func TestClaudeCodeGetsTheImageOfAnMCPTool(t *testing.T) {
 	dir := t.TempDir()
 	toolLog := filepath.Join(dir, "tool.jsonl")
 	for k, v := range map[string]string{
-		"FAKE_CLAUDE_MODE": "normal", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"),
+		"FAKE_CLAUDE_MODE": "thinking", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"),
 		"FAKE_CLAUDE_CALL_TOOL": "mcp__weather__shot", "FAKE_CLAUDE_TOOL_LOG": toolLog,
 		"FAKE_CLAUDE_INIT_TOOLS": `["mcp__harness__mcp__weather__shot"]`,
 	} {

@@ -29,7 +29,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -63,10 +63,19 @@
     "offered_tools.a": {
       "status": 200,
       "body": [
+        "bash",
+        "edit_file",
         "get_conversation_history",
+        "glob",
+        "grep",
+        "ls",
         "model",
         "process",
-        "task"
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
       ]
     }
   }

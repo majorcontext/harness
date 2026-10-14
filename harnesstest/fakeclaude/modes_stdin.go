@@ -86,7 +86,7 @@ func awaitQueued(f *fake) (string, bool) {
 // CLI takes a queued message at the next tool result. It answers with the
 // queued text.
 func steer(f *fake) {
-	f.emit(assistant(toolUse("toolu_s", "Bash", obj{"command": "sleep 1"})))
+	f.emit(assistant(toolUse("toolu_s", "mcp__harness__bash", obj{"command": "sleep 1"})))
 	text := "no steer received"
 	if content, ok := awaitQueued(f); ok {
 		text = "steered: " + content
@@ -119,7 +119,7 @@ func steerFinalText(f *fake) {
 // steerUntaken ends the turn with its tool call unanswered after it took a
 // message.
 func steerUntaken(f *fake) {
-	f.emit(assistant(toolUse("toolu_r", "Bash", obj{"command": "sleep 1"})))
+	f.emit(assistant(toolUse("toolu_r", "mcp__harness__bash", obj{"command": "sleep 1"})))
 	text, queued := awaitQueued(f)
 	f.emit(say("tool done"), success("tool done", 5, 5).set("total_cost_usd", 0.01))
 	if queued {
@@ -140,7 +140,7 @@ func steerTextThenTool(f *fake) {
 // steerUnanswered takes a message, ends the turn with its result, and exits
 // without a second result.
 func steerUnanswered(f *fake) {
-	f.emit(assistant(toolUse("toolu_r", "Bash", obj{"command": "sleep 1"})))
+	f.emit(assistant(toolUse("toolu_r", "mcp__harness__bash", obj{"command": "sleep 1"})))
 	awaitQueued(f)
 	f.emit(say("tool done"), success("tool done", 5, 5))
 }

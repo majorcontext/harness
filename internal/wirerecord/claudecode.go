@@ -3,22 +3,28 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/wirescrub"
 )
 
-// cliArgs are the flags that the claudecode backend passes for a run with one
-// built-in tool.
+// cliArgs are the flags that the claudecode backend passes for a run whose
+// only built-in tool is tools.
 func cliArgs(model, tools string, extra ...string) []string {
 	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--forward-subagent-text", "--thinking-display", "summarized",
+		"--thinking-display", "summarized",
 		"--disallowedTools", "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
 		"--tools", tools, "--strict-mcp-config", "--model", model, "--session-mirror",
 		"--setting-sources", "project", "--disable-slash-commands"}
@@ -99,6 +105,62 @@ func (r *recorder) saveJSONL(name string, raw []byte) error {
 	return r.save(name, short)
 }
 
+// bashServer serves a bash tool to the CLI as the harness MCP server does, in
+// dir, under a secret path so that no other local client reaches it. It returns the extra flags of a run and a stop function.
+func bashServer(dir string) ([]string, func(), error) {
+	reg := mcp.NewRegistry("harness", "1")
+	reg.RegisterTool(mcp.Tool{Name: "bash", Description: "Run a shell command.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`)},
+		func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+			var in struct {
+				Command string `json:"command"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			cmd := exec.CommandContext(ctx, "sh", "-c", in.Command)
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			if err != nil && ctx.Err() != nil {
+				return mcp.CallToolResult{}, ctx.Err()
+			}
+			return mcp.CallToolResult{Content: []mcp.Content{{Type: "text", Text: string(out)}}, IsError: err != nil}, nil
+		})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, nil, err
+	}
+	var key [16]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		_ = ln.Close()
+		return nil, nil, err
+	}
+	secret := "/" + hex.EncodeToString(key[:])
+	gate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != secret {
+			http.NotFound(w, r)
+			return
+		}
+		reg.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: gate, ReadHeaderTimeout: time.Minute}
+	go func() { _ = srv.Serve(ln) }()
+	cfg, err := os.CreateTemp("", "wirerecord-mcp-*.json")
+	if err != nil {
+		_ = srv.Close()
+		return nil, nil, err
+	}
+	body, _ := json.Marshal(obj{"mcpServers": obj{"harness": obj{"type": "http", "url": "http://" + ln.Addr().String() + secret}}})
+	_, werr := cfg.Write(body)
+	_ = cfg.Close()
+	stop := func() { _ = srv.Close(); _ = os.Remove(cfg.Name()) }
+	if werr != nil {
+		stop()
+		return nil, nil, werr
+	}
+	return []string{"--mcp-config", cfg.Name(), "--allowedTools", "mcp__harness"}, stop, nil
+}
+
 func recordClaudeCode(r *recorder, work string) error {
 	dir := filepath.Join(work, "proj")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -109,22 +171,27 @@ func recordClaudeCode(r *recorder, work string) error {
 			return err
 		}
 	}
-	tool, err := runCLI(dir, []string{"Run ls with the Bash tool in the current directory, then name the files you saw in one short sentence."},
-		cliArgs(claudeModel, "Bash", "--effort", "medium"), false)
+	bash, stop, err := bashServer(dir)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	tool, err := runCLI(dir, []string{"Run ls with the mcp__harness__bash tool in the current directory, then name the files you saw in one short sentence."},
+		cliArgs(claudeModel, "", append([]string{"--effort", "medium"}, bash...)...), false)
 	if err != nil {
 		return fmt.Errorf("tool run: %w", err)
 	}
 	if err := r.saveJSONL("claudecode.tool.jsonl", tool); err != nil {
 		return err
 	}
-	stopped, err := runCLI(dir, []string{"Run sleep 30 with the Bash tool, then say done."}, cliArgs(claudeModel, "Bash"), true)
+	stopped, err := runCLI(dir, []string{"Run sleep 30 with the mcp__harness__bash tool, then say done."}, cliArgs(claudeModel, "", bash...), true)
 	if err != nil {
 		return fmt.Errorf("interrupt run: %w", err)
 	}
 	if err := r.saveJSONL("claudecode.interrupt.jsonl", stopped); err != nil {
 		return err
 	}
-	bad, err := runCLI(dir, []string{"hi"}, cliArgs("no-such-model", "Bash"), false)
+	bad, err := runCLI(dir, []string{"hi"}, cliArgs("no-such-model", ""), false)
 	if err != nil {
 		return fmt.Errorf("error run: %w", err)
 	}
@@ -280,8 +347,13 @@ func recordClaudeCodePartial(r *recorder, work string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	raw, err := runCLI(dir, []string{"Think it over, say in one short sentence what you will do, run echo hi with the Bash tool, then greet me in one short sentence."},
-		cliArgs(claudeModel, "Bash", "--effort", "medium", "--include-partial-messages"), false)
+	bash, stop, err := bashServer(dir)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	raw, err := runCLI(dir, []string{"Think it over, say in one short sentence what you will do, run echo hi with the mcp__harness__bash tool, then greet me in one short sentence."},
+		cliArgs(claudeModel, "", append([]string{"--effort", "medium", "--include-partial-messages"}, bash...)...), false)
 	if err != nil {
 		return fmt.Errorf("partial run: %w", err)
 	}

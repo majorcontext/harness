@@ -37,11 +37,10 @@ type actorTools struct {
 }
 
 func (s actorTools) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
-	if s.a.cfg.Backend.Capabilities(model).OwnsLoop {
-		return turn.Toolset{Tools: []turn.Tool{historyTool{s.a}}}
-	}
 	var ts turn.Toolset
-	if s.mayAsk(ctx) {
+	if s.a.cfg.Backend.Capabilities(model).OwnsLoop {
+		ts.Tools = []turn.Tool{historyTool{s.a}}
+	} else if s.mayAsk(ctx) {
 		ts.Tools = turn.Restrict([]turn.Tool{turn.NewAskTool()}, allowed)
 	}
 	if s.a.cfg.Retain {

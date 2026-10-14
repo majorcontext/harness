@@ -45,6 +45,9 @@ type claudeLane struct {
 	// listTools makes each turn of the CLI list the tools of the hosted MCP
 	// server after the result.
 	listTools bool
+	// turnCalls are batches of harness tool calls that the "turn_calls" mode
+	// makes the CLI run during the turn, each batch at once.
+	turnCalls [][]turnCall
 	// initTools is the JSON list of tools in the init frame of the CLI, which a
 	// session with an allowed list checks.
 	initTools string
@@ -58,6 +61,12 @@ type claudeLane struct {
 	spawnModes string
 	// env adds FAKE_CLAUDE_* and FAKECLAUDE_* variables to the environment of the CLI.
 	env map[string]string
+}
+
+// turnCall is one call of a "turn_calls" batch.
+type turnCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
 }
 
 // claudeLogs are the files where fakeclaude records what it received.
@@ -101,6 +110,10 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 	}
 	if lane.listTools {
 		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
+	}
+	if lane.turnCalls != nil {
+		calls, _ := json.Marshal(lane.turnCalls)
+		env["FAKE_CLAUDE_TURN_CALLS"] = string(calls)
 	}
 	if lane.initTools != "" {
 		env["FAKE_CLAUDE_INIT_TOOLS"] = lane.initTools
@@ -189,10 +202,9 @@ func argvFacts(argv []string) map[string]any {
 		"mcp_config":         slices.Contains(argv, "--mcp-config"),
 		"question_tool_open": slices.Contains(argv, "--permission-prompt-tool"),
 
-		"forward_subagent_text": slices.Contains(argv, "--forward-subagent-text"),
-		"thinking_display":      value("--thinking-display"),
-		"disallowed_tools":      value("--disallowedTools"),
-		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
+		"thinking_display":  value("--thinking-display"),
+		"disallowed_tools":  value("--disallowedTools"),
+		"strict_mcp_config": slices.Contains(argv, "--strict-mcp-config"),
 	}
 	if e := value("--effort"); e != nil {
 		facts["effort"] = e
@@ -475,14 +487,6 @@ func (a claudeSession) run(t *testing.T, r *run) {
 		}
 	}
 	r.record(t, "get_session", a.as, res)
-}
-
-// claudeMessageParents records the parent_tool_use_id of each transcript
-// message, which the oracle's transcript vocabulary leaves out.
-type claudeMessageParents struct{ as string }
-
-func (a claudeMessageParents) run(t *testing.T, r *run) {
-	r.record(t, "message_parents", a.as, claudeDriverOf(t, r).messageParents(t, r.id(t, a.as)))
 }
 
 // claudeJournalEvents records the type and compaction fields of the session's

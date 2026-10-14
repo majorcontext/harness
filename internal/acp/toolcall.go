@@ -26,26 +26,11 @@ var toolKinds = map[string]string{
 	"ls":               "search",
 	"bash":             "execute",
 	"process":          "execute",
-	"Read":             "read",
-	"Write":            "edit",
-	"Edit":             "edit",
-	"MultiEdit":        "edit",
-	"NotebookEdit":     "edit",
-	"Glob":             "search",
-	"Grep":             "search",
-	"LS":               "search",
-	"Bash":             "execute",
-	"BashOutput":       "execute",
-	"KillShell":        "execute",
-	"WebFetch":         "fetch",
-	"WebSearch":        "fetch",
-	"TodoWrite":        "think",
 }
 
 // fileTools are the tools whose path argument is a file location.
 var fileTools = map[string]bool{
 	"read_file": true, "write_file": true, "edit_file": true,
-	"Read": true, "Write": true, "Edit": true, "MultiEdit": true,
 }
 
 const titleRunes = 100

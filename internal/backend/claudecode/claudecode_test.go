@@ -136,11 +136,11 @@ func hasArgs(argv []string, want ...string) bool {
 const toolsInit = "FAKE_CLAUDE_INIT_TOOLS"
 
 func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
-	for _, name := range []string{"bash", "nope"} {
+	for _, name := range []string{"Read", "nope"} {
 		t.Run(name, func(t *testing.T) {
 			r := claudeRuntime(t, store.NewMemStore(), lookup{})
 			defer closeRuntime(t, r)
-			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{"Read", name}})
+			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{name}})
 			if !errors.Is(err, harness.ErrInvalidRequest) {
 				t.Errorf("Create = %v, want ErrInvalidRequest", err)
 			}
@@ -149,8 +149,8 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 }
 
 func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
-	for _, allowed := range [][]string{nil, {"Read"}} {
-		r := claudeRuntime(t, store.NewMemStore(), newProbe("Read", false))
+	for _, allowed := range [][]string{nil, {"AskUserQuestion"}} {
+		r := claudeRuntime(t, store.NewMemStore(), newProbe("AskUserQuestion", false))
 		defer closeRuntime(t, r)
 		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
 		if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -260,21 +260,21 @@ func TestClaudeCodeAppliesTheAllowedToolsOfASession(t *testing.T) {
 		want       []string
 		args       []string
 	}{
-		{name: "a restriction maps to the tool list", mode: "thinking", env: []string{toolsInit, `["Bash","Read"]`}, allowed: []string{"Read", "Bash"},
+		{name: "a restriction maps to the tool list", mode: "thinking", env: []string{toolsInit, `["mcp__harness__echo"]`}, allowed: []string{"echo"},
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", answered, "context.measured", "turn.ended completed"},
-			args: []string{"--tools", "Bash,Read", "--strict-mcp-config"}},
+			args: []string{"--tools", "", "--strict-mcp-config"}},
 		{name: "an empty restriction disables every built-in tool", mode: "thinking", env: []string{toolsInit, `[]`}, allowed: []string{},
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", answered, "context.measured", "turn.ended completed"},
 			args: []string{"--tools", "", "--strict-mcp-config"}},
-		{name: "a restricted CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"Bash"},
+		{name: "a CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"echo"},
 			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
-		{name: "a CLI that ignores the restriction fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash","Write"]`}, allowed: []string{"Bash"},
-			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: Write"}},
+		{name: "a CLI that lists a built-in tool fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash"]`},
+			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: Bash"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			argvLog := fakeClaude(t, tc.mode, tc.env...)
 			st := store.NewMemStore()
-			r := claudeRuntime(t, st)
+			r := claudeRuntime(t, st, newProbe("echo", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
 			wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)

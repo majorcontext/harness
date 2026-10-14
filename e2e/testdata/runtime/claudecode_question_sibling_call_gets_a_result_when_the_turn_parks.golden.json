@@ -43,7 +43,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -101,7 +101,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#3",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -138,7 +138,6 @@
         {
           "defer_hook": true,
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
@@ -151,7 +150,6 @@
           "defer_hook": true,
           "deferred_call": "toolu#1",
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
@@ -163,7 +161,6 @@
         {
           "defer_hook": true,
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",

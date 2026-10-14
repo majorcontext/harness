@@ -17,10 +17,8 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "Task",
-            "arguments": {}
+            "type": "text",
+            "text": "Let me check that."
           }
         ]
       },
@@ -29,8 +27,12 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "Working inside the subagent."
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo block-me"
+            }
           }
         ]
       },
@@ -41,7 +43,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "subagent done"
+            "is_error": true,
+            "content": "blocked by fixture"
           }
         ]
       },
@@ -51,37 +54,10 @@
         "parts": [
           {
             "type": "text",
-            "text": "All done."
+            "text": "Done."
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "message_parents.a": {
-      "status": 200,
-      "body": [
-        {
-          "parent_tool_use_id": "",
-          "role": "user"
-        },
-        {
-          "parent_tool_use_id": "",
-          "role": "assistant"
-        },
-        {
-          "parent_tool_use_id": "toolu#1",
-          "role": "assistant"
-        },
-        {
-          "parent_tool_use_id": "toolu#1",
-          "role": "tool"
-        },
-        {
-          "parent_tool_use_id": "",
-          "role": "assistant"
-        }
-      ]
-    }
   }
 }

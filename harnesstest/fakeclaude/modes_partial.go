@@ -8,7 +8,6 @@ import (
 const (
 	partialFirstID  = "msg_011FAKEPARTIAL1"
 	partialSecondID = "msg_011FAKEPARTIAL2"
-	partialTaskID   = "msg_011FAKEPARTIALTASK"
 )
 
 // partialEmit prints frames that exist only with --include-partial-messages.
@@ -23,7 +22,6 @@ func partialEmit(f *fake, fs ...obj) {
 // frames alone, as the CLI does.
 var partialModes = map[string]mode{
 	"partial_messages": partialMessages,
-	"partial_crossing": partialCrossing,
 	"partial_retry":    partialRetry,
 }
 
@@ -61,7 +59,7 @@ func textDelta(s string) obj { return obj{"type": "text_delta", "text": s} }
 // as an assistant frame, the way the CLI prints it.
 func partialMessages(f *fake) {
 	emit := func(fs ...obj) { partialEmit(f, fs...) }
-	bash := toolUse("toolu_partial", "Bash", obj{"command": "echo hi"})
+	bash := toolUse("toolu_partial", "mcp__harness__bash", obj{"command": "echo hi"})
 	emit(messageStart(partialFirstID),
 		blockStart(0, thinkingBlock("", "")),
 		blockDelta(0, thinkingDelta("Let me ")), blockDelta(0, thinkingDelta("reason.")),
@@ -70,7 +68,7 @@ func partialMessages(f *fake) {
 	emit(blockStop(0), blockStart(1, textBlock("")),
 		blockDelta(1, textDelta("Let me ")), blockDelta(1, textDelta("check ")), blockDelta(1, textDelta("that.")))
 	f.emit(say("Let me check that.").inMessage("id", partialFirstID))
-	emit(blockStop(1), blockStart(2, toolUse("toolu_partial", "Bash", obj{})),
+	emit(blockStop(1), blockStart(2, toolUse("toolu_partial", "mcp__harness__bash", obj{})),
 		blockDelta(2, obj{"type": "input_json_delta", "partial_json": ""}))
 	f.emit(assistant(bash).inMessage("id", partialFirstID))
 	emit(blockStop(2), messageStop("tool_use"), streamEvent(obj{"type": "message_stop"}))
@@ -80,25 +78,6 @@ func partialMessages(f *fake) {
 	f.emit(say("It printed hi.").inMessage("id", partialSecondID))
 	emit(blockStop(0), messageStop("end_turn"), streamEvent(obj{"type": "message_stop"}))
 	f.emit(success("It printed hi.", 12, 8))
-}
-
-// partialCrossing runs a subagent while the main thread streams. The main
-// message holds a thinking block and a text block; the assistant frames of
-// the subagent arrive in the middle of the text, as the CLI prints the frames
-// of a background subagent. The stream events carry no subagent text.
-func partialCrossing(f *fake) {
-	emit := func(fs ...obj) { partialEmit(f, fs...) }
-	f.emit(assistant(toolUse("toolu_parent", "Task", obj{})).inMessage("id", partialTaskID).parent(nil))
-	emit(messageStart(partialFirstID), blockStart(0, thinkingBlock("", "")),
-		blockDelta(0, thinkingDelta("Main ")), blockDelta(0, thinkingDelta("thinking.")))
-	f.emit(assistant(thinkingBlock("Main thinking.", "sig-cross")).inMessage("id", partialFirstID))
-	emit(blockStop(0), blockStart(1, textBlock("")), blockDelta(1, textDelta("Main ")))
-	f.emit(say("Subagent text.").parent("toolu_parent"))
-	emit(blockDelta(1, textDelta("text.")))
-	f.emit(say("Main text.").inMessage("id", partialFirstID))
-	emit(blockStop(1), messageStop("end_turn"), streamEvent(obj{"type": "message_stop"}))
-	f.emit(user(toolResult("toolu_parent", "subagent done", false)).parent("toolu_parent"),
-		success("Main text.", 14, 6))
 }
 
 // partialRetry drops a reply that it began and answers again, as the CLI does

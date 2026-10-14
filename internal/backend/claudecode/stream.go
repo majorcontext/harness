@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/majorcontext/harness/internal/backend/external"
@@ -25,8 +26,14 @@ type run struct {
 	dir       string
 	mirror    external.Mirror
 	allowed   map[string]bool
-	bridged   map[string]bool
-	names     map[string]string
+	// restricted is a run whose session lists its allowed tools: the CLI gets
+	// no configured MCP server.
+	restricted bool
+	bridged    map[string]bool
+	// blobs holds the blobs of the bridge results by call ID until the result frame arrives.
+	blobMu sync.Mutex
+	blobs  map[string][]protocol.Blob
+	names  map[string]string
 	// questions reports a run with the question channel; resolution answers
 	// the parked call, and question is the call that the main thread asked.
 	questions  bool
@@ -266,7 +273,7 @@ func (r *run) frame(line []byte) error {
 }
 
 func (r *run) handle(env envelope) error {
-	if r.allowed != nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
+	if r.resolution == nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result" && !env.IsError) {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
 	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
@@ -366,14 +373,24 @@ func (r *run) system(env envelope) error {
 	return nil
 }
 
-func (r *run) checkTools(tools *[]string) error {
-	if r.allowed == nil {
-		return nil
+// mayCall reports whether the CLI may call the tool name. A restricted run
+// calls only its allowed tools. Any run calls MCP tools, and AskUserQuestion
+// when it may ask. A built-in tool that acts on the machine fails the turn.
+func (r *run) mayCall(name string) bool {
+	if r.restricted {
+		return r.allowed[name]
 	}
+	return strings.HasPrefix(name, "mcp__") || r.allowed[name]
+}
+
+func (r *run) checkTools(tools *[]string) error {
 	if tools == nil {
 		return fmt.Errorf("%w: the init frame lists no tools", ErrToolsNotRestricted)
 	}
 	for _, t := range *tools {
+		if strings.HasPrefix(t, "mcp__") && !r.restricted {
+			continue
+		}
 		if !r.allowed[t] {
 			return fmt.Errorf("%w: %s", ErrToolsNotRestricted, t)
 		}
@@ -415,6 +432,11 @@ func (r *run) assistant(env envelope) error {
 	if len(parts) == 0 {
 		return nil
 	}
+	for _, p := range parts {
+		if p.Type == protocol.LogPartToolCall && !r.mayCall(p.Name) {
+			return fmt.Errorf("%w: tool call %s", ErrToolsNotRestricted, p.Name)
+		}
+	}
 	if r.pending == nil || m.ID == "" || m.ID != r.pendingID || r.pending.ParentCallID != env.ParentToolUseID {
 		if err := r.flush(); err != nil {
 			return err
@@ -451,6 +473,9 @@ func (r *run) toolResults(env envelope) error {
 	parts := toolResults(decodeMessage(env.Message), r.names)
 	if len(parts) == 0 {
 		return nil
+	}
+	if err := r.attachBlobs(parts); err != nil {
+		return err
 	}
 	if env.ParentToolUseID == "" {
 		r.owed = false
@@ -540,4 +565,40 @@ func (r *run) telemetry(env envelope) {
 func callMetrics(env envelope) *turn.CallMetrics {
 	ttft := time.Duration(env.TTFTMillis) * time.Millisecond
 	return &turn.CallMetrics{TTFT: ttft, Stream: max(0, time.Duration(env.DurationMillis)*time.Millisecond-ttft)}
+}
+
+// keepBlobs remembers the blobs of the result of call id, for the result frame
+// that the CLI prints after the bridge call.
+func (r *run) keepBlobs(id string, blobs []protocol.Blob) {
+	r.blobMu.Lock()
+	defer r.blobMu.Unlock()
+	if r.blobs == nil {
+		r.blobs = map[string][]protocol.Blob{}
+	}
+	r.blobs[id] = blobs
+}
+
+// attachBlobs stores the blobs of each bridge result and adds their parts to
+// the result part, so the log holds the image that the CLI saw.
+func (r *run) attachBlobs(parts []protocol.LogPart) error {
+	a, ok := r.out.(turn.Attacher)
+	if !ok {
+		return nil
+	}
+	r.blobMu.Lock()
+	defer r.blobMu.Unlock()
+	for i, p := range parts {
+		for _, b := range r.blobs[p.CallID] {
+			if len(b.Data) == 0 {
+				continue
+			}
+			bp, err := a.Attach(b.MediaType, b.Data)
+			if err != nil {
+				return err
+			}
+			parts[i].Blobs = append(parts[i].Blobs, bp)
+		}
+		delete(r.blobs, p.CallID)
+	}
+	return nil
 }

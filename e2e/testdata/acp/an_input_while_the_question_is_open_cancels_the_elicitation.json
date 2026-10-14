@@ -81,7 +81,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -524,13 +524,13 @@
           "sessionId": "\u003csession:a\u003e",
           "update": {
             "kind": "execute",
-            "name": "Bash",
+            "name": "bash",
             "rawInput": {
               "command": "echo hi"
             },
             "sessionUpdate": "tool_call",
             "status": "in_progress",
-            "title": "Bash echo hi",
+            "title": "bash echo hi",
             "toolCallId": "toolu_1"
           }
         }

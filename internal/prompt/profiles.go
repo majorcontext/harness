@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/skill"
@@ -33,9 +34,9 @@ var generalPurpose = Profile{Name: GeneralPurpose,
 		"Do the whole task with your tools. Your final message is the only thing the parent reads, " +
 		"so make it a complete, concise report of what you found or changed."}
 
-// readOnly names the read-only tools of the native and Claude Code backends:
-// the file tools and session_info. A spawn keeps the names that the child has.
-var readOnly = []string{"read_file", "glob", "grep", "ls", "session_info", "Read", "Glob", "Grep"}
+// readOnly names the read-only tools of every backend: the file
+// tools and session_info. A spawn keeps the names that the child has.
+var readOnly = []string{"read_file", "glob", "grep", "ls", "session_info"}
 
 var explore = Profile{Name: "explore", Tools: readOnly,
 	Description: "A fast, read-only agent that finds code and answers where-is questions. It cannot edit files or run commands.",
@@ -45,6 +46,11 @@ var plan = Profile{Name: "plan", Tools: readOnly,
 	Description: "A read-only agent that investigates the code and returns an implementation plan. It makes no edits.",
 	Prompt: generalPurpose.Prompt + "\n\nInvestigate with your read-only tools, then give a clear, concrete implementation plan as your final message. " +
 		"You have no tool that edits a file or runs a command, so make no change."}
+
+// claudeToolNames maps the tool names of Claude Code to the harness tools that
+// do the same work, so one profile file serves every backend.
+var claudeToolNames = map[string]string{"Read": "read_file", "Write": "write_file", "Edit": "edit_file", "MultiEdit": "edit_file",
+	"Glob": "glob", "Grep": "grep", "LS": "ls", "Bash": "bash"}
 
 // profileKeys are the agent frontmatter keys of Claude Code that a profile reads or ignores.
 var profileKeys = []string{"name", "description", "tools", "model", "color"}
@@ -124,7 +130,11 @@ func profile(path string) (Profile, error) {
 		p.Model = f["model"]
 	}
 	for t := range strings.SplitSeq(f["tools"], ",") {
-		if t = strings.TrimSpace(t); t != "" {
+		t = strings.TrimSpace(t)
+		if h, ok := claudeToolNames[t]; ok {
+			t = h
+		}
+		if t != "" && !slices.Contains(p.Tools, t) {
 			p.Tools = append(p.Tools, t)
 		}
 	}
