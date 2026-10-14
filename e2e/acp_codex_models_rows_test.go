@@ -65,6 +65,27 @@ var acpCodexModelsScenarios = []acpScenario{
 		},
 	},
 	{
+		name:  "live_catalog_levels_decide_the_effort_a_request_sends",
+		cite:  "a request then sends the nearest listed level (see Reasoning effort)",
+		login: &acpLoginSpec{chatgpt: true, stored: true, models: chatgptCatalog},
+		model: codexReplyHi,
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpSetConfig{as: "a", id: "model", value: "codex/live-a"},
+			acpSetConfig{as: "a", id: "effort", value: "max"},
+			acpPrompt{as: "a", text: "hello", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				var efforts []string
+				for _, w := range c.env.login.openai.WireEvents() {
+					efforts = append(efforts, w.ReasoningEffort)
+				}
+				if !slices.Contains(efforts, "max") {
+					t.Errorf("reasoning efforts on the wire = %v, want max for a live-only model that lists max", efforts)
+				}
+			}),
+		},
+	},
+	{
 		name:  "session_new_lists_the_static_models_when_the_chatgpt_backend_fails",
 		cite:  "When the fetch fails, times out, or returns no model, the list is the static list of the `codex` models, and the next call after 5 minutes tries again.",
 		login: &acpLoginSpec{chatgpt: true, stored: true, modelsStatus: http.StatusInternalServerError},

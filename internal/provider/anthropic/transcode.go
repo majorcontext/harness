@@ -91,6 +91,26 @@ func effortField(req *provider.Request) string {
 	return string(req.Effort)
 }
 
+// adaptiveOutputFloor is the least max_tokens of a request with adaptive
+// thinking. Thinking counts against max_tokens and has no budget to add the
+// margin to, so the floor scales with the level. A larger cap is kept.
+func adaptiveOutputFloor(e modelref.Effort) int {
+	switch e {
+	case modelref.EffortMinimal:
+		return 10000
+	case modelref.EffortLow:
+		return 12000
+	case modelref.EffortMedium:
+		return 18000
+	case modelref.EffortHigh:
+		return 25000
+	case modelref.EffortXHigh:
+		return 32000
+	default:
+		return 40000
+	}
+}
+
 // thinkingCompletionMargin is the minimum room left for the visible answer
 // above the thinking budget, since the API requires max_tokens > budget_tokens.
 const thinkingCompletionMargin = 4096
@@ -272,6 +292,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	switch {
 	case thinkingEnabled && req.EffortField && !req.BudgetTokens:
 		out.Thinking = &apiThinking{Type: "adaptive"}
+		out.MaxTokens = max(out.MaxTokens, adaptiveOutputFloor(req.Effort))
 		out.Temperature = nil
 		out.TopP = nil
 	case thinkingEnabled:

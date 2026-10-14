@@ -11,10 +11,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/provider"
 )
 
@@ -26,6 +29,7 @@ const defaultResponsesPath = "/v1/responses"
 // Client is a provider.Provider for the OpenAI Responses API. The zero value
 // plus APIKey is usable; nothing touches the network until Stream.
 type Client struct {
+	live atomic.Value
 	// APIKey may be empty when HTTPClient sets the Authorization header.
 	APIKey string
 	// NoKeyReason says why APIKey is empty. The error of an empty APIKey names it.
@@ -82,6 +86,17 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 
 // Name returns the provider family key of this client.
 func (c *Client) Name() string { return c.family() }
+
+// EffortControl returns the effort control of a model id.
+func (c *Client) EffortControl(model string) (modelmeta.EffortControl, bool) {
+	ctl, ok := modelmeta.OpenAIEfforts(model)
+	if levels, live := c.live.Load().(map[string][]string); live {
+		if l, found := levels[model]; found {
+			ctl.Levels, ctl.Field, ok = slices.Clone(l), true, true
+		}
+	}
+	return ctl, ok
+}
 
 // StartupPrewarmEnabled reports whether engine startup assembly can produce
 // transport state for this client without relying on request data.

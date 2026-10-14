@@ -336,40 +336,31 @@ type EffortControl struct {
 	Budget bool
 }
 
-// Efforts returns the effort control of the model of ref. It returns false
-// for a model that the tables do not hold, and for a ref that a Bedrock-style
-// id names.
-func Efforts(ref modelref.ModelRef) (EffortControl, bool) {
-	model := lastPathSegment(ref.Model)
-	var info modelInfo
-	var ok bool
-	switch ref.Provider {
-	case "anthropic":
-		if _, bedrock := stripBedrockAnthropicPrefix(model); !bedrock {
-			info, ok = anthropicInfo[stripBedrockVersionSuffix(model)]
-		}
-	case "openai", codexProvider:
-		model = strings.TrimPrefix(model, "openai.")
-		info, ok = openaiInfo[model]
-	case claudeCodeProvider:
-		return EffortControl{Levels: slices.Clone(claudeCodeEfforts)}, true
+// AnthropicEfforts returns the effort control of an Anthropic model id, with
+// a Bedrock-style id and a routing namespace read as the model they name. It
+// returns false for a model that the table does not hold.
+func AnthropicEfforts(model string) (EffortControl, bool) {
+	model = lastPathSegment(model)
+	if suffix, bedrock := stripBedrockAnthropicPrefix(model); bedrock {
+		model = suffix
 	}
+	return controlOf(anthropicInfo, stripBedrockVersionSuffix(model))
+}
+
+// OpenAIEfforts returns the effort control of an OpenAI model id, or false for
+// a model that the table does not hold.
+func OpenAIEfforts(model string) (EffortControl, bool) {
+	model = strings.TrimPrefix(lastPathSegment(model), "openai.")
+	return controlOf(openaiInfo, model)
+}
+
+// ClaudeCodeEfforts returns the levels that the Claude Code CLI takes.
+func ClaudeCodeEfforts() []string { return slices.Clone(claudeCodeEfforts) }
+
+func controlOf(info map[string]modelInfo, id string) (EffortControl, bool) {
+	i, ok := info[id]
 	if !ok {
 		return EffortControl{}, false
 	}
-	return EffortControl{Levels: slices.Clone(info.efforts), Field: info.effortField, Budget: info.budgetTokens}, true
-}
-
-// ClampEffort returns the level that a request to ref sends for e. A model
-// with levels takes the nearest level that it lists, and a model that the
-// tables do not hold, or that lists none, takes at most high. It reports
-// whether the level differs from e.
-func ClampEffort(ref modelref.ModelRef, e modelref.Effort) (modelref.Effort, bool) {
-	c := e
-	if ctl, ok := Efforts(ref); ok && len(ctl.Levels) > 0 {
-		c = e.ClampTo(ctl.Levels)
-	} else {
-		c = e.Cap(modelref.EffortHigh)
-	}
-	return c, c != e
+	return EffortControl{Levels: slices.Clone(i.efforts), Field: i.effortField, Budget: i.budgetTokens}, true
 }

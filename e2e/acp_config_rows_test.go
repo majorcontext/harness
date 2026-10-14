@@ -322,7 +322,7 @@ var acpConfigScenarios = []acpScenario{
 	},
 	{
 		name: "effort_option_offers_every_level_for_an_unlisted_model",
-		cite: "A model that `Runtime.Models` does not hold offers every level.",
+		cite: "A model that `Runtime.Models` does not hold offers every level up to `high`.",
 		config: map[string]any{
 			"model":                 "gateway/vendor/model",
 			"context_window_tokens": 1000,

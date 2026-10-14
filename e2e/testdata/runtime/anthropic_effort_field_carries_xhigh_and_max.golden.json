@@ -5,6 +5,7 @@
       "model": "claude-opus-5-5",
       "thinking_type": "adaptive",
       "effort": "xhigh",
+      "adaptive_max_tokens": 32000,
       "tools": [
         "bash",
         "edit_file",
@@ -41,6 +42,7 @@
       "model": "claude-opus-5-5",
       "thinking_type": "adaptive",
       "effort": "max",
+      "adaptive_max_tokens": 40000,
       "tools": [
         "bash",
         "edit_file",

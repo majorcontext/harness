@@ -182,6 +182,9 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
+	"anthropic_adaptive_thinking_raises_max_tokens_for_the_level":                                              reGolden(specUpdate),
+	"bedrock_mantle_claude_id_sends_the_effort_field":                                                          reGolden(specUpdate),
+	"thinking_off_names_a_model_that_always_thinks":                                                            reGolden(specUpdate),
 	"anthropic_effort_field_carries_xhigh_and_max":                                                             reGolden(specUpdate),
 	"anthropic_effort_field_clamps_xhigh_for_a_model_without_it":                                               reGolden(specUpdate),
 	"anthropic_budget_only_model_clamps_xhigh_and_max_to_the_high_budget":                                      reGolden(specUpdate),

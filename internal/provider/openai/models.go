@@ -84,7 +84,15 @@ func (c *Client) ListModels(ctx context.Context) ([]modelmeta.Model, error) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, fmt.Errorf("openai: model list is not JSON: %w", err)
 	}
-	return catalogModels(body), nil
+	models := catalogModels(body)
+	levels := map[string][]string{}
+	for _, m := range models {
+		if len(m.Efforts) > 0 {
+			levels[m.ID] = m.Efforts
+		}
+	}
+	c.live.Store(levels)
+	return models, nil
 }
 
 // catalogModels maps the picker models of a catalog to modelmeta models, lowest priority first.

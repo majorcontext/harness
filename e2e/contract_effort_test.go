@@ -45,6 +45,24 @@ func TestContractEffortLevels(t *testing.T) {
 			actions: effortTurns("anthropic/claude-unlisted-9", "xhigh", "max"),
 		},
 		{
+			name:    "anthropic_adaptive_thinking_raises_max_tokens_for_the_level",
+			model:   effortSteps("high", "max"),
+			actions: effortTurns("anthropic/claude-opus-5-5", "high", "max"),
+		},
+		{
+			name:    "bedrock_mantle_claude_id_sends_the_effort_field",
+			model:   effortSteps("max"),
+			actions: effortTurns("anthropic/bedrock_mantle/anthropic.claude-opus-5-5-v1:0", "max"),
+		},
+		{
+			name: "thinking_off_names_a_model_that_always_thinks",
+			actions: []action{
+				create{as: "a", model: "anthropic/claude-opus-5-5"},
+				command{as: "a", text: "/thinking off"}, awaitCommands{as: "a"},
+				commandRecords{as: "a"},
+			},
+		},
+		{
 			name: "thinking_command_accepts_max_and_names_the_clamp",
 			actions: []action{
 				create{as: "a", model: "anthropic/claude-haiku-4-5"},

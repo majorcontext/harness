@@ -51,6 +51,15 @@ func (e Effort) Cap(top Effort) Effort {
 	return e
 }
 
+// Fit returns the level that a request sends for e on a model that lists
+// levels: ClampTo, or at most high when levels is empty.
+func (e Effort) Fit(levels []string) Effort {
+	if len(levels) == 0 {
+		return e.Cap(EffortHigh)
+	}
+	return e.ClampTo(levels)
+}
+
 // ClampTo returns the level of levels that a request at e uses. It is e when
 // levels list it, else the highest listed level below e, else the lowest
 // listed level. A level that requests no reasoning, and an empty levels list,

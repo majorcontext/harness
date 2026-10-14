@@ -11,7 +11,6 @@ import (
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/command"
-	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/session"
@@ -72,22 +71,22 @@ func setThinking(ctx context.Context, s *Session, args map[string]any) (any, err
 	if err != nil {
 		return nil, err
 	}
-	return noted{v, effortNotice(v)}, nil
+	return noted{v, effortNotice(s.r, v)}, nil
 }
 
-// effortNotice names the level that a request of the session sends when the
-// model of the session does not list the effort of the session.
-func effortNotice(v protocol.Session) string {
-	ref, err := modelref.ParseModelRef(v.Model)
-	if err != nil {
-		return ""
-	}
+// effortNotice says which level a request of the session sends when the model
+// of the session does not list the effort of the session.
+func effortNotice(r *Runtime, v protocol.Session) string {
 	e, err := modelref.ParseEffort(v.Effort)
-	if err != nil {
+	if err != nil || !e.Reasoning() && e != modelref.EffortOff {
 		return ""
 	}
-	if c, changed := modelmeta.ClampEffort(ref, e); changed {
+	caps := r.models.Capabilities(v.Model)
+	switch c := e.Fit(caps.Efforts); {
+	case c != e:
 		return fmt.Sprintf("%s is not offered by %s; using %s", e, v.Model, c)
+	case e == modelref.EffortOff && len(caps.Efforts) > 0 && !slices.Contains(caps.Efforts, "off"):
+		return fmt.Sprintf("off is not offered by %s; it always thinks", v.Model)
 	}
 	return ""
 }
