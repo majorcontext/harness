@@ -23,6 +23,13 @@
         },
         {
           "context_window": 1000000,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "id": "gateway/vendor/unknown-model",
           "provider": "gateway"
         },
@@ -43,6 +50,13 @@
         },
         {
           "context_window": 1000000,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "id": "gateway/plain-model",
           "provider": "gateway"
         },

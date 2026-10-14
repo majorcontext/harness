@@ -535,6 +535,7 @@ var runtimeRows = map[string]runtimeRow{
 	"provider_429_without_retry_after_is_not_retried":                         sameAsServe(),
 	"codex_login_headers_reach_the_request":                                   sameAsServe(),
 	"codex_login_models_list_the_models_of_the_backend":                       sameAsServe(),
+	"codex_login_models_list_of_the_entry_makes_no_catalog_request":           sameAsServe(),
 	"codex_login_websocket_dial_carries_the_login":                            sameAsServe(),
 	"codex_login_near_expiry_refreshes_once_for_concurrent_sessions":          sameAsServe(),
 	"codex_login_rotated_refresh_token_is_stored":                             sameAsServe(),

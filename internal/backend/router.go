@@ -232,7 +232,7 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 		}
 		if lister, ok := be.(interface {
 			Models(ctx context.Context) []modelmeta.Model
-		}); ok && !set {
+		}); ok {
 			models = lister.Models(ctx)
 		}
 		for _, mm := range models {

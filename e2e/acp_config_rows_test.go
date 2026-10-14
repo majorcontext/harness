@@ -285,6 +285,12 @@ var acpConfigScenarios = []acpScenario{
 					t.Errorf("name of the unknown model = %q, want its reference", v.name)
 				}
 			}),
+			acpSetConfig{as: "a", id: "model", value: "gateway/plain-model"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,off,minimal,low,medium,high" {
+					t.Errorf("effort values of a listed unknown model = %v, want default and every level up to high", got)
+				}
+			}),
 		},
 	},
 	{

@@ -143,6 +143,137 @@
           }
         }
       }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/set_config_option",
+        "params": {
+          "configId": "model",
+          "sessionId": "\u003csession:a\u003e",
+          "value": "gateway/plain-model"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "configOptions": [
+              {
+                "category": "model",
+                "currentValue": "gateway/plain-model",
+                "id": "model",
+                "name": "Model",
+                "options": [
+                  {
+                    "name": "\u003cmodels\u003e",
+                    "value": "\u003cmodels\u003e"
+                  }
+                ],
+                "type": "select"
+              },
+              {
+                "category": "thought_level",
+                "currentValue": "default",
+                "id": "effort",
+                "name": "Effort",
+                "options": [
+                  {
+                    "name": "Default",
+                    "value": "default"
+                  },
+                  {
+                    "name": "Off",
+                    "value": "off"
+                  },
+                  {
+                    "name": "Minimal",
+                    "value": "minimal"
+                  },
+                  {
+                    "name": "Low",
+                    "value": "low"
+                  },
+                  {
+                    "name": "Medium",
+                    "value": "medium"
+                  },
+                  {
+                    "name": "High",
+                    "value": "high"
+                  }
+                ],
+                "type": "select"
+              }
+            ],
+            "sessionUpdate": "config_option_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "gateway/plain-model",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "Default",
+                  "value": "default"
+                },
+                {
+                  "name": "Off",
+                  "value": "off"
+                },
+                {
+                  "name": "Minimal",
+                  "value": "minimal"
+                },
+                {
+                  "name": "Low",
+                  "value": "low"
+                },
+                {
+                  "name": "Medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "High",
+                  "value": "high"
+                }
+              ],
+              "type": "select"
+            }
+          ]
+        }
+      }
     }
   ]
 }

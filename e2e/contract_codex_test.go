@@ -35,6 +35,8 @@ type codexScenario struct {
 	auth *codexAuth
 	// env is added to the environment of the host.
 	env map[string]string
+	// listModels is the models list of the codex entry.
+	listModels []string
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -96,6 +98,18 @@ func (recordWire) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 	r.record(t, "codex_wire", "", callResult{Status: 200, Body: body})
 }
 
+// noModelRequests fails when the Responses server received a request for its model catalog.
+type noModelRequests struct{}
+
+func (noModelRequests) run(t *testing.T, _ *run) {
+	t.Fatal("noModelRequests runs only under runCodexScenario")
+}
+func (noModelRequests) runWire(t *testing.T, _ *run, o *harnesstest.OpenAI) {
+	if n := o.ModelRequests(); n != 0 {
+		t.Errorf("the backend served %d model lists, want none for an entry that sets models", n)
+	}
+}
+
 // getSessionUsage records GET /session/{id} without subscription_usage.captured_at,
 // which is the harness clock at capture time.
 type getSessionUsage struct{ as string }
@@ -149,6 +163,9 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	}
 	if ca != nil {
 		ca.configure(cfg)
+	}
+	if sc.listModels != nil {
+		cfg["providers"].(map[string]any)["codex"].(map[string]any)["models"] = sc.listModels
 	}
 	drv := codexDriver(t, h, ca, sc.env, o.URL(), cfg)
 	r := &run{

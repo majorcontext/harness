@@ -39,7 +39,7 @@ func acpStaticCodexModels(t *testing.T, c *acpConn) {
 var acpCodexModelsScenarios = []acpScenario{
 	{
 		name:  "session_new_lists_the_models_that_the_chatgpt_backend_serves",
-		cite:  "`Runtime.Models` fetches the model list of a provider entry with `auth` `chatgpt` from the ChatGPT backend on its first call, and keeps it for the life of the process.",
+		cite:  "`Runtime.Models` fetches the model list of a provider entry with `auth` `chatgpt` that sets no `models` from the ChatGPT backend on its first call, and keeps it for the life of the process.",
 		login: &acpLoginSpec{chatgpt: true, stored: true, models: chatgptCatalog},
 		steps: []acpStep{
 			acpNew{as: "a"},

@@ -102,6 +102,9 @@ var claudeCodeModels = []Model{
 	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: claudeCodeEfforts},
 }
 
+// unlistedEfforts are the levels of a model that no table holds.
+var unlistedEfforts = []string{"off", "minimal", "low", "medium", "high"}
+
 // claudeCodeEfforts are the levels of a model whose backend decides what it takes.
 var claudeCodeEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
@@ -164,11 +167,12 @@ func Models(provider string) []Model {
 // Named returns the models of ids, in the order given, for a provider whose entry lists its models. A model
 // of catalog, the curated list of the provider, has the facts of the catalog. Any other model that the tables
 // hold has its models.dev name, description, and efforts; the id is read as ContextWindow reads it, so a
-// routing namespace such as "anthropic/" does not hide the model. Any other id has the id alone.
+// routing namespace such as "anthropic/" does not hide the model. Any other id has no name and no description,
+// and every effort level up to high, as a model that no list holds has.
 func Named(ids []string, catalog []Model) []Model {
 	out := make([]Model, len(ids))
 	for n, id := range ids {
-		out[n] = Model{ID: id}
+		out[n] = Model{ID: id, Efforts: slices.Clone(unlistedEfforts)}
 		if i := slices.IndexFunc(catalog, func(m Model) bool { return m.ID == id }); i >= 0 {
 			out[n] = catalog[i]
 			out[n].Efforts = slices.Clone(out[n].Efforts)
