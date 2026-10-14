@@ -99,9 +99,11 @@ type Provider struct {
 	// session state holds the transcript and another host can resume it.
 	SessionMirror bool `json:"session_mirror,omitempty"`
 
-	// Keyless marks an entry that only the project file defines. It sends no credential and reads no key variable. MergeProject sets it; no JSON key does.
-	Keyless bool `json:"-"`
+	keyless bool
 }
+
+// Keyless reports that only the project file defines the entry, so it reads no API key. Only MergeProject sets it.
+func (p Provider) Keyless() bool { return p.keyless }
 
 // claudeCodePermissionModes returns the accepted --permission-mode values.
 func claudeCodePermissionModes() []string {

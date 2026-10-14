@@ -20,8 +20,8 @@ func TestMergeProjectMarksOnlyAProviderThatTheProjectFileAloneDefines(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := cfg.Providers[name].Keyless; got != c.want {
-			t.Errorf("providers.%s.Keyless = %v, want %v", name, got, c.want)
+		if got := cfg.Providers[name].Keyless(); got != c.want {
+			t.Errorf("providers.%s.Keyless() = %v, want %v", name, got, c.want)
 		}
 	}
 }

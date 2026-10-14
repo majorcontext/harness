@@ -70,14 +70,14 @@ func MergeProject(user *Config, userName, dir, proxyBase string) (*Config, error
 	return &out, out.Validate()
 }
 
-// markKeyless sets Keyless on each provider that only the project file defines.
+// markKeyless sets the keyless mark on each provider that only the project file defines.
 func markKeyless(out, user, proj *Config) {
 	for name := range proj.Providers {
 		if _, defined := user.Providers[name]; defined || NativeKeyEnv(name) != "" {
 			continue
 		}
 		p := out.Providers[name]
-		p.Keyless = true
+		p.keyless = true
 		out.Providers[name] = p
 	}
 }
