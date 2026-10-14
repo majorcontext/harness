@@ -15,6 +15,13 @@ export function moduleFiles() {
   return { module, wasmExec };
 }
 
+/** Path of the native harness binary, which the Node job builds. */
+export function harnessBinary() {
+  const bin = process.env.HARNESS_BIN;
+  if (!bin) throw new Error("set HARNESS_BIN to the built cmd/harness");
+  return bin;
+}
+
 export function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "harness-embed-"));
 }
@@ -55,6 +62,7 @@ export function acpClient(h) {
   const reader = h.stream.readable.getReader();
   const waiting = new Map();
   const updates = [];
+  const chunkWaiters = [];
   let nextId = 1;
   const done = (async () => {
     for (;;) {
@@ -67,13 +75,17 @@ export function acpClient(h) {
         else resolve(value.result);
       } else if (value.method === "session/update") {
         updates.push(value.params.update);
+        if (value.params.update.sessionUpdate === "agent_message_chunk") chunkWaiters.splice(0).forEach((resolve) => resolve());
       }
     }
   })();
   return {
     updates,
     done,
+    /** Resolves when an agent_message_chunk has arrived. */
+    streaming: () => (updates.some((u) => u.sessionUpdate === "agent_message_chunk") ? Promise.resolve() : new Promise((resolve) => chunkWaiters.push(resolve))),
     cancelReader: () => reader.cancel(),
+    abortWriter: (reason) => writer.abort(reason),
     request(method, params) {
       const id = nextId++;
       return new Promise((resolve, reject) => {

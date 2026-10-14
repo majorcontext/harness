@@ -342,13 +342,14 @@ jobs:
           HARNESS_E2E_NODE: '1'
         run: go test -race -count=1 ./e2e/ -run '^(TestACPScenarios|TestNode.*)$' -skip '^TestACPScenarios/[^/]+/(binary|in-process)$'
 
-      - name: sdk/embed over the Worker transport
-        # The tests start the module in a worker_threads Worker; a missing
-        # variable fails them, it does not skip them.
+      - name: sdk/embed over the Worker and subprocess transports
+        # The tests start the module in a worker_threads Worker and spawn the
+        # native binary; a missing variable fails them, it does not skip them.
         run: |
+          go build -o "$RUNNER_TEMP/harness" ./cmd/harness
           GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$RUNNER_TEMP/harness.wasm" ./cmd/harness-wasm
           go build -o "$RUNNER_TEMP/embedfake" ./internal/embedfake
-          HARNESS_EMBEDFAKE="$RUNNER_TEMP/embedfake" HARNESS_WASM="$RUNNER_TEMP/harness.wasm" HARNESS_WASM_EXEC="$(go env GOROOT)/lib/wasm/wasm_exec.js" node --test sdk/embed/test/*.test.mjs
+          HARNESS_BIN="$RUNNER_TEMP/harness" HARNESS_EMBEDFAKE="$RUNNER_TEMP/embedfake" HARNESS_WASM="$RUNNER_TEMP/harness.wasm" HARNESS_WASM_EXEC="$(go env GOROOT)/lib/wasm/wasm_exec.js" node --test sdk/embed/test/*.test.mjs
 
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
