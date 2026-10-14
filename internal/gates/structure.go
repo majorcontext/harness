@@ -61,7 +61,10 @@ type source struct {
 type nodeRule struct {
 	name, detail string
 	match        func(n ast.Node, imports map[string]string) bool
-	allow        []string
+	// bind builds match for one file from the string constants of the
+	// module and the directory of the file. It replaces match.
+	bind  func(strs map[string]string, dir string) func(ast.Node, map[string]string) bool
+	allow []string
 }
 
 var storeWriters = []string{
@@ -134,6 +137,18 @@ var nodeRules = []nodeRule{
 		},
 	},
 	{
+		name:   "git_subprocess",
+		detail: "only the git helpers of internal/workspace and of the gates start the git process (spec: Workspace)",
+		bind:   startsProcess("git"),
+		allow:  []string{"internal/workspace/git.go#gitCmd", "internal/workspace/git.go#gitCmdMagicPathspecs", "internal/gates/git.go#git"},
+	},
+	{
+		name:   "engine_list_walker",
+		detail: "only workspace.Changes names the engine list, outside its definition (spec: Workspace)",
+		match:  namesIdent("engineList"),
+		allow:  []string{"internal/workspace/workspace.go#changes"},
+	},
+	{
 		name:   "engine_context_creator",
 		detail: "only the model API backend creates message.EngineContext, from the runtime's pins and logged parts (AGENTS.md: Invariants)",
 		match:  literalOf(modulePath+"/internal/message", "EngineContext"),
@@ -144,6 +159,103 @@ var nodeRules = []nodeRule{
 func selectorOf(n ast.Node) (*ast.SelectorExpr, bool) {
 	sel, ok := n.(*ast.SelectorExpr)
 	return sel, ok
+}
+
+func namesIdent(name string) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, _ map[string]string) bool {
+		id, ok := n.(*ast.Ident)
+		return ok && id.Name == name
+	}
+}
+
+// startsProcess matches a call of os/exec.Command or CommandContext whose
+// program is the string program. The program is a string literal, or a name
+// that stringConsts resolves: a constant or variable of the same package, or
+// of another package of the module. A program that cannot be resolved, such
+// as a local variable, does not match.
+func startsProcess(program string) func(map[string]string, string) func(ast.Node, map[string]string) bool {
+	return func(strs map[string]string, dir string) func(ast.Node, map[string]string) bool {
+		return func(n ast.Node, imports map[string]string) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return false
+			}
+			sel, ok := selectorOf(call.Fun)
+			if !ok {
+				return false
+			}
+			arg := 0
+			switch sel.Sel.Name {
+			case "Command":
+			case "CommandContext":
+				arg = 1
+			default:
+				return false
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || imports[id.Name] != "os/exec" || len(call.Args) <= arg {
+				return false
+			}
+			got, ok := stringValue(call.Args[arg], strs, dir, imports)
+			return ok && got == program
+		}
+	}
+}
+
+// stringValue returns the value of a string literal, or of a name in strs.
+func stringValue(e ast.Expr, strs map[string]string, dir string, imports map[string]string) (string, bool) {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		v, err := strconv.Unquote(e.Value)
+		return v, err == nil
+	case *ast.Ident:
+		v, ok := strs[dir+"#"+e.Name]
+		return v, ok
+	case *ast.SelectorExpr:
+		id, ok := e.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		rel, ok := strings.CutPrefix(imports[id.Name], modulePath)
+		if !ok || (rel != "" && rel[0] != '/') {
+			return "", false
+		}
+		v, ok := strs[strings.TrimPrefix(rel, "/")+"#"+e.Sel.Name]
+		return v, ok
+	}
+	return "", false
+}
+
+// stringConsts maps "dir#Name" to the value of each package-level constant
+// or variable of the module that a string literal initializes.
+func stringConsts(srcs []source) map[string]string {
+	out := map[string]string{}
+	for _, s := range srcs {
+		dir := path.Dir(s.path)
+		if dir == "." {
+			dir = ""
+		}
+		for _, decl := range s.file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						break
+					}
+					if v, ok := stringValue(vs.Values[i], nil, "", nil); ok {
+						out[dir+"#"+name.Name] = v
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 func selectsField(name string) func(ast.Node, map[string]string) bool {
@@ -277,15 +389,35 @@ func importNames(f *ast.File) map[string]string {
 
 func checkNodeRules(srcs []source) []Violation {
 	var out []Violation
+	strs := stringConsts(srcs)
 	for _, s := range srcs {
+		dir := path.Dir(s.path)
+		if dir == "." {
+			dir = ""
+		}
+		matchers := make([]func(ast.Node, map[string]string) bool, len(nodeRules))
+		for i, r := range nodeRules {
+			if matchers[i] = r.match; r.bind != nil {
+				matchers[i] = r.bind(strs, dir)
+			}
+		}
 		for _, decl := range s.file.Decls {
 			fn := ""
 			if fd, ok := decl.(*ast.FuncDecl); ok {
 				fn = fd.Name.Name
 			}
+			defs := map[*ast.Ident]bool{}
 			ast.Inspect(decl, func(n ast.Node) bool {
-				for _, r := range nodeRules {
-					if r.match(n, s.imports) && !allows(r.allow, s.path, fn) {
+				if vs, ok := n.(*ast.ValueSpec); ok {
+					for _, name := range vs.Names {
+						defs[name] = true
+					}
+				}
+				if id, ok := n.(*ast.Ident); ok && defs[id] {
+					return true
+				}
+				for i, r := range nodeRules {
+					if matchers[i](n, s.imports) && !allows(r.allow, s.path, fn) {
 						out = append(out, Violation{Path: s.path, Rule: r.name, Detail: r.detail})
 					}
 				}
