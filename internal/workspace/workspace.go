@@ -1,5 +1,5 @@
-// Package workspace reads the git work tree of a directory. It shells out
-// to git and never reaches a runtime or a session.
+// Package workspace reads the work tree of a directory through an Engine.
+// It never reaches a runtime or a session.
 package workspace
 
 import (
@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,10 +32,45 @@ const budget = 28 * time.Second
 
 const maxPatch = 1 << 20
 
-// Changes diffs the git work tree of dir by scope: "branch" (the default)
-// against the merge base with the default branch, or "uncommitted" against
-// HEAD. Untracked files count as added. An empty dir is root itself, and
-// git may find its repository above root. Any other dir, relative to root,
+// Engine reads one kind of work tree.
+type Engine interface {
+	// Name is the value of the engine field of the answer.
+	Name() string
+	// Open returns the repository that holds dir below ceiling, or false
+	// when dir is in no work tree of this kind.
+	Open(ctx context.Context, dir, ceiling string) (Repo, bool, error)
+}
+
+// Repo is an open work tree. It exposes revisions and file lists, never a
+// storage path.
+type Repo interface {
+	// Root is the root directory of the work tree.
+	Root() string
+	// Head returns the head. Its Rev is the zero Rev when the head has no commit.
+	Head(ctx context.Context) (Head, error)
+	// Base returns the base of the branch scope, or an error that wraps ErrNoBase.
+	Base(ctx context.Context, head Head) (Base, error)
+	// Diff lists the changed files and the patch against base. A zero base
+	// means the head. The patch ends at the last whole file within patchCap.
+	Diff(ctx context.Context, head Head, base Base, patchCap int) (files []protocol.ChangedFile, patch string, truncated bool, err error)
+}
+
+// Head is the head of a work tree. Label is an optional name, such as a branch.
+type Head struct {
+	Rev   protocol.Rev
+	Label string
+}
+
+// Base is the base of the branch scope. Ref is its display name.
+type Base struct {
+	Rev protocol.Rev
+	Ref string
+}
+
+// Changes diffs the work tree of dir by scope: "branch" (the default)
+// against the base of the repository, or "uncommitted" against its head.
+// Untracked files count as added. An empty dir is root itself, and the
+// engine may find its repository above root. Any other dir, relative to root,
 // must stay under root after symlinks, and so must its repository.
 func Changes(ctx context.Context, root, dir, scope string) (protocol.WorkspaceChanges, error) {
 	if scope == "" {
@@ -105,70 +139,44 @@ func within(root, dir string) (real, ceiling string, err error) {
 }
 
 func changes(ctx context.Context, root, dir, real, ceiling, scope string, explicit bool) (protocol.WorkspaceChanges, error) {
-	repoRoot, ok, err := repoRootAt(ctx, real, ceiling)
+	eng := gitEngine{}
+	repo, ok, err := eng.Open(ctx, real, ceiling)
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err
 	}
 	// GIT_CEILING_DIRECTORIES has no escape for a colon in a path, so git
 	// can walk past a root that holds one; check the repository root too.
 	if ok && explicit {
-		_, _, err := within(root, repoRoot)
+		_, _, err := within(root, repo.Root())
 		ok = err == nil
 	}
 	if !ok {
 		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: %q is not a git work tree", ErrNotRepo, dir)
 	}
-	head := ""
-	if out, err := gitOut(ctx, repoRoot, nil, "rev-parse", "HEAD"); err == nil {
-		head = strings.TrimSpace(out)
-	} else if ctx.Err() != nil {
-		return protocol.WorkspaceChanges{}, err
-	}
-	branch := ""
-	if b, err := gitOut(ctx, repoRoot, nil, "symbolic-ref", "-q", "--short", "HEAD"); err == nil {
-		branch = strings.TrimSpace(b)
-	}
-	//nolint:staticcheck // the deprecated fields keep their values for clients that read them
-	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: protocol.EngineGit, Branch: branch, Head: head}
-	if head != "" {
-		c.HeadRev = protocol.Rev{Kind: protocol.RevCommit, ID: head}
-	}
-	base, err := baseOf(ctx, repoRoot, &c)
+	head, err := repo.Head(ctx)
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err
 	}
-	c.Files, c.Patch, c.Truncated, err = changeSet(ctx, repoRoot, head, base, maxPatch)
+	//nolint:staticcheck // the deprecated fields keep their values for clients that read them
+	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: eng.Name(), Branch: head.Label, HeadRev: head.Rev}
+	if head.Rev.Kind == protocol.RevCommit {
+		c.Head = head.Rev.ID
+	}
+	var base Base
+	if scope == protocol.ScopeBranch {
+		if base, err = repo.Base(ctx, head); err != nil {
+			return protocol.WorkspaceChanges{}, err
+		}
+		//nolint:staticcheck // the deprecated field keeps its value for clients that read it
+		c.Base = &protocol.BaseRef{Ref: base.Ref, SHA: commitID(base.Rev), Rev: base.Rev}
+	}
+	c.Files, c.Patch, c.Truncated, err = repo.Diff(ctx, head, base, maxPatch)
 	return c, err
 }
 
-// baseOf returns the tree-ish that c diffs against, and sets c.Base for the
-// branch scope. An unborn HEAD diffs against the empty tree.
-func baseOf(ctx context.Context, repoRoot string, c *protocol.WorkspaceChanges) (string, error) {
-	switch {
-	case c.Scope == protocol.ScopeBranch:
-		if c.Head == "" {
-			return "", fmt.Errorf("%w: HEAD has no commit yet", ErrNoBase)
-		}
-		display, revision, found := defaultBranchRef(ctx, repoRoot)
-		if !found {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			return "", fmt.Errorf("%w: no default branch found (checked origin/HEAD, origin/main, origin/master)", ErrNoBase)
-		}
-		mb, err := gitOut(ctx, repoRoot, nil, "merge-base", c.Head, revision)
-		if err != nil {
-			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && ctx.Err() == nil && exitErr.ExitCode() == 1 {
-				return "", fmt.Errorf("%w: HEAD and %s share no common ancestor", ErrNoBase, display)
-			}
-			return "", err
-		}
-		sha := strings.TrimSpace(mb)
-		//nolint:staticcheck // the deprecated field keeps its value for clients that read it
-		c.Base = &protocol.BaseRef{Ref: display, SHA: sha, Rev: protocol.Rev{Kind: protocol.RevCommit, ID: sha}}
-		return sha, nil
-	case c.Head == "":
-		return emptyTree(ctx, repoRoot)
+func commitID(r protocol.Rev) string {
+	if r.Kind == protocol.RevCommit {
+		return r.ID
 	}
-	return "HEAD", nil
+	return ""
 }
