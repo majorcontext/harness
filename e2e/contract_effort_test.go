@@ -80,6 +80,32 @@ func TestContractEffortLevels(t *testing.T) {
 	})
 }
 
+func TestContractEffortStoredThinking(t *testing.T) {
+	steps := []harnesstest.Step{
+		{Name: "first", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Reasoning: "weigh it", Text: "one"}},
+		{Name: "second", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "two"}},
+	}
+	turns := func(model, level string) []action {
+		actions := []action{create{as: "a", model: model}}
+		if level != "" {
+			actions = append(actions, setThinking{as: "a", level: level})
+		}
+		return append(actions, submit{as: "a", text: "first"}, waitIdle{as: "a"}, submit{as: "a", text: "second"}, waitIdle{as: "a"})
+	}
+	runScenarios(t, []scenario{
+		{
+			name:    "stored_thinking_stays_in_the_history_of_a_model_that_always_thinks",
+			model:   steps,
+			actions: turns("anthropic/claude-opus-5-5", ""),
+		},
+		{
+			name:    "stored_thinking_leaves_the_history_when_a_model_that_lists_off_has_thinking_off",
+			model:   steps,
+			actions: turns("anthropic/claude-sonnet-5", "off"),
+		},
+	})
+}
+
 func TestContractEffortLevelsChat(t *testing.T) {
 	runScenarios(t, []scenario{
 		{

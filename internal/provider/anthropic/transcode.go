@@ -336,7 +336,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
-		blocks, err := transcodeParts(m.Parts, thinkingEnabled, true)
+		blocks, err := transcodeParts(m.Parts, thinkingEnabled || req.AlwaysThinks, true)
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
@@ -363,8 +363,8 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 }
 
 // transcodeParts renders parts to wire blocks. thinkingEnabled reports whether
-// THIS request enables extended thinking; when false, stored Reasoning parts
-// are stripped (see the *message.Reasoning case below). topLevel is true for a
+// THIS request keeps thinking blocks (it enables thinking, or the model always
+// thinks); when false, stored Reasoning parts are stripped (see the *message.Reasoning case below). topLevel is true for a
 // message's own parts and false when recursing into a ToolResult's content
 // (see the ToolResult case below). The topLevel distinction matters ONLY for
 // *message.EngineContext: the trusted engine-context sentinel is keyed on wire
@@ -454,8 +454,8 @@ func transcodeParts(parts message.Parts, thinkingEnabled, topLevel bool) ([]apiB
 
 		case *message.Reasoning:
 			if !thinkingEnabled {
-				// Thinking is OFF for this request. A stored thinking/
-				// redacted_thinking block sent with thinking disabled is
+				// Thinking is OFF for this request, and the model can run
+				// without it. A stored thinking/redacted_thinking block sent with thinking disabled is
 				// rejected by the API ("thinking blocks require thinking to be
 				// enabled") — and, once in durable history, it 400s EVERY later
 				// turn, a permanent wedge. This is the symmetric opposite of the

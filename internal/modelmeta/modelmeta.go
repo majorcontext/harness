@@ -336,6 +336,12 @@ type EffortControl struct {
 	Budget bool
 }
 
+// AlwaysThinks reports whether the model lists a reasoning level and no off
+// level, so that it thinks on every request.
+func (c EffortControl) AlwaysThinks() bool {
+	return len(c.Levels) > 0 && !slices.Contains(c.Levels, "off")
+}
+
 // AnthropicEfforts returns the effort control of an Anthropic model id, with
 // a Bedrock-style id and a routing namespace read as the model they name. It
 // returns false for a model that the table does not hold.

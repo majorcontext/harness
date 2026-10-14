@@ -42,8 +42,9 @@ type Reply struct {
 	// Hangup closes the connection with no response. It sets no status. The websocket transport of the Responses server ignores it.
 	Hangup bool
 	Block  bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
-	// Reasoning is streamed before Text as reasoning_content deltas. Only the
-	// chat-completions server (NewChat) sends it.
+	// Reasoning is streamed before Text: as reasoning_content deltas by the
+	// chat-completions server (NewChat), and as a signed thinking block by the
+	// Anthropic server.
 	Reasoning string
 	// ErrorCode is the error.code of an HTTPStatus reply, for example
 	// "context_length_exceeded". Only NewChat sends it.
@@ -106,7 +107,7 @@ type Message struct {
 
 // Part is one content block of a Message.
 type Part struct {
-	Kind      string // "text" | "tool_use" | "tool_result" | "image" | "document" (Text is its URL or data URI)
+	Kind      string // "text" | "thinking" | "tool_use" | "tool_result" | "image" | "document" (Text is its URL or data URI)
 	Text      string
 	ToolName  string
 	ToolInput map[string]any

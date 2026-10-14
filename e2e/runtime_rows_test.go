@@ -189,6 +189,8 @@ var runtimeRows = map[string]runtimeRow{
 	"thinking_off_on_a_model_that_lists_off_sends_no_thinking":                                                 reGolden(specUpdate),
 	"anthropic_adaptive_thinking_raises_max_tokens_for_the_level":                                              reGolden(specUpdate),
 	"bedrock_mantle_claude_id_sends_the_effort_field":                                                          reGolden(specUpdate),
+	"stored_thinking_stays_in_the_history_of_a_model_that_always_thinks":                                       sameAsServe(),
+	"stored_thinking_leaves_the_history_when_a_model_that_lists_off_has_thinking_off":                          sameAsServe(),
 	"thinking_off_names_a_model_that_always_thinks":                                                            reGolden(specUpdate),
 	"anthropic_effort_field_carries_xhigh_and_max":                                                             reGolden(specUpdate),
 	"anthropic_effort_field_clamps_xhigh_for_a_model_without_it":                                               reGolden(specUpdate),

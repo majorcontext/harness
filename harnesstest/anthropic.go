@@ -38,6 +38,7 @@ type wireBlock struct {
 	Type         string          `json:"type"`
 	CacheControl json.RawMessage `json:"cache_control"`
 	Text         string          `json:"text"`
+	Thinking     string          `json:"thinking"`
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Input        map[string]any  `json:"input"`
@@ -95,6 +96,8 @@ func decodeRequest(body []byte) (Request, error) {
 			switch b.Type {
 			case "text":
 				msg.Parts = append(msg.Parts, Part{Kind: "text", Text: b.Text})
+			case "thinking":
+				msg.Parts = append(msg.Parts, Part{Kind: "thinking", Text: b.Thinking})
 			case "image", "document":
 				msg.Parts = append(msg.Parts, Part{Kind: b.Type, Text: sourceURI(b)})
 			case "tool_use":
@@ -238,6 +241,13 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 
 	idx := 0
 	gate := rep.Block && rep.Text == ""
+	if rep.Reasoning != "" {
+		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "thinking", "thinking": "", "signature": ""}})
+		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "thinking_delta", "thinking": rep.Reasoning}})
+		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "signature_delta", "signature": "SIGNATURE_FIXTURE_1"}})
+		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
+		idx++
+	}
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "text", "text": ""}})
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Text}})
