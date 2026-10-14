@@ -1,10 +1,12 @@
 package harness
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // ErrModelUnavailable reports a model that no configured provider serves.
@@ -24,12 +26,7 @@ func (r *Runtime) checkModel(model string, names []string, session bool) error {
 	}
 	caps := be.Capabilities(model)
 	if !caps.OwnsLoop {
-		if names == nil {
-			if taken := r.shadowed(); len(taken) > 0 {
-				return fmt.Errorf("%w: tool %q has the name of a built-in tool, which the session allows; list the allowed tools to replace it", ErrInvalidRequest, taken[0])
-			}
-		}
-		return nil
+		return r.checkShadowed(names)
 	}
 	for _, n := range caps.Tools {
 		if r.owns(n) {
@@ -49,4 +46,26 @@ func (r *Runtime) checkModel(model string, names []string, session bool) error {
 // provider through the history tool, so any two models may follow each other.
 func (r *Runtime) changeModel(session bool) func(_, to string, names []string) error {
 	return func(_, to string, names []string) error { return r.checkModel(to, names, session) }
+}
+
+// checkShadowed fails when the session allows every tool and an embedder tool
+// has the name of a built-in tool of the WorkDir.
+func (r *Runtime) checkShadowed(names []string) error {
+	if names != nil {
+		return nil
+	}
+	if taken := r.shadowed(); len(taken) > 0 {
+		return fmt.Errorf("%w: tool %q has the name of a built-in tool, which the session allows; list the allowed tools to replace it", ErrInvalidRequest, taken[0])
+	}
+	return nil
+}
+
+// createdForOpen reads the session.created record of session id and checks
+// its tool names as Create does.
+func (r *Runtime) createdForOpen(ctx context.Context, id string) (protocol.SessionCreated, error) {
+	c, err := r.created(ctx, id)
+	if err == nil && !r.models.Capabilities(c.Model).OwnsLoop {
+		err = r.checkShadowed(c.AllowedTools)
+	}
+	return c, err
 }

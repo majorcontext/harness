@@ -372,7 +372,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	var c protocol.SessionCreated
 	if l.created != nil {
 		c = *l.created
-	} else if c, err = r.created(ctx, id); err != nil {
+	} else if c, err = r.createdForOpen(ctx, id); err != nil {
 		session.Discard(own, id, r.log)
 		return nil, err
 	}
