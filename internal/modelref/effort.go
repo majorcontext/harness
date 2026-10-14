@@ -68,23 +68,23 @@ func (e Effort) ClampTo(levels []string) Effort {
 	if !e.Reasoning() || slices.Contains(levels, string(e)) {
 		return e
 	}
-	best, lowest := EffortUnset, EffortUnset
+	ladder := append([]Effort{EffortOff}, reasoningEfforts...)
+	best, lowest := -1, -1
 	for _, l := range levels {
-		c := Effort(l)
-		r := c.rank()
+		o := slices.Index(ladder, Effort(l))
 		switch {
-		case r < 0:
-		case r < e.rank() && (best == EffortUnset || r > best.rank()):
-			best = c
-		case lowest == EffortUnset || r < lowest.rank():
-			lowest = c
+		case o < 0:
+		case o < slices.Index(ladder, e) && o > best:
+			best = o
+		case lowest < 0 || o < lowest:
+			lowest = o
 		}
 	}
-	if best != EffortUnset {
-		return best
+	if best >= 0 {
+		return ladder[best]
 	}
-	if lowest != EffortUnset {
-		return lowest
+	if lowest >= 0 {
+		return ladder[lowest]
 	}
 	return e
 }
