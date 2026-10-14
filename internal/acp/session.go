@@ -16,14 +16,15 @@ import (
 // held is one session of the connection: its handle, its event pump, and the
 // prompts in flight.
 type held struct {
-	id        string
-	sess      *harness.Session
-	cwd       string
-	models    []protocol.Model
-	notices   bool
-	log       *slog.Logger
-	send      func(method string, params any) error
-	toolImage func(ctx context.Context, key string) (io.ReadCloser, error)
+	id         string
+	sess       *harness.Session
+	cwd        string
+	models     []protocol.Model
+	notices    bool
+	compaction bool
+	log        *slog.Logger
+	send       func(method string, params any) error
+	toolImage  func(ctx context.Context, key string) (io.ReadCloser, error)
 
 	stop    context.CancelFunc
 	stopped chan struct{}
@@ -48,20 +49,22 @@ type prompt struct {
 }
 
 // heldConfig is what the connection knows of a session it took. models is the
-// model list of its runtime. notices says that the client takes notices.
+// model list of its runtime. notices and compaction say that the client takes
+// notices and compaction updates.
 type heldConfig struct {
-	cwd       string
-	models    []protocol.Model
-	notices   bool
-	log       *slog.Logger
-	send      func(string, any) error
-	toolImage func(context.Context, string) (io.ReadCloser, error)
+	cwd        string
+	models     []protocol.Model
+	notices    bool
+	compaction bool
+	log        *slog.Logger
+	send       func(string, any) error
+	toolImage  func(context.Context, string) (io.ReadCloser, error)
 }
 
 // newHeld returns the session id of the connection, with no pump. A replay can
 // use it before the session is open; start then binds the session.
 func newHeld(id string, c heldConfig) *held {
-	return &held{id: id, cwd: c.cwd, models: c.models, notices: c.notices, log: c.log, send: c.send, toolImage: c.toolImage,
+	return &held{id: id, cwd: c.cwd, models: c.models, notices: c.notices, compaction: c.compaction, log: c.log, send: c.send, toolImage: c.toolImage,
 		stopped: make(chan struct{}), wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
 }
 
@@ -90,6 +93,9 @@ type pumpState struct {
 	sent  map[chunkKey]string
 	diffs map[string][]any
 	last  lastSent
+	// compaction is the ID of the compaction that has started and not ended, and compactions counts the starts of each ID.
+	compaction  string
+	compactions map[string]int
 	// owners maps a running turn to the prompts that wait for their answers.
 	owners map[string][]*prompt
 }
@@ -97,7 +103,7 @@ type pumpState struct {
 // newPumpState returns the state of a pump that starts at the head of the log
 // that snap describes.
 func newPumpState(snap protocol.Session) *pumpState {
-	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap), owners: map[string][]*prompt{}}
+	return &pumpState{sent: map[chunkKey]string{}, diffs: map[string][]any{}, last: seedSent(snap), compactions: map[string]int{}, owners: map[string][]*prompt{}}
 }
 
 func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
@@ -144,11 +150,21 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 		return h.chunk(kind, f.ItemID, f.Text)
 	case protocol.KindSettingsChanged:
 		return h.configUpdate(st)
-	case protocol.KindContextMeasured, protocol.KindCompactionApplied:
+	case protocol.KindStatus:
+		return h.compactionStatus(e, st)
+	case protocol.KindCompactionApplied:
+		if err := h.compactionApplied(e, st); err != nil {
+			return err
+		}
+		return h.usageUpdate(st)
+	case protocol.KindContextMeasured:
 		return h.usageUpdate(st)
 	case protocol.KindCommandRecorded:
 		return h.commandStatus(e)
 	case protocol.KindTurnEnded:
+		if err := h.compactionTurnEnded(e, st); err != nil {
+			return err
+		}
 		clear(st.diffs)
 		if err := h.usageUpdate(st); err != nil {
 			return err

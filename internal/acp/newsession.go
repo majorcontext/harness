@@ -82,8 +82,13 @@ func (a *agent) runtime(ctx context.Context, cwd string) (Runtime, error) {
 }
 
 // newHeld returns a held session of the work directory cwd, served by rt.
+<<<<<<< HEAD
 func (a *agent) newHeld(ctx context.Context, id, cwd string, rt Runtime) *held {
 	return newHeld(id, heldConfig{cwd: cwd, models: rt.Models(ctx), notices: a.notices.Load(), log: a.cfg.Logger, send: a.conn.Notify,
+=======
+func (a *agent) newHeld(id, cwd string, rt Runtime) *held {
+	return newHeld(id, heldConfig{cwd: cwd, models: rt.Models(), notices: a.notices.Load(), compaction: a.compaction.Load(), log: a.cfg.Logger, send: a.conn.Notify,
+>>>>>>> ace24f6b (feat(acp): send a compaction through the ACP compaction updates)
 		toolImage: func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.ToolImage(ctx, id, key) }})
 }
 

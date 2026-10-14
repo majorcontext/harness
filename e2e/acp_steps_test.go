@@ -232,8 +232,10 @@ func (c *acpConn) dir(name string) string {
 
 var acpMessageID = regexp.MustCompile(`"messageId":"([^"]+)"`)
 
+var acpCompactionID = regexp.MustCompile(`"compactionId":"([^"]+)"`)
+
 // goldenWire returns the frames with the session IDs, the directories, and the
-// message IDs replaced by placeholders, and with the consecutive chunks of one
+// message IDs and the compaction IDs replaced by placeholders, and with the consecutive chunks of one
 // message joined: how the model stream splits into chunks is not the contract.
 func (c *acpConn) goldenWire() []acpFrame {
 	type swap struct{ from, to string }
@@ -248,7 +250,7 @@ func (c *acpConn) goldenWire() []acpFrame {
 		swaps = append(swaps, swap{path, to})
 	}
 	sort.Slice(swaps, func(i, j int) bool { return len(swaps[i].from) > len(swaps[j].from) })
-	ids := map[string]string{}
+	ids, compactions := map[string]string{}, map[string]string{}
 	var out []acpFrame
 	for _, f := range c.wire {
 		text := acpStableFrame(string(f.Frame))
@@ -261,6 +263,13 @@ func (c *acpConn) goldenWire() []acpFrame {
 				ids[id] = fmt.Sprintf("<message:%d>", len(ids)+1)
 			}
 			return `"messageId":"` + ids[id] + `"`
+		})
+		text = acpCompactionID.ReplaceAllStringFunc(text, func(m string) string {
+			id := acpCompactionID.FindStringSubmatch(m)[1]
+			if _, ok := compactions[id]; !ok {
+				compactions[id] = fmt.Sprintf("<compaction:%d>", len(compactions)+1)
+			}
+			return `"compactionId":"` + compactions[id] + `"`
 		})
 		f.Frame = json.RawMessage(text)
 		if n := len(out); n > 0 && joinACPChunk(&out[n-1], f) {

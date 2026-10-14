@@ -55,6 +55,8 @@ type acpScenario struct {
 type acpInit struct {
 	version, want int
 	notices       bool
+	// compaction adds the client capability session.compaction.
+	compaction bool
 	// terminal adds the client capability auth.terminal. methods are the ids of authMethods, in order.
 	terminal bool
 	methods  []string
@@ -80,8 +82,15 @@ type acpNotify struct{ method string }
 func (s acpInit) run(t *testing.T, c *acpConn) {
 	t.Helper()
 	caps := map[string]any{}
+	session := map[string]any{}
 	if s.notices {
-		caps["session"] = map[string]any{"notices": map[string]any{}}
+		session["notices"] = map[string]any{}
+	}
+	if s.compaction {
+		session["compaction"] = map[string]any{}
+	}
+	if len(session) > 0 {
+		caps["session"] = session
 	}
 	if s.terminal {
 		caps["auth"] = map[string]any{"terminal": true}
@@ -128,7 +137,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios, acpCompactionScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
