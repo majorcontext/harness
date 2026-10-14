@@ -177,3 +177,43 @@ func limited(key, env string, n int) func(*testing.T, host, string) driver {
 		return h.open(t, writeGoalConfigWith(t, modelURL, scenarioConfig(map[string]any{key: n})), map[string]string{env: strconv.Itoa(n)})
 	}
 }
+
+func requestMentions(substr string) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == "text" && strings.Contains(p.Text, substr) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+func not(m harnesstest.Matcher) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool { return !m(r) }
+}
+
+func taskCallsAre(n int) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		calls := 0
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == "tool_use" && p.ToolName == "task" {
+					calls++
+				}
+			}
+		}
+		return calls == n
+	}
+}
+
+// awaitReport keeps a parent turn open, one short bash call at a time, until a request holds report.
+func awaitReport(report string) harnesstest.Step {
+	return harnesstest.Step{Name: "await report", Repeat: true,
+		Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash"), not(requestMentions(report)), taskCallsAre(1)),
+		Reply: harnesstest.Reply{Calls: func(r harnesstest.Request) []harnesstest.ToolCall {
+			return []harnesstest.ToolCall{{ID: fmt.Sprintf("toolu_await_%d", len(r.Messages)), Name: "bash", Input: ftArgs("command", "sleep 0.05")}}
+		}}}
+}
