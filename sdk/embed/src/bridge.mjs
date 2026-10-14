@@ -49,8 +49,13 @@ function opError({ code, message }) {
 function pageFs(post) {
   let next = 0;
   const waiting = new Map();
+  let closed = false;
   const call = (op, args, transfer = []) =>
     new Promise((resolve, reject) => {
+      if (closed) {
+        reject(new Error("the harness is closed"));
+        return;
+      }
       const id = ++next;
       waiting.set(id, { resolve, reject });
       post({ fsop: { id, op, args } }, transfer);
@@ -66,7 +71,7 @@ function pageFs(post) {
       try {
         await call("mkdir", [current]);
       } catch (err) {
-        if (code(err) !== "EEXIST") throw err;
+        if (code(err) !== "EEXIST" || !(await stat(current)).isDirectory) throw err;
       }
     }
   }
@@ -107,6 +112,7 @@ function pageFs(post) {
       else entry?.resolve(result);
     },
     close() {
+      closed = true;
       for (const entry of waiting.values()) entry.reject(new Error("the harness is closed"));
       waiting.clear();
     },

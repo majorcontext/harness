@@ -79,6 +79,19 @@ test("the adapter keeps the error code of the module", async () => {
   await assert.rejects(mounted.symlink("/a", "/b"), (err) => err.code === "ENOSYS");
 });
 
+test("a directory move keeps a rename error that is not a missing feature", async () => {
+  const fs = memoryFs();
+  await fs.mkdir("/work/d");
+  const refusing = {
+    ...fs,
+    rename: async () => {
+      throw codeError("ENOTEMPTY", "/work/e");
+    },
+  };
+  await assert.rejects(shellFs(refusing, "/work").mv("/d", "/e"), (err) => err.code === "ENOTEMPTY");
+  assert.equal((await fs.stat("/work/d")).isDirectory, true);
+});
+
 test("the shell tool refuses a harness without a file system handle", async () => {
   const tool = shellTool();
   assert.equal(tool.name, "bash");

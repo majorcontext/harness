@@ -19,7 +19,7 @@ const schema = { type: "object", properties: { command: { type: "string", descri
 function clip(text, max) {
   if (text.length <= max) return text;
   const half = Math.floor(max / 2);
-  return `${text.slice(0, half)}\n[... ${text.length - max} characters cut ...]\n${text.slice(-half)}`;
+  return `${text.slice(0, half)}\n[... ${text.length - max} characters cut ...]\n${half > 0 ? text.slice(-half) : ""}`;
 }
 
 async function isDirectory(fs, path) {

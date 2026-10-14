@@ -90,7 +90,7 @@ export function shellFs(fs, root) {
       try {
         await fs.rename(at(src), at(dest));
       } catch (err) {
-        if (!s.isDirectory) throw err;
+        if (!s.isDirectory || !["ENOSYS", "EXDEV"].includes(err?.code)) throw err;
         await cp(src, dest, { recursive: true });
         await fs.rm(at(src), { recursive: true });
       }
