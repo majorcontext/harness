@@ -91,6 +91,22 @@ func TestContractEffortLevelsChat(t *testing.T) {
 	})
 }
 
+func TestContractEffortMinimalClampsUp(t *testing.T) {
+	t.Parallel()
+	runCodexScenarios(t, []codexScenario{{
+		scenario: scenario{
+			name:  "codex_minimal_on_a_model_without_it_clamps_up_to_low",
+			model: effortSteps("minimal"),
+			actions: codexSession([]action{
+				setModel{as: "a", model: "codex/gpt-5.5"},
+				command{as: "a", text: "/thinking minimal"}, awaitCommands{as: "a"},
+				commandRecords{as: "a"},
+				submit{as: "a", text: "minimal"}, waitIdle{as: "a"}, recordWire{},
+			}),
+		},
+	}})
+}
+
 func TestContractEffortLevelsCodex(t *testing.T) {
 	t.Parallel()
 	turn := func(model string, levels ...string) []action {

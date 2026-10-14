@@ -60,31 +60,33 @@ func (e Effort) Fit(levels []string) Effort {
 	return e.ClampTo(levels)
 }
 
-// ClampTo returns the level of levels that a request at e uses. It is e when
-// levels list it, else the highest listed level below e, else the lowest
-// listed level. A level that requests no reasoning, and an empty levels list,
-// leave e unchanged.
+// ClampTo returns the level of levels that a request at e uses. A reasoning
+// level is kept when listed, else it becomes the highest listed reasoning
+// level below it, else the lowest listed reasoning level. It becomes off only
+// when levels list no reasoning level and list off. Off and unset are
+// unchanged.
 func (e Effort) ClampTo(levels []string) Effort {
 	if !e.Reasoning() || slices.Contains(levels, string(e)) {
 		return e
 	}
-	ladder := append([]Effort{EffortOff}, reasoningEfforts...)
 	best, lowest := -1, -1
 	for _, l := range levels {
-		o := slices.Index(ladder, Effort(l))
+		o := slices.Index(reasoningEfforts, Effort(l))
 		switch {
 		case o < 0:
-		case o < slices.Index(ladder, e) && o > best:
+		case o < e.rank() && o > best:
 			best = o
 		case lowest < 0 || o < lowest:
 			lowest = o
 		}
 	}
-	if best >= 0 {
-		return ladder[best]
-	}
-	if lowest >= 0 {
-		return ladder[lowest]
+	switch {
+	case best >= 0:
+		return reasoningEfforts[best]
+	case lowest >= 0:
+		return reasoningEfforts[lowest]
+	case slices.Contains(levels, string(EffortOff)):
+		return EffortOff
 	}
 	return e
 }
