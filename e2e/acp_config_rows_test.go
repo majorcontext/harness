@@ -64,6 +64,59 @@ func (c *acpConn) expectUpdate(session, kind string) {
 	}
 }
 
+type acpGroup struct {
+	name   string
+	order  []string
+	values map[string]acpValue
+}
+
+type acpValue struct{ name, description string }
+
+// acpGroups returns the groups of a grouped select option by group id.
+func acpGroups(t *testing.T, option any) map[string]acpGroup {
+	t.Helper()
+	out := map[string]acpGroup{}
+	m, _ := option.(map[string]any)
+	list, _ := m["options"].([]any)
+	for _, e := range list {
+		g, _ := e.(map[string]any)
+		id, _ := g["group"].(string)
+		if id == "" {
+			t.Fatalf("option %v is not a group", e)
+		}
+		grp := acpGroup{values: map[string]acpValue{}}
+		grp.name, _ = g["name"].(string)
+		opts, _ := g["options"].([]any)
+		for _, o := range opts {
+			v, _ := o.(map[string]any)
+			value, _ := v["value"].(string)
+			name, _ := v["name"].(string)
+			desc, _ := v["description"].(string)
+			grp.order = append(grp.order, value)
+			grp.values[value] = acpValue{name, desc}
+		}
+		out[id] = grp
+	}
+	return out
+}
+
+// acpEffortValues returns the values of a flat select option.
+func acpEffortValues(option any) []string {
+	m, _ := option.(map[string]any)
+	var out []string
+	for _, o := range m["options"].([]any) {
+		out = append(out, o.(map[string]any)["value"].(string))
+	}
+	return out
+}
+
+// acpLastEffortValues returns the effort values of the last config_option_update, joined by commas.
+func acpLastEffortValues(c *acpConn) string {
+	ups := acpUpdatesOf(c, "config_option_update")
+	last, _ := ups[len(ups)-1]["configOptions"].([]any)
+	return strings.Join(acpEffortValues(last[1]), ",")
+}
+
 func acpOptionValue(options any, id string) any {
 	list, _ := options.([]any)
 	for _, o := range list {
@@ -187,6 +240,83 @@ var acpConfigScenarios = []acpScenario{
 		},
 	},
 	{
+		name: "session_new_groups_the_models_by_provider_with_names",
+		cite: "The values are in one group for each provider, in the order of `Runtime.Models`.",
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				groups := acpGroups(t, acpNewOptions(c)[0])
+				a, ok := groups["anthropic"]
+				if !ok || a.name != "Anthropic" {
+					t.Fatalf("groups = %v, want an Anthropic group", groups)
+				}
+				v, ok := a.values["anthropic/claude-sonnet-5"]
+				if !ok || v.name != "Claude Sonnet 5" || !strings.HasPrefix(v.description, "anthropic/claude-sonnet-5 \u00b7 ") {
+					t.Errorf("claude-sonnet-5 = %+v", v)
+				}
+				if _, deprecated := groups["openai"].values["openai/gpt-3.5-turbo"]; deprecated {
+					t.Error("the model option lists a deprecated model")
+				}
+			}),
+		},
+	},
+	{
+		name: "effort_option_offers_the_levels_of_the_model",
+		cite: "It is a flat list of `default` and the effort levels of the current model",
+		config: map[string]any{"providers": map[string]any{
+			"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+			"openai":    map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+		}},
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpEffortValues(acpNewOptions(c)[1]); strings.Join(got, ",") != "default,low,medium,high" {
+					t.Errorf("effort values of claude-fable-5 = %v", got)
+				}
+			}),
+			acpSetConfig{as: "a", id: "effort", value: "high"},
+			acpSetConfig{as: "a", id: "model", value: "openai/gpt-4.1"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,high" {
+					t.Errorf("effort values of gpt-4.1 = %v, want default and the current effort", got)
+				}
+			}),
+			acpPrompt{as: "a", text: "/model anthropic/claude-haiku-4-5", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := acpLastEffortValues(c); got != "default,off,minimal,low,medium,high" {
+					t.Errorf("effort values of claude-haiku-4-5 after /model = %v, want every level", got)
+				}
+			}),
+		},
+	},
+	{
+		name: "effort_option_offers_every_level_for_an_unlisted_model",
+		cite: "A model that `Runtime.Models` does not hold offers every level.",
+		config: map[string]any{
+			"model":                 "gateway/vendor/model",
+			"context_window_tokens": 1000,
+			"providers": map[string]any{
+				"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+				"gateway":   map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+			},
+		},
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				opts := acpNewOptions(c)
+				if got := acpEffortValues(opts[1]); strings.Join(got, ",") != "default,off,minimal,low,medium,high" {
+					t.Errorf("effort values of an unlisted model = %v, want every level", got)
+				}
+				other, ok := acpGroups(t, opts[0])["Other"]
+				if !ok || other.name != "Other" || len(other.order) != 1 || other.order[0] != "gateway/vendor/model" {
+					t.Errorf("the model option has no Other group with the current model: %v", opts[0])
+				}
+			}),
+			acpSetConfig{as: "a", id: "effort", value: "high"},
+		},
+	},
+	{
 		name: "session_new_is_followed_by_the_available_commands",
 		cite: "After the answer to `session/new`, the agent sends an `available_commands_update`.",
 		steps: []acpStep{
@@ -223,17 +353,9 @@ var acpConfigScenarios = []acpScenario{
 			acpNew{as: "a"},
 			acpSetConfig{as: "a", id: "model", value: "codex/gpt-6-luna"},
 			acpCheck(func(t *testing.T, c *acpConn) {
-				var codex, native int
-				for _, o := range acpNewOptions(c)[0].(map[string]any)["options"].([]any) {
-					switch v := o.(map[string]any)["value"].(string); {
-					case strings.HasPrefix(v, "codex/"):
-						codex++
-					case strings.HasPrefix(v, "anthropic/"):
-						native++
-					}
-				}
-				if codex != 3 || native == 0 {
-					t.Errorf("the model option lists %d codex and %d anthropic values, want the 3 codex models and the anthropic models", codex, native)
+				groups := acpGroups(t, acpNewOptions(c)[0])
+				if got := len(groups["codex"].values); got != 8 || len(groups["anthropic"].values) == 0 {
+					t.Errorf("the model option lists %d codex and %d anthropic values, want the 8 codex models and the anthropic models", got, len(groups["anthropic"].values))
 				}
 			}),
 		},

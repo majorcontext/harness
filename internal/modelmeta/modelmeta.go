@@ -1,4 +1,4 @@
-// Package modelmeta provides static model context-window metadata.
+// Package modelmeta provides static model context-window and display metadata.
 //
 // The tables are curated snapshots of models.dev's limit.context field for
 // the model families that Harness serves. They remain static so session
@@ -41,9 +41,8 @@ func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 		// the model ID proper; the direct-vendor form (e.g.
 		// "claude-fable-5") never does. The dotted prefix marks a ref
 		// that is SERVED through Bedrock, so it must honor the Bedrock
-		// window where the two tables diverge (today only
-		// claude-sonnet-4-5-20250929: 200k on Bedrock vs 1M first-party
-		// — see bedrockAnthropicContextWindows's doc comment).
+		// window where the two tables diverge (see
+		// bedrockAnthropicContextWindows's doc comment).
 		// Over-reporting here arms compaction above the route's real
 		// limit and re-creates the overflow this package exists to
 		// prevent.
@@ -55,9 +54,7 @@ func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 		// family the bedrock snapshot doesn't key resolves as unknown
 		// (the backend applies its default window) rather than
 		// borrowing the first-party window, which would silently un-do the
-		// divergence for any form not keyed exactly (e.g. the undated
-		// "anthropic.claude-sonnet-4-5" borrowing 1M where Bedrock's real
-		// window is 200k).
+		// divergence for any form not keyed exactly.
 		if suffix, isBedrockStyle := stripBedrockAnthropicPrefix(model); isBedrockStyle {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 			return tokens, ok
@@ -93,36 +90,104 @@ func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 
 // codexModels are the models that the ChatGPT subscription backend accepts.
 // It refuses most other OpenAI models, gpt-5.3-codex included.
-var codexModels = []string{"gpt-6-astra", "gpt-6-luna", "gpt-6-sol"}
+var codexModels = []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 
-// claudeCodeModels are the model aliases that the Claude Code CLI resolves.
-var claudeCodeModels = []string{"fable", "haiku", "opus", "sonnet"}
+// claudeCodeModels are the model aliases that the Claude Code CLI resolves,
+// with the name that a client shows for each.
+var claudeCodeModels = []Model{
+	{ID: "fable", Name: "Claude Fable (Claude Code)", Efforts: allEfforts},
+	{ID: "haiku", Name: "Claude Haiku (Claude Code)", Efforts: allEfforts},
+	{ID: "opus", Name: "Claude Opus (Claude Code)", Efforts: allEfforts},
+	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: allEfforts},
+}
+
+// allEfforts are the levels of a model whose backend decides what it takes.
+var allEfforts = []string{"off", "minimal", "low", "medium", "high"}
+
+// modelInfo holds the models.dev facts of one chat model. A model that is not
+// listed is deprecated or cannot call tools.
+type modelInfo struct {
+	name, description, released string
+	efforts                     []string
+	listed                      bool
+}
+
+// Model is a model that a provider serves, with the facts a client shows.
+type Model struct {
+	// ID is the model id without the provider.
+	ID string
+	// Name is a human label, or empty when unknown.
+	Name string
+	// Description is one line about the model, or empty when unknown.
+	Description string
+	// Efforts are the effort levels that the model supports, from off to
+	// high. It is empty for a model that has no reasoning control.
+	Efforts []string
+}
 
 // datedSnapshotPattern matches a trailing snapshot date of eight digits, with
 // or without hyphens.
 var datedSnapshotPattern = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2})$`)
 
-// Models returns, sorted, the models that a provider serves. The anthropic
-// and openai models are the chat entries of the generated tables, with a
-// dated snapshot folded into its undated alias when the table holds both. The
-// codex models are ones that ContextWindow knows. The claude-code aliases are
+// Models returns the models that a provider serves, newest first and then by
+// name. The anthropic and openai models are the listed chat entries of the
+// generated tables, with a dated snapshot folded into its undated alias when
+// the table holds both; a deprecated model and a model without tool calls are
+// not listed, although ContextWindow still knows them. The codex models are
+// ones that the subscription backend accepts. The claude-code aliases are
 // names that the CLI resolves, and the backend owns their window. It returns
 // nil for a provider with no curated list.
-func Models(provider string) []string {
+func Models(provider string) []Model {
 	switch provider {
 	case "anthropic":
-		return undatedKeys(anthropicContextWindows)
+		return listed(undatedKeys(anthropicContextWindows), anthropicInfo)
 	case "openai":
-		return undatedKeys(openaiContextWindows)
+		return listed(undatedKeys(openaiContextWindows), openaiInfo)
 	case codexProvider:
-		return slices.Clone(codexModels)
+		return listed(codexModels, openaiInfo)
 	case claudeCodeProvider:
-		return slices.Clone(claudeCodeModels)
+		out := slices.Clone(claudeCodeModels)
+		for i := range out {
+			out[i].Efforts = slices.Clone(out[i].Efforts)
+		}
+		return out
 	}
 	return nil
 }
 
-// undatedKeys returns the sorted keys of table without a dated snapshot whose
+// ProviderName returns the display name of a provider from models.dev, or
+// an empty string when it has none.
+func ProviderName(provider string) string { return providerNames[provider] }
+
+// listed returns the models of ids that info lists, ordered by release date
+// with the newest first and then by name.
+func listed(ids []string, info map[string]modelInfo) []Model {
+	type row struct {
+		Model
+		released string
+	}
+	var rows []row
+	for _, id := range ids {
+		i, ok := info[id]
+		if !ok || !i.listed {
+			continue
+		}
+		rows = append(rows, row{Model{ID: id, Name: i.name, Description: i.description, Efforts: slices.Clone(i.efforts)}, i.released})
+	}
+	slices.SortStableFunc(rows, func(a, b row) int {
+		if c := strings.Compare(b.released, a.released); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	out := make([]Model, len(rows))
+	for i, r := range rows {
+		out[i] = r.Model
+	}
+	return out
+}
+
+// undatedKeys returns the keys of table without a dated snapshot whose
 // undated alias is also a key.
 func undatedKeys(table map[string]int) []string {
 	out := make([]string, 0, len(table))
@@ -134,7 +199,6 @@ func undatedKeys(table map[string]int) []string {
 		}
 		out = append(out, id)
 	}
-	slices.Sort(out)
 	return out
 }
 

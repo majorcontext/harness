@@ -41,14 +41,14 @@ jobs:
 
       - name: Open or update pull request
         run: |
-          if git diff --quiet -- internal/modelmeta/context_windows_gen.go; then
+          if git diff --quiet -- internal/modelmeta/ && [ -z "$(git ls-files --others --exclude-standard internal/modelmeta)" ]; then
             echo "Generated file is current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$BRANCH"
-          git add internal/modelmeta/context_windows_gen.go
+          git add internal/modelmeta/context_windows_gen.go internal/modelmeta/model_info_gen.go
           git commit -m "chore(modelmeta): refresh context windows from models.dev" \
             -m "Regenerated with go generate ./internal/modelmeta/ from https://models.dev/api.json."
           git push --force origin "$BRANCH"

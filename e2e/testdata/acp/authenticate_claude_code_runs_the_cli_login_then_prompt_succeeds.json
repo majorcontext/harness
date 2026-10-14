@@ -194,27 +194,27 @@
               "name": "Effort",
               "options": [
                 {
-                  "name": "default",
+                  "name": "Default",
                   "value": "default"
                 },
                 {
-                  "name": "off",
+                  "name": "Off",
                   "value": "off"
                 },
                 {
-                  "name": "minimal",
+                  "name": "Minimal",
                   "value": "minimal"
                 },
                 {
-                  "name": "low",
+                  "name": "Low",
                   "value": "low"
                 },
                 {
-                  "name": "medium",
+                  "name": "Medium",
                   "value": "medium"
                 },
                 {
-                  "name": "high",
+                  "name": "High",
                   "value": "high"
                 }
               ],

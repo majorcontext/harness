@@ -152,12 +152,9 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 		{"anthropic/bedrock_mantle/anthropic.claude-opus-5", 1_000_000},
 		// A version-suffixed mantle ID must use the same key.
 		{"anthropic/bedrock_mantle/anthropic.claude-opus-5-v1:0", 1_000_000},
-		// The one family where the two tables DIVERGE (see
-		// bedrockAnthropicContextWindows's doc comment): a mantle-routed
-		// ref is served through Bedrock, so it must honor the Bedrock
-		// window (200k), not the first-party 1M — over-reporting arms
-		// compaction at 800k against a real 200k limit, re-creating the
-		// exact overflow class this package exists to prevent.
+		// A mantle-routed ref is served through Bedrock, so it must honor
+		// the Bedrock table (see bedrockAnthropicContextWindows's doc
+		// comment), not the first-party one.
 		{"anthropic/bedrock_mantle/anthropic.claude-sonnet-4-5-20250929-v1:0", 200_000},
 		{"anthropic/bedrock_mantle/anthropic.claude-sonnet-4-5-20250929", 200_000},
 		// A version suffix on a NON-dotted direct-vendor ref must also
@@ -225,10 +222,9 @@ func TestContextWindowUnknown(t *testing.T) {
 		{Provider: "amazon-bedrock", Model: "us.amazon.titan-text-express-v1"},
 		// A dotted (Bedrock-served) ref whose family the bedrock table
 		// doesn't key MUST resolve unknown, never borrow the first-party
-		// window: claude-sonnet-4-5 is 1M first-party but 200k on Bedrock
-		// (keyed only under its dated form), so a first-party fallback
-		// here would over-report 5x and re-create the overflow class this
-		// package prevents.
+		// window: the bedrock table keys claude-sonnet-4-5 only under its
+		// dated form, so a first-party fallback here would borrow a window
+		// that the Bedrock route may not have.
 		{Provider: "anthropic", Model: "bedrock_mantle/anthropic.claude-sonnet-4-5"},
 		// A bifrost near miss must fail closed rather than match a
 		// neighboring table entry by accident.
@@ -290,8 +286,8 @@ func TestCodexModelsAreKnownToContextWindow(t *testing.T) {
 		t.Error(`Models("codex") is empty`)
 	}
 	for _, m := range models {
-		if _, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: m}); !ok {
-			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m)
+		if _, ok := ContextWindow(modelref.ModelRef{Provider: "codex", Model: m.ID}); !ok {
+			t.Errorf("Models(\"codex\") lists %q, which ContextWindow does not know", m.ID)
 		}
 	}
 	for _, provider := range []string{"bedrock"} {

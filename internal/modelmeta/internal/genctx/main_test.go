@@ -59,3 +59,23 @@ func TestGenerateRejectsMissingProvider(t *testing.T) {
 		t.Fatal("generate accepted a catalog with no providers")
 	}
 }
+
+// TestGenerateInfoGolden pins the model facts for a fixed catalog: the removal of the latest suffix,
+// the listed flag for a deprecated model and a model without tool calls, the mapping of none, toggle,
+// and budget_tokens to the levels of harness, the levels of a model with reasoning and no usable
+// option, an empty list for a model without reasoning, and the provider display names.
+func TestGenerateInfoGolden(t *testing.T) {
+	code, err := generateInfo(readFile(t, "testdata/catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const golden = "testdata/model_info_gen.golden"
+	if *update {
+		if err := os.WriteFile(golden, code, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := readFile(t, golden); !bytes.Equal(code, want) {
+		t.Errorf("generated output differs from %s; rerun with -update and review the diff\ngot:\n%s", golden, code)
+	}
+}

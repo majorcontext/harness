@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/majorcontext/harness/config"
@@ -193,16 +192,21 @@ func (m *Router) Warm(ctx context.Context, req turn.Request) error {
 	return nil
 }
 
-// List returns the models that modelmeta knows for each configured provider.
+// List returns the models that modelmeta knows for each configured provider, by provider name and then in the order of modelmeta.
 func (m *Router) List() []protocol.Model {
+	names := make([]string, 0, len(m.backends))
+	for name := range m.backends {
+		names = append(names, name)
+	}
+	slices.Sort(names)
 	out := []protocol.Model{}
-	for name, be := range m.backends {
-		for _, id := range modelmeta.Models(name) {
-			ref := name + "/" + id
-			out = append(out, protocol.Model{ID: ref, Provider: name, ContextWindow: be.Capabilities(ref).ContextWindow})
+	for _, name := range names {
+		be := m.backends[name]
+		for _, mm := range modelmeta.Models(name) {
+			ref := name + "/" + mm.ID
+			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: be.Capabilities(ref).ContextWindow})
 		}
 	}
-	slices.SortFunc(out, func(a, b protocol.Model) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
 
