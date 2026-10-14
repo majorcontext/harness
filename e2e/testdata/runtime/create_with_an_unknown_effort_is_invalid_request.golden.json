@@ -1,0 +1,22 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create_effort.bogus": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)"
+        }
+      }
+    },
+    "list_sessions": {
+      "status": 200,
+      "body": {
+        "sessions": []
+      }
+    }
+  }
+}

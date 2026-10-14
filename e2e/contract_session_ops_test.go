@@ -192,6 +192,14 @@ func TestContractSessionOpsSettings(t *testing.T) {
 			},
 		},
 		{
+			name:  "create_with_an_unknown_effort_is_invalid_request",
+			model: []harnesstest.Step{agentStep("rest", "ok", true)},
+			actions: []action{
+				tryCreateEffort{effort: "bogus"},
+				listSessions{},
+			},
+		},
+		{
 			name: "settings_model_change_reaches_the_next_model_call_of_a_turn",
 			model: []harnesstest.Step{
 				{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "checking", Block: true, ToolCalls: []harnesstest.ToolCall{{

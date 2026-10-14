@@ -193,6 +193,9 @@ type sendToSession struct{ as, text string }
 // tryCreate creates a session that names model and records the response. It binds no alias.
 type tryCreate struct{ model string }
 
+// tryCreateEffort creates a session that names effort and records the response. It binds no alias.
+type tryCreateEffort struct{ effort string }
+
 // postInput admits an input and records the receipt.
 type postInput struct{ as, text string }
 
@@ -336,6 +339,9 @@ func (a tryCreate) run(t *testing.T, r *run) {
 		name = "(default)"
 	}
 	r.record(t, "create", name, r.drv.CreateModel(t, a.model))
+}
+func (a tryCreateEffort) run(t *testing.T, r *run) {
+	r.record(t, "create_effort", a.effort, r.drv.CreateEffort(t, a.effort))
 }
 func (a postInput) run(t *testing.T, r *run) {
 	r.record(t, "input", a.as, r.drv.PostInput(t, r.id(t, a.as), a.text))

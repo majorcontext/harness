@@ -273,14 +273,6 @@ func New(opts Options) (*Runtime, error) {
 	return r, nil
 }
 
-// banner renders the engine status line, or "" for an empty version.
-func banner(version string, started time.Time) string {
-	if version == "" {
-		return ""
-	}
-	return "[engine: harness " + version + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
-}
-
 // positive returns v, or def when v is not positive.
 func positive[T int | float64](v, def T) T {
 	if v <= 0 {
@@ -294,6 +286,9 @@ func positive[T int | float64](v, def T) T {
 func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts ...SessionOption) (*Session, error) {
 	if req.Model == "" {
 		req.Model = r.resolve("")
+	}
+	if err := checkEffort(req.Effort); err != nil {
+		return nil, err
 	}
 	so, err := r.sessionOptions(opts)
 	if err != nil {
