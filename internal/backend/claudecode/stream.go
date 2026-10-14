@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/majorcontext/harness/internal/backend/external"
@@ -29,7 +30,10 @@ type run struct {
 	// no configured MCP server.
 	restricted bool
 	bridged    map[string]bool
-	names      map[string]string
+	// blobs holds the blobs of the bridge results by call ID until the result frame arrives.
+	blobMu sync.Mutex
+	blobs  map[string][]protocol.Blob
+	names  map[string]string
 	// questions reports a run with the question channel; resolution answers
 	// the parked call, and question is the call that the main thread asked.
 	questions  bool
@@ -269,7 +273,7 @@ func (r *run) frame(line []byte) error {
 }
 
 func (r *run) handle(env envelope) error {
-	if r.resolution == nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
+	if r.resolution == nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result" && !env.IsError) {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
 	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
@@ -470,6 +474,9 @@ func (r *run) toolResults(env envelope) error {
 	if len(parts) == 0 {
 		return nil
 	}
+	if err := r.attachBlobs(parts); err != nil {
+		return err
+	}
 	if env.ParentToolUseID == "" {
 		r.owed = false
 		for _, p := range parts {
@@ -558,4 +565,40 @@ func (r *run) telemetry(env envelope) {
 func callMetrics(env envelope) *turn.CallMetrics {
 	ttft := time.Duration(env.TTFTMillis) * time.Millisecond
 	return &turn.CallMetrics{TTFT: ttft, Stream: max(0, time.Duration(env.DurationMillis)*time.Millisecond-ttft)}
+}
+
+// keepBlobs remembers the blobs of the result of call id, for the result frame
+// that the CLI prints after the bridge call.
+func (r *run) keepBlobs(id string, blobs []protocol.Blob) {
+	r.blobMu.Lock()
+	defer r.blobMu.Unlock()
+	if r.blobs == nil {
+		r.blobs = map[string][]protocol.Blob{}
+	}
+	r.blobs[id] = blobs
+}
+
+// attachBlobs stores the blobs of each bridge result and adds their parts to
+// the result part, so the log holds the image that the CLI saw.
+func (r *run) attachBlobs(parts []protocol.LogPart) error {
+	a, ok := r.out.(turn.Attacher)
+	if !ok {
+		return nil
+	}
+	r.blobMu.Lock()
+	defer r.blobMu.Unlock()
+	for i, p := range parts {
+		for _, b := range r.blobs[p.CallID] {
+			if len(b.Data) == 0 {
+				continue
+			}
+			bp, err := a.Attach(b.MediaType, b.Data)
+			if err != nil {
+				return err
+			}
+			parts[i].Blobs = append(parts[i].Blobs, bp)
+		}
+		delete(r.blobs, p.CallID)
+	}
+	return nil
 }

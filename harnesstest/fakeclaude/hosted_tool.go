@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -29,22 +30,13 @@ func callHostedTool(f *fake) {
 	if list := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); list != "" {
 		name, log, method, params = "tools/list", list, "tools/list", obj{}
 	}
-	edits, big := os.Getenv("FAKE_CLAUDE_PARALLEL_EDITS"), os.Getenv("FAKE_CLAUDE_READ_RETAINED")
-	if (name == "" || log == "") && edits == "" && big == "" {
+	if name == "" || log == "" {
 		return
 	}
 	for {
 		if _, ok := f.readLine(); !ok {
 			break
 		}
-	}
-	if edits != "" {
-		parallelEdits(edits, log)
-		return
-	}
-	if big != "" {
-		readRetained(big, log)
-		return
 	}
 	appendFile(log, hostedRPC(method, params)+"\n")
 }
@@ -125,24 +117,6 @@ func hostedServer() (hostedEntry, bool) {
 	return hostedEntry{}, false
 }
 
-// parallelEdits calls edit_file at once for each of the 16 lines of path, line
-// i from "line-i-old" to "line-i-new", as a CLI that runs MCP tools in
-// parallel does, and then appends the read_file response of path to log.
-func parallelEdits(path, log string) {
-	var wg sync.WaitGroup
-	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			hostedRPC("tools/call", obj{"name": "edit_file", "arguments": obj{"path": path,
-				"old_string": fmt.Sprintf("line-%d-old", i), "new_string": fmt.Sprintf("line-%d-new", i)},
-				"_meta": obj{toolUseMeta: fmt.Sprintf("toolu_edit_%d", i)}})
-		}()
-	}
-	wg.Wait()
-	appendFile(log, hostedRPC("tools/call", obj{"name": "read_file", "arguments": obj{"path": path}, "_meta": obj{toolUseMeta: "toolu_read"}})+"\n")
-}
-
 type hostedText struct {
 	Result struct {
 		Content []struct{ Text string }
@@ -163,20 +137,44 @@ func (h hostedText) text() string {
 	return h.Result.Content[0].Text
 }
 
-// readRetained reads path with read_file, which retains a large result, and
-// then reads the retained result back with read_tool_result. It appends the
-// shape of both responses to log.
-func readRetained(path, log string) {
-	first := hostedCall("read_file", obj{"path": path}, "toolu_big")
-	text := first.text()
-	handle := ""
-	if i := strings.Index(text, "trh_"); i >= 0 {
-		handle = text[i : i+strings.IndexAny(text[i:], `"\n )]`)]
+type turnCall struct {
+	Name string `json:"name"`
+	Args obj    `json:"args"`
+}
+
+// turnCalls runs the batches of FAKE_CLAUDE_TURN_CALLS during the turn, as the
+// CLI does: each batch prints one tool_use frame per call, calls the tools of
+// the harness MCP server at once, and prints the tool_result frames. The text
+// $HANDLE in the arguments of a call stands for the first trh_N handle in the
+// result of the batch before it.
+func turnCalls(f *fake) {
+	var batches [][]turnCall
+	_ = json.Unmarshal([]byte(os.Getenv("FAKE_CLAUDE_TURN_CALLS")), &batches)
+	handle := regexp.MustCompile(`trh_\d+`)
+	last := ""
+	for b, batch := range batches {
+		results := make([]hostedText, len(batch))
+		ids := make([]string, len(batch))
+		for i, c := range batch {
+			ids[i] = fmt.Sprintf("toolu_t%d_%d", b, i)
+			args, _ := json.Marshal(c.Args)
+			args = []byte(strings.ReplaceAll(string(args), "$HANDLE", handle.FindString(last)))
+			batch[i].Args = obj{}
+			_ = json.Unmarshal(args, &batch[i].Args)
+			f.emit(assistant(toolUse(ids[i], "mcp__harness__"+c.Name, batch[i].Args)).inMessage("id", fmt.Sprintf("msg_t%d", b)))
+		}
+		var wg sync.WaitGroup
+		for i, c := range batch {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[i] = hostedCall(c.Name, c.Args, ids[i])
+			}()
+		}
+		wg.Wait()
+		for i := range batch {
+			f.emit(user(toolResult(ids[i], results[i].text(), results[i].Result.IsError)))
+		}
+		last = results[0].text()
 	}
-	second := hostedCall("read_tool_result", obj{"handle": handle, "offset": 1, "limit": 2}, "toolu_back")
-	b, _ := json.Marshal(obj{
-		"first":  obj{"bytes_under_limit": len(text) < 25000, "has_hint": strings.Contains(text, "— read the rest with read_tool_result(handle=\""+handle+"\")]"), "handle": handle, "is_error": first.Result.IsError},
-		"second": obj{"text": second.text(), "is_error": second.Result.IsError},
-	})
-	appendFile(log, string(b)+"\n")
 }

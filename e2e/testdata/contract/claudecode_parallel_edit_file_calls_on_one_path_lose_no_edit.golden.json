@@ -29,21 +29,28 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "bash",
+            "name": "edit_file",
             "arguments": {
-              "command": "echo hi"
+              "new_string": "line-0-new",
+              "old_string": "line-0-old",
+              "path": "lines.txt"
             }
           }
         ]
       },
       {
         "id": "msg#4",
-        "role": "tool",
+        "role": "assistant",
         "parts": [
           {
-            "type": "tool_result",
-            "call_id": "toolu#1",
-            "content": "hi\n"
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-1-new",
+              "old_string": "line-1-old",
+              "path": "lines.txt"
+            }
           }
         ]
       },
@@ -52,28 +59,436 @@
         "role": "assistant",
         "parts": [
           {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-2-new",
+              "old_string": "line-2-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-3-new",
+              "old_string": "line-3-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-4-new",
+              "old_string": "line-4-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-5-new",
+              "old_string": "line-5-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#7",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-6-new",
+              "old_string": "line-6-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-7-new",
+              "old_string": "line-7-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#9",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-8-new",
+              "old_string": "line-8-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#10",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-9-new",
+              "old_string": "line-9-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#11",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-10-new",
+              "old_string": "line-10-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#12",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-11-new",
+              "old_string": "line-11-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#13",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-12-new",
+              "old_string": "line-12-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#14",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-13-new",
+              "old_string": "line-13-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#15",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-14-new",
+              "old_string": "line-14-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#16",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "line-15-new",
+              "old_string": "line-15-old",
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#21",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#23",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#24",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#25",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#7",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#26",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#27",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#9",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#28",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#10",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#29",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#11",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#30",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#12",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#31",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#13",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#32",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#14",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#33",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#15",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#34",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#16",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/lines.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#35",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#17",
+            "name": "read_file",
+            "arguments": {
+              "path": "lines.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#36",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#17",
+            "content": "1→line-0-new\n2→line-1-new\n3→line-2-new\n4→line-3-new\n5→line-4-new\n6→line-5-new\n7→line-6-new\n8→line-7-new\n9→line-8-new\n10→line-9-new\n11→line-10-new\n12→line-11-new\n13→line-12-new\n14→line-13-new\n15→line-14-new\n16→line-15-new"
+          }
+        ]
+      },
+      {
+        "id": "msg#37",
+        "role": "assistant",
+        "parts": [
+          {
             "type": "text",
-            "text": "Done — it printed hi."
+            "text": "Done."
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "tool_call.a": {
-      "status": 200,
-      "body": {
-        "id": 1,
-        "jsonrpc": "2.0",
-        "result": {
-          "content": [
-            {
-              "text": "1→line-0-new\n2→line-1-new\n3→line-2-new\n4→line-3-new\n5→line-4-new\n6→line-5-new\n7→line-6-new\n8→line-7-new\n9→line-8-new\n10→line-9-new\n11→line-10-new\n12→line-11-new\n13→line-12-new\n14→line-13-new\n15→line-14-new\n16→line-15-new",
-              "type": "text"
-            }
-          ]
-        }
-      }
-    }
   }
 }

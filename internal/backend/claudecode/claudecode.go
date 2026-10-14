@@ -269,7 +269,14 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[stri
 // on the other backends.
 func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) {
 	var err error
-	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, req.Call); err != nil {
+	call := func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		res := req.Call(ctx, c)
+		if len(res.Blobs) > 0 {
+			r.keepBlobs(c.ID, res.Blobs)
+		}
+		return res
+	}
+	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, call); err != nil {
 		return "", err
 	}
 	r.bridged = map[string]bool{}

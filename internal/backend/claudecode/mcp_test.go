@@ -28,9 +28,9 @@ type mcpConfigFile struct {
 const hist = "get_conversation_history"
 
 func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *testing.T) {
-	dir := t.TempDir()
+	dir, st := t.TempDir(), store.NewMemStore()
 	mcpLog, configLog := filepath.Join(dir, "mcp"), filepath.Join(dir, "config")
-	argvLog := fakeClaude(t, "mcp", toolsInit, `["mcp__gateway__ping"]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
+	argvLog := fakeClaude(t, "mcp", toolsInit, `[]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG", configLog)
 	reg := mcp.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -41,7 +41,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{newProbe("echo", false)}, Config: config.Config{
+	r, err := harness.New(harness.Options{Store: st, Tools: []harness.Tool{newProbe("echo", false)}, Config: config.Config{
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}},
 		MCPServers: map[string]config.MCPServerSpec{
 			"chrome-devtools": {Command: []string{"chrome-devtools-mcp-absent", "--headless"}, Dir: dir},
@@ -52,6 +52,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	}
 	defer closeRuntime(t, r)
 	turnOf(t, createClaude(t, r, []string{"echo", "mcp__gateway__ping"}), text("a", "hi"))
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m", `item.completed tool toolu_m echo {"q":"hi"}`, "item.completed assistant done", "context.measured", "turn.ended completed")
 	offered := []string{"echo", "mcp__gateway__ping", hist}
 	runs := jsonLines[mcpRun](t, mcpLog)
 	if len(runs) != 1 || !slices.Equal(runs[0].Tools, offered) {

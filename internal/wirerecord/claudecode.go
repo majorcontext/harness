@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -104,7 +106,7 @@ func (r *recorder) saveJSONL(name string, raw []byte) error {
 }
 
 // bashServer serves a bash tool to the CLI as the harness MCP server does, in
-// dir. It returns the extra flags of a run and a stop function.
+// dir, under a secret path so that no other local client reaches it. It returns the extra flags of a run and a stop function.
 func bashServer(dir string) ([]string, func(), error) {
 	reg := mcp.NewRegistry("harness", "1")
 	reg.RegisterTool(mcp.Tool{Name: "bash", Description: "Run a shell command.",
@@ -128,14 +130,27 @@ func bashServer(dir string) ([]string, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	srv := &http.Server{Handler: reg, ReadHeaderTimeout: time.Minute}
+	var key [16]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		_ = ln.Close()
+		return nil, nil, err
+	}
+	secret := "/" + hex.EncodeToString(key[:])
+	gate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != secret {
+			http.NotFound(w, r)
+			return
+		}
+		reg.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: gate, ReadHeaderTimeout: time.Minute}
 	go func() { _ = srv.Serve(ln) }()
 	cfg, err := os.CreateTemp("", "wirerecord-mcp-*.json")
 	if err != nil {
 		_ = srv.Close()
 		return nil, nil, err
 	}
-	body, _ := json.Marshal(obj{"mcpServers": obj{"harness": obj{"type": "http", "url": "http://" + ln.Addr().String()}}})
+	body, _ := json.Marshal(obj{"mcpServers": obj{"harness": obj{"type": "http", "url": "http://" + ln.Addr().String() + secret}}})
 	_, werr := cfg.Write(body)
 	_ = cfg.Close()
 	stop := func() { _ = srv.Close(); _ = os.Remove(cfg.Name()) }

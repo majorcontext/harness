@@ -185,6 +185,13 @@ type Sink interface {
 	Asked(id string) (json.RawMessage, bool)
 }
 
+// Attacher is a Sink that stores the blob of a tool result and returns the
+// blob part that names it, so a backend that owns the loop records the image
+// that a bridge tool returned.
+type Attacher interface {
+	Attach(mediaType string, data []byte) (protocol.LogPart, error)
+}
+
 // Threaded is a Sink that gives each key a live item of its own. A backend
 // that runs several threads of output at once, such as a main thread and a
 // subagent, gives each thread a key, so the deltas of one never join the item

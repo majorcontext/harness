@@ -309,6 +309,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_bridge_refuses_set_on_the_model_tool":                                          sameAsServe(),
 	"claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads": sameAsServe(),
 	"claudecode_session_info_lists_the_tools_that_the_call_offered":                            sameAsServe(),
+	"claudecode_bridge_image_result_reaches_the_log_and_a_model_api_replay":                    sameAsServe(),
 	"claudecode_built_in_tool_call_fails_the_turn":                                             sameAsServe(),
 	"claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit":                             sameAsServe(),
 	"task_profile_maps_claude_code_tool_names_to_harness_tools":                                sameAsServe(),

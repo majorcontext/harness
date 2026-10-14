@@ -45,13 +45,9 @@ type claudeLane struct {
 	// listTools makes each turn of the CLI list the tools of the hosted MCP
 	// server after the result.
 	listTools bool
-	// parallelEdits makes each turn of the CLI edit this file with 16
-	// edit_file calls at once on the hosted MCP server after the result, and
-	// read it back.
-	parallelEdits string
-	// readRetained makes each turn of the CLI read this file with read_file
-	// and then its retained result with read_tool_result, after the result.
-	readRetained string
+	// turnCalls are batches of harness tool calls that the "turn_calls" mode
+	// makes the CLI run during the turn, each batch at once.
+	turnCalls [][]turnCall
 	// initTools is the JSON list of tools in the init frame of the CLI, which a
 	// session with an allowed list checks.
 	initTools string
@@ -65,6 +61,12 @@ type claudeLane struct {
 	spawnModes string
 	// env adds FAKE_CLAUDE_* and FAKECLAUDE_* variables to the environment of the CLI.
 	env map[string]string
+}
+
+// turnCall is one call of a "turn_calls" batch.
+type turnCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
 }
 
 // claudeLogs are the files where fakeclaude records what it received.
@@ -109,11 +111,9 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 	if lane.listTools {
 		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
 	}
-	if lane.readRetained != "" {
-		env["FAKE_CLAUDE_READ_RETAINED"], env["FAKE_CLAUDE_TOOL_LOG"] = lane.readRetained, l.toolLog
-	}
-	if lane.parallelEdits != "" {
-		env["FAKE_CLAUDE_PARALLEL_EDITS"], env["FAKE_CLAUDE_TOOL_LOG"] = lane.parallelEdits, l.toolLog
+	if lane.turnCalls != nil {
+		calls, _ := json.Marshal(lane.turnCalls)
+		env["FAKE_CLAUDE_TURN_CALLS"] = string(calls)
 	}
 	if lane.initTools != "" {
 		env["FAKE_CLAUDE_INIT_TOOLS"] = lane.initTools

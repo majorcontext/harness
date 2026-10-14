@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -535,7 +536,7 @@ func TestContractClaudeCodeQuestionResults(t *testing.T) {
 }
 
 func TestContractClaudeCodeTools(t *testing.T) {
-	setModel := map[string]any{"action": "set", "model": "anthropic/claude-fable-5"}
+	setArgs := map[string]any{"action": "set", "model": "anthropic/claude-fable-5"}
 	runScenarios(t, []scenario{{
 		name:    "claudecode_cli_gets_the_tools_of_the_engine_bridge",
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
@@ -546,31 +547,55 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		actions: withActions(claudeOneTurn, claudeOfferedModelTool{as: "a"}),
 	}, {
 		name:    "claudecode_bridge_refuses_set_on_the_model_tool",
-		driver:  claudeLane{mode: "normal", callTool: "model", callArgs: setModel}.newDriver,
+		driver:  claudeLane{mode: "normal", callTool: "model", callArgs: setArgs}.newDriver,
 		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}, {
 		name:    "claudecode_plugin_hook_denies_a_bash_call_of_the_cli",
-		driver:  claudeLane{mode: "normal", callTool: "bash", callArgs: map[string]any{"command": "echo block-me"}, extra: pluginConfig(t, nil)}.newDriver,
-		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "echo block-me"}}}}, extra: pluginConfig(t, nil)}.newDriver,
+		actions: claudeOneTurn,
+	}, {
+		name:   "claudecode_bridge_image_result_reaches_the_log_and_a_model_api_replay",
+		driver: claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"read_file", map[string]any{"path": "pic.png"}}}}}.newDriver,
+		model:  []harnesstest.Step{{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}},
+		actions: append([]action{writeFile{path: "pic.png", body: pngBody()}},
+			withActions(claudeOneTurn,
+				setModel{as: "a", model: "anthropic/claude-fable-5"},
+				submit{as: "a", text: "native"}, waitIdle{as: "a"})...),
 	}, {
 		name:    "claudecode_built_in_tool_call_fails_the_turn",
 		driver:  claudeLane{mode: "builtin_tool"}.newDriver,
 		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
 	}, {
-		name:   "claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit",
-		driver: claudeLane{mode: "normal", parallelEdits: "lines.txt"}.newDriver,
-		actions: append([]action{writeFile{path: "lines.txt", body: numberedLines()}},
-			withActions(claudeOneTurn, claudeToolCall{as: "a"})...),
+		name:    "claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit",
+		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{editCalls(), {{"read_file", map[string]any{"path": "lines.txt"}}}}}.newDriver,
+		actions: append([]action{writeFile{path: "lines.txt", body: numberedLines()}}, claudeOneTurn...),
 	}, {
 		name:    "claudecode_session_info_lists_the_tools_that_the_call_offered",
 		driver:  claudeLane{mode: "normal", callTool: "session_info", callArgs: map[string]any{}}.newDriver,
 		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}, {
-		name:   "claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads",
-		driver: claudeLane{mode: "normal", readRetained: "big.txt"}.newDriver,
-		actions: append([]action{writeFile{path: "big.txt", body: strings.Repeat("line of the large file with some padding text\n", 3000)}},
-			withActions(claudeOneTurn, claudeToolCall{as: "a"})...),
+		name: "claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads",
+		driver: claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"read_file", map[string]any{"path": "big.txt"}}},
+			{{"read_tool_result", map[string]any{"handle": "$HANDLE", "offset": 1, "limit": 2}}}}}.newDriver,
+		actions: append([]action{writeFile{path: "big.txt", body: strings.Repeat("line of the large file with some padding text\n", 3000)}}, claudeOneTurn...),
 	}})
+}
+
+func pngBody() string {
+	b, err := base64.StdEncoding.DecodeString(mcpPNG)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+func editCalls() []turnCall {
+	var calls []turnCall
+	for i := range 16 {
+		calls = append(calls, turnCall{"edit_file", map[string]any{"path": "lines.txt",
+			"old_string": fmt.Sprintf("line-%d-old", i), "new_string": fmt.Sprintf("line-%d-new", i)}})
+	}
+	return calls
 }
 
 func numberedLines() string {

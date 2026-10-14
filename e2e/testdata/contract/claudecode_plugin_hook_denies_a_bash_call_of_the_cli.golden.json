@@ -31,7 +31,7 @@
             "call_id": "toolu#1",
             "name": "bash",
             "arguments": {
-              "command": "echo hi"
+              "command": "echo block-me"
             }
           }
         ]
@@ -43,7 +43,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "hi\n"
+            "is_error": true,
+            "content": "blocked by fixture"
           }
         ]
       },
@@ -53,28 +54,10 @@
         "parts": [
           {
             "type": "text",
-            "text": "Done — it printed hi."
+            "text": "Done."
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "tool_call.a": {
-      "status": 200,
-      "body": {
-        "id": 1,
-        "jsonrpc": "2.0",
-        "result": {
-          "content": [
-            {
-              "text": "blocked by fixture",
-              "type": "text"
-            }
-          ],
-          "isError": true
-        }
-      }
-    }
   }
 }
