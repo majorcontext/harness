@@ -11,8 +11,16 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
-	skipShort(t)
+// ccCompactionRow is one scripted CLI stream with the events and the summary that its compaction logs.
+type ccCompactionRow struct {
+	name   string
+	frames []map[string]any
+	want   []string
+	// summary, when set, is the summary of the compaction.applied record.
+	summary string
+}
+
+func ccCompactionRows() []ccCompactionRow {
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": "S", "model": "claude-haiku-4-5-20251001", "tools": []string{}}
 	compacting := map[string]any{"type": "system", "subtype": "status", "status": "compacting", "session_id": "S"}
 	settled := map[string]any{"type": "system", "subtype": "status", "status": nil, "compact_result": "success", "session_id": "S"}
@@ -29,13 +37,7 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 	boundaryLine := "Claude Code compacted its context (auto, 167000 tokens before)."
 	settledLines := []string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}
 	cliSummary := "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion.\n\nSummary:\nthe plain body\n\nIf you need specific details from before compaction (like exact code snippets), read the full transcript at: /x.jsonl\nContinue the conversation from where it left off."
-	rows := []struct {
-		name   string
-		frames []map[string]any
-		want   []string
-		// summary, when set, is the summary of the compaction.applied record.
-		summary string
-	}{
+	return []ccCompactionRow{
 		{"claude_code_compaction_sends_compacting_then_running_at_the_boundary",
 			[]map[string]any{init, compacting, settled, boundary, summary, reply, result},
 			[]string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}, ""},
@@ -67,7 +69,11 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 		{"claude_code_boundary_without_a_summary_frame_logs_the_boundary_text",
 			[]map[string]any{init, compacting, settled, boundary, reply, result}, settledLines, boundaryLine},
 	}
-	for _, row := range rows {
+}
+
+func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
+	skipShort(t)
+	for _, row := range ccCompactionRows() {
 		t.Run(row.name, func(t *testing.T) {
 			l := newCCLane(t, "", ccStream(t, row.frames...))
 			r := l.runtime()
