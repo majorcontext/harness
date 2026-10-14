@@ -3,7 +3,9 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -87,5 +89,101 @@ func TestContractRuntimeToolCall(t *testing.T) {
 		if c.Session != "s1" || c.Root != "s1" || turnID == "" || c.TurnID != turnID || c.Name != "probe" || c.ID == "" {
 			t.Errorf("call %d = %+v, want session s1, root s1, turn %q", i, c, turnID)
 		}
+	}
+}
+
+// hostBash is an embedder tool with the name of the built-in bash tool.
+type hostBash struct{}
+
+func (hostBash) Spec() protocol.ToolSpec {
+	return protocol.ToolSpec{Name: "bash", Description: "host shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"host_only":{"type":"string"}}}`)}
+}
+
+func (hostBash) Run(context.Context, harness.Call) (protocol.ToolResult, error) {
+	return protocol.ToolResult{Text: "host ran"}, nil
+}
+
+func hostBashRuntime(t *testing.T, fake *harnesstest.Server) *harness.Runtime {
+	t.Helper()
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{hostBash{}}, WorkDir: t.TempDir(), Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
+	if err != nil {
+		t.Fatalf("New with an embedder tool named bash = %v, want nil", err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	return r
+}
+
+func TestContractRuntimeEmbedderToolReplacesAnUnlistedBuiltinOfTheSameName(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	fake := harnesstest.NewChat(t,
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ok"}})
+	r := hostBashRuntime(t, fake)
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test", AllowedTools: []string{"read_file", "bash"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == "turn.ended" {
+			break
+		}
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(reqs))
+	}
+	if n := strings.Count(strings.Join(reqs[0].Tools, " ")+" ", "bash "); n != 1 {
+		t.Errorf("tools of the first request = %v, want one bash", reqs[0].Tools)
+	}
+	if got := requestText(reqs[1]); !strings.Contains(got, "host ran") {
+		t.Errorf("the second request does not hold the result of the embedder tool: %s", got)
+	}
+}
+
+func TestContractRuntimeEmbedderToolWithABuiltinNameFailsCreateWhenEveryToolIsAllowed(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	r := hostBashRuntime(t, harnesstest.NewChat(t))
+	_, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
+	if !errors.Is(err, harness.ErrInvalidRequest) || !strings.Contains(err.Error(), `"bash"`) {
+		t.Errorf("Create = %v, want ErrInvalidRequest that names bash", err)
+	}
+}
+
+func TestContractRuntimeEmbedderToolWithABuiltinNameFailsOpenOfASessionThatAllowsEveryTool(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	fake := harnesstest.NewChat(t)
+	st, dir := store.NewMemStore(), t.TempDir()
+	opts := func(tools ...harness.Tool) harness.Options {
+		return harness.Options{Store: st, Tools: tools, WorkDir: dir, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+			Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}}
+	}
+	first, err := harness.New(opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := harness.New(opts(hostBash{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close(context.Background()) })
+	_, err = second.Open(t.Context(), "s1")
+	if !errors.Is(err, harness.ErrInvalidRequest) || !strings.Contains(err.Error(), `"bash"`) {
+		t.Errorf("Open = %v, want ErrInvalidRequest that names bash", err)
 	}
 }

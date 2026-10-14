@@ -17,6 +17,13 @@ const big = {
   run: async () => Array.from({ length: 2000 }, (_, i) => "line " + i).join("\n"),
 };
 
+const hostBash = {
+  name: "bash",
+  description: "Host shell.",
+  schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+  run: async (input) => "host:" + input.command,
+};
+
 function acpClient(h) {
   const writer = h.stream.writable.getWriter();
   const reader = h.stream.readable.getReader();
@@ -67,7 +74,7 @@ async function start(row, log = () => {}) {
     transport: wasm({ module: "harness.wasm", wasmExec: "wasm_exec.js", worker: true }),
     config: config(row),
     proxy: row.proxy,
-    tools: [echo, big],
+    tools: row.hostBash ? [echo, big, hostBash] : [echo, big],
     store: row.persist ? { persist: true } : {},
     log: (line) => (logs.push(line), log(line)),
   });

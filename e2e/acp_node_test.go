@@ -267,6 +267,50 @@ func TestNodeWasmRunsAJavaScriptTool(t *testing.T) {
 	c.finish(stop)
 }
 
+// TestNodeWasmPageToolReplacesABuiltinTool pins the sentence of the tools
+// section on a host tool with the name of a built-in tool: with an allowed list,
+// the host tool replaces the built-in, and the model sees one tool of that name.
+func TestNodeWasmPageToolReplacesABuiltinTool(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t,
+		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "bash", Input: map[string]any{"command": "hi"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), nil), sessDir: t.TempDir()}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{BuiltinTools: []string{"read_file", "bash"}, JSTools: []string{"bash"}}.withBase(env))
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a"}.run(t, c)
+	acpPrompt{as: "a", text: "go", stop: "end_turn"}.run(t, c)
+	reqs := acpRequests(t, c, 2)
+	if n := strings.Count(strings.Join(reqs[0].Tools, " ")+" ", "bash "); n != 1 {
+		t.Errorf("tools of the first request = %v, want one bash", reqs[0].Tools)
+	}
+	if got := requestText(reqs[1]); !strings.Contains(got, "host:hi") {
+		t.Errorf("the second request does not hold the result of the page tool: %s", got)
+	}
+	c.finish(stop)
+}
+
+// TestNodeWasmPageToolWithABuiltinNameFailsWhenEveryToolIsAllowed pins the
+// same sentence: with no allowed list, the built-in tool is allowed, and the
+// name is taken.
+func TestNodeWasmPageToolWithABuiltinNameFailsWhenEveryToolIsAllowed(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t)
+	env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), nil), sessDir: t.TempDir()}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{JSTools: []string{"bash"}}.withBase(env))
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a", code: acpInvalidParams}.run(t, c)
+	c.finish(stop)
+}
+
 func (o nodeHostOptions) withBase(env acpEnv) nodeHostOptions {
 	o.ConfigPath, o.StoreDir = env.configPath, env.sessDir
 	o.Env = map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}

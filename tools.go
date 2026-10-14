@@ -51,6 +51,23 @@ func (r *Runtime) builtin(name string) bool {
 	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == selftool.SessionInfoName)
 }
 
+// shadowable reports whether name is a file, search, or shell tool of the
+// WorkDir, which a tool of Options.Tools replaces.
+func (r *Runtime) shadowable(name string) bool {
+	return r.workDir != "" && slices.Contains(builtin.Names, name)
+}
+
+// shadowed returns the shadowable built-in names that Options.Tools takes.
+func (r *Runtime) shadowed() []string {
+	var out []string
+	for _, t := range r.tools {
+		if n := t.Spec().Name; r.shadowable(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // source returns the tools of session id for each model call: the runtime
 // tools, then the goal, file, MCP, and plugin tools of the models that take
 // them. A session tool binds to the session or drops out. Each session has
@@ -99,7 +116,9 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		if plug != nil {
 			env = plug.ShellEnv
 		}
-		files := turn.Fixed(append(builtin.Tools(r.workDir, env), selftool.NewSessionInfo(toolHost{r}, id, sp)))
+		taken := r.shadowed()
+		files := turn.Fixed(append(slices.DeleteFunc(builtin.Tools(r.workDir, env), func(t turn.Tool) bool { return slices.Contains(taken, t.Spec().Name) }),
+			selftool.NewSessionInfo(toolHost{r}, id, sp)))
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
 			if c.OwnsLoop {
 				return nil

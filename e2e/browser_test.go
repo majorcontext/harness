@@ -337,6 +337,24 @@ func (k *browserKit) turnRows() {
 		})
 	}
 	{
+		f := newBrowserFront(t, nil,
+			harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "bash", Input: map[string]any{"command": "hi"}}}}},
+			text("done"))
+		add("page tool named bash replaces the built-in bash", map[string]any{"kind": "turn", "baseURL": f.URL, "hostBash": true}, func(t *testing.T, res browserResult, _ string) {
+			noFailure(t, res)
+			if res.StopReason != "end_turn" {
+				t.Fatalf("stopReason = %q, error %+v, console %v", res.StopReason, res.Error, res.Console)
+			}
+			reqs := f.fake.Requests()
+			if len(reqs) != 2 || !strings.Contains(requestText(reqs[1]), "host:hi") {
+				t.Fatalf("the second model request lacks the page tool result: %d requests", len(reqs))
+			}
+			if n := strings.Count(strings.Join(reqs[0].Tools, " ")+" ", "bash "); n != 1 {
+				t.Errorf("tools of the first request = %v, want one bash", reqs[0].Tools)
+			}
+		})
+	}
+	{
 		f := newBrowserFront(t, nil, text("hello from the browser"))
 		add("streamed text turn", map[string]any{"kind": "turn", "baseURL": f.URL}, func(t *testing.T, res browserResult, _ string) {
 			noFailure(t, res)

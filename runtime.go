@@ -99,8 +99,8 @@ type Options struct {
 	// Logger receives every log line of the runtime. nil: slog.Default().
 	Logger *slog.Logger
 	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process, task, model, or a built-in tool name. With a
-	// goal evaluator, no name may be goal. With Config.MCPServers, no name
+	// WorkDir, no name may be process, task, model, read_tool_result, or session_info; a
+	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, or start with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
@@ -254,7 +254,7 @@ func New(opts Options) (*Runtime, error) {
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log})
 	for _, t := range tools {
-		if name := t.Spec().Name; name == "" || r.known("", name) {
+		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
@@ -372,7 +372,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	var c protocol.SessionCreated
 	if l.created != nil {
 		c = *l.created
-	} else if c, err = r.created(ctx, id); err != nil {
+	} else if c, err = r.createdForOpen(ctx, id); err != nil {
 		session.Discard(own, id, r.log)
 		return nil, err
 	}
