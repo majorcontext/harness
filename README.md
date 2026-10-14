@@ -103,6 +103,13 @@ Harness reads two JSON files, and both are optional:
 See `config.Config` for every field. The next steps add keys to
 `.harness.json`.
 
+A `.harness.json` is code. Harness runs the programs that it names (`mcp_servers`,
+`plugins`, `processes`, and `binary_path` of a `claude-code-cli` provider) and
+connects to the URLs that it names, with no prompt. Do not run Harness in a
+checkout that you do not trust. An embedder that opens untrusted directories
+must pass its own config and isolate the process. The
+[architecture spec](docs/architecture.md#config) lists every key.
+
 ### Give the model more tools
 
 This MCP server lets the model fetch web pages. It needs
