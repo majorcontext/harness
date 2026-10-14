@@ -146,7 +146,7 @@ var nodeRules = []nodeRule{
 		name:   "engine_list_walker",
 		detail: "only workspace.Changes names the engine list, outside its definition (spec: Workspace)",
 		match:  namesIdent("engineList"),
-		allow:  []string{"internal/workspace/workspace.go#changes"},
+		allow:  []string{"internal/workspace/workspace.go#Changes"},
 	},
 	{
 		name:   "engine_context_creator",

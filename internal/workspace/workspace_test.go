@@ -2,8 +2,10 @@ package workspace_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/workspace"
+	"github.com/majorcontext/harness/internal/workspace/workspacetest"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -409,5 +412,97 @@ func TestChangesRefusals(t *testing.T) {
 		if !errors.Is(err, row.err) || err.Error() != row.msg {
 			t.Errorf("%s: Changes = %v, want %v: %s", row.name, err, row.err, row.msg)
 		}
+	}
+}
+
+func TestGitEngineContract(t *testing.T) { workspacetest.Run(t, gitFixture) }
+
+func TestFakeEngineContract(t *testing.T) { workspacetest.Run(t, fakeFixture) }
+
+// contractRepo commits seed.txt alone on main, and records origin/main there
+// when origin is true.
+func contractRepo(t *testing.T, origin bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
+	git(t, dir, "config", "maintenance.auto", "false")
+	write(t, dir, "seed.txt", "seed\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "init")
+	if origin {
+		git(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
+	}
+	return dir
+}
+
+// gitFootprint hashes the real index, the index lock, HEAD, the config, the
+// packed references, and every file of the real object directory and of refs.
+func gitFootprint(t *testing.T, dir string) string {
+	var out []string
+	for _, p := range []string{".git/index", ".git/index.lock", ".git/HEAD", ".git/config", ".git/packed-refs"} {
+		data, err := os.ReadFile(filepath.Join(dir, p))
+		out = append(out, fmt.Sprintf("%s %x %v", p, sha256.Sum256(data), err))
+	}
+	for _, sub := range []string{"objects", "refs"} {
+		err := filepath.WalkDir(filepath.Join(dir, ".git", sub), func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				data, rerr := os.ReadFile(p)
+				out = append(out, fmt.Sprintf("%s %x %v", p, sha256.Sum256(data), rerr))
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func gitFixture(t *testing.T) workspacetest.Fixture {
+	return workspacetest.Fixture{
+		Engine: workspace.GitEngine{},
+		New:    func(t *testing.T) string { return contractRepo(t, true) },
+		Unborn: func(t *testing.T) string {
+			dir := t.TempDir()
+			git(t, dir, "init", "-q", "-b", "main")
+			return dir
+		},
+		NoBase:  func(t *testing.T) string { return contractRepo(t, false) },
+		Outside: func(t *testing.T) string { return t.TempDir() },
+		Operations: func(t *testing.T, dir string) int {
+			return len(strings.Fields(git(t, dir, "reflog", "--all", "--format=%H")))
+		},
+		Guard:     func(t *testing.T, dir string) { write(t, dir, ".git/index.lock", "held\n") },
+		Footprint: gitFootprint,
+	}
+}
+
+func fakeFixture(t *testing.T) workspacetest.Fixture {
+	tree := func(o workspacetest.FakeOptions) func(t *testing.T) string {
+		return func(t *testing.T) string {
+			dir := t.TempDir()
+			write(t, dir, "seed.txt", "seed\n")
+			if err := workspacetest.Init(dir, o); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}
+	}
+	ops := func(t *testing.T, dir string) int {
+		n, err := workspacetest.Operations(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	return workspacetest.Fixture{
+		Engine:         workspacetest.Fake{},
+		New:            tree(workspacetest.FakeOptions{}),
+		Unborn:         tree(workspacetest.FakeOptions{Unborn: true}),
+		NoBase:         tree(workspacetest.FakeOptions{NoBase: true}),
+		Outside:        func(t *testing.T) string { return t.TempDir() },
+		Operations:     ops,
+		Footprint:      func(t *testing.T, dir string) string { return fmt.Sprint(ops(t, dir)) },
+		SnapshotsEdits: true,
 	}
 }

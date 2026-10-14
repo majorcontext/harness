@@ -33,8 +33,8 @@ const budget = 28 * time.Second
 const maxPatch = 1 << 20
 
 // engineList is the ordered list of engines. The first engine that opens a
-// directory answers, and Changes is the only code that walks it.
-var engineList = []Engine{gitEngine{}}
+// directory answers. Only Changes names it.
+var engineList = []Engine{GitEngine{}}
 
 // Engine reads one kind of work tree.
 type Engine interface {
@@ -78,6 +78,12 @@ type Base struct {
 // engine may find its repository above root. Any other dir, relative to root,
 // must stay under root after symlinks, and so must its repository.
 func Changes(ctx context.Context, root, dir, scope string) (protocol.WorkspaceChanges, error) {
+	return ChangesWith(ctx, engineList, root, dir, scope)
+}
+
+// ChangesWith is Changes over engines, which it tries in order. A contract
+// test passes the engine under test.
+func ChangesWith(ctx context.Context, engines []Engine, root, dir, scope string) (protocol.WorkspaceChanges, error) {
 	if scope == "" {
 		scope = protocol.ScopeBranch
 	}
@@ -94,7 +100,7 @@ func Changes(ctx context.Context, root, dir, scope string) (protocol.WorkspaceCh
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	c, err := changes(ctx, root, abs, real, ceiling, scope, dir != "")
+	c, err := changes(ctx, engines, root, abs, real, ceiling, scope, dir != "")
 	if ctx.Err() != nil || errors.Is(err, errMetadataTooLarge) {
 		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: request exceeded its time budget diffing a large change set", ErrTooManyChanges)
 	}
@@ -143,11 +149,11 @@ func within(root, dir string) (real, ceiling string, err error) {
 	return "", "", fmt.Errorf("%w: dir %q escapes every allowed workspace root", ErrInvalid, dir)
 }
 
-func changes(ctx context.Context, root, dir, real, ceiling, scope string, explicit bool) (protocol.WorkspaceChanges, error) {
+func changes(ctx context.Context, engines []Engine, root, dir, real, ceiling, scope string, explicit bool) (protocol.WorkspaceChanges, error) {
 	var eng Engine
 	var repo Repo
 	ok := false
-	for _, e := range engineList {
+	for _, e := range engines {
 		r, found, err := e.Open(ctx, real, ceiling)
 		if err != nil {
 			return protocol.WorkspaceChanges{}, err
