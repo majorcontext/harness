@@ -155,4 +155,41 @@ var acpCompactionScenarios = []acpScenario{
 			}
 		}),
 	},
+	{
+		name: "a_claude_code_compaction_in_a_turn_sends_the_entity_lifecycle",
+		cite: "A frame with `idle` or `running` ends no compaction, because the summary of a compaction of the Claude Code CLI follows its `running` frame.",
+		login: &acpLoginSpec{claude: true, claudeFrames: []map[string]any{
+			{"type": "system", "subtype": "init", "session_id": "S", "model": "claude-haiku-4-5-20251001", "tools": []string{}},
+			{"type": "system", "subtype": "status", "status": "compacting", "session_id": "S"},
+			{"type": "system", "subtype": "status", "status": nil, "compact_result": "success", "session_id": "S"},
+			{"type": "system", "subtype": "compact_boundary", "session_id": "S", "compact_metadata": map[string]any{"trigger": "auto", "pre_tokens": 167000}},
+			{"type": "user", "message": map[string]any{"role": "user", "content": "cli-summary-marker"}},
+			{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "Continuing."}}}},
+			{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "result": "Continuing.", "session_id": "S", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
+		}},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, compaction: true, methods: []string{"claude-code"}},
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "go", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				var order []string
+				for _, f := range c.wire {
+					switch updateKind(f) {
+					case "compaction_update":
+						status, _ := acpUpdateBody(f)["status"].(string)
+						order = append(order, "update:"+status)
+					case "compaction_summary_chunk":
+						order = append(order, "chunk")
+					}
+				}
+				if want := []string{"update:in_progress", "chunk", "update:completed"}; !slices.Equal(order, want) {
+					t.Fatalf("compaction frames = %v, want %v", order, want)
+				}
+				chunk := acpUpdatesOf(c, "compaction_summary_chunk")[0]
+				if content, _ := chunk["content"].(map[string]any); !strings.Contains(content["text"].(string), "cli-summary-marker") {
+					t.Errorf("summary chunk = %v", chunk)
+				}
+			}),
+		},
+	},
 }

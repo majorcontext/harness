@@ -41,8 +41,6 @@ func (c *compactionHarness) event(t *testing.T, seq uint64, kind string, data an
 		err = c.h.compactionStatus(e, c.st)
 	case protocol.KindCompactionApplied:
 		err = c.h.compactionApplied(e, c.st)
-	case protocol.KindTurnEnded:
-		err = c.h.compactionTurnEnded(e, c.st)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -84,22 +82,10 @@ func TestCompactionRecordWithoutAStartFrameUsesTheSummaryMessageID(t *testing.T)
 	}
 }
 
-func TestTurnThatEndsDuringACompactionEndsTheCompaction(t *testing.T) {
-	for stop, want := range map[protocol.StopReason]string{protocol.StopInterrupted: "cancelled", protocol.StopFailed: "failed"} {
-		c := newCompactionHarness(true)
-		c.event(t, 0, protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: "turn_1"})
-		c.event(t, 3, protocol.KindTurnEnded, protocol.TurnEnded{TurnID: "turn_1", StopReason: stop})
-		if got := c.lifecycle(); !slices.Equal(got, []string{"turn_1:in_progress", "turn_1:" + want}) {
-			t.Errorf("stop %s: lifecycle = %v, want a %s end", stop, got, want)
-		}
-	}
-}
-
 func TestCompactionSendsNothingWithoutTheCapability(t *testing.T) {
 	c := newCompactionHarness(false)
 	c.event(t, 0, protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: "turn_1"})
 	c.event(t, 7, protocol.KindCompactionApplied, protocol.CompactionApplied{Summary: "the summary"})
-	c.event(t, 8, protocol.KindTurnEnded, protocol.TurnEnded{TurnID: "turn_1"})
 	if err := c.h.replayCompaction(protocol.Message{ID: "cmpsum_7"}); err != nil {
 		t.Fatal(err)
 	}

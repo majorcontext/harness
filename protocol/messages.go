@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +51,11 @@ type Message struct {
 
 // CompactionSummaryIDPrefix starts the ID of the summary message of a compaction.
 const CompactionSummaryIDPrefix = "cmpsum_"
+
+// CompactionSummaryID returns the ID of the summary message of the compaction that the record at seq made.
+func CompactionSummaryID(seq uint64) string {
+	return CompactionSummaryIDPrefix + strconv.FormatUint(seq, 10)
+}
 
 // IsCompactionSummary reports whether m is the summary message of a compaction. It reads the ID, never the text.
 func (m Message) IsCompactionSummary() bool {

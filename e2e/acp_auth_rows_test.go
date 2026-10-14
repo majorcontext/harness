@@ -35,6 +35,8 @@ type acpLoginSpec struct {
 	// models is the catalog that the fake ChatGPT backend serves. modelsStatus, when set, makes it refuse the request with this status.
 	models       []harnesstest.CodexModel
 	modelsStatus int
+	// claudeFrames makes the fake CLI play these frames for each turn, in place of its default reply. The spec needs claude.
+	claudeFrames []map[string]any
 }
 
 // acpLoginRun is a started acpLoginSpec.
@@ -125,7 +127,12 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 				t.Fatal(err)
 			}
 		}
-		l.cfg["providers"].(map[string]any)["claude-code"] = map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "extra_args": []string{"--fake-env=FAKE_CLAUDE_AUTH=" + l.claudeState}}
+		extra := []string{"--fake-env=FAKE_CLAUDE_AUTH=" + l.claudeState}
+		if spec.claudeFrames != nil {
+			extra = append(extra, fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "mirror", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"),
+				"FAKE_CLAUDE_MIRROR_FIXTURE": ccStream(t, spec.claudeFrames...)})...)
+		}
+		l.cfg["providers"].(map[string]any)["claude-code"] = map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "extra_args": extra}
 	}
 	if l.emptyPath == "" {
 		l.emptyPath = t.TempDir()

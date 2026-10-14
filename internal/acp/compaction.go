@@ -3,7 +3,6 @@ package acp
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -13,7 +12,6 @@ const (
 	compactionInProgress = "in_progress"
 	compactionCompleted  = "completed"
 	compactionFailed     = "failed"
-	compactionCancelled  = "cancelled"
 )
 
 // compactionStatus starts or fails the compaction that a status frame names.
@@ -57,7 +55,7 @@ func (h *held) compactionApplied(e protocol.Event, st *pumpState) error {
 	}
 	id := st.compaction
 	if id == "" {
-		id = protocol.CompactionSummaryIDPrefix + strconv.FormatUint(e.Seq, 10)
+		id = protocol.CompactionSummaryID(e.Seq)
 	}
 	if rec.Summary != "" {
 		if err := h.update(map[string]any{"sessionUpdate": "compaction_summary_chunk", "compactionId": id,
@@ -67,20 +65,6 @@ func (h *held) compactionApplied(e protocol.Event, st *pumpState) error {
 	}
 	st.compaction = ""
 	return h.compactionUpdate(id, compactionCompleted, nil)
-}
-
-// compactionTurnEnded ends the compaction that its turn left open.
-func (h *held) compactionTurnEnded(e protocol.Event, st *pumpState) error {
-	if !h.compaction || st.compaction == "" {
-		return nil
-	}
-	status := compactionFailed
-	if p, err := e.Payload(); err == nil {
-		if ended, ok := p.(*protocol.TurnEnded); ok && ended.StopReason == protocol.StopInterrupted {
-			status = compactionCancelled
-		}
-	}
-	return h.endCompaction(st, status)
 }
 
 func (h *held) endCompaction(st *pumpState, status string) error {

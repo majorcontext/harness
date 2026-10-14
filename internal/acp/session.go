@@ -162,9 +162,6 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 	case protocol.KindCommandRecorded:
 		return h.commandStatus(e)
 	case protocol.KindTurnEnded:
-		if err := h.compactionTurnEnded(e, st); err != nil {
-			return err
-		}
 		clear(st.diffs)
 		if err := h.usageUpdate(st); err != nil {
 			return err
