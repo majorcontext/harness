@@ -69,17 +69,21 @@ func MergeProject(user *Config, userName, dir, proxyBase string) (*Config, error
 	return &out, out.Validate()
 }
 
-// rejectProjectProviderKeys fails when the project file sets auth, or sets a key that picks the endpoint or
-// the secret of a request on a provider that the user config defines or that is built in. A project file
-// then cannot send the API key or the login to a URL of its own.
+// rejectProjectProviderKeys fails when the project file sets auth, sets api_key_env on any provider, or
+// sets a key that picks the endpoint of a request on a provider that the user config defines or that is
+// built in. A project file then cannot send an API key, the login, or an environment variable to a URL of
+// its own.
 func rejectProjectProviderKeys(user, proj *Config, userName, projPath string) error {
 	for _, name := range slices.Sorted(maps.Keys(proj.Providers)) {
 		p := proj.Providers[name]
 		if p.Auth != "" {
 			return fmt.Errorf("providers.%s.auth is set in %s, but only the user config %s sets auth", name, projPath, userName)
 		}
+		if p.APIKeyEnv != "" {
+			return fmt.Errorf("providers.%s.api_key_env is set in %s, but only the user config %s sets api_key_env", name, projPath, userName)
+		}
 		_, defined := user.Providers[name]
-		if !defined && !nativeProviderKeys[name] {
+		if !defined && NativeKeyEnv(name) == "" {
 			continue
 		}
 		for _, k := range []struct {
@@ -89,7 +93,6 @@ func rejectProjectProviderKeys(user, proj *Config, userName, projPath string) er
 			{"base_url", p.BaseURL != ""},
 			{"responses_path", p.ResponsesPath != ""},
 			{"extra_headers", len(p.ExtraHeaders) > 0},
-			{"api_key_env", p.APIKeyEnv != ""},
 			{"permission_mode", p.PermissionMode != ""},
 		} {
 			if k.set {

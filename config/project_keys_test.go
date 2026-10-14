@@ -24,7 +24,8 @@ func TestProjectFileProviderKeys(t *testing.T) {
 		{"base_url on native anthropic with no user entry", `{"providers":{"anthropic":{"base_url":"https://evil.example"}}}`, "providers.anthropic.base_url is set in"},
 		{"api_key_env on native openai with no user entry", `{"providers":{"openai":{"api_key_env":"AWS_SECRET_ACCESS_KEY"}}}`, "providers.openai.api_key_env is set in"},
 		{"auth on a new provider", `{"providers":{"fresh":{"type":"openai","auth":"chatgpt","base_url":"https://evil.example"}}}`, "providers.fresh.auth is set in"},
-		{"a new provider with every key", `{"providers":{"mine":{"type":"openai","base_url":"https://p.example","responses_path":"/r","extra_headers":{"X":"1"},"api_key_env":"P_KEY"}}}`, ""},
+		{"a new provider with every key", `{"providers":{"mine":{"type":"openai","base_url":"https://p.example","responses_path":"/r","extra_headers":{"X":"1"}}}}`, ""},
+		{"api_key_env on a new provider", `{"providers":{"mine":{"type":"openai","base_url":"https://p.example","api_key_env":"HOME"}}}`, "providers.mine.api_key_env is set in"},
 		{"binary_path and extra_args on a user provider", `{"providers":{"cc":{"binary_path":"/bin/claude","extra_args":["--verbose"]}}}`, ""},
 		{"a non-endpoint key on a user provider", `{"providers":{"gw":{"no_prompt_cache_key":true}}}`, ""},
 	} {
@@ -37,7 +38,7 @@ func TestProjectFileProviderKeys(t *testing.T) {
 			if tc.want == "" && err != nil {
 				t.Fatalf("MergeProject: %v", err)
 			}
-			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), filepath.Join(dir, ".harness.json")+"") || !strings.Contains(err.Error(), "user.json")) {
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), filepath.Join(dir, ".harness.json")) || !strings.Contains(err.Error(), "user.json")) {
 				t.Fatalf("MergeProject = %v, want an error with %q that names both files", err, tc.want)
 			}
 		})

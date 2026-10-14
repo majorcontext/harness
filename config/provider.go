@@ -22,11 +22,18 @@ const TypeOpenAI = "openai"
 const TypeClaudeCodeCLI = "claude-code-cli"
 
 // nativeProviderKeys are the only providers map keys allowed an empty Type with no further
-// defaulting: the built-in adapters that the runtime wires by name.
-var nativeProviderKeys = map[string]bool{
-	"anthropic": true,
-	"openai":    true,
+// defaulting: the built-in adapters that the runtime wires by name. Each maps to the variable that holds
+// its API key when the entry sets no api_key_env.
+var nativeProviderKeys = map[string]string{
+	"anthropic": "ANTHROPIC_API_KEY",
+	"openai":    "OPENAI_API_KEY",
 }
+
+// NativeProviders returns the names of the built-in providers, sorted.
+func NativeProviders() []string { return slices.Sorted(maps.Keys(nativeProviderKeys)) }
+
+// NativeKeyEnv returns the variable that holds the API key of the built-in provider name, and "" for any other provider.
+func NativeKeyEnv(name string) string { return nativeProviderKeys[name] }
 
 // WithProxyBase returns a copy of c in which every request goes to base: the native providers and each
 // providers entry that sets no BaseURL get it. A Claude Code CLI entry keeps no base URL. An empty base
@@ -163,7 +170,7 @@ func validateProviders(providers map[string]Provider) error {
 	for name, p := range providers {
 		switch p.Type {
 		case "":
-			if !nativeProviderKeys[name] {
+			if _, ok := nativeProviderKeys[name]; !ok {
 				return fmt.Errorf("providers.%s: type is required (empty type is only valid for the built-in %q/%q entries); valid types: \"\" (native anthropic/openai override), %q, %q, %q", name, "anthropic", "openai", TypeOpenAICompat, TypeOpenAI, TypeClaudeCodeCLI)
 			}
 			// Legacy/native provider entry (anthropic or openai); no further validation here.
