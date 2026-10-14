@@ -41,7 +41,7 @@ type Client struct {
 	APIKey string
 	// NoKeyReason says why APIKey is empty. The error of an empty APIKey names it.
 	NoKeyReason string
-	// NoKey says that the entry sends no credential, so an empty APIKey is no error.
+	// NoKey says that the entry reads no key and sends no key header of its own, so an empty APIKey is no error.
 	NoKey bool
 	// BaseURL is the API root; the client POSTs to BaseURL+"/chat/completions".
 	BaseURL string
