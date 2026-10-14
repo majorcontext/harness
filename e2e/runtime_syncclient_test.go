@@ -265,7 +265,7 @@ var syncReply = harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "
 
 func rowSyncPostsTheLogWithTheBearerTokenAndTheEpoch(t *testing.T) {
 	rcv, fake, st := newSyncReceiver(t, nil), harnesstest.NewChat(t, syncReply), store.NewMemStore()
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 7, rcv, fake.URL(), nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 7, rcv, fake.URL(), nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func rowSyncResendsTheSameBatchAfterAFailedPost(t *testing.T) {
 		return 0, ""
 	})
 	st := store.NewMemStore()
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func rowSyncStaleEpochIsFinalAndEndsTheSession(t *testing.T) {
 	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
 		return http.StatusConflict, protocol.CodeStaleEpoch
 	})
-	r, err := newWired(harness.Options{Store: store.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: store.NewMemStore(), Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func rowCatchUpReplicatesEveryStoredSessionWithoutOpeningIt(t *testing.T) {
 	st := store.NewMemStore()
 	heads := seedSessions(t, st, "s1", "s2")
 	rcv := newSyncReceiver(t, nil)
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 9, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 9, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func rowCatchUpStaleEpochFails(t *testing.T) {
 	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
 		return http.StatusConflict, protocol.CodeStaleEpoch
 	})
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func rowPluginGetsServeUrlAndRunTokenFromOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := newWired(harness.Options{Store: store.NewMemStore(), Config: *c, ServeURL: "http://127.0.0.1:4242", RunToken: "run-token-1"})
+	r, err := newWired(t, harness.Options{Store: store.NewMemStore(), Config: *c, ServeURL: "http://127.0.0.1:4242", RunToken: "run-token-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func rowCatchUpGivesWayToOpenOfTheSessionThatItHolds(t *testing.T) {
 	st := store.NewMemStore()
 	seedSessions(t, st, "s1")
 	rcv := newSyncReceiver(t, downUntil(2))
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +455,7 @@ func rowCloseEndsACatchUpThatRetries(t *testing.T) {
 	st := store.NewMemStore()
 	seedSessions(t, st, "s1")
 	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) { return http.StatusServiceUnavailable, "internal" })
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func rowCatchUpSkipsASessionThatItCannotReadAndReportsIt(t *testing.T) {
 	mem := store.NewMemStore()
 	seedSessions(t, mem, "s1", "s2")
 	rcv := newSyncReceiver(t, nil)
-	r, err := newWired(harness.Options{Store: unreadableLog{mem, "s1"}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: unreadableLog{mem, "s1"}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +516,7 @@ func rowSyncReadsTheTokenFileAgainForEachPost(t *testing.T) {
 	})
 	c := syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)
 	tokenFile = c.Sync.TokenFile
-	r, err := newWired(harness.Options{Store: st, Config: c})
+	r, err := newWired(t, harness.Options{Store: st, Config: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +559,7 @@ func rowSyncSendsTheBatchAgainWhileTheTokenFileIsUnreadable(t *testing.T) {
 		}
 		return nil
 	}}
-	r, err := newWired(harness.Options{Store: st, Config: c})
+	r, err := newWired(t, harness.Options{Store: st, Config: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +583,7 @@ func rowCatchUpReportsASessionWhoseOpenFailsAfterItTookTheGrant(t *testing.T) {
 		return nil
 	}}
 	rcv := newSyncReceiver(t, downUntil(1000))
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +606,7 @@ func rowTwoCatchUpsAtOnceLetOpenTakeTheSession(t *testing.T) {
 	st := store.NewMemStore()
 	seedSessions(t, st, "s1")
 	rcv := newSyncReceiver(t, downUntil(2))
-	r, err := newWired(harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +634,7 @@ func rowCatchUpReportsAReleaseErrorWhenOpenTakesTheSession(t *testing.T) {
 	st := store.NewMemStore()
 	seedSessions(t, st, "s1")
 	rcv := newSyncReceiver(t, downUntil(2))
-	r, err := newWired(harness.Options{Store: st, Owner: heldOwner{releaseErr: boom}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: st, Owner: heldOwner{releaseErr: boom}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
