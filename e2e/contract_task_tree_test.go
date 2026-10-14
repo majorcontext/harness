@@ -54,9 +54,11 @@ func TestContractTaskTree(t *testing.T) {
 			name:       "task_cancel_of_a_child_stops_the_grandchild",
 			concurrent: true,
 			model: grandchildren(
-				busyTaskStep("cancel", userStarts("cancel"), onKid(func(kid string) []map[string]any { return []map[string]any{onSession("cancel", kid)} }))),
+				flagTaskStep("cancel", userStarts("cancel"), onKid(func(kid string) []map[string]any { return []map[string]any{onSession("cancel", kid)} }))),
 			actions: slices.Concat(tree, []action{
 				submit{as: "a", text: "cancel"},
+				awaitSettled{as: "grand", parent: "kid"},
+				writeFile{path: settledFlag, body: "1"},
 				waitIdle{as: "a"},
 				waitIdle{as: "grand"},
 			}),
@@ -66,11 +68,13 @@ func TestContractTaskTree(t *testing.T) {
 			concurrent: true,
 			model: grandchildren(
 				taskStep("look", userStarts("cancel grand"), onKid(func(kid string) []map[string]any { return []map[string]any{onSession("status", kid)} })),
-				busyTaskStep("cancel_grand", lastResultHas(`"children":["ses_`), func(r harnesstest.Request) []map[string]any {
+				flagTaskStep("cancel_grand", lastResultHas(`"children":["ses_`), func(r harnesstest.Request) []map[string]any {
 					return []map[string]any{onSession("cancel", resultID(r, childrenIDPattern))}
 				})),
 			actions: slices.Concat(tree, []action{
 				submit{as: "a", text: "cancel grand"},
+				awaitSettled{as: "grand", parent: "kid"},
+				writeFile{path: settledFlag, body: "1"},
 				waitIdle{as: "a"},
 				waitIdle{as: "grand"},
 			}),
