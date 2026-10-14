@@ -39,7 +39,6 @@ const (
 type Client struct {
 	APIKey      string
 	NoKeyReason string       // why APIKey is empty; the error of an empty APIKey names it
-	NoKey       bool         // the entry sends no credential, so an empty APIKey is no error
 	BaseURL     string       // defaults to https://api.anthropic.com
 	HTTPClient  *http.Client // defaults to http.DefaultClient
 	// CacheTTL is the prompt-cache breakpoint lifetime: CacheTTL5m (the
@@ -69,7 +68,7 @@ func (c *Client) EffortControl(model string) (modelmeta.EffortControl, bool) {
 }
 
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
-	if c.APIKey == "" && c.HTTPClient == nil && !c.NoKey {
+	if c.APIKey == "" && c.HTTPClient == nil {
 		return nil, provider.NoKeyError("anthropic", c.NoKeyReason)
 	}
 	ttl, err := resolveCacheTTL(c.CacheTTL)

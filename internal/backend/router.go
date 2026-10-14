@@ -110,7 +110,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
 		key, reason := env.key(cmp.Or(p.APIKeyEnv, config.NativeKeyEnv(name)))
-		return &anthropic.Client{APIKey: key, NoKeyReason: reason, NoKey: p.Keyless, BaseURL: p.BaseURL,
+		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
