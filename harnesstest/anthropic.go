@@ -63,6 +63,9 @@ func decodeRequest(body []byte) (Request, error) {
 	}
 	for _, t := range w.Tools {
 		req.Tools = append(req.Tools, t.Name)
+		if t.Description == "" && len(t.InputSchema) == 0 {
+			continue
+		}
 		if req.ToolSpecs == nil {
 			req.ToolSpecs = map[string]ToolSpec{}
 		}
