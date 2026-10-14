@@ -57,7 +57,7 @@ type Runtime[S Session] interface {
 	Create(ctx context.Context, req protocol.CreateSession) (S, error)
 	Open(ctx context.Context, id string) (S, error)
 	End(ctx context.Context, id string) error
-	Models() []protocol.Model
+	Models(ctx context.Context) []protocol.Model
 	Commands(ctx context.Context) (protocol.Commands, error)
 }
 
@@ -122,8 +122,8 @@ func (h *handler[S]) handlers() map[string]http.HandlerFunc {
 		"answerRequest":    h.session(h.resolve),
 		"setGoal":          h.session(h.setGoal),
 		"clearGoal":        h.session(h.clearGoal),
-		"listModels": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-			reply(w, http.StatusOK, h.rt.Models())
+		"listModels": h.serve(func(w http.ResponseWriter, r *http.Request) error {
+			reply(w, http.StatusOK, h.rt.Models(r.Context()))
 			return nil
 		}),
 		"listCommands": h.serve(h.commands),

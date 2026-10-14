@@ -26,12 +26,15 @@ import (
 // acpLoginSpec scripts the logins of an ACP row.
 type acpLoginSpec struct {
 	// chatgpt adds the provider entry "codex" with auth chatgpt, and the sign-in issuer. stored writes a login file;
-	// refreshRejected writes one near its end, which the issuer refuses to refresh.
+	// refreshRejected makes the issuer refuse every refresh.
 	chatgpt, stored, refreshRejected bool
 	// claude adds the provider entry "claude-code" over fakeclaude. claudeOut makes fakeclaude report no login.
 	claude, claudeOut bool
 	// claudeHold makes `claude auth login` start a child and wait, as a login that waits for a browser does.
 	claudeHold bool
+	// models is the catalog that the fake ChatGPT backend serves. modelsStatus, when set, makes it refuse the request with this status.
+	models       []harnesstest.CodexModel
+	modelsStatus int
 }
 
 // acpLoginRun is a started acpLoginSpec.
@@ -39,7 +42,9 @@ type acpLoginRun struct {
 	spec  acpLoginSpec
 	codex *codexAuthRun
 	fake  *harnesstest.Server
-	cfg   map[string]any
+	// openai is the fake ChatGPT backend, when spec.chatgpt is set.
+	openai *harnesstest.OpenAI
+	cfg    map[string]any
 	// sink receives the sign-in text of the host, which is what the host writes to stderr.
 	sink                               *signInSink
 	claudeState, claudeLog, claudeHold string
@@ -88,17 +93,17 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 	l := &acpLoginRun{spec: spec, opened: make(chan string, 4)}
 	l.sink = &signInSink{urls: make(chan string, 4)}
 	auth := codexAuth{}
-	switch {
-	case spec.refreshRejected:
-		auth = codexAuth{label: "seed", lifetime: time.Minute, issuer: harnesstest.CodexIssuerOptions{RefreshStatus: 400}}
-	case spec.stored:
+	if spec.stored {
 		auth = codexAuth{label: "seed", lifetime: time.Hour}
+	}
+	if spec.refreshRejected {
+		auth.issuer = harnesstest.CodexIssuerOptions{RefreshStatus: 400}
 	}
 	l.cfg = map[string]any{}
 	if spec.chatgpt {
 		l.codex = startCodexAuth(t, auth)
-		o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Credentials: l.codex.accepts, AccountID: codexAccount}, model...)
-		l.fake = o.Server
+		o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Credentials: l.codex.accepts, AccountID: codexAccount, Models: spec.models, ModelsStatus: spec.modelsStatus}, model...)
+		l.openai, l.fake = o, o.Server
 		l.cfg = codexConfig(o.URL(), false, nil)
 		l.codex.configure(l.cfg)
 	} else {
@@ -408,10 +413,13 @@ var acpAuthScenarios = []acpScenario{
 	{
 		name:  "rejected_refresh_during_a_turn_answers_auth_required",
 		cite:  "A turn that fails with the error class `login_required`, because the refresh token of the ChatGPT login was rejected, answers `session/prompt` with `-32000`, `data.code` `login_required`, and the error of the turn as the message, without its leading `[class]` tag.",
-		login: &acpLoginSpec{chatgpt: true, refreshRejected: true},
+		login: &acpLoginSpec{chatgpt: true, stored: true, refreshRejected: true},
 		steps: []acpStep{
 			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
 			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				c.env.login.codex.write(t, "seed", time.Minute, harnesstest.CodexInitialRefresh)
+			}),
 			acpPrompt{as: "a", text: "hello", code: acpAuthRequired, dataCode: "login_required"},
 			acpCheck(acpCheckNoSecret),
 		},

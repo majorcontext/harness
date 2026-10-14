@@ -224,7 +224,7 @@ func (s stub) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, er
 	}
 	return rd.Inputs(ctx)
 }
-func (stub) Models() []protocol.Model                            { return nil }
+func (stub) Models(context.Context) []protocol.Model             { return nil }
 func (stub) Commands(context.Context) (protocol.Commands, error) { return protocol.Commands{}, nil }
 func (s stub) Withdraw(context.Context, string) error            { return nil }
 func (stub) Snapshot() protocol.Session                          { return protocol.Session{} }

@@ -134,6 +134,31 @@ func fakeResponsesShape(t *testing.T) Shape {
 	return s
 }
 
+func fakeCodexModelsShape(t *testing.T) Shape {
+	t.Helper()
+	srv := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Models: []harnesstest.CodexModel{
+		{Slug: "a", DisplayName: "A", Description: "d", Priority: 1, Efforts: []string{"low", "high"}},
+		{Slug: "b", DisplayName: "B", Visibility: "hide", Priority: 2},
+	}})
+	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/backend-api/codex/models?client_version=1.0.0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer k")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	s := Shape{}
+	CodexModelsWire.Observe(s, body)
+	return s
+}
+
 var (
 	fakeClaudeOnce sync.Once
 	fakeClaudePath string

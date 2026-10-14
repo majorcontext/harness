@@ -144,7 +144,7 @@ func Models(provider string) []Model {
 	case "openai":
 		return listed(undatedKeys(openaiContextWindows), openaiInfo)
 	case codexProvider:
-		return listed(codexModels, openaiInfo)
+		return CodexModels()
 	case claudeCodeProvider:
 		out := slices.Clone(claudeCodeModels)
 		for i := range out {
@@ -153,6 +153,18 @@ func Models(provider string) []Model {
 		return out
 	}
 	return nil
+}
+
+// CodexModels returns the static list of the models that the ChatGPT subscription backend accepts, in the order of Models.
+func CodexModels() []Model { return listed(codexModels, openaiInfo) }
+
+// OpenAIModel returns the models.dev facts of an OpenAI model id, listed or not.
+func OpenAIModel(id string) (Model, bool) {
+	i, ok := openaiInfo[id]
+	if !ok {
+		return Model{}, false
+	}
+	return Model{ID: id, Name: i.name, Description: i.description, Efforts: slices.Clone(i.efforts)}, true
 }
 
 // ProviderName returns the display name of a provider from models.dev, or

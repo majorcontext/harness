@@ -1,0 +1,1576 @@
+{
+  "models": [
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": {
+        "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+      },
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# When to ask the user for permission\n\nUse your best judgement given task context for when you really need user permission, like a ...",
+      "comp_hash": "3000",
+      "context_window": 500000,
+      "default_reasoning_level": "low",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Latest workhorse model for coding and everyday work.",
+      "display_name": "GPT-6.1-Sol",
+      "experimental_supported_tools": [
+        "send_user_message_async",
+        "clock"
+      ],
+      "guardian": null,
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.153.0",
+      "model_messages": {
+        "approvals": {
+          "never": null,
+          "on_request": null,
+          "on_request_auto_review": "\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\nIf a rejection happens, you can continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete ...",
+          "unless_trusted": null
+        },
+        "auto_review": {
+          "node_repl_policy": null,
+          "policy": null,
+          "policy_template": null,
+          "rejection_instructions": "Do not bypass this rejection through a workaround or indirect execution. Continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete unaffected work without asking for confirmation. Report anything that remains blocked, clar...",
+          "timeout_instructions": null
+        },
+        "collaboration_modes": {
+          "default": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool...",
+          "plan": null
+        },
+        "confirmation_policies": {
+          "browser_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool...",
+          "computer_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool..."
+        },
+        "guardian_v2": {
+          "classifier_instructions": "Predict whether the agent's computer and browser activity needs blocking security review. Review nested calls recursively. Return `high` to enable review of future actions, or `low` to let them continue without it.\nAssess the current course of action, the previous five actions, and the likely next t...",
+          "max_action_tokens": null,
+          "max_classifier_instruction_tokens": null,
+          "max_parent_compaction_tokens": null,
+          "max_tool_call_lag": null,
+          "reasoning_effort": null,
+          "reuse_parent_compaction": null,
+          "review_threshold_basis_points": null,
+          "transcript": null
+        },
+        "instructions_template": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# When to ask the user for permission\n\nUse your best judgement given task context for when you really need user permission, like a ...",
+        "instructions_variables": null,
+        "multi_agent": {
+          "mode": null,
+          "role": {
+            "root": "You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.\n\nAt the start of your turn, you are the active agent.\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.\nAll agents in the team, including the agents that ...",
+            "subagent": "You are an agent in a team of agents collaborating to complete a task.\n\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to..."
+          }
+        },
+        "permissions": null,
+        "persistent_instructions": "## Overview\nYou are now in persistent mode for this session until explicitly disabled by a later developer message.\n\nIn persistent mode, your first order goal is still to fulfill the user's request, as in non-persistent mode. The key difference is that now you need be more persistent and proactive: ...",
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": "xhigh",
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": true,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 1,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "2x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-6.1-sol",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "effort": "ultra"
+        }
+      ],
+      "supports_experimental_context": false,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": true,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# When to ask the user for permission\n\nUse your best judgement given task context for when you really need user permission, like a ...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Frontier intelligence for the most demanding work.",
+      "display_name": "GPT-6-Astra",
+      "experimental_supported_tools": [
+        "send_user_message_async",
+        "clock"
+      ],
+      "guardian": null,
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.153.0",
+      "model_messages": {
+        "approvals": {
+          "never": null,
+          "on_request": null,
+          "on_request_auto_review": "\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\nIf a rejection happens, you can continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete ...",
+          "unless_trusted": null
+        },
+        "auto_review": {
+          "node_repl_policy": null,
+          "policy": null,
+          "policy_template": null,
+          "rejection_instructions": "Do not bypass this rejection through a workaround or indirect execution. Continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete unaffected work without asking for confirmation. Report anything that remains blocked, clar...",
+          "timeout_instructions": null
+        },
+        "collaboration_modes": {
+          "default": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool...",
+          "plan": null
+        },
+        "confirmation_policies": {
+          "browser_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool...",
+          "computer_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool..."
+        },
+        "guardian_v2": {
+          "classifier_instructions": "Predict whether the agent's computer and browser activity needs blocking security review. Review nested calls recursively. Return `high` to enable review of future actions, or `low` to let them continue without it.\nAssess the current course of action, the previous five actions, and the likely next t...",
+          "max_action_tokens": null,
+          "max_classifier_instruction_tokens": null,
+          "max_parent_compaction_tokens": null,
+          "max_tool_call_lag": null,
+          "reasoning_effort": null,
+          "reuse_parent_compaction": null,
+          "review_threshold_basis_points": null,
+          "transcript": null
+        },
+        "instructions_template": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# When to ask the user for permission\n\nUse your best judgement given task context for when you really need user permission, like a ...",
+        "instructions_variables": null,
+        "multi_agent": {
+          "mode": null,
+          "role": {
+            "root": "You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.\n\nAt the start of your turn, you are the active agent.\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.\nAll agents in the team, including the agents that ...",
+            "subagent": "You are an agent in a team of agents collaborating to complete a task.\n\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to..."
+          }
+        },
+        "permissions": null,
+        "persistent_instructions": "## Overview\nYou are now in persistent mode for this session until explicitly disabled by a later developer message.\n\nIn persistent mode, your first order goal is still to fulfill the user's request, as in non-persistent mode. The key difference is that now you need be more persistent and proactive: ...",
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": "xhigh",
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": true,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 2,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "2x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-6-astra",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "effort": "ultra"
+        }
+      ],
+      "supports_experimental_context": true,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": true,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# Personality\n\nAs Codex, you are a curious, thoughtful collaborator and a simple, clear communicator. You keep your own judgment, d...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Previous generation workhorse model.",
+      "display_name": "GPT-6-Sol",
+      "experimental_supported_tools": [
+        "send_user_message_async",
+        "clock"
+      ],
+      "guardian": null,
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.155.0",
+      "model_messages": {
+        "approvals": {
+          "never": null,
+          "on_request": null,
+          "on_request_auto_review": "\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\nIf a rejection happens, you can continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete ...",
+          "unless_trusted": null
+        },
+        "auto_review": {
+          "node_repl_policy": null,
+          "policy": null,
+          "policy_template": null,
+          "rejection_instructions": "Do not bypass this rejection through a workaround or indirect execution. Continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete unaffected work without asking for confirmation. Report anything that remains blocked, clar...",
+          "timeout_instructions": null
+        },
+        "collaboration_modes": {
+          "default": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool...",
+          "plan": null
+        },
+        "confirmation_policies": {
+          "browser_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool...",
+          "computer_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool..."
+        },
+        "guardian_v2": {
+          "classifier_instructions": "Predict whether the agent's computer and browser activity needs blocking security review. Review nested calls recursively. Return `high` to enable review of future actions, or `low` to let them continue without it.\nAssess the current course of action, the previous five actions, and the likely next t...",
+          "max_action_tokens": null,
+          "max_classifier_instruction_tokens": null,
+          "max_parent_compaction_tokens": null,
+          "max_tool_call_lag": null,
+          "reasoning_effort": null,
+          "reuse_parent_compaction": null,
+          "review_threshold_basis_points": null,
+          "transcript": null
+        },
+        "instructions_template": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# Personality\n\nAs Codex, you are a curious, thoughtful collaborator and a simple, clear communicator. You keep your own judgment, d...",
+        "instructions_variables": null,
+        "multi_agent": {
+          "mode": null,
+          "role": {
+            "root": "You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.\n\nAt the start of your turn, you are the active agent.\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.\nAll agents in the team, including the agents that ...",
+            "subagent": "You are an agent in a team of agents collaborating to complete a task.\n\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to..."
+          }
+        },
+        "permissions": null,
+        "persistent_instructions": "## Overview\nYou are now in persistent mode for this session until explicitly disabled by a later developer message.\n\nIn persistent mode, your first order goal is still to fulfill the user's request, as in non-persistent mode. The key difference is that now you need be more persistent and proactive: ...",
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": true,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 3,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-6-sol",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "effort": "ultra"
+        }
+      ],
+      "supports_experimental_context": true,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": true,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# Personality\n\nAs Codex, you are a curious, thoughtful collaborator and a simple, clear communicator. You keep your own judgment, d...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Fast and affordable model for easier tasks.",
+      "display_name": "GPT-6-Luna",
+      "experimental_supported_tools": [
+        "send_user_message_async",
+        "clock"
+      ],
+      "guardian": null,
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.155.0",
+      "model_messages": {
+        "approvals": {
+          "never": null,
+          "on_request": null,
+          "on_request_auto_review": "\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\nIf a rejection happens, you can continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete ...",
+          "unless_trusted": null
+        },
+        "auto_review": {
+          "node_repl_policy": null,
+          "policy": null,
+          "policy_template": null,
+          "rejection_instructions": "Do not bypass this rejection through a workaround or indirect execution. Continue with a safer alternative, or carry out checks to prove that the action is authorized or low risk before trying again. Complete unaffected work without asking for confirmation. Report anything that remains blocked, clar...",
+          "timeout_instructions": null
+        },
+        "collaboration_modes": {
+          "default": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool...",
+          "plan": null
+        },
+        "confirmation_policies": {
+          "browser_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool...",
+          "computer_use": "# Computer/Browser Use Confirmation Policy\n\nThis policy defines when the model should request confirmation for consequential computer/browser actions. It only applies to actions that would interact with a web browser or computer UI. It does not apply to terminal or shell commands, and any other tool..."
+        },
+        "guardian_v2": {
+          "classifier_instructions": "Predict whether the agent's computer and browser activity needs blocking security review. Review nested calls recursively. Return `high` to enable review of future actions, or `low` to let them continue without it.\nAssess the current course of action, the previous five actions, and the likely next t...",
+          "max_action_tokens": null,
+          "max_classifier_instruction_tokens": null,
+          "max_parent_compaction_tokens": null,
+          "max_tool_call_lag": null,
+          "reasoning_effort": null,
+          "reuse_parent_compaction": null,
+          "review_threshold_basis_points": null,
+          "transcript": null
+        },
+        "instructions_template": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# Personality\n\nAs Codex, you are a curious, thoughtful collaborator and a simple, clear communicator. You keep your own judgment, d...",
+        "instructions_variables": null,
+        "multi_agent": {
+          "mode": null,
+          "role": {
+            "root": "You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.\n\nAt the start of your turn, you are the active agent.\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.\nAll agents in the team, including the agents that ...",
+            "subagent": "You are an agent in a team of agents collaborating to complete a task.\n\nYou can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to..."
+          }
+        },
+        "permissions": null,
+        "persistent_instructions": "## Overview\nYou are now in persistent mode for this session until explicitly disabled by a later developer message.\n\nIn persistent mode, your first order goal is still to fulfill the user's request, as in non-persistent mode. The key difference is that now you need be more persistent and proactive: ...",
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 4,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-6-luna",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        }
+      ],
+      "supports_experimental_context": true,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": true,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Fast and affordable agentic coding model.",
+      "display_name": "GPT-Reserve",
+      "experimental_supported_tools": [],
+      "guardian": null,
+      "include_apps_usage_instructions": true,
+      "include_plugin_usage_instructions": true,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.144.0",
+      "model_messages": {
+        "approvals": null,
+        "auto_review": null,
+        "collaboration_modes": null,
+        "confirmation_policies": null,
+        "guardian_v2": null,
+        "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+        "instructions_variables": null,
+        "multi_agent": null,
+        "permissions": null,
+        "persistent_instructions": null,
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v1",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 4,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-reserve",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        }
+      ],
+      "supports_experimental_context": false,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": false,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "hide",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "low",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Older generation workhorse model.",
+      "display_name": "GPT-5.6-Sol",
+      "experimental_supported_tools": [],
+      "guardian": null,
+      "include_apps_usage_instructions": true,
+      "include_plugin_usage_instructions": true,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.144.0",
+      "model_messages": {
+        "approvals": null,
+        "auto_review": null,
+        "collaboration_modes": null,
+        "confirmation_policies": null,
+        "guardian_v2": null,
+        "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+        "instructions_variables": null,
+        "multi_agent": null,
+        "permissions": null,
+        "persistent_instructions": null,
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 5,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-5.6-sol",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "effort": "ultra"
+        }
+      ],
+      "supports_experimental_context": true,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": false,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Older balanced model for straightforward work.",
+      "display_name": "GPT-5.6-Terra",
+      "experimental_supported_tools": [],
+      "guardian": null,
+      "include_apps_usage_instructions": true,
+      "include_plugin_usage_instructions": true,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.144.0",
+      "model_messages": {
+        "approvals": null,
+        "auto_review": null,
+        "collaboration_modes": null,
+        "confirmation_policies": null,
+        "guardian_v2": null,
+        "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+        "instructions_variables": null,
+        "multi_agent": null,
+        "permissions": null,
+        "persistent_instructions": null,
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v2",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 8,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-5.6-terra",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "effort": "ultra"
+        }
+      ],
+      "supports_experimental_context": false,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": false,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Older fast and efficient model.",
+      "display_name": "GPT-5.6-Luna",
+      "experimental_supported_tools": [],
+      "guardian": null,
+      "include_apps_usage_instructions": true,
+      "include_plugin_usage_instructions": true,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.144.0",
+      "model_messages": {
+        "approvals": null,
+        "auto_review": null,
+        "collaboration_modes": null,
+        "confirmation_policies": null,
+        "guardian_v2": null,
+        "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+        "instructions_variables": null,
+        "multi_agent": null,
+        "permissions": null,
+        "persistent_instructions": null,
+        "token_budget": {
+          "auto_compact_fallback_buffer_tokens": 16384,
+          "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisi...",
+          "enabled": false,
+          "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history`...",
+          "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relev...",
+          "reminder_threshold_tokens": 6144,
+          "use_history_notes_extension": false
+        },
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v1",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 9,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-5.6-luna",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        }
+      ],
+      "supports_experimental_context": false,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": false,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "free",
+        "free_workspace",
+        "go",
+        "hc",
+        "k12",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nYou have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gifts is helping th...",
+      "comp_hash": "2911",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Legacy coding model.",
+      "display_name": "GPT-5.5",
+      "experimental_supported_tools": [],
+      "guardian": null,
+      "include_apps_usage_instructions": true,
+      "include_plugin_usage_instructions": true,
+      "include_skills_usage_instructions": true,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 272000,
+      "minimal_client_version": "0.124.0",
+      "model_messages": {
+        "approvals": null,
+        "auto_review": null,
+        "collaboration_modes": null,
+        "confirmation_policies": null,
+        "guardian_v2": null,
+        "instructions_template": "You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nYou have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gifts is helping th...",
+        "instructions_variables": null,
+        "multi_agent": null,
+        "permissions": null,
+        "persistent_instructions": null,
+        "token_budget": null,
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": null,
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 13,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "gpt-5.5",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        }
+      ],
+      "supports_experimental_context": false,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": false,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": null,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": {
+        "migration_markdown": "GPT-5.5 retires on October 14, 2026. Switch to GPT-6.1 Sol to continue working in Codex.",
+        "model": "gpt-6.1-sol",
+        "retirement_at": "2026-10-14T19:00:00Z"
+      },
+      "use_responses_lite": false,
+      "visibility": "hide",
+      "web_search_tool_type": "text_and_image"
+    },
+    {
+      "additional_speed_tiers": [
+        "fast"
+      ],
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": null,
+      "auto_review_model_override": null,
+      "availability_nux": null,
+      "available_access_programs": {
+        "cyber": [
+          "standard"
+        ]
+      },
+      "available_in_plans": [
+        "business",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "education",
+        "ent26",
+        "enterprise",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_trial",
+        "enterprise_cbp_usage_based",
+        "finserv",
+        "go",
+        "hc",
+        "law",
+        "plus",
+        "pro",
+        "prolite",
+        "promax",
+        "quorum",
+        "sci",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "team"
+      ],
+      "base_instructions": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+      "comp_hash": "3000",
+      "context_window": 272000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_service_tier": null,
+      "default_verbosity": "low",
+      "description": "Automatic approval review model for Codex.",
+      "display_name": "Codex Auto Review",
+      "experimental_supported_tools": [],
+      "guardian": null,
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 872000,
+      "minimal_client_version": "0.98.0",
+      "model_messages": {
+        "approvals": {
+          "never": "",
+          "on_request": null,
+          "on_request_auto_review": null,
+          "unless_trusted": null
+        },
+        "auto_review": {
+          "node_repl_policy": "# Computer and Browser Use\n\nApply these rules only to computer and browser use through `node_repl` or `cua_repl`. Review nested tool calls recursively.\n\n## Definitions\nConsequential action - an action with nontrivial external effects.\nAccess change - granting or expanding privileged access or permis...",
+          "policy": "## Environment Profile\n- Organization: default generic organization / personal user.\n- Apply this policy to the current planned action. Prior Guardian decisions are context, not precedent.\n- No organization-specific code hosts, storage systems, or third-party SaaS destinations are trusted by default...",
+          "policy_template": "You are judging one planned coding-agent action.\nAssess the exact action's intrinsic risk and whether the transcript authorizes its target and side effects. Then derive `outcome` from the security policy, `risk_level`, and `user_authorization`.\nYour primary objective is to determine whether the acti...",
+          "rejection_instructions": null,
+          "timeout_instructions": null
+        },
+        "collaboration_modes": null,
+        "confirmation_policies": null,
+        "guardian_v2": null,
+        "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user...",
+        "instructions_variables": null,
+        "multi_agent": null,
+        "permissions": {
+          "danger_full_access": "",
+          "read_only": "",
+          "workspace_write": ""
+        },
+        "persistent_instructions": null,
+        "token_budget": null,
+        "tools": null
+      },
+      "model_specialty": null,
+      "multi_agent_reasoning_effort": null,
+      "multi_agent_version": "v1",
+      "node_repl_auto_review_required": false,
+      "node_repl_disabled": false,
+      "prefer_websockets": true,
+      "priority": 43,
+      "requires_sandboxed_review": false,
+      "service_tiers": [
+        {
+          "description": "1.5x speed, increased usage",
+          "id": "priority",
+          "name": "Fast"
+        }
+      ],
+      "shell_type": "shell_command",
+      "slug": "codex-auto-review",
+      "support_verbosity": true,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "effort": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "effort": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "effort": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "effort": "max"
+        }
+      ],
+      "supports_experimental_context": false,
+      "supports_image_detail_original": true,
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_effort_updates": false,
+      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
+      "supports_search_tool": true,
+      "tool_mode": "code_mode_only",
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "hide",
+      "web_search_tool_type": "text_and_image"
+    }
+  ]
+}

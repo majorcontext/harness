@@ -777,9 +777,9 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 	return l.st.GetBlob(ctx, l.id, key)
 }
 
-// Models returns the models that the configured providers serve, by ID. It
-// does no I/O.
-func (r *Runtime) Models() []protocol.Model { return r.models.List() }
+// Models returns the models of the configured providers, by ID. A provider with
+// auth "chatgpt" fetches its list once, within 3 s or until ctx ends.
+func (r *Runtime) Models(ctx context.Context) []protocol.Model { return r.models.List(ctx) }
 
 func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) turn.CallParams {
 	if plug == nil {

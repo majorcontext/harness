@@ -68,7 +68,7 @@ type Runtime interface {
 	Open(ctx context.Context, id string, opts ...harness.SessionOption) (*harness.Session, error)
 	Read(ctx context.Context, id string) (harness.Reader, error)
 	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
-	Models() []protocol.Model
+	Models(ctx context.Context) []protocol.Model
 	Commands(ctx context.Context) (protocol.Commands, error)
 }
 
