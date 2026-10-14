@@ -386,7 +386,7 @@
               "kind": "tool_use",
               "tool_name": "bash",
               "tool_input": {
-                "command": "sleep 0.5"
+                "command": "i=0; while [ ! -e .settled ] \u0026\u0026 [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; [ -e .settled ] || { echo 'the scenario never wrote .settled' \u003e\u00262; exit 1; }"
               },
               "tool_use_id": "toolu#2"
             }
@@ -640,7 +640,7 @@
             "call_id": "toolu#2",
             "name": "bash",
             "arguments": {
-              "command": "sleep 0.5"
+              "command": "i=0; while [ ! -e .settled ] \u0026\u0026 [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; [ -e .settled ] || { echo 'the scenario never wrote .settled' \u003e\u00262; exit 1; }"
             }
           }
         ]

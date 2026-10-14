@@ -94,6 +94,22 @@ func busyTaskStep(name string, when harnesstest.Matcher, build func(r harnesstes
 	}}}
 }
 
+// flagTaskStep is taskStep with a bash call after the task calls, which holds
+// the turn open until the scenario writes the file settledFlag, while a child
+// that the task calls stop reports to its parent. The wait ends after 30 s with
+// an error that names the file.
+func flagTaskStep(name string, when harnesstest.Matcher, build func(r harnesstest.Request) []map[string]any) harnesstest.Step {
+	calls := taskCalls(build)
+	return harnesstest.Step{Name: name, Match: when, Reply: harnesstest.Reply{Calls: func(r harnesstest.Request) []harnesstest.ToolCall {
+		return append(calls(r), harnesstest.ToolCall{ID: "toolu_flag", Name: "bash", Input: ftArgs("command", waitForFlag)})
+	}}}
+}
+
+// settledFlag is the file that the scenario writes when the child has settled.
+const settledFlag = ".settled"
+
+const waitForFlag = "i=0; while [ ! -e " + settledFlag + " ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; [ -e " + settledFlag + " ] || { echo 'the scenario never wrote " + settledFlag + "' >&2; exit 1; }"
+
 func fixed(args ...map[string]any) func(harnesstest.Request) []map[string]any {
 	return func(harnesstest.Request) []map[string]any { return args }
 }

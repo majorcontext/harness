@@ -39,10 +39,10 @@ func TestContractTaskActions(t *testing.T) {
 		{
 			name:       "task_cancel_and_send_to_a_running_child",
 			concurrent: true,
-			model: delegation(general, childRuns, busyTaskStep("act", userStarts("actions"), onKid(func(kid string) []map[string]any {
+			model: delegation(general, childRuns, flagTaskStep("act", userStarts("actions"), onKid(func(kid string) []map[string]any {
 				return []map[string]any{onSession("send", kid, "prompt", "more work"), onSession("cancel", kid)}
 			}))),
-			actions: slices.Concat(spawnedRunning, []action{submit{as: "a", text: "actions"}, waitIdle{as: "a"}, waitIdle{as: "kid"}}),
+			actions: slices.Concat(spawnedRunning, []action{submit{as: "a", text: "actions"}, awaitSettled{as: "kid", parent: "a"}, writeFile{path: settledFlag, body: "1"}, waitIdle{as: "a"}, waitIdle{as: "kid"}}),
 		},
 		{
 			name:       "task_spawn_past_max_tree_tokens_is_refused",
