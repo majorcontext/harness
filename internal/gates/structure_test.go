@@ -98,6 +98,26 @@ var structureCases = []struct {
 			"engine_context_creator:internal/backend/modelapi/convert.go", "engine_context_creator:internal/backend/modelapi/modelapi.go"},
 	},
 	{
+		name: "a_git_subprocess_outside_its_owner_fails",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
+			"internal/a/a.go":             goFile(`import "os/exec"`, "func F() { _ = exec.Command(\"git\", \"status\") }\nfunc G() { _ = exec.CommandContext(nil, \"git\") }\nfunc H() { _ = exec.Command(\"ls\") }"),
+			"internal/workspace/other.go": goFile(`import "os/exec"`, "func F() { _ = exec.Command(\"git\") }")},
+		want: []string{"git_subprocess:internal/a/a.go", "git_subprocess:internal/a/a.go", "git_subprocess:internal/workspace/other.go"},
+	},
+	{
+		name: "a_git_subprocess_in_its_owner_passes",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
+			"internal/workspace/git.go": goFile(`import "os/exec"`, "func gitCmd() { _ = exec.CommandContext(nil, \"git\") }\nfunc gitCmdMagicPathspecs() { _ = exec.CommandContext(nil, \"git\") }"),
+			"internal/gates/git.go":     goFile(`import "os/exec"`, "func git() { _ = exec.Command(\"git\") }")},
+	},
+	{
+		name: "the_engine_list_is_walked_outside_changes_fails",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
+			"internal/workspace/workspace.go": goFile("", "var engineList = []int{1}\nfunc changes() { _ = engineList }\nfunc other() { _ = engineList }"),
+			"internal/workspace/other.go":     goFile("", "func F() { _ = engineList }")},
+		want: []string{"engine_list_walker:internal/workspace/workspace.go", "engine_list_walker:internal/workspace/other.go"},
+	},
+	{
 		name: "a_stray_write_or_route_in_an_owner_file_fails",
 		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
 			"runtime.go":                goFile("", "func scratch(s S) {\n\ts.Append(1, 2, 3)\n}"),

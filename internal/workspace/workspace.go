@@ -32,6 +32,10 @@ const budget = 28 * time.Second
 
 const maxPatch = 1 << 20
 
+// engineList is the ordered list of engines. The first engine that opens a
+// directory answers, and Changes is the only code that walks it.
+var engineList = []Engine{gitEngine{}}
+
 // Engine reads one kind of work tree.
 type Engine interface {
 	// Name is the value of the engine field of the answer.
@@ -140,10 +144,18 @@ func within(root, dir string) (real, ceiling string, err error) {
 }
 
 func changes(ctx context.Context, root, dir, real, ceiling, scope string, explicit bool) (protocol.WorkspaceChanges, error) {
-	eng := gitEngine{}
-	repo, ok, err := eng.Open(ctx, real, ceiling)
-	if err != nil {
-		return protocol.WorkspaceChanges{}, err
+	var eng Engine
+	var repo Repo
+	ok := false
+	for _, e := range engineList {
+		r, found, err := e.Open(ctx, real, ceiling)
+		if err != nil {
+			return protocol.WorkspaceChanges{}, err
+		}
+		if found {
+			eng, repo, ok = e, r, true
+			break
+		}
 	}
 	// An engine can find a repository above the ceiling, so check the
 	// repository root too.

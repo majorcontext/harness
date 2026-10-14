@@ -134,6 +134,18 @@ var nodeRules = []nodeRule{
 		},
 	},
 	{
+		name:   "git_subprocess",
+		detail: "only the git helpers of internal/workspace and of the gates start the git process (spec: Workspace)",
+		match:  startsProcess("git"),
+		allow:  []string{"internal/workspace/git.go#gitCmd", "internal/workspace/git.go#gitCmdMagicPathspecs", "internal/gates/git.go#git"},
+	},
+	{
+		name:   "engine_list_walker",
+		detail: "only workspace.Changes walks the engine list (spec: Workspace)",
+		match:  namesIdent("engineList"),
+		allow:  []string{"internal/workspace/workspace.go#", "internal/workspace/workspace.go#changes"},
+	},
+	{
 		name:   "engine_context_creator",
 		detail: "only the model API backend creates message.EngineContext, from the runtime's pins and logged parts (AGENTS.md: Invariants)",
 		match:  literalOf(modulePath+"/internal/message", "EngineContext"),
@@ -144,6 +156,35 @@ var nodeRules = []nodeRule{
 func selectorOf(n ast.Node) (*ast.SelectorExpr, bool) {
 	sel, ok := n.(*ast.SelectorExpr)
 	return sel, ok
+}
+
+func namesIdent(name string) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, _ map[string]string) bool {
+		id, ok := n.(*ast.Ident)
+		return ok && id.Name == name
+	}
+}
+
+// startsProcess matches a call of os/exec.Command or CommandContext that
+// names the program as a string literal.
+func startsProcess(program string) func(ast.Node, map[string]string) bool {
+	return func(n ast.Node, imports map[string]string) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := selectorOf(call.Fun)
+		if !ok || (sel.Sel.Name != "Command" && sel.Sel.Name != "CommandContext") {
+			return false
+		}
+		if id, ok := sel.X.(*ast.Ident); !ok || imports[id.Name] != "os/exec" {
+			return false
+		}
+		return slices.ContainsFunc(call.Args, func(arg ast.Expr) bool {
+			lit, ok := arg.(*ast.BasicLit)
+			return ok && lit.Kind == token.STRING && lit.Value == strconv.Quote(program)
+		})
+	}
 }
 
 func selectsField(name string) func(ast.Node, map[string]string) bool {
