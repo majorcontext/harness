@@ -86,7 +86,8 @@ async function runRow(browser, row) {
   }
   await page.goto(origin + "/app/index.html");
   let timer;
-  const deadline = new Promise((resolve) => (timer = setTimeout(() => resolve({ failure: "the row did not finish in 30 s" }), 30000)));
+  const limit = row.timeoutMs ?? 30000;
+  const deadline = new Promise((resolve) => (timer = setTimeout(() => resolve({ failure: `the row did not finish in ${limit} ms` }), limit)));
   const result = await Promise.race([page.evaluate(async (r) => (await import("/page/page.mjs")).runRow(r), row), deadline]);
   clearTimeout(timer);
   await Promise.race([context.close(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
@@ -101,7 +102,7 @@ async function runRow(browser, row) {
 
 let browser;
 try {
-  browser = await chromium.launch();
+  browser = await chromium.launch({ args: ["--enable-precise-memory-info"] });
 } catch (err) {
   console.error(String(err.message));
   process.exit(/Executable doesn't exist/.test(err.message) ? 3 : 1);

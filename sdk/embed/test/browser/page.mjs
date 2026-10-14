@@ -2,6 +2,7 @@
 // in a Worker through createHarness, and runs one row against a fake model
 // server. e2e/browser_test.go serves this file and asserts on the results.
 import { createHarness, wasm } from "/embed/index.mjs";
+import { soakOps, soakRow } from "./soak.mjs";
 
 const echo = {
   name: "js_echo",
@@ -35,6 +36,7 @@ function acpClient(h) {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
+      client.onFrame?.(value);
       if (value.id !== undefined && waiting.has(value.id)) {
         waiting.get(value.id)(value);
         waiting.delete(value.id);
@@ -44,8 +46,9 @@ function acpClient(h) {
       }
     }
   })();
-  return {
+  const client = {
     text,
+    onFrame: undefined,
     call(method, params) {
       const id = nextId++;
       return new Promise((resolve) => {
@@ -56,18 +59,19 @@ function acpClient(h) {
     notify: (method, params) => writer.write({ jsonrpc: "2.0", method, params }),
     firstChunk: () => (text.length ? Promise.resolve() : new Promise((resolve) => chunkWaiters.push(resolve))),
   };
+  return client;
 }
 
 function config(row) {
   const anthropic = {};
   if (row.baseURL) anthropic.base_url = row.baseURL;
   if (row.extraHeaders) anthropic.extra_headers = row.extraHeaders;
-  return { model: "anthropic/claude-fable-5", providers: { anthropic } };
+  return { model: "anthropic/claude-fable-5", providers: { anthropic }, ...row.settings };
 }
 
 // start starts the module in a Worker with the paths relative to this page, and
 // opens the ACP connection. A row with persist keeps the store in OPFS.
-async function start(row, log = () => {}) {
+export async function start(row, log = () => {}) {
   const logs = [];
   const started = performance.now();
   const extra = [];
@@ -76,7 +80,7 @@ async function start(row, log = () => {}) {
     extra.push(shellTool({ load: () => import("/vendor/just-bash.js") }));
   }
   const h = await createHarness({
-    transport: wasm({ module: "harness.wasm", wasmExec: "wasm_exec.js", worker: true }),
+    transport: wasm({ module: "harness.wasm", wasmExec: row.wasmExec ?? "wasm_exec.js", worker: true }),
     config: config(row),
     proxy: row.proxy,
     tools: [echo, big, ...(row.hostBash ? [hostBash] : []), ...extra],
@@ -85,11 +89,11 @@ async function start(row, log = () => {}) {
   });
   const bootMs = performance.now() - started;
   const c = acpClient(h);
-  await c.call("initialize", { protocolVersion: 1, clientCapabilities: {} });
+  await c.call("initialize", { protocolVersion: 1, clientCapabilities: row.compaction ? { session: { compaction: {} } } : {} });
   return { h, c, bootMs, logs };
 }
 
-async function newSession(c, logs) {
+export async function newSession(c, logs) {
   const created = await c.call("session/new", { cwd: "/work", mcpServers: [] });
   if (created.error) throw new Error("session/new: " + JSON.stringify(created.error) + "\n" + logs.join("\n"));
   return created.result.sessionId;
@@ -107,7 +111,7 @@ async function listIDs(c) {
   return { ids: done.result?.sessions?.map((s) => s.sessionId), error: done.error };
 }
 
-const prompt = (c, sessionId, text) => c.call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+export const prompt = (c, sessionId, text) => c.call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
 
 const rows = {
   async turn(row) {
@@ -317,6 +321,8 @@ const rows = {
     return { written, stored: await inspect({ file: "/persist/killtest" }) };
   },
 
+  soak: (row) => soakRow(row, tabs),
+
   // offline leaves the network after the module booted. The driver returns it
   // when the first model request fails, so the turn must retry to finish.
   async offline(row) {
@@ -361,7 +367,7 @@ const lockName = () => "harness:store:" + location.origin;
 
 // tab is the harness of this page when a driver page runs it as a tab.
 let tab;
-const workers = [];
+export const workers = [];
 const NativeWorker = globalThis.Worker;
 globalThis.Worker = class extends NativeWorker {
   constructor(...args) {
@@ -416,6 +422,7 @@ export const tabOps = {
     return {};
   },
   inspect,
+  ...soakOps,
 };
 
 const tabs = {

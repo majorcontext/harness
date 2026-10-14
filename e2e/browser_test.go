@@ -165,7 +165,11 @@ func browserPage(t *testing.T, wasm, execJS string, awaits *sync.Map) *httptest.
 		http.ServeFile(w, r, path)
 	})
 	file("/app/wasm_exec.js", execJS, "text/javascript")
-	for _, name := range []string{"page.mjs", "inspect-worker.mjs", "fsprobe-worker.mjs"} {
+	mux.HandleFunc("/app/wasm_exec_probe.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		serveWithProbe(w, execJS)
+	})
+	for _, name := range []string{"page.mjs", "soak.mjs", "inspect-worker.mjs", "fsprobe-worker.mjs"} {
 		file("/page/"+name, filepath.Join(root, "sdk", "embed", "test", "browser", name), "text/javascript")
 	}
 	embed := filepath.Join(root, "sdk", "embed")
@@ -200,6 +204,13 @@ func browserTools(t *testing.T) (node, embed string) {
 	if os.Getenv(browserEnv) != "1" {
 		t.Skip(browserEnv + "=1 enables the browser job")
 	}
+	return requireBrowserTools(t)
+}
+
+// requireBrowserTools returns node and the sdk/embed directory, and fails when
+// node or Playwright is missing.
+func requireBrowserTools(t *testing.T) (node, embed string) {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Fatalf("the browser job needs node: %v", err)
@@ -214,6 +225,12 @@ func browserTools(t *testing.T) (node, embed string) {
 // runBrowser runs sdk/embed/test/browser.mjs on the rows and returns the results by row name.
 func runBrowser(t *testing.T, node, embed, origin, modulePath string, rows []map[string]any) map[string]browserResult {
 	t.Helper()
+	return runBrowserWithin(t, 2*time.Minute, node, embed, origin, modulePath, rows)
+}
+
+// runBrowserWithin is runBrowser with a limit for the whole run.
+func runBrowserWithin(t *testing.T, limit time.Duration, node, embed, origin, modulePath string, rows []map[string]any) map[string]browserResult {
+	t.Helper()
 	b, err := json.Marshal(map[string]any{"origin": origin, "modulePath": modulePath, "rows": rows})
 	if err != nil {
 		t.Fatal(err)
@@ -227,13 +244,13 @@ func runBrowser(t *testing.T, node, embed, origin, modulePath string, rows []map
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	g := startGroup(t, cmd)
-	timer := time.NewTimer(2 * time.Minute)
+	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {
 	case <-g.exited:
 	case <-timer.C:
 		g.kill()
-		t.Fatalf("browser.mjs did not end in 2 minutes\n%s", stderr.String())
+		t.Fatalf("browser.mjs did not end in %s\n%s", limit, stderr.String())
 	}
 	if !cmd.ProcessState.Success() {
 		if cmd.ProcessState.ExitCode() == browserMissingExit {

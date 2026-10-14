@@ -1,0 +1,45 @@
+name: Browser soak
+
+# Runs the long-session soak of the browser host (docs/design/acp-wasm.md,
+# risk 10). It never runs on a pull request, so it adds nothing to the CI
+# jobs. The metrics table goes to the job summary.
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: Browser soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/embed/package-lock.json
+
+      - name: Install Playwright
+        working-directory: sdk/embed
+        run: npm ci --ignore-scripts
+
+      - name: Install Chromium
+        working-directory: sdk/embed
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Soak
+        # The test appends its metrics table to GITHUB_STEP_SUMMARY.
+        env:
+          HARNESS_E2E_BROWSER: '1'
+          HARNESS_E2E_SOAK: '1'
+        run: go test -race -count=1 -timeout 15m ./e2e/ -run '^TestBrowserSoak$'
