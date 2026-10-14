@@ -79,7 +79,7 @@ const (
 	specMCPNoLeak     = "An error that is not the server's own RPC error names a reason, never the endpoint URL or a response body."
 	specRetainBound   = "`read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`."
 	specNoReader      = "A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call."
-	specRetainIndex   = "Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds."
+	specRetainIndex   = "Each compaction record holds an index of the newest 32 retained results in its `index` field, and the model reads it after the summary, so a handle stays reachable after its preview folds."
 	specFileCap       = "A file-size cap of 20 MiB bounds one file:"
 	specToolImages    = "shows no blob."
 	specProfileSkip   = "is skipped with a WARN log line"
