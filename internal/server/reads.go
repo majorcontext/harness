@@ -60,6 +60,17 @@ var staticCodes = []struct {
 	{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges},
 }
 
+// invalidSentinels are the errors of staticCodes with the code invalid_request.
+var invalidSentinels = func() []error {
+	var out []error
+	for _, c := range staticCodes {
+		if c.code == protocol.CodeInvalidRequest {
+			out = append(out, c.err)
+		}
+	}
+	return out
+}()
+
 // NewReads returns the HTTP API of the routes of Table that only read, over
 // rt. A route that changes something, and any other method of a read route,
 // answers 405; any other path answers 404. The handler appends nothing, opens
