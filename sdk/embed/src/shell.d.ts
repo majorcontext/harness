@@ -14,10 +14,12 @@ export interface ShellToolOptions {
   load?: () => Promise<JustBashModule>;
   /** The wall time limit of one call in ms. Default 10000. */
   timeoutMs?: number;
-  /** The limit of commands and of loop iterations of one call. Default 10000. */
+  /** The limit of commands of one call. Default 10000. */
   maxCommands?: number;
   /** The limit of characters of stdout and of stderr in a result; the head and the tail stay. Default 20000. */
   maxOutput?: number;
+  /** The limit of bytes that one call writes, to stdout, stderr, or a file; a command over it stops. Default 8388608. */
+  maxOutputBytes?: number;
 }
 
 /**

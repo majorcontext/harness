@@ -20,6 +20,8 @@ func (k *browserKit) shellRows() {
 		ftTool("bash", ftArgs("command", "curl -s https://example.com")),
 		ftTool("bash", ftArgs("command", "while true; do :; done")),
 		ftTool("bash", ftArgs("command", "cat /work")),
+		ftTool("bash", ftArgs("command", "seq 1 90000 | sed 's/$/-padding-padding/' | sort -r | tee big.txt")),
+		ftTool("bash", ftArgs("command", "wc -c < big.txt")),
 	)
 	f := newBrowserFront(t, nil, steps...)
 	add("the shell tool and h.fs share the work directory with the file tools", map[string]any{"kind": "shell", "baseURL": f.URL}, func(t *testing.T, res browserResult, _ string) {
@@ -28,8 +30,8 @@ func (k *browserKit) shellRows() {
 			t.Fatalf("stopReason = %q, error %+v, console %v", res.StopReason, res.Error, res.Console)
 		}
 		reqs := f.fake.Requests()
-		if len(reqs) != 10 {
-			t.Fatalf("model requests = %d, want 10", len(reqs))
+		if len(reqs) != 12 {
+			t.Fatalf("model requests = %d, want 12", len(reqs))
 		}
 		if n := strings.Count(strings.Join(reqs[0].Tools, " ")+" ", "bash "); n != 1 {
 			t.Errorf("tools of the first request = %v, want one bash", reqs[0].Tools)
@@ -39,13 +41,15 @@ func (k *browserKit) shellRows() {
 			t.Errorf("bash tool of the first request = %+v, want the shell description and the command schema", spec)
 		}
 		for i, want := range map[int]string{
-			2: "banana\napple\ncherry",
-			3: "3\n",
-			5: "written by shell",
-			6: "58",
-			7: "command not found",
-			8: "[exit 126]",
-			9: "cat: /work: ",
+			2:  "banana\napple\ncherry",
+			3:  "3\n",
+			5:  "written by shell",
+			6:  "58",
+			7:  "command not found",
+			8:  "[exit 126]",
+			9:  "cat: /work: ",
+			10: "characters cut",
+			11: "1968894",
 		} {
 			if got := requestText(reqs[i]); !strings.Contains(got, want) {
 				t.Errorf("request %d lacks %q: %s", i, want, got)

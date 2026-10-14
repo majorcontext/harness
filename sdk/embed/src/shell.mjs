@@ -11,9 +11,6 @@ const description =
   "Each call starts a new shell: cd and variables do not last to the next call. " +
   "A long or endless command stops at a limit.";
 
-// outputHeadroom lets a command write more than maxOutput before just-bash stops it, so that the result still shows the head and the tail.
-const outputHeadroom = 8;
-
 const schema = { type: "object", properties: { command: { type: "string", description: "The command line." } }, required: ["command"] };
 
 function clip(text, max) {
@@ -30,14 +27,14 @@ async function isDirectory(fs, path) {
   }
 }
 
-async function createBash(fs, { load, maxCommands, timeoutMs, maxOutput }) {
+async function createBash(fs, { load, maxCommands, timeoutMs, maxOutputBytes }) {
   const { Bash, InMemoryFs, MountableFs } = await load();
   const mounts = [{ mountPoint: "/work", filesystem: shellFs(fs, "/work") }];
   if (await isDirectory(fs, "/tmp")) mounts.push({ mountPoint: "/tmp", filesystem: shellFs(fs, "/tmp") });
   return new Bash({
     fs: new MountableFs({ base: new InMemoryFs(), mounts }),
     cwd: "/work",
-    executionLimits: { maxCommandCount: maxCommands, maxLoopIterations: maxCommands, maxExecutionTimeMs: timeoutMs, maxOutputSize: maxOutput * outputHeadroom },
+    executionLimits: { maxCommandCount: maxCommands, maxExecutionTimeMs: timeoutMs, maxOutputSize: maxOutputBytes },
   });
 }
 
@@ -48,11 +45,12 @@ async function createBash(fs, { load, maxCommands, timeoutMs, maxOutput }) {
  * tool name (default bash). load returns the just-bash module and defaults to
  * import("just-bash/browser"), which a bundler or an import map resolves.
  * timeoutMs and maxCommands limit one call; maxOutput clips stdout and stderr
- * each, and the command stops at 8 times that size while it runs. Each tool keeps one
+ * each, to the model. maxOutputBytes (default 8 MiB) stops a command that writes more
+ * than that in one call, including output to a file. Each tool keeps one
  * shell for each harness, so two tools have their own limits. The shell has no
  * network.
  */
-export function shellTool({ name = "bash", load = () => import("just-bash/browser"), timeoutMs = 10000, maxCommands = 10000, maxOutput = 20000 } = {}) {
+export function shellTool({ name = "bash", load = () => import("just-bash/browser"), timeoutMs = 10000, maxCommands = 10000, maxOutput = 20000, maxOutputBytes = 8 * 1024 * 1024 } = {}) {
   const perFs = new WeakMap();
   return {
     name,
@@ -63,7 +61,7 @@ export function shellTool({ name = "bash", load = () => import("just-bash/browse
       if (typeof input?.command !== "string") throw new Error("command must be a string");
       let bash = perFs.get(fs);
       if (!bash) {
-        bash = createBash(fs, { load, maxCommands, timeoutMs, maxOutput });
+        bash = createBash(fs, { load, maxCommands, timeoutMs, maxOutputBytes });
         perFs.set(fs, bash);
         bash.catch(() => perFs.delete(fs));
       }
