@@ -17,7 +17,7 @@ import (
 var (
 	// ErrInvalid reports a bad scope or a dir outside the root.
 	ErrInvalid = errors.New("invalid request")
-	// ErrNotRepo reports a dir that is not in a git work tree.
+	// ErrNotRepo reports a dir that is in no work tree of a known VCS.
 	ErrNotRepo = errors.New("not_a_repo")
 	// ErrNoBase reports a branch scope with no merge base.
 	ErrNoBase = errors.New("no_base")
@@ -48,7 +48,8 @@ type Repo interface {
 	Root() string
 	// Head returns the head. Its Rev is the zero Rev when the head has no commit.
 	Head(ctx context.Context) (Head, error)
-	// Base returns the base of the branch scope, or an error that wraps ErrNoBase.
+	// Base returns the base of the branch scope. It wraps ErrNoBase when the
+	// work tree has no base; any other error is a failure of the engine.
 	Base(ctx context.Context, head Head) (Base, error)
 	// Diff lists the changed files and the patch against base. A zero base
 	// means the head. The patch ends at the last whole file within patchCap.
@@ -144,14 +145,14 @@ func changes(ctx context.Context, root, dir, real, ceiling, scope string, explic
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err
 	}
-	// GIT_CEILING_DIRECTORIES has no escape for a colon in a path, so git
-	// can walk past a root that holds one; check the repository root too.
+	// An engine can find a repository above the ceiling, so check the
+	// repository root too.
 	if ok && explicit {
 		_, _, err := within(root, repo.Root())
 		ok = err == nil
 	}
 	if !ok {
-		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: %q is not a git work tree", ErrNotRepo, dir)
+		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: %q is not a work tree of a known VCS", ErrNotRepo, dir)
 	}
 	head, err := repo.Head(ctx)
 	if err != nil {
