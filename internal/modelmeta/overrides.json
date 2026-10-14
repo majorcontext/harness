@@ -7,6 +7,11 @@
       "note": "models.dev lists no off level, but platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting lists its thinking default as Off."
     }
   },
+  "thinkingCanBeDisabled": {
+    "claude-opus-5": {
+      "note": "models.dev lists no off level, but platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting says Claude Opus 5 accepts thinking type disabled at effort high or below."
+    }
+  },
   "bifrostFireworksContextWindows": {
     "firerouter": {
       "context": 1000000,

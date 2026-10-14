@@ -60,6 +60,19 @@ func TestContractEffortLevels(t *testing.T) {
 			actions: effortTurns("anthropic/claude-sonnet-5", "off"),
 		},
 		{
+			name:    "thinking_off_on_a_model_whose_thinking_can_be_disabled_sends_thinking_disabled",
+			model:   effortSteps("off"),
+			actions: effortTurns("anthropic/claude-opus-5", "off"),
+		},
+		{
+			name: "thinking_off_is_not_offered_by_a_model_that_takes_between_tools",
+			actions: []action{
+				create{as: "a", model: "anthropic/claude-sonnet-5-5"},
+				command{as: "a", text: "/thinking off"}, awaitCommands{as: "a"},
+				commandRecords{as: "a"},
+			},
+		},
+		{
 			name: "thinking_off_is_not_offered_by_a_model_that_always_thinks",
 			actions: []action{
 				create{as: "a", model: "anthropic/claude-opus-5-5"},

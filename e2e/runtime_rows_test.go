@@ -194,6 +194,8 @@ var runtimeRows = map[string]runtimeRow{
 	"stored_thinking_leaves_the_history_of_a_model_with_thinking_off_by_default":                               sameAsServe(),
 	"stored_thinking_leaves_the_history_when_thinking_is_disabled_on_a_model_that_thinks_by_default":           sameAsServe(),
 	"stored_thinking_leaves_the_history_when_a_budget_model_has_thinking_off":                                  sameAsServe(),
+	"thinking_off_on_a_model_whose_thinking_can_be_disabled_sends_thinking_disabled":                           reGolden(specUpdate),
+	"thinking_off_is_not_offered_by_a_model_that_takes_between_tools":                                          reGolden(specUpdate),
 	"thinking_off_is_not_offered_by_a_model_that_always_thinks":                                                reGolden(specUpdate),
 	"anthropic_effort_field_carries_xhigh_and_max":                                                             reGolden(specUpdate),
 	"anthropic_effort_field_clamps_xhigh_for_a_model_without_it":                                               reGolden(specUpdate),
