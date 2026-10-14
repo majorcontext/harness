@@ -95,11 +95,20 @@ type catalog map[string]struct {
 }
 
 // overrideEntry is one hand-written entry for a model that models.dev lacks
-// or reports wrongly. Note is documentation for maintainers only.
+// or reports wrongly. Note is documentation for maintainers only. OffType
+// names the thinking type that the off level sends, and only an entry of a
+// thinking-disable table may set it.
 type overrideEntry struct {
 	Context int    `json:"context"`
+	OffType string `json:"offType"`
 	Note    string `json:"note"`
 }
+
+// offTypeDisabled and offTypeBetweenTools are the thinking types that the off level can send. An entry without an offType sends the first.
+const (
+	offTypeDisabled     = "disabled"
+	offTypeBetweenTools = "between_tools"
+)
 
 // thinkingOffTable names the overrides of the models that run with thinking off when a request omits the thinking field.
 const thinkingOffTable = "thinkingOffByDefault"
@@ -186,9 +195,17 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 	for _, t := range infoTables {
 		known[t.provider+thinkingDisableSuffix] = true
 	}
-	for name := range ovr {
+	for name, entries := range ovr {
 		if !known[name] {
 			return nil, nil, fmt.Errorf("overrides name unknown table %q", name)
+		}
+		if strings.HasSuffix(name, thinkingDisableSuffix) {
+			continue
+		}
+		for id, e := range entries {
+			if e.OffType != "" {
+				return nil, nil, fmt.Errorf("%s[%q] sets offType outside a %s table", name, id, thinkingDisableSuffix)
+			}
 		}
 	}
 
@@ -240,10 +257,14 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 }
 
 // infoTables lists the tables of model facts. A table holds the chat models
-// of one models.dev provider.
-var infoTables = []struct{ varName, provider string }{
-	{"anthropicInfo", "anthropic"},
-	{"openaiInfo", "openai"},
+// of one models.dev provider. offTypes is true when modelmeta reads the
+// offType of the thinking-disable table of the provider.
+var infoTables = []struct {
+	varName, provider string
+	offTypes          bool
+}{
+	{"anthropicInfo", "anthropic", true},
+	{"openaiInfo", "openai", false},
 }
 
 // latestSuffix marks the undated alias of a model in a models.dev name.
@@ -339,6 +360,36 @@ func noImageLiteral(input []string) string {
 	return ", noImageInput: true"
 }
 
+// writeOffTypes writes anthropicThinkingOffType, the model ids whose off level sends a thinking type other than "disabled". The map is empty when no entry sets one. An unknown offType, or an offType in a table that modelmeta does not read, is an error.
+func writeOffTypes(buf *bytes.Buffer, ovr overrides) error {
+	for _, t := range infoTables {
+		table := t.provider + thinkingDisableSuffix
+		for _, id := range slices.Sorted(maps.Keys(ovr[table])) {
+			switch typ := ovr[table][id].OffType; {
+			case typ == "":
+			case !t.offTypes:
+				return fmt.Errorf("%s[%q] sets offType, which modelmeta does not read for this provider", table, id)
+			case typ != offTypeDisabled && typ != offTypeBetweenTools:
+				return fmt.Errorf("%s[%q] has unknown offType %q", table, id, typ)
+			}
+		}
+	}
+	for _, t := range infoTables {
+		if !t.offTypes {
+			continue
+		}
+		table := ovr[t.provider+thinkingDisableSuffix]
+		fmt.Fprintf(buf, "\n// %sThinkingOffType holds the thinking type that the off level sends in place of %q for a model of the %s provider.\nvar %sThinkingOffType = map[string]string{\n", t.provider, offTypeDisabled, t.provider, t.provider)
+		for _, id := range slices.Sorted(maps.Keys(table)) {
+			if typ := table[id].OffType; typ != "" && typ != offTypeDisabled {
+				fmt.Fprintf(buf, "\t%q: %q,\n", id, typ)
+			}
+		}
+		buf.WriteString("}\n")
+	}
+	return nil
+}
+
 // generateInfo renders the Go source of the model-fact tables for
 // catalogJSON. A model is listed when it supports tool calls and is not
 // deprecated. An entry without a name is skipped.
@@ -370,6 +421,9 @@ func generateInfo(catalogJSON, ovrJSON []byte) ([]byte, []string, error) {
 		fmt.Fprintf(&buf, "\t%q: true,\n", id)
 	}
 	buf.WriteString("}\n")
+	if err := writeOffTypes(&buf, ovr); err != nil {
+		return nil, nil, err
+	}
 	for _, t := range infoTables {
 		prov := cat[t.provider]
 		keys := make([]string, 0, len(prov.Models))

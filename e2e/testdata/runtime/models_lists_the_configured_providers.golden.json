@@ -71,6 +71,7 @@
           "context_window": 1000000,
           "description": "Fast Claude model for everyday coding, agents, and knowledge work",
           "efforts": [
+            "off",
             "low",
             "medium",
             "high",

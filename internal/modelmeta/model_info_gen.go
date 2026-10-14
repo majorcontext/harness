@@ -14,6 +14,11 @@ var thinkingOffByDefault = map[string]bool{
 	"claude-opus-4-8": true,
 }
 
+// anthropicThinkingOffType holds the thinking type that the off level sends in place of "disabled" for a model of the anthropic provider.
+var anthropicThinkingOffType = map[string]string{
+	"claude-sonnet-5-5": "between_tools",
+}
+
 // anthropicInfo holds the facts of the models.dev "anthropic" chat models, keyed by model ID.
 var anthropicInfo = map[string]modelInfo{
 	"claude-fable-5":             {name: "Claude Fable 5", description: "Claude model for creative writing, analysis, and controlled agent workflows", released: "2026-06-07", efforts: []string{"low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},
@@ -32,7 +37,7 @@ var anthropicInfo = map[string]modelInfo{
 	"claude-sonnet-4-5-20250929": {name: "Claude Sonnet 4.5", description: "Balanced Claude model for coding, analysis, agent workflows, and cost control", released: "2025-09-29", efforts: []string{"off", "minimal", "low", "medium", "high"}, budgetTokens: true, listed: true},
 	"claude-sonnet-4-6":          {name: "Claude Sonnet 4.6", description: "Claude workhorse for coding agents, careful analysis, and production cost control", released: "2026-02-17", efforts: []string{"off", "minimal", "low", "medium", "high", "max"}, effortField: true, budgetTokens: true, listed: true},
 	"claude-sonnet-5":            {name: "Claude Sonnet 5", description: "Everyday Claude agent model for coding, planning, browsing, and general work", released: "2026-06-29", efforts: []string{"off", "low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},
-	"claude-sonnet-5-5":          {name: "Claude Sonnet 5.5", description: "Fast Claude model for everyday coding, agents, and knowledge work", released: "2026-09-28", efforts: []string{"low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},
+	"claude-sonnet-5-5":          {name: "Claude Sonnet 5.5", description: "Fast Claude model for everyday coding, agents, and knowledge work", released: "2026-09-28", efforts: []string{"off", "low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},
 }
 
 // openaiInfo holds the facts of the models.dev "openai" chat models, keyed by model ID.

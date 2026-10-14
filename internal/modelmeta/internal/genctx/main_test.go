@@ -79,3 +79,35 @@ func TestGenerateInfoGolden(t *testing.T) {
 		t.Errorf("generated output differs from %s; rerun with -update and review the diff\ngot:\n%s", golden, code)
 	}
 }
+
+func TestGenerateRejectsUnknownOffType(t *testing.T) {
+	ovr := `{"anthropicThinkingCanBeDisabled":{"claude-a-4":{"offType":"enabled"}}}`
+	if _, _, err := generateInfo(readFile(t, "testdata/catalog.json"), []byte(ovr)); err == nil {
+		t.Fatal("generateInfo accepted an unknown offType")
+	}
+}
+
+func TestGenerateRejectsOffTypeOutsideThinkingDisableTable(t *testing.T) {
+	ovr := `{"thinkingOffByDefault":{"claude-off":{"offType":"between_tools"}}}`
+	if _, _, err := generate(readFile(t, "testdata/catalog.json"), []byte(ovr)); err == nil {
+		t.Fatal("generate accepted offType in a table that is not a thinking-disable table")
+	}
+}
+
+func TestGenerateEmitsEmptyOffTypeMapWhenNoEntryNamesOne(t *testing.T) {
+	ovr := `{"anthropicThinkingCanBeDisabled":{"claude-a-4":{"offType":"disabled"}}}`
+	code, _, err := generateInfo(readFile(t, "testdata/catalog.json"), []byte(ovr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(code), "var anthropicThinkingOffType = map[string]string{}") {
+		t.Errorf("generated source has no empty anthropicThinkingOffType map:\n%s", code)
+	}
+}
+
+func TestGenerateRejectsOffTypeInTheTableOfAnotherProvider(t *testing.T) {
+	ovr := `{"openaiThinkingCanBeDisabled":{"gpt-x-new":{"offType":"between_tools"}}}`
+	if _, _, err := generateInfo(readFile(t, "testdata/catalog.json"), []byte(ovr)); err == nil {
+		t.Fatal("generateInfo accepted offType in a table that no code reads")
+	}
+}

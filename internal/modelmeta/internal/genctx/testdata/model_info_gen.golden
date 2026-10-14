@@ -13,6 +13,11 @@ var thinkingOffByDefault = map[string]bool{
 	"claude-off": true,
 }
 
+// anthropicThinkingOffType holds the thinking type that the off level sends in place of "disabled" for a model of the anthropic provider.
+var anthropicThinkingOffType = map[string]string{
+	"claude-a-4": "between_tools",
+}
+
 // anthropicInfo holds the facts of the models.dev "anthropic" chat models, keyed by model ID.
 var anthropicInfo = map[string]modelInfo{
 	"claude-a-1": {name: "Claude A 1", description: "Budget model.", released: "2025-10-15", efforts: []string{"off", "minimal", "low", "medium", "high"}, budgetTokens: true, listed: true},

@@ -54,7 +54,7 @@ type apiOutputConfig struct {
 }
 
 // apiThinking enables Anthropic extended thinking: type "enabled" with a token
-// budget, type "adaptive" with none, or type "disabled". The API requires max_tokens strictly
+// budget, type "adaptive" with none, type "disabled", or type "between_tools". The API requires max_tokens strictly
 // greater than budget_tokens, and rejects an explicit temperature or top_p
 // while thinking is enabled — transcodeRequest enforces both.
 type apiThinking struct {
@@ -292,8 +292,8 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		out.MaxTokens = max(out.MaxTokens, adaptiveOutputFloor(req.Effort))
 		out.Temperature = nil
 		out.TopP = nil
-	case req.Effort == modelref.EffortOff && req.OffDisables:
-		out.Thinking = &apiThinking{Type: "disabled"}
+	case req.Effort == modelref.EffortOff && req.OffThinking != "":
+		out.Thinking = &apiThinking{Type: req.OffThinking}
 	case thinkingEnabled:
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
 		if out.MaxTokens < budget+thinkingCompletionMargin {

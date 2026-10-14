@@ -7,7 +7,7 @@
     "open-b": {"context": 512000, "note": "repeats models.dev"}
   },
   "anthropicThinkingCanBeDisabled": {
-    "claude-a-4": {"note": "accepts a disabled thinking request; models.dev lists no off level"}
+    "claude-a-4": {"offType": "between_tools", "note": "takes between_tools in place of disabled; models.dev lists no off level"}
   },
   "thinkingOffByDefault": {
     "claude-off": {"note": "thinking is off when a request omits the field"}

@@ -9,6 +9,7 @@ package modelmeta
 //go:generate go run ./internal/genctx
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"strings"
@@ -326,6 +327,9 @@ func stripBedrockAnthropicPrefix(model string) (suffix string, isAnthropic bool)
 	return rest, true
 }
 
+// offThinkingDisabled is the thinking type that off sends unless the model names another.
+const offThinkingDisabled = "disabled"
+
 // EffortControl is how a model takes a reasoning level.
 type EffortControl struct {
 	// Levels are the levels that the model lists.
@@ -337,8 +341,9 @@ type EffortControl struct {
 	// ThinksByDefault is true when a request that omits the thinking field
 	// runs adaptive thinking.
 	ThinksByDefault bool
-	// OffDisables is true when the model thinks by default and lists off.
-	OffDisables bool
+	// OffThinking is the thinking type that off sends, "disabled" or
+	// "between_tools". It is empty when off sends no thinking field.
+	OffThinking string
 }
 
 // AnthropicEfforts returns the effort control of an Anthropic model id, with
@@ -352,7 +357,9 @@ func AnthropicEfforts(model string) (EffortControl, bool) {
 	model = stripBedrockVersionSuffix(model)
 	c, ok := controlOf(anthropicInfo, model)
 	c.ThinksByDefault = ok && c.Field && !c.Budget && !thinkingOffByDefault[model]
-	c.OffDisables = c.ThinksByDefault && slices.Contains(c.Levels, "off")
+	if c.ThinksByDefault && slices.Contains(c.Levels, "off") {
+		c.OffThinking = cmp.Or(anthropicThinkingOffType[model], offThinkingDisabled)
+	}
 	return c, ok
 }
 

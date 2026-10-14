@@ -39,8 +39,10 @@ type Request struct {
 	// model. The zero value sends no reasoning control.
 	Effort modelref.Effort
 	// The model takes a wire effort field and a thinking budget, and thinks by
-	// default when a request omits the field; off needs OffDisables. All are false for an unknown model.
-	EffortField, BudgetTokens, ThinksByDefault, OffDisables bool
+	// default when a request omits the field. All are false for an unknown model.
+	EffortField, BudgetTokens, ThinksByDefault bool
+	// OffThinking is the thinking type that the off level sends. It is empty for a model that has none.
+	OffThinking string
 	// ServiceTier is an opaque, per-session speed-tier hint (e.g. Codex's
 	// "standard"/"fast"/"ultrafast"), forwarded to the provider verbatim as
 	// the wire "service_tier" field. The zero value (empty string) sends no

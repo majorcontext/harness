@@ -1,0 +1,105 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-sonnet-5-5",
+      "thinking_type": "between_tools",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "off"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "off"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok off"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "command.a": {
+      "status": 201,
+      "body": {
+        "command": "accepted",
+        "input_id": "in1",
+        "seq": 3
+      }
+    },
+    "command_records.a": {
+      "status": 200,
+      "body": [
+        {
+          "line": "/thinking off",
+          "name": "thinking",
+          "result": {
+            "context": {
+              "tokens": 0,
+              "window": 1000000
+            },
+            "created_at": "\u003ctime\u003e",
+            "effort": "off",
+            "head_seq": 4,
+            "id": "ses:a",
+            "model": "anthropic/claude-sonnet-5-5",
+            "origin": "",
+            "status": "idle",
+            "subscription_usage": null,
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            },
+            "work_dir": "\u003cworkdir\u003e"
+          },
+          "status": "succeeded",
+          "text": "/thinking succeeded"
+        }
+      ]
+    }
+  }
+}
