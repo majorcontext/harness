@@ -1,0 +1,282 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "what is this"
+            },
+            {
+              "kind": "image",
+              "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "what is this"
+          },
+          {
+            "type": "blob"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "seen"
+          }
+        ]
+      }
+    ]
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "anthropic/claude-fable-5",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "Default",
+                  "value": "default"
+                },
+                {
+                  "name": "Low",
+                  "value": "low"
+                },
+                {
+                  "name": "Medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "High",
+                  "value": "high"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "what is this",
+              "type": "text"
+            },
+            {
+              "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+              "mimeType": "image/png",
+              "type": "image"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "seen",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 5
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}

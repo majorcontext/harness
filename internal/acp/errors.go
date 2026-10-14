@@ -36,6 +36,9 @@ func rpcError(err error) error {
 	if ok && code != protocol.CodeInternal && code != protocol.CodeSessionUnreplayable {
 		e.Message = pe.Message
 	}
+	if code == protocol.CodeInvalidRequest {
+		e.Message = err.Error()
+	}
 	return e
 }
 

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -105,6 +106,10 @@ func (s acpInit) run(t *testing.T, c *acpConn) {
 		t.Errorf("initialize with version %d answered version %v, want %d", s.version, res["protocolVersion"], s.want)
 	}
 	checkACPAuthMethods(t, res, s.methods)
+	agentCaps, _ := res["agentCapabilities"].(map[string]any)
+	if got, want := fmt.Sprint(agentCaps["promptCapabilities"]), "map[embeddedContext:true image:true]"; got != want {
+		t.Errorf("promptCapabilities = %s, want %s", got, want)
+	}
 }
 
 func (s acpRaw) run(t *testing.T, c *acpConn) {
@@ -137,7 +142,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios, acpCompactionScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{

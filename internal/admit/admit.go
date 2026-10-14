@@ -64,13 +64,13 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 	case in.ID == "":
 		return ev, nil, fmt.Errorf("input id is empty")
 	case len(in.Parts) == 0:
-		return ev, nil, fmt.Errorf("input %s has no parts", in.ID)
+		return ev, nil, fmt.Errorf("input has no parts")
 	case ev.Delivery != protocol.DeliveryQueue && ev.Delivery != protocol.DeliverySteer:
-		return ev, nil, fmt.Errorf("input %s has delivery %q", in.ID, in.Delivery)
+		return ev, nil, fmt.Errorf("input has delivery %q", in.Delivery)
 	}
 	label, err := Provenance(in.SourceID, in.SourceLabel)
 	if err != nil {
-		return ev, nil, fmt.Errorf("input %s: %w", in.ID, err)
+		return ev, nil, err
 	}
 	ev.SourceLabel = label
 	var blobs []Blob
@@ -81,12 +81,12 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 		case protocol.PartBlob:
 			part, err := attachment(p)
 			if err != nil {
-				return ev, nil, fmt.Errorf("input %s: %w", in.ID, err)
+				return ev, nil, err
 			}
 			ev.Parts = append(ev.Parts, part)
 			blobs = append(blobs, Blob{Key: part.BlobKey, Data: p.Data})
 		default:
-			return ev, nil, fmt.Errorf("input %s has part type %q", in.ID, p.Type)
+			return ev, nil, fmt.Errorf("input has part type %q", p.Type)
 		}
 	}
 	return ev, blobs, nil

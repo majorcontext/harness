@@ -282,13 +282,4 @@ var acpSessionScenarios = []acpScenario{
 			acpResult{id: "x", code: acpSessionNotFound, dataCode: "session_not_found"},
 		},
 	},
-	{
-		name: "prompt_with_an_image_block_is_invalid",
-		cite: "A prompt block other than `text` and `resource_link` is `-32602`.",
-		steps: []acpStep{
-			acpNew{as: "a"},
-			acpPromptStart{as: "a", blocks: []any{map[string]any{"type": "image", "data": "AAAA", "mimeType": "image/png"}}},
-			acpResult{id: "a", code: acpInvalidParams},
-		},
-	},
 }

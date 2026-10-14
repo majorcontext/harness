@@ -2,10 +2,13 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,40 +26,88 @@ type promptParams struct {
 	Prompt    []json.RawMessage `json:"prompt"`
 }
 
-// promptParts maps the content blocks of a prompt to input parts. The agent
-// advertises no prompt capability, so it takes the baseline: text and
-// resource_link.
+// promptBlock is the union of the content blocks that the agent takes.
+type promptBlock struct {
+	Type     string  `json:"type"`
+	Text     *string `json:"text"`
+	Name     *string `json:"name"`
+	URI      *string `json:"uri"`
+	Data     *string `json:"data"`
+	MimeType *string `json:"mimeType"`
+	Resource *struct {
+		URI      *string `json:"uri"`
+		MimeType *string `json:"mimeType"`
+		Text     *string `json:"text"`
+		Blob     *string `json:"blob"`
+	} `json:"resource"`
+}
+
+// promptParts maps the content blocks of a prompt to input parts: text,
+// resource_link, image, and resource. The runtime checks the media type and
+// the size of an attachment when it admits the input.
 func promptParts(blocks []json.RawMessage) ([]protocol.Part, error) {
 	var parts []protocol.Part
 	for i, raw := range blocks {
-		var b struct {
-			Type string  `json:"type"`
-			Text *string `json:"text"`
-			Name *string `json:"name"`
-			URI  *string `json:"uri"`
-		}
+		var b promptBlock
 		if err := json.Unmarshal(raw, &b); err != nil {
 			return nil, invalidParams(fmt.Sprintf("prompt[%d] is not a content block", i))
 		}
-		switch b.Type {
-		case "text":
-			if b.Text == nil {
-				return nil, invalidParams(fmt.Sprintf("prompt[%d] has no text", i))
-			}
-			parts = append(parts, protocol.Part{Type: protocol.PartText, Text: *b.Text})
-		case "resource_link":
-			if b.Name == nil || b.URI == nil {
-				return nil, invalidParams(fmt.Sprintf("prompt[%d] needs name and uri", i))
-			}
-			parts = append(parts, protocol.Part{Type: protocol.PartText, Text: *b.Name + " (" + *b.URI + ")"})
-		default:
-			return nil, invalidParams(fmt.Sprintf("prompt[%d] has the unsupported type %q", i, b.Type))
+		part, err := blockPart(i, b)
+		if err != nil {
+			return nil, err
 		}
+		parts = append(parts, part)
 	}
 	if len(parts) == 0 {
 		return nil, invalidParams("prompt has no content block")
 	}
 	return parts, nil
+}
+
+// imageTypes are the media types that an image block may carry. A PDF travels only as an embedded resource.
+var imageTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+func blockPart(i int, b promptBlock) (protocol.Part, error) {
+	switch b.Type {
+	case "text":
+		if b.Text == nil {
+			return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] has no text", i))
+		}
+		return protocol.Part{Type: protocol.PartText, Text: *b.Text}, nil
+	case "resource_link":
+		if b.Name == nil || b.URI == nil {
+			return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] needs name and uri", i))
+		}
+		return protocol.Part{Type: protocol.PartText, Text: *b.Name + " (" + *b.URI + ")"}, nil
+	case "image":
+		if b.Data == nil || b.MimeType == nil {
+			return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] needs data and mimeType", i))
+		}
+		if !slices.Contains(imageTypes, *b.MimeType) {
+			return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] image has the media type %q", i, *b.MimeType))
+		}
+		return attachmentPart(i, *b.MimeType, *b.Data)
+	case "resource":
+		r := b.Resource
+		switch {
+		case r == nil || r.URI == nil:
+			return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] needs a resource with a uri", i))
+		case r.Text != nil:
+			return protocol.Part{Type: protocol.PartText, Text: "<resource uri=\"" + html.EscapeString(*r.URI) + "\">\n" + *r.Text + "\n</resource>"}, nil
+		case r.Blob != nil && r.MimeType != nil:
+			return attachmentPart(i, *r.MimeType, *r.Blob)
+		}
+		return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] needs a resource with text, or with blob and mimeType", i))
+	}
+	return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] has the unsupported type %q", i, b.Type))
+}
+
+func attachmentPart(i int, mediaType, data string) (protocol.Part, error) {
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return protocol.Part{}, invalidParams(fmt.Sprintf("prompt[%d] is not valid base64", i))
+	}
+	return protocol.Part{Type: protocol.PartBlob, MediaType: mediaType, Data: raw}, nil
 }
 
 func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error) {

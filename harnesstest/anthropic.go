@@ -40,6 +40,8 @@ type wireBlock struct {
 	Content      json.RawMessage `json:"content"`
 	IsError      bool            `json:"is_error"`
 	Source       struct {
+		Type      string `json:"type"`
+		URL       string `json:"url"`
 		MediaType string `json:"media_type"`
 		Data      string `json:"data"`
 	} `json:"source"`
@@ -81,6 +83,8 @@ func decodeRequest(body []byte) (Request, error) {
 			switch b.Type {
 			case "text":
 				msg.Parts = append(msg.Parts, Part{Kind: "text", Text: b.Text})
+			case "image", "document":
+				msg.Parts = append(msg.Parts, Part{Kind: b.Type, Text: sourceURI(b)})
 			case "tool_use":
 				toolNames[b.ID] = b.Name
 				msg.Parts = append(msg.Parts, Part{Kind: "tool_use", ToolName: b.Name, ToolInput: b.Input, ToolUseID: b.ID})
@@ -112,6 +116,14 @@ func decodeRequest(body []byte) (Request, error) {
 		return Request{}, fmt.Errorf("%d tool_use blocks have no tool_result message", len(pending))
 	}
 	return req, nil
+}
+
+// sourceURI is the URL of an image or document block, or the data URI of its bytes.
+func sourceURI(b wireBlock) string {
+	if b.Source.Type == "url" {
+		return b.Source.URL
+	}
+	return "data:" + b.Source.MediaType + ";base64," + b.Source.Data
 }
 
 func blocks(raw json.RawMessage) []wireBlock {
