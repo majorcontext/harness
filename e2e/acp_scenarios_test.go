@@ -110,7 +110,7 @@ func (s acpInit) run(t *testing.T, c *acpConn) {
 	if got, _ := res["protocolVersion"].(float64); int(got) != s.want {
 		t.Errorf("initialize with version %d answered version %v, want %d", s.version, res["protocolVersion"], s.want)
 	}
-	checkACPAuthMethods(t, res, s.methods)
+	checkACPAuthMethods(t, res, s.methods, c.env.wasm)
 	agentCaps, _ := res["agentCapabilities"].(map[string]any)
 	if got, want := fmt.Sprint(agentCaps["promptCapabilities"]), "map[embeddedContext:true image:true]"; got != want {
 		t.Errorf("promptCapabilities = %s, want %s", got, want)
@@ -205,7 +205,6 @@ var acpWireScenarios = []acpScenario{
 		cite: "A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.",
 		steps: []acpStep{
 			acpCall{method: "bogus/method", code: acpMethodNotFound},
-			acpCall{method: "authenticate", params: map[string]any{"methodId": "x"}, code: acpMethodNotFound},
 			acpNotify{method: "bogus/notification"},
 			acpInit{version: 1, want: 1},
 		},
@@ -315,7 +314,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
 				t.Parallel()
 				var fake *harnesstest.Server
-				env := acpEnv{sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir(), jsTool: sc.jsTool, memoryStore: host.name == browserHostName}
+				env := acpEnv{sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir(), jsTool: sc.jsTool, memoryStore: host.name == browserHostName, wasm: host.name == nodeHostName || host.name == browserHostName}
 				if sc.login != nil {
 					env.login = startACPLogin(t, *sc.login, sc.model)
 					fake = env.login.fake

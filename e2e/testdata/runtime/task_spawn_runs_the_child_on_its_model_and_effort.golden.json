@@ -183,7 +183,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -274,7 +274,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -392,7 +392,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -537,7 +537,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -709,7 +709,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -906,7 +906,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -1125,7 +1125,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "task",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -1417,7 +1417,7 @@
             "type": "tool_result",
             "call_id": "toolu#2",
             "is_error": true,
-            "content": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai])"
+            "content": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex openai])"
           }
         ]
       },

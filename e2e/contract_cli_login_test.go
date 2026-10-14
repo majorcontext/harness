@@ -46,6 +46,9 @@ func TestContractCLILoginDeviceCodeStoresTheLoginUntilLogout(t *testing.T) {
 			t.Errorf("login output lacks %q:\n%s", want, out)
 		}
 	}
+	if !strings.Contains(out, "Try: harness run -model codex/") {
+		t.Errorf("login output names no next command:\n%s", out)
+	}
 	noSecret(t, issuer, "login output", out+errOut)
 	info, err := os.Stat(file)
 	if err != nil {

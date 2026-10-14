@@ -49,6 +49,8 @@ type Options struct {
 	Out io.Writer
 	// Env is the environment of the Claude Code CLI. Nil is the environment of the process.
 	Env []string
+	// LookPath resolves the program of the Claude Code CLI, as exec.LookPath does. Nil is exec.LookPath.
+	LookPath func(file string) (string, error)
 }
 
 // Auth implements acp.Auth.
@@ -73,6 +75,9 @@ func New(opts Options) *Auth {
 	if opts.Out == nil {
 		opts.Out = io.Discard
 	}
+	if opts.LookPath == nil {
+		opts.LookPath = exec.LookPath
+	}
 	return &Auth{opts: opts, status: map[string]claudeStatus{}}
 }
 
@@ -82,12 +87,14 @@ type target struct {
 	claude  string // the CLI binary, empty when no entry uses the CLI
 }
 
-func targets(cfg *config.Config) target {
-	var t target
-	for _, p := range cfg.Providers {
-		t.chatgpt = t.chatgpt || p.UsesChatGPTLogin()
+// targets offers the ChatGPT login always, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
+func (a *Auth) targets(cfg *config.Config) target {
+	t := target{chatgpt: true}
+	if bin, ok := cfg.ClaudeCLI(); ok {
+		if _, err := a.opts.LookPath(bin); err == nil {
+			t.claude = bin
+		}
 	}
-	t.claude, _ = cfg.ClaudeCLI()
 	return t
 }
 
@@ -96,7 +103,7 @@ func (a *Auth) userTargets() target {
 	if err != nil || cfg == nil {
 		return target{}
 	}
-	return targets(cfg)
+	return a.targets(cfg)
 }
 
 // Methods implements acp.Auth.
@@ -173,7 +180,7 @@ func (a *Auth) claudeCmd(ctx context.Context, bin string, args ...string) *exec.
 }
 
 func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config) error {
-	bin := targets(cfg).claude
+	bin, _ := cfg.ClaudeCLI()
 	cmd := a.claudeCmd(ctx, bin, "auth", "login")
 	cmd.Stdout, cmd.Stderr = a.opts.Out, a.opts.Out
 	err := cmd.Run()
@@ -206,7 +213,7 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 		return nil
 	}
 	provider, _, _ := strings.Cut(cfg.ResolveModel(model), "/")
-	p, ok := cfg.Providers[provider]
+	p, ok := cfg.ProviderEntries()[provider]
 	switch {
 	case !ok:
 		return nil

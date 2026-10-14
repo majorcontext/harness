@@ -27,31 +27,6 @@
     {
       "dir": "client",
       "frame": {
-        "id": 2,
-        "jsonrpc": "2.0",
-        "method": "authenticate",
-        "params": {
-          "methodId": "x"
-        }
-      }
-    },
-    {
-      "dir": "agent",
-      "frame": {
-        "error": {
-          "code": -32601,
-          "data": {
-            "method": "authenticate"
-          },
-          "message": "Method not found"
-        },
-        "id": 2,
-        "jsonrpc": "2.0"
-      }
-    },
-    {
-      "dir": "client",
-      "frame": {
         "jsonrpc": "2.0",
         "method": "bogus/notification"
       }
@@ -59,7 +34,7 @@
     {
       "dir": "client",
       "frame": {
-        "id": 3,
+        "id": 2,
         "jsonrpc": "2.0",
         "method": "initialize",
         "params": {
@@ -75,10 +50,13 @@
     {
       "dir": "agent",
       "frame": {
-        "id": 3,
+        "id": 2,
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": true,
@@ -99,7 +77,13 @@
             "title": "Harness",
             "version": "\u003cversion\u003e"
           },
-          "authMethods": [],
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            }
+          ],
           "protocolVersion": 1
         }
       }

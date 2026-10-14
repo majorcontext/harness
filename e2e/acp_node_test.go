@@ -176,6 +176,8 @@ func startACPNodeOpts(t *testing.T, opts nodeHostOptions) (io.WriteCloser, io.Re
 const (
 	nodeMCPOff = `"mcpCapabilities":{"http":false`
 	nodeMCPOn  = `"mcpCapabilities":{"http":true`
+	// nodeAuthMethods is the authMethods of the native hosts, for the wasm host, which offers no login.
+	nodeAuthMethods = `"authMethods":[{"description":"Open your browser and sign in with your ChatGPT subscription.","id":"chatgpt","name":"Log in with ChatGPT"}]`
 )
 
 // alignNodeGolden rewrites the two texts in which the wasm host differs from
@@ -187,6 +189,10 @@ func alignNodeGolden(t *testing.T, g acpGolden) acpGolden {
 	t.Helper()
 	for i, f := range g.Wire {
 		text := string(f.Frame)
+		if f.Dir == "agent" && strings.Contains(text, `"authMethods":[]`) {
+			text = strings.Replace(strings.Replace(text, `"authMethods":[]`, nodeAuthMethods, 1), `"agentCapabilities":{`, `"agentCapabilities":{"auth":{"logout":{}},`, 1)
+			g.Wire[i].Frame = json.RawMessage(text)
+		}
 		if f.Dir != "agent" || !strings.Contains(text, `"mcpCapabilities"`) {
 			continue
 		}

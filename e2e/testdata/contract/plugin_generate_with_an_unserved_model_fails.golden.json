@@ -99,7 +99,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "host error: client/generate: provider \"nosuch\" is not configured (valid aliases: []; configured providers: [anthropic openai])",
+              "text": "host error: client/generate: provider \"nosuch\" is not configured (valid aliases: []; configured providers: [anthropic claude-code codex openai])",
               "tool_name": "fixture_generate",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -144,7 +144,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "host error: client/generate: provider \"nosuch\" is not configured (valid aliases: []; configured providers: [anthropic openai])"
+            "content": "host error: client/generate: provider \"nosuch\" is not configured (valid aliases: []; configured providers: [anthropic claude-code codex openai])"
           }
         ]
       },

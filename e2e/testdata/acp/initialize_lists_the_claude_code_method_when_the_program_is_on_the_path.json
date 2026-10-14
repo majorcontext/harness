@@ -25,6 +25,9 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": true,
@@ -47,6 +50,11 @@
           },
           "authMethods": [
             {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            },
+            {
               "description": "Sign in with the Claude Code CLI. The CLI opens your browser.",
               "id": "claude-code",
               "name": "Log in with Claude Code"
@@ -54,29 +62,6 @@
           ],
           "protocolVersion": 1
         }
-      }
-    },
-    {
-      "dir": "client",
-      "frame": {
-        "id": 2,
-        "jsonrpc": "2.0",
-        "method": "logout",
-        "params": {}
-      }
-    },
-    {
-      "dir": "agent",
-      "frame": {
-        "error": {
-          "code": -32601,
-          "data": {
-            "method": "logout"
-          },
-          "message": "Method not found"
-        },
-        "id": 2,
-        "jsonrpc": "2.0"
       }
     }
   ]

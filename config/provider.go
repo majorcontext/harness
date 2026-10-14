@@ -29,8 +29,42 @@ var nativeProviderKeys = map[string]string{
 	"openai":    "OPENAI_API_KEY",
 }
 
+// codexBaseURL is the base URL of the ChatGPT subscription backend of the native codex provider.
+const codexBaseURL = "https://chatgpt.com/backend-api/codex"
+
+// nativeProviderEntries are the entries of the built-in providers: each one needs no providers entry. The key
+// variables of anthropic and openai are in nativeProviderKeys.
+func nativeProviderEntries() map[string]Provider {
+	return map[string]Provider{
+		"anthropic": {},
+		"openai":    {},
+		"codex": {
+			Type:                TypeOpenAI,
+			Auth:                AuthChatGPT,
+			BaseURL:             codexBaseURL,
+			ResponsesPath:       "/responses",
+			OmitResponseParams:  omitResponseParams(),
+			SanitizeToolSchemas: true,
+		},
+		"claude-code": {Type: TypeClaudeCodeCLI},
+	}
+}
+
 // NativeProviders returns the names of the built-in providers, sorted.
-func NativeProviders() []string { return slices.Sorted(maps.Keys(nativeProviderKeys)) }
+func NativeProviders() []string { return slices.Sorted(maps.Keys(nativeProviderEntries())) }
+
+// NativeProvider returns the entry of the built-in provider name. A providers entry of the same name replaces it as a whole.
+func NativeProvider(name string) (Provider, bool) {
+	p, ok := nativeProviderEntries()[name]
+	return p, ok
+}
+
+// ProviderEntries returns the providers of c: each providers entry, and the entry of each built-in provider that no providers entry replaces.
+func (c *Config) ProviderEntries() map[string]Provider {
+	out := nativeProviderEntries()
+	maps.Copy(out, c.Providers)
+	return out
+}
 
 // NativeKeyEnv returns the variable that holds the API key of the built-in provider name, and "" for any other provider.
 func NativeKeyEnv(name string) string { return nativeProviderKeys[name] }
@@ -123,13 +157,19 @@ func (p Provider) UsesChatGPTLogin() bool { return p.Auth == AuthChatGPT }
 // UsesClaudeCLI says that the entry runs the Claude Code CLI.
 func (p Provider) UsesClaudeCLI() bool { return p.Type == TypeClaudeCodeCLI }
 
-// ClaudeCLI returns the executable of the Claude Code CLI that the config uses: the entry of the default model when it runs the CLI, else the first such entry in name order. ok is false when no entry runs the CLI.
+// ClaudeCLI returns the executable of the Claude Code CLI that the config uses: the entry of the default model when it runs the CLI, else the first such entry in name order, else the program of the native claude-code provider. ok is false when the providers entries replace the native entry with one that does not run the CLI and no entry runs it.
 func (c *Config) ClaudeCLI() (bin string, ok bool) {
-	if ref, _, _ := strings.Cut(c.ResolveModel(""), "/"); c.Providers[ref].UsesClaudeCLI() {
-		return c.Providers[ref].CLIBinary(), true
+	entries := c.ProviderEntries()
+	if ref, _, _ := strings.Cut(c.ResolveModel(""), "/"); entries[ref].UsesClaudeCLI() {
+		return entries[ref].CLIBinary(), true
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Providers)) {
 		if p := c.Providers[name]; p.UsesClaudeCLI() {
+			return p.CLIBinary(), true
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(entries)) {
+		if p := entries[name]; p.UsesClaudeCLI() {
 			return p.CLIBinary(), true
 		}
 	}

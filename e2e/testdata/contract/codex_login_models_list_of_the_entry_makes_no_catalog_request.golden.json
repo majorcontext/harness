@@ -222,6 +222,66 @@
           "provider_name": "Anthropic"
         },
         {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/fable",
+          "name": "Claude Fable (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/haiku",
+          "name": "Claude Haiku (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/opus",
+          "name": "Claude Opus (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/sonnet",
+          "name": "Claude Sonnet (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
           "context_window": 1000000,
           "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
           "efforts": [

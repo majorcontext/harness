@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/codexauth"
+	"github.com/majorcontext/harness/internal/modelmeta"
 )
 
 const loginUsage = "usage: harness login codex [--device] [--no-browser] [--status]\n       harness login claude-code [--console] [--sso] [--status]\n       harness logout codex\n       harness logout claude-code"
@@ -140,6 +141,9 @@ func loginCodex(args []string) error {
 		return err
 	}
 	fmt.Println("Signed in to Codex.")
+	if models := modelmeta.CodexModels(); len(models) > 0 {
+		fmt.Printf("Try: harness run -model codex/%s -p \"...\"\n", models[0].ID)
+	}
 	return nil
 }
 
