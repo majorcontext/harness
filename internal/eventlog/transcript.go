@@ -24,7 +24,9 @@ func (s *State) lastMessageID() string {
 	return ""
 }
 
-func summaryID(seq uint64) string { return protocol.CompactionSummaryIDPrefix + strconv.FormatUint(seq, 10) }
+func summaryID(seq uint64) string {
+	return protocol.CompactionSummaryIDPrefix + strconv.FormatUint(seq, 10)
+}
 
 // Transcript returns the conversation as a reader sees it, oldest first: the
 // messages that each compaction folded, the summary of each compaction as a
