@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,15 +209,45 @@ func (c *acpConn) finish(stop func()) {
 	if closer, ok := c.in.(io.Closer); ok {
 		_ = closer.Close()
 	}
-	for l := range c.lines {
-		if l.err != nil && !errors.Is(l.err, io.EOF) && !errors.Is(l.err, io.ErrClosedPipe) {
-			c.t.Errorf("reading the output of the agent: %v", l.err)
-		}
-		if l.text != "" {
-			c.t.Errorf("stdout holds a line that no step read: %q", l.text)
+	timer := time.NewTimer(finishBound)
+	defer timer.Stop()
+	for {
+		select {
+		case l, ok := <-c.lines:
+			if !ok {
+				stop()
+				return
+			}
+			if l.err != nil && !errors.Is(l.err, io.EOF) && !errors.Is(l.err, io.ErrClosedPipe) {
+				c.t.Errorf("reading the output of the agent: %v", l.err)
+			}
+			if l.text != "" {
+				c.t.Errorf("stdout holds a line that no step read: %q", l.text)
+			}
+		case <-timer.C:
+			c.t.Fatalf("the agent did not close its output within %s after its input closed%s", finishBound, stallReport(c.t))
 		}
 	}
-	stop()
+}
+
+// finishBound bounds the wait for the output of an agent to close after its
+// input closes. A healthy agent needs milliseconds.
+const finishBound = 20 * time.Second
+
+// rowBound is the hard limit of one Node host run.
+const rowBound = 45 * time.Second
+
+// stallDumps maps a test to a function that asks its agent process for a state
+// report, kills the process, and returns the report with the stderr.
+var stallDumps sync.Map
+
+// stallReport returns the state report of the agent of t, or an empty string.
+func stallReport(t *testing.T) string {
+	fn, ok := stallDumps.Load(t)
+	if !ok {
+		return ""
+	}
+	return "\n" + fn.(func() string)()
 }
 
 // drain closes the input and fails on any line that no step read, until the

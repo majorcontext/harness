@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // nodeHostName names the Node wasm host in the subtests of the ACP table.
@@ -135,12 +137,40 @@ func startACPNodeOpts(t *testing.T, opts nodeHostOptions) (io.WriteCloser, io.Re
 	cmd := exec.Command(node, host, wasm, execJS, optsPath)
 	cmd.Dir = t.TempDir()
 	in, out, g, stderr := startACPCmd(t, cmd)
+	dump := func() string {
+		_ = syscall.Kill(g.cmd.Process.Pid, syscall.SIGUSR2)
+		state := "the host answered the state request"
+		if !testpoll.UntilNoT(3*time.Second, func() bool { return strings.Contains(stderr.String(), "active resources:") }, 50*time.Millisecond) {
+			state = "the host did not answer the state request; its event loop is blocked"
+		}
+		report := state + "\nnode stderr:\n" + stderr.String()
+		g.kill()
+		return report
+	}
+	stallDumps.Store(t, dump)
+	callback := make(chan struct{})
+	watchdog := time.AfterFunc(rowBound, func() {
+		defer close(callback)
+		t.Errorf("the Node host ran longer than %s\n%s", rowBound, dump())
+	})
+	// endWatch ends the limit of this host before another host of t starts.
+	// Stop does not wait for a callback that runs, so the wait does.
+	var endOnce sync.Once
+	endWatch := func() {
+		endOnce.Do(func() {
+			if !watchdog.Stop() {
+				<-callback
+			}
+			stallDumps.Delete(t)
+		})
+	}
 	t.Cleanup(func() {
+		endWatch()
 		if t.Failed() {
 			t.Logf("node stderr:\n%s", stderr.String())
 		}
 	})
-	return in, out, func() { t.Helper(); waitACPExit(t, g, stderr) }
+	return in, out, func() { t.Helper(); endWatch(); waitACPExit(t, g, stderr) }
 }
 
 const (
