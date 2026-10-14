@@ -15,13 +15,14 @@ func TestFormOfMapsMultiSelectAndFreeTextQuestions(t *testing.T) {
 		t.Fatal("formOf reported no form")
 	}
 	want := map[string]any{
-		"type": "object", "required": []string{"question_1", "question_2"},
+		"type": "object", "required": []string{"question_2"},
 		"properties": map[string]any{
 			"question_1": map[string]any{"type": "array", "title": "Tools", "description": "Which tools?", "minItems": 1,
 				"items": map[string]any{"anyOf": []any{
 					map[string]any{"const": "lint", "title": "lint"},
 					map[string]any{"const": "test", "title": "test", "description": "runs tests"}}}},
-			"question_2": map[string]any{"type": "string", "title": "Name it?", "description": "Name it?"},
+			"question_1_other": map[string]any{"type": "string", "title": "Other", "description": "Your own answer to: Which tools?"},
+			"question_2":       map[string]any{"type": "string", "title": "Name it?", "description": "Name it?"},
 		},
 	}
 	if !reflect.DeepEqual(f.schema, want) || f.message != "Which tools?\nName it?" {

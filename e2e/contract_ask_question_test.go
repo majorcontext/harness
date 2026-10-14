@@ -106,6 +106,18 @@ func askLaneWith(extra map[string]any) func(t *testing.T, h host, modelURL strin
 	}
 }
 
+func askQuestion(question string, labels ...string) map[string]any {
+	return askQuestionWith(question, "Q", labels...)
+}
+
+func askQuestionWith(question, header string, labels ...string) map[string]any {
+	var opts []any
+	for _, l := range labels {
+		opts = append(opts, map[string]any{"label": l, "description": "d"})
+	}
+	return map[string]any{"question": question, "header": header, "multiSelect": false, "options": opts}
+}
+
 func askCall(id, question string) harnesstest.ToolCall {
 	return harnesstest.ToolCall{ID: id, Name: "ask_user_question", Input: map[string]any{"questions": []any{map[string]any{
 		"question": question, "header": "Q", "multiSelect": false,
@@ -171,6 +183,70 @@ func TestContractModelAPIQuestionEdges(t *testing.T) {
 			},
 			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, getSession{as: "a"}},
 		},
+	})
+}
+
+func TestContractModelAPIQuestionInput(t *testing.T) {
+	followUp := harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("ask_user_question"), Reply: harnesstest.Reply{Text: "after"}}
+	rest := harnesstest.Step{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}
+	runScenarios(t, []scenario{
+		{
+			name:   "model_api_question_with_repeated_question_texts_gets_an_error_result",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_dup", Name: "ask_user_question", Input: map[string]any{"questions": []any{askQuestion("Same?", "A", "B"), askQuestion("Same?", "C", "D")}}},
+				}}},
+				followUp, rest,
+			},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name:   "model_api_question_with_repeated_option_labels_gets_an_error_result",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_dup", Name: "ask_user_question", Input: map[string]any{"questions": []any{askQuestion("Which?", "A", "A")}}},
+				}}},
+				followUp, rest,
+			},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name:   "model_api_question_with_a_long_header_gets_an_error_result",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_long", Name: "ask_user_question", Input: map[string]any{"questions": []any{askQuestionWith("Which?", "A very long header", "A", "B")}}},
+				}}},
+				followUp, rest,
+			},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name:   "model_api_question_with_preview_metadata_answers_and_annotations_opens_a_request",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_ask", Name: "ask_user_question", Input: map[string]any{
+						"questions": []any{map[string]any{"question": "Which layout?", "header": "Layout", "multiSelect": false, "options": []any{
+							map[string]any{"label": "Grid", "description": "a grid", "preview": "+--+--+"},
+							map[string]any{"label": "List", "description": "a list"},
+						}}},
+						"metadata": map[string]any{"source": "test"}, "answers": map[string]any{"x": "y"}, "annotations": map[string]any{"x": map[string]any{"notes": "n"}},
+					}},
+				}}},
+				followUp, rest,
+			},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, getSession{as: "a"},
+				answerQuestion{as: "a", callID: "toolu_ask", answers: map[string]string{"Which layout?": "Grid"}}, waitIdle{as: "a"}},
+		},
+	})
+}
+
+func TestContractModelAPIQuestionScope(t *testing.T) {
+	rest := harnesstest.Step{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}
+	runScenarios(t, []scenario{
 		{
 			name:   "model_api_session_info_lists_the_question_tool_when_it_is_offered",
 			driver: askLane(true),

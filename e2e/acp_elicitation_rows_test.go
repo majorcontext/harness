@@ -100,6 +100,73 @@ var acpQuestionLogin = &acpLoginSpec{claude: true, claudeQuestion: true}
 
 var acpElicitationScenarios = []acpScenario{
 	{
+		name: "free_text_in_the_other_field_is_the_answer_and_a_preview_shows_in_the_option",
+		cite: "it is an optional `string` with the `title` `Other`",
+		model: []harnesstest.Step{
+			{Name: "ask", Match: assistantTurns(0), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_ask", Name: "ask_user_question", Input: map[string]any{"questions": []any{map[string]any{
+				"question": "Which database?", "header": "DB", "multiSelect": false,
+				"options": []any{
+					map[string]any{"label": "PostgreSQL", "description": "a", "preview": "SELECT 1;"},
+					map[string]any{"label": "SQLite", "description": "b"},
+				},
+			}}}}}}},
+			{Name: "noted", Match: assistantTurns(1), Reply: harnesstest.Reply{Text: "Noted."}},
+		},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, elicitation: true},
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
+			acpAwaitElicitation{as: "q", check: func(t *testing.T, params map[string]any) {
+				props, _ := params["requestedSchema"].(map[string]any)["properties"].(map[string]any)
+				first, _ := props["question_1"].(map[string]any)
+				opts, _ := first["oneOf"].([]any)
+				got, _ := opts[0].(map[string]any)["description"].(string)
+				if got != "a\n\nSELECT 1;" {
+					t.Errorf("option description = %q, want the description and the preview", got)
+				}
+				if other, _ := props["question_1_other"].(map[string]any); other["title"] != "Other" || other["type"] != "string" {
+					t.Errorf("question_1_other = %v, want a string titled Other", props["question_1_other"])
+				}
+			}},
+			acpAnswerElicitation{as: "q", action: "accept", content: map[string]any{"question_1_other": "Oracle"}},
+			acpAwaitText{text: "Noted."},
+			acpAwaitUpdate{kind: "session_info_update"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := requestText(acpRequests(t, c, 2)[1]); !strings.Contains(got, `"Which database?"="Oracle"`) {
+					t.Errorf("the second request does not hold the typed answer: %s", got)
+				}
+			}),
+		},
+	},
+	{
+		name: "free_text_joins_the_chosen_labels_of_a_multiple_choice_question",
+		cite: "When `question_N_other` has text, that text is the answer; for a question that allows more than one answer, it follows the chosen labels.",
+		model: []harnesstest.Step{
+			{Name: "ask", Match: assistantTurns(0), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_ask", Name: "ask_user_question", Input: map[string]any{"questions": []any{map[string]any{
+				"question": "Which features?", "header": "Features", "multiSelect": true,
+				"options": []any{
+					map[string]any{"label": "A", "description": "a"},
+					map[string]any{"label": "B", "description": "b"},
+				},
+			}}}}}}},
+			{Name: "noted", Match: assistantTurns(1), Reply: harnesstest.Reply{Text: "Noted."}},
+		},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, elicitation: true},
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "pick", stop: "end_turn"},
+			acpAwaitElicitation{as: "q"},
+			acpAnswerElicitation{as: "q", action: "accept", content: map[string]any{"question_1": []any{"A", "B"}, "question_1_other": "C"}},
+			acpAwaitText{text: "Noted."},
+			acpAwaitUpdate{kind: "session_info_update"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := requestText(acpRequests(t, c, 2)[1]); !strings.Contains(got, `"Which features?"="A, B, C"`) {
+					t.Errorf("the second request does not hold the joined answer: %s", got)
+				}
+			}),
+		},
+	},
+	{
 		name: "a_model_api_session_question_is_elicited_and_the_answer_reaches_the_model",
 		cite: "so a session of any backend can ask a question.",
 		model: []harnesstest.Step{
@@ -142,14 +209,14 @@ var acpElicitationScenarios = []acpScenario{
 			acpAwaitElicitation{as: "q", check: func(t *testing.T, params map[string]any) {
 				schema, _ := params["requestedSchema"].(map[string]any)
 				want := map[string]any{
-					"type": "object", "required": []any{"question_1"},
+					"type": "object",
 					"properties": map[string]any{"question_1": map[string]any{
 						"type": "string", "title": "DB", "description": "Which database?",
 						"oneOf": []any{
 							map[string]any{"const": "PostgreSQL", "title": "PostgreSQL", "description": "a"},
 							map[string]any{"const": "SQLite", "title": "SQLite", "description": "b"},
 						},
-					}},
+					}, "question_1_other": map[string]any{"type": "string", "title": "Other", "description": "Your own answer to: Which database?"}},
 				}
 				if !reflect.DeepEqual(schema, want) {
 					t.Errorf("requestedSchema = %v, want %v", schema, want)

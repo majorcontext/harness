@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -16,9 +17,15 @@ import (
 // the user a question.
 const AskTool = "ask_user_question"
 
-const askDescription = "Ask the user one to four multiple-choice questions when you need a decision that the conversation does not give. " +
-	"Each question has two to four options; the user may also give free text. " +
-	"The call ends your turn until the user answers. The result holds the answer to each question."
+const askDescription = "Ask the user one to four multiple-choice questions during a task. " +
+	"Use it to gather preferences or requirements, to clarify an ambiguous instruction, to get a decision on an implementation choice, or to offer the user choices of direction. " +
+	"The user can always pick Other and type their own text, so do not add an Other option yourself. " +
+	"Set multiSelect to true when the choices are not mutually exclusive. " +
+	"To recommend an option, make it the first option and end its label with \" (Recommended)\". " +
+	"Use preview on an option only for a concrete artifact that the user must compare side by side, such as a code snippet, a mockup, or a diagram; a preview works only when multiSelect is false. " +
+	"Each question text must be unique, and each option label must be unique within its question. " +
+	"Do not use this tool to ask whether a plan is ready or whether to proceed. " +
+	"The call ends your turn until the user answers; the result holds the answer to each question."
 
 const askSchema = `{
 	"type": "object",
@@ -32,7 +39,7 @@ const askSchema = `{
 				"type": "object",
 				"properties": {
 					"question": {"type": "string", "description": "The complete question, ending with a question mark"},
-					"header": {"type": "string", "description": "A very short label for the question, at most 12 characters"},
+					"header": {"type": "string", "maxLength": 12, "description": "A very short label for the question, at most 12 characters"},
 					"options": {
 						"type": "array",
 						"minItems": 2,
@@ -41,15 +48,21 @@ const askSchema = `{
 							"type": "object",
 							"properties": {
 								"label": {"type": "string", "description": "The choice, in one to five words"},
-								"description": {"type": "string", "description": "What the choice means"}
+								"description": {"type": "string", "description": "What the choice means"},
+								"preview": {"type": "string", "description": "Optional. A mockup, code snippet, or diagram that the user sees when the option is focused. Only for a question with multiSelect false"}
 							},
 							"required": ["label", "description"]
 						}
 					},
-					"multiSelect": {"type": "boolean", "description": "Let the user choose more than one option"}
+					"multiSelect": {"type": "boolean", "default": false, "description": "Let the user choose more than one option"}
 				},
 				"required": ["question", "header", "options", "multiSelect"]
 			}
+		},
+		"metadata": {
+			"type": "object",
+			"description": "Optional. Tracking data that the tool ignores",
+			"properties": {"source": {"type": "string", "description": "An identifier of the origin of the question"}}
 		}
 	},
 	"required": ["questions"]
@@ -90,14 +103,27 @@ func checkAsk(args json.RawMessage) error {
 	if n := len(in.Questions); n < 1 || n > 4 {
 		return fmt.Errorf("invalid input: ask one to four questions, not %d", n)
 	}
+	seen := map[string]bool{}
 	for _, q := range in.Questions {
+		if seen[q.Question] {
+			return fmt.Errorf("invalid input: the question %q is repeated; each question text must be unique", q.Question)
+		}
+		seen[q.Question] = true
 		if strings.TrimSpace(q.Question) == "" || q.Header == nil || q.MultiSelect == nil || len(q.Options) < 2 || len(q.Options) > 4 {
 			return errors.New("invalid input: each question needs question, header, multiSelect, and two to four options")
 		}
+		if utf8.RuneCountInString(*q.Header) > 12 {
+			return fmt.Errorf("invalid input: the header %q has more than 12 characters", *q.Header)
+		}
+		labels := map[string]bool{}
 		for _, o := range q.Options {
 			if strings.TrimSpace(o.Label) == "" || o.Description == nil {
 				return errors.New("invalid input: each option needs label and description")
 			}
+			if labels[o.Label] {
+				return fmt.Errorf("invalid input: the option label %q is repeated in the question %q; each label must be unique", o.Label, q.Question)
+			}
+			labels[o.Label] = true
 		}
 	}
 	return nil
