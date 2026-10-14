@@ -17,11 +17,10 @@ import (
 )
 
 // newWired builds a Runtime as cmd/harness does: the Owner and the Sync come
-// from the config keys owner_epoch and sync.
-// newWired builds a runtime with an owner and, when the config names a Sync,
-// an HTTP Sync client. A runtime with a Sync closes at cleanup, so a row that
-// fails before its own Close leaves no sender that posts to a closed receiver.
-// Create the receiver first: cleanups run in reverse order.
+// from the config keys owner_epoch and sync. A runtime with a Sync closes at
+// cleanup, so a row that fails before its own Close leaves no sender that
+// posts to a closed receiver. Create the receiver first: cleanups run in
+// reverse order.
 func newWired(t *testing.T, opts harness.Options) (*harness.Runtime, error) {
 	t.Helper()
 	if opts.Getenv == nil {
