@@ -91,7 +91,11 @@ async function runRow(browser, row) {
   clearTimeout(timer);
   await Promise.race([context.close(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
   const out = { ...result, offlineFailures, console: console_ };
-  if (row.throttle && modulePath) out.brotliBytes = (await promisify(zlib.brotliCompress)(fs.readFileSync(modulePath))).length;
+  if (row.throttle && modulePath) {
+    // Quality 9 takes about 1 s for this module and the default quality 11 about 40 s. The size is for information only.
+    const params = { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 };
+    out.brotliBytes = (await promisify(zlib.brotliCompress)(fs.readFileSync(modulePath), { params })).length;
+  }
   return out;
 }
 
