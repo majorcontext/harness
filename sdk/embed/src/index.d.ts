@@ -30,7 +30,7 @@ export interface SubprocessTransport {
 export interface CreateHarnessOptions {
   /** wasm() or subprocess(). subprocess refuses tools, builtinTools, proxy, and fetch. */
   transport: WasmTransport | SubprocessTransport;
-  /** The config.Config JSON. It holds no key. With subprocess it replaces the user config file of the process. */
+  /** The config.Config JSON. It holds no key. With subprocess it is the user config file of the process; the project config still merges over it. */
   config?: object;
   /** A same-origin proxy: baseURL fills every provider that sets none; headers go only on requests to the origin of baseURL. */
   proxy?: { baseURL?: string | URL; headers?: Record<string, string> };
@@ -43,7 +43,7 @@ export interface CreateHarnessOptions {
    * Under Node, dir is a directory that one process holds. In the browser, persist keeps the sessions in
    * the origin private file system below dir (default /persist/sessions), and the promise rejects with code "store_in_use" after 2 s while
    * another page of the origin holds the store. Otherwise the store is in memory.
-   * With subprocess, dir is the session directory of the process (it sets HARNESS_SESSION_DIR); the process holds its own lock, and without dir it uses its default directory.
+   * With subprocess, dir is the session directory of the process (it sets HARNESS_SESSION_DIR); the process holds its own lock, and without dir the sessions go to its default directory, not to memory.
    */
   store?: { persist?: boolean; dir?: string };
   /** Receives each JSON log line of the module. */
@@ -53,7 +53,7 @@ export interface CreateHarnessOptions {
 export interface Harness {
   /** ACP messages. It has no backpressure in either direction. */
   stream: { readable: ReadableStream<AcpMessage>; writable: WritableStream<AcpMessage> };
-  /** Ends the connection and the Worker. A second call returns the same promise. */
+  /** Ends the connection and the Worker or the process. A second call returns the same promise. */
   close(): Promise<void>;
 }
 

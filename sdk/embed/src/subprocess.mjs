@@ -48,9 +48,10 @@ async function startSubprocess(transport, { config, store, log }) {
   if (!isNode) throw new Error("the subprocess transport runs under Node only");
   const [{ spawn }, fs, os, path] = await Promise.all([import("node:child_process"), import("node:fs/promises"), import("node:os"), import("node:path")]);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-embed-"));
-  const removeDir = () => fs.rm(dir, { recursive: true, force: true });
+  let removed;
+  const removeDir = () => (removed ??= fs.rm(dir, { recursive: true, force: true }));
   const configPath = path.join(dir, "config.json");
-  const env = { ...process.env, ...transport.env, HARNESS_CONFIG: configPath };
+  const env = { ...process.env, ...transport.env, HARNESS_CONFIG_FILE: configPath };
   if (store.dir) env.HARNESS_SESSION_DIR = store.dir;
   let child;
   try {
@@ -110,7 +111,10 @@ async function startSubprocess(transport, { config, store, log }) {
 
   function close() {
     return (closing ??= (async () => {
-      if (failed && exit) return;
+      if (failed && exit) {
+        await removeDir();
+        throw new Error(describeExit(exit));
+      }
       child.stdin.end();
       const sent = [];
       let info = await within(exited, transport.closeTimeout);
@@ -120,7 +124,13 @@ async function startSubprocess(transport, { config, store, log }) {
         child.kill(signal);
         info = await within(exited, transport.closeTimeout);
       }
-      info ??= await exited;
+      if (!info) {
+        // A grandchild can hold the pipes after the process is dead.
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        info = (await within(exited, transport.closeTimeout)) ?? { code: null, signal: "SIGKILL" };
+      }
       await removeDir();
       stream.end();
       if (sent.length) throw new Error(`harness did not exit ${transport.closeTimeout} ms after its input closed; sent ${sent.join(" then ")}`);

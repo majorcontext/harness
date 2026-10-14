@@ -52,7 +52,7 @@ test("command, args, env, cwd, and config reach the process", async () => {
   const cwd = tempDir();
   const dir = tempDir();
   const h = await createHarness({
-    transport: fakeHarness("report", { cwd, env: { FAKE_MARKER: "m1" } }),
+    transport: fakeHarness("report", { cwd, env: { FAKE_MARKER: "m1", HARNESS_CONFIG_FILE: "/nonexistent" } }),
     config: { model: "anthropic/claude-fable-5" },
     store: { dir },
   });
@@ -103,11 +103,11 @@ test("a line on stdout that is no frame ends the stream with an error and stops 
   await h.close().catch(() => {});
 });
 
-test("a process that exits on its own ends the stream with its exit status, and close settles", async () => {
+test("a process that exits on its own ends the stream with its exit status, and close rejects with it", async () => {
   const lines = [];
   const h = await createHarness({ transport: fakeHarness("crash"), log: (line) => lines.push(line) });
   await assert.rejects(h.stream.readable.getReader().read(), /exited with code 2/);
-  await h.close();
+  await assert.rejects(h.close(), /exited with code 2/);
   assert.deepEqual(lines, ["boom"]);
 });
 

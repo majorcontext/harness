@@ -143,8 +143,16 @@ func loadConfig() (*config.Config, error) {
 	return config.LoadProject(userConfigPath(), dir)
 }
 
-// userConfigPath is $HARNESS_CONFIG if set, otherwise ~/.harness/config.json.
+// userConfigPath is the user config file to read: $HARNESS_CONFIG_FILE if set, otherwise homeConfigPath.
 func userConfigPath() string {
+	if p := os.Getenv("HARNESS_CONFIG_FILE"); p != "" {
+		return p
+	}
+	return homeConfigPath()
+}
+
+// homeConfigPath is $HARNESS_CONFIG if set, otherwise ~/.harness/config.json.
+func homeConfigPath() string {
 	if p := os.Getenv("HARNESS_CONFIG"); p != "" {
 		return p
 	}
@@ -153,6 +161,11 @@ func userConfigPath() string {
 		return filepath.Join(".harness", "config.json")
 	}
 	return filepath.Join(home, ".harness", "config.json")
+}
+
+// userDir is the directory that holds the Codex login and the plugin cache. It does not follow $HARNESS_CONFIG_FILE.
+func userDir() string {
+	return filepath.Dir(homeConfigPath())
 }
 
 // applyOverrides applies the HARNESS_* variables to cfg, then the flags, so a

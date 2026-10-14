@@ -19,10 +19,10 @@ import (
 
 const loginUsage = "usage: harness login codex [--device] [--no-browser] [--status]\n       harness login claude-code [--console] [--sso] [--status]\n       harness logout codex\n       harness logout claude-code"
 
-// defaultCodexAuth puts the Codex login beside the user config when no variable or key names it.
+// defaultCodexAuth puts the Codex login beside $HARNESS_CONFIG (or in ~/.harness) when no variable or key names it.
 func defaultCodexAuth(cfg *config.Config) {
 	if cfg.CodexAuthFile == "" {
-		cfg.CodexAuthFile = filepath.Join(filepath.Dir(userConfigPath()), "auth", "codex.json")
+		cfg.CodexAuthFile = filepath.Join(userDir(), "auth", "codex.json")
 	}
 }
 

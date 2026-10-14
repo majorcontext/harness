@@ -6,7 +6,7 @@ const mode = process.env.FAKE_MODE;
 const frame = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 process.stdin.resume();
 if (mode === "report") {
-  frame({ jsonrpc: "2.0", method: "report", params: { cwd: process.cwd(), arg: process.argv[2], marker: process.env.FAKE_MARKER, config: process.env.HARNESS_CONFIG, sessions: process.env.HARNESS_SESSION_DIR } });
+  frame({ jsonrpc: "2.0", method: "report", params: { cwd: process.cwd(), arg: process.argv[2], marker: process.env.FAKE_MARKER, config: process.env.HARNESS_CONFIG_FILE, sessions: process.env.HARNESS_SESSION_DIR } });
   process.stdin.on("end", () => process.exit(0));
 } else if (mode === "eof3") {
   frame({ jsonrpc: "2.0", method: "ready" });
