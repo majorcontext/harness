@@ -66,6 +66,9 @@ func (a *codexAuthRun) write(t *testing.T, label string, lifetime time.Duration,
 	t.Helper()
 	access := harnesstest.AccessToken(label, codexAccount, lifetime)
 	a.tokens = append(a.tokens, access, refresh)
+	if parts := strings.Split(access, "."); len(parts) == 3 {
+		a.tokens = append(a.tokens, parts[1])
+	}
 	body, err := json.Marshal(map[string]string{
 		"access_token":  access,
 		"refresh_token": refresh,
