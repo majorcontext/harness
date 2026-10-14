@@ -26,9 +26,9 @@ func loginHost(t *testing.T, opts harnesstest.CodexIssuerOptions) (*cliHost, *ha
 	return h, issuer, filepath.Join(filepath.Dir(h.config), "auth", "codex.json")
 }
 
-func noSecret(t *testing.T, what, text string) {
+func noSecret(t *testing.T, issuer *harnesstest.CodexIssuer, what, text string) {
 	t.Helper()
-	if strings.Contains(text, "eyJ") || strings.Contains(text, "refresh-") {
+	if _, leak := holdsSecret(text, issuer.Secrets()); leak {
 		t.Errorf("%s holds a token:\n%s", what, text)
 	}
 }
@@ -46,7 +46,7 @@ func TestContractCLILoginDeviceCodeStoresTheLoginUntilLogout(t *testing.T) {
 			t.Errorf("login output lacks %q:\n%s", want, out)
 		}
 	}
-	noSecret(t, "login output", out+errOut)
+	noSecret(t, issuer, "login output", out+errOut)
 	info, err := os.Stat(file)
 	if err != nil {
 		t.Fatalf("login stored no file: %v", err)
@@ -62,7 +62,7 @@ func TestContractCLILoginDeviceCodeStoresTheLoginUntilLogout(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "acct-1") || !strings.Contains(out, "refresh token: yes") {
 		t.Errorf("status = %d %q, want the account and a refresh token\n%s", code, out, errOut)
 	}
-	noSecret(t, "status output", out+errOut)
+	noSecret(t, issuer, "status output", out+errOut)
 
 	if _, errOut, code = h.run("logout", "codex"); code != 0 {
 		t.Fatalf("logout = %d\n%s", code, errOut)
@@ -189,7 +189,7 @@ func TestContractCLILoginBrowserCallbackWithAnotherStateKeepsWaiting(t *testing.
 func TestContractCLILoginRefusesAFileThatOthersCanRead(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	h, _, file := loginHost(t, harnesstest.CodexIssuerOptions{})
+	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{})
 	if _, errOut, code := h.run("login", "codex", "--device"); code != 0 {
 		t.Fatalf("login = %d\n%s", code, errOut)
 	}
@@ -200,7 +200,7 @@ func TestContractCLILoginRefusesAFileThatOthersCanRead(t *testing.T) {
 	if code != 1 || !strings.Contains(out+errOut, "chmod 600") {
 		t.Errorf("status = %d %q %q, want 1 and the chmod 600 advice", code, out, errOut)
 	}
-	noSecret(t, "status output", out+errOut)
+	noSecret(t, issuer, "status output", out+errOut)
 }
 
 func TestContractCLILoginIgnoresAnIssuerFromTheEnvironment(t *testing.T) {

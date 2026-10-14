@@ -281,10 +281,8 @@ func acpCheckNoSecret(t *testing.T, c *acpConn) {
 		all.Write(f.Frame)
 	}
 	all.WriteString(c.env.login.sink.String())
-	for _, secret := range []string{"eyJ", "refresh-", harnesstest.CodexAuthCode} {
-		if strings.Contains(all.String(), secret) {
-			t.Errorf("a frame or a log holds %q", secret)
-		}
+	if _, leak := holdsSecret(all.String(), c.env.login.codex.secrets()); leak {
+		t.Error("a frame or a log holds a token or the authorization code")
 	}
 }
 

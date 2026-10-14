@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -63,6 +64,7 @@ type CodexIssuer struct {
 	lastRedirect string
 	secretSeen   bool
 	challenge    string // the code_challenge that a browser sign-in sent
+	minted       []string
 	arrived      chan struct{}
 	gate         chan struct{}
 }
@@ -131,6 +133,15 @@ func closeOnceCh(c chan struct{}) {
 func s256(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// Secrets lists the exact values that a leak check must not find: the access
+// token, id token, and refresh token of every answer, the claims segment of
+// each JWT, the initial refresh token, and the authorization code.
+func (i *CodexIssuer) Secrets() []string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return append([]string{CodexInitialRefresh, CodexAuthCode}, i.minted...)
 }
 
 // URL is the base URL of the issuer.
@@ -215,6 +226,14 @@ func (i *CodexIssuer) issue(w http.ResponseWriter, refresh string) {
 	}
 	if refresh != "" {
 		out["refresh_token"] = refresh
+		i.minted = append(i.minted, refresh)
+	}
+	for _, k := range []string{"access_token", "id_token"} {
+		jwt := out[k].(string)
+		i.minted = append(i.minted, jwt)
+		if parts := strings.Split(jwt, "."); len(parts) == 3 {
+			i.minted = append(i.minted, parts[1])
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
