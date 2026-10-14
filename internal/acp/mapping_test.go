@@ -176,12 +176,14 @@ func TestPromptResultAfterACancelIsCancelled(t *testing.T) {
 
 type noRuntimes struct{ calls int }
 
-func (n *noRuntimes) For(context.Context, string) (Runtime, error) {
+func (n *noRuntimes) For(context.Context, string, RuntimeOptions) (Runtime, error) {
 	n.calls++
 	return nil, errors.New("unexpected")
 }
-func (n *noRuntimes) Default(context.Context) (Runtime, error) { return nil, errors.New("unexpected") }
-func (n *noRuntimes) Close(context.Context) error              { return nil }
+func (n *noRuntimes) Default(context.Context, RuntimeOptions) (Runtime, error) {
+	return nil, errors.New("unexpected")
+}
+func (n *noRuntimes) Close(context.Context) error { return nil }
 func (n *noRuntimes) ToolImage(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("unexpected")
 }

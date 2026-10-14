@@ -85,6 +85,9 @@ const (
 	ResolutionDismissed ResolutionKind = "dismissed"
 )
 
+// DismissedQuestionText is the text of the error result that closes the call of a dismissed question.
+const DismissedQuestionText = "The user dismissed this question without answering."
+
 // GoalState is the state of the session goal.
 type GoalState string
 

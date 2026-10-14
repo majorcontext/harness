@@ -58,6 +58,8 @@ type acpInit struct {
 	notices       bool
 	// compaction adds the client capability session.compaction.
 	compaction bool
+	// elicitation adds the client capability elicitation.form.
+	elicitation bool
 	// terminal adds the client capability auth.terminal. methods are the ids of authMethods, in order.
 	terminal bool
 	methods  []string
@@ -95,6 +97,9 @@ func (s acpInit) run(t *testing.T, c *acpConn) {
 	}
 	if s.terminal {
 		caps["auth"] = map[string]any{"terminal": true}
+	}
+	if s.elicitation {
+		caps["elicitation"] = map[string]any{"form": map[string]any{}}
 	}
 	id := c.request("initialize", map[string]any{
 		"protocolVersion":    s.version,
@@ -142,7 +147,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{

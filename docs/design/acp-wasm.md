@@ -682,7 +682,7 @@ Tracks: C (core), A (ACP), W (wasm and browser). One concern per PR.
 | A5 | Config options, `available_commands_update`, `usage_update`, `session_info_update`, slash commands as typed text, and the lost-ownership `notice` (7.6, 8; only with the client capability `session.notices`). | scenarios: `/compact`, `/model`, option change, usage, ownership lost with and without `session.notices` | the TCK config-option tests pass |
 | A6 | `session/load`, `session/resume`, `session/list`, `session/close`. | scenarios: replay equality, list with `cwd`, close | the TCK CAPABILITY tier for these passes |
 | A7 | TCK required. Built: the job fails on a failure, runs on every pull request, and the `TCK` check is required to merge into `main`. | the job | one release cycle green on `main` |
-| A8 | Elicitation for `question` requests. | scenario: question round trip | capability appears only with the scenario green |
+| A8 | Elicitation for `question` requests. Built. | scenario: question round trip | capability appears only with the scenario green |
 | A9 | v2 layer. | v2 wire scenarios; `--protocol-version 2` | v1 goldens unchanged |
 | A10 (follow-up) | The prompt answer precedes every update of a later turn. The event pump owns this order: it holds at the `turn.ended` event of a prompt's turn until the rpc layer has queued the answer. Andy approved it (2026-10-13). Built. | a row whose frames hold the goal-turn text after the prompt response on every host | the `schedulerOrder` flag leaves the table |
 | A5 follow-up | A useful model list for providers with no catalog needs a new Runtime list. | Andy decision | none yet |

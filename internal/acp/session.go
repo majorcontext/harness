@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/internal/acp/rpc"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -25,6 +26,8 @@ type held struct {
 	log        *slog.Logger
 	send       func(method string, params any) error
 	toolImage  func(ctx context.Context, key string) (io.ReadCloser, error)
+	// elicit sends a request to the client. It is nil when the client takes no elicitation.
+	elicit func(method string, params any) (*rpc.Pending, error)
 
 	stop    context.CancelFunc
 	stopped chan struct{}
@@ -34,6 +37,9 @@ type held struct {
 	ended   bool
 	wake    chan struct{}
 	prompts map[*prompt]struct{}
+	// elicits are the elicitations that wait for an answer, by request ID. answers waits for the goroutines that read them.
+	elicits map[string]*rpc.Pending
+	answers sync.WaitGroup
 }
 
 // prompt is one session/prompt in flight. cancelled records a session/cancel
@@ -59,13 +65,14 @@ type heldConfig struct {
 	log        *slog.Logger
 	send       func(string, any) error
 	toolImage  func(context.Context, string) (io.ReadCloser, error)
+	elicit     func(string, any) (*rpc.Pending, error)
 }
 
 // newHeld returns the session id of the connection, with no pump. A replay can
 // use it before the session is open; start then binds the session.
 func newHeld(id string, c heldConfig) *held {
-	return &held{id: id, cwd: c.cwd, models: c.models, notices: c.notices, compaction: c.compaction, log: c.log, send: c.send, toolImage: c.toolImage,
-		stopped: make(chan struct{}), wake: make(chan struct{}), prompts: map[*prompt]struct{}{}}
+	return &held{id: id, cwd: c.cwd, models: c.models, notices: c.notices, compaction: c.compaction, log: c.log, send: c.send, toolImage: c.toolImage, elicit: c.elicit,
+		stopped: make(chan struct{}), wake: make(chan struct{}), prompts: map[*prompt]struct{}{}, elicits: map[string]*rpc.Pending{}}
 }
 
 // start binds sess and starts its event pump after seq after, which is the
@@ -83,6 +90,7 @@ func (h *held) close() {
 	}
 	h.stop()
 	<-h.stopped
+	h.answers.Wait()
 }
 
 type chunkKey struct{ item, kind string }
@@ -98,6 +106,8 @@ type pumpState struct {
 	compactions map[string]int
 	// owners maps a running turn to the prompts that wait for their answers.
 	owners map[string][]*prompt
+	// asks are the questions that the running turn opened.
+	asks []ask
 }
 
 // newPumpState returns the state of a pump that starts at the head of the log
@@ -109,6 +119,7 @@ func newPumpState(snap protocol.Session) *pumpState {
 func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 	defer close(h.stopped)
 	defer h.finish()
+	defer h.cancelElicitations()
 	for e, err := range h.sess.Events(ctx, after) {
 		if err != nil {
 			if ctx.Err() == nil {
@@ -131,6 +142,9 @@ func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 				return
 			}
 		}
+		if e.Kind == protocol.KindTurnEnded {
+			h.elicitAsks(ctx, e, st)
+		}
 	}
 }
 
@@ -148,6 +162,10 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 		}
 		sent[chunkKey{f.ItemID, f.Type}] += f.Text
 		return h.chunk(kind, f.ItemID, f.Text)
+	case protocol.KindRequestOpened:
+		h.opened(e, st)
+	case protocol.KindRequestResolved:
+		return h.resolved(e, st)
 	case protocol.KindSettingsChanged:
 		return h.configUpdate(st)
 	case protocol.KindStatus:

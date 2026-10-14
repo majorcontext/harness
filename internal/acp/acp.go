@@ -44,12 +44,19 @@ type Config struct {
 	Auth Auth
 }
 
+// RuntimeOptions are the choices of the connection for a Runtime that it asks for.
+type RuntimeOptions struct {
+	// AskUserQuestion says that the client answers the question of a backend that owns its loop.
+	AskUserQuestion bool
+}
+
 // Runtimes gives the adapter the Runtime of a work directory. The host builds
 // one for each cwd, with the project config of that cwd, over one Store and one Owner.
 type Runtimes interface {
 	// For returns the Runtime of cwd, which is an absolute path. A cwd that is
 	// not a directory fails with an error that matches harness.ErrInvalidRequest.
-	For(ctx context.Context, cwd string) (Runtime, error)
+	// The first call for a cwd decides its options. That is safe because each connection has its own Runtimes (cmd/harness/acp.go, cmd/harness-wasm/connect.go), so the options of one client never reach the runtime of another.
+	For(ctx context.Context, cwd string, opts RuntimeOptions) (Runtime, error)
 	// ToolImage returns the bytes of a tool-result image of a session. A key that
 	// FindToolImage does not accept for the log of the session fails with
 	// harness.ErrBlobNotFound.
@@ -57,7 +64,7 @@ type Runtimes interface {
 	// Default returns the Runtime that serves a request with no cwd: one that For
 	// built, else the one of the work directory of the host process. It fails with
 	// a nil Runtime and no error when the host has none.
-	Default(ctx context.Context) (Runtime, error)
+	Default(ctx context.Context, opts RuntimeOptions) (Runtime, error)
 	// Close closes every Runtime that For built.
 	Close(ctx context.Context) error
 }
@@ -96,6 +103,7 @@ type agent struct {
 	notices      atomic.Bool
 	compaction   atomic.Bool
 	terminalAuth atomic.Bool
+	elicitation  atomic.Bool
 
 	mu       sync.Mutex
 	sessions map[string]*held
@@ -202,12 +210,16 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 			Auth struct {
 				Terminal bool `json:"terminal"`
 			} `json:"auth"`
+			Elicitation struct {
+				Form json.RawMessage `json:"form"`
+			} `json:"elicitation"`
 		} `json:"clientCapabilities"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.ProtocolVersion == nil || *p.ProtocolVersion < 0 || *p.ProtocolVersion > 65535 {
 		return nil, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "Invalid params", Data: map[string]string{"reason": "protocolVersion must be an integer from 0 to 65535"}}
 	}
 	a.terminalAuth.Store(p.ClientCapabilities.Auth.Terminal)
+	a.elicitation.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Elicitation.Form), []byte("{")))
 	a.notices.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Notices), []byte("{")))
 	a.compaction.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Compaction), []byte("{")))
 	version := LatestVersion
