@@ -175,6 +175,11 @@ var acpCompactionScenarios = []acpScenario{
 			acpPrompt{as: "a", text: "two", stop: "end_turn"},
 			acpPromptStart{as: "a", id: "three", text: "three"},
 			acpAwaitUpdate{kind: "compaction_update", status: "in_progress"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if !c.fake.AwaitRequests(3, waitBound) {
+					t.Fatalf("model requests = %d, want 3: two turns and the summary", len(c.fake.Requests()))
+				}
+			}),
 			acpPromptStart{as: "a", id: "abort", text: "/abort"},
 			acpResult{id: "abort", stop: "end_turn"},
 			acpResult{id: "three", stop: "end_turn"},
