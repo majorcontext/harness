@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
-import { createHarness, wasm } from "../src/index.mjs";
+import { createHarness, defaultBuiltinTools, wasm } from "../src/index.mjs";
 import { workerBridge } from "../src/workerbridge.mjs";
 import { acpClient, bodyText, fakeModel, moduleFiles, tempDir, userConfig } from "./support.mjs";
 
@@ -291,4 +291,31 @@ test("a failed Worker releases the store directory before close", async () => {
   const again = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
   await again.close();
   await h.close();
+});
+
+async function firstTools(options) {
+  const model = await fakeModel([{ text: "ok" }]);
+  const h = await harness({ config: userConfig(model.url), ...options });
+  try {
+    const c = acpClient(h);
+    await c.prompt(await c.session(), "go");
+    return (await model.requests())[0].body.tools?.map((t) => t.name).sort() ?? [];
+  } finally {
+    await h.close();
+    model.close();
+  }
+}
+
+test("the first request of a host lists the default tools, the page tools, and no bash or process", async () => {
+  const names = await firstTools({ tools: [echo] });
+  assert.deepEqual(names, [...defaultBuiltinTools, "js_echo"].sort());
+  assert.ok(!names.includes("bash") && !names.includes("process"));
+});
+
+test("an empty builtinTools gives the model no tools", async () => {
+  assert.deepEqual(await firstTools({ tools: [echo], builtinTools: [] }), []);
+});
+
+test("builtinTools replaces the default set", async () => {
+  assert.deepEqual(await firstTools({ builtinTools: ["read_file", "task"] }), ["read_file", "task"]);
 });

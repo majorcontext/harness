@@ -96,7 +96,7 @@ type nodeHostOptions struct {
 func startACPNode(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func()) {
 	t.Helper()
 	return startACPNodeOpts(t, nodeHostOptions{ConfigPath: env.configPath, StoreDir: env.sessDir,
-		Env: map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}, BuiltinTools: env.allowed})
+		Env: map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}, BuiltinTools: env.allowed, EchoTool: env.jsTool})
 }
 
 // nodePath returns the node binary. Without HARNESS_E2E_NODE=1 the test skips,

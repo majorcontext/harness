@@ -44,6 +44,10 @@ type acpScenario struct {
 	needsExec, needsMCP bool
 	// login scripts the logins that the host offers. A row that sets it replaces the model provider, and does not run on the Node wasm host, which offers no login.
 	login *acpLoginSpec
+	// jsTool adds the page tool js_echo to the wasm hosts. The native hosts have no JavaScript tools, so the row runs on the wasm hosts only.
+	jsTool bool
+	// browser marks a row that also runs on the browser host. It needs no file, no directory beyond "main", and no restart.
+	browser bool
 }
 
 // acpInit sends initialize with the client protocol version and expects the
@@ -203,6 +207,9 @@ func acpObserve(t *testing.T, c *acpConn) acpGolden {
 	st := store.NewDiskStore(c.env.sessDir)
 	sessions := map[string][]transcriptMessage{}
 	for alias, id := range c.sessions {
+		if c.env.memoryStore {
+			break
+		}
 		v, err := harness.OpenView(t.Context(), st, id)
 		if err != nil {
 			t.Fatalf("view %s: %v", alias, err)
@@ -257,9 +264,13 @@ func (sc acpScenario) runsOn(host string) bool {
 	}
 	switch host {
 	case "binary":
-		return len(sc.allowed) == 0
+		return len(sc.allowed) == 0 && !sc.jsTool
+	case "in-process":
+		return !sc.jsTool
 	case nodeHostName:
 		return sc.login == nil && !sc.needsExec && !sc.needsMCP
+	case browserHostName:
+		return sc.browser
 	}
 	return true
 }
@@ -270,16 +281,22 @@ func (sc acpScenario) runsOn(host string) bool {
 func TestACPScenarios(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
+	runACPScenarios(t, acpTableHosts())
+}
+
+// runACPScenarios runs each row on the hosts that it runs on, as a parallel subtest.
+func runACPScenarios(t *testing.T, hosts []acpHost) {
+	t.Helper()
 	schema := loadACPSchema(t)
 	for _, sc := range acpScenarios {
-		for _, host := range acpTableHosts() {
+		for _, host := range hosts {
 			if !sc.runsOn(host.name) {
 				continue
 			}
 			t.Run(sc.name+"/"+host.name, func(t *testing.T) {
 				t.Parallel()
 				var fake *harnesstest.Server
-				env := acpEnv{sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir()}
+				env := acpEnv{sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir(), jsTool: sc.jsTool, memoryStore: host.name == browserHostName}
 				if sc.login != nil {
 					env.login = startACPLogin(t, *sc.login, sc.model)
 					fake = env.login.fake
@@ -303,6 +320,12 @@ func TestACPScenarios(t *testing.T) {
 					c.attach(in, out)
 				}
 				c.dirs["main"] = writeACPDir(t, sc.files)
+				if host.name == browserHostName {
+					if len(sc.files) > 0 || len(sc.dirs) > 0 {
+						t.Fatalf("row %s sets files or dirs, which the browser host cannot seed", sc.name)
+					}
+					c.dirs["main"] = browserWorkDir
+				}
 				for name, files := range sc.dirs {
 					c.dirs[name] = writeACPDir(t, files)
 				}
@@ -310,10 +333,13 @@ func TestACPScenarios(t *testing.T) {
 					step.run(t, c)
 				}
 				c.finish(stop)
-				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process")
+				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process" || sc.jsTool && host.name == nodeHostName)
 				got := acpGoldenOf(t, c, sc.wireOnly)
-				if host.name == nodeHostName {
+				if host.name == nodeHostName || host.name == browserHostName {
 					got = alignNodeGolden(t, got)
+				}
+				if host.name == browserHostName {
+					got = alignBrowserGolden(t, got, filepath.Join("testdata", "acp", sc.name+".json"))
 				}
 				compareACPGolden(t, filepath.Join("testdata", "acp", sc.name+".json"), got, update)
 			})

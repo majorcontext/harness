@@ -3,6 +3,7 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -17,6 +18,22 @@ func acpToolCall(name string, in map[string]any) []harnesstest.Step {
 }
 
 var acpToolScenarios = []acpScenario{
+	{
+		name:    "page_tool_round_trip_returns_the_result_to_the_model",
+		cite:    "A tool call of the model is a `tool_call` update.",
+		model:   acpToolCall("js_echo", map[string]any{"text": "hi"}),
+		jsTool:  true,
+		browser: true,
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "echo it", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if got := requestText(acpRequests(t, c, 2)[1]); !strings.Contains(got, "echo:hi") {
+					t.Errorf("the second request does not hold the tool result: %s", got)
+				}
+			}),
+		},
+	},
 	{
 		name:  "tool_call_reports_kind_location_and_result",
 		cite:  "A tool call of the model is a `tool_call` update.",
@@ -38,9 +55,10 @@ var acpToolScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "file_tool_adds_the_absolute_path_as_a_location",
-		cite:  "A file tool adds `locations` to its `tool_call`:",
-		model: acpToolCall("write_file", map[string]any{"path": "sub/new.txt", "content": "hello\n"}),
+		name:    "file_tool_adds_the_absolute_path_as_a_location",
+		browser: true,
+		cite:    "A file tool adds `locations` to its `tool_call`:",
+		model:   acpToolCall("write_file", map[string]any{"path": "sub/new.txt", "content": "hello\n"}),
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "write it", stop: "end_turn"},

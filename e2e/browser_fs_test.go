@@ -15,9 +15,8 @@ var fsProbe struct {
 	err  error
 }
 
-// buildFsProbe compiles e2e/testdata/fsprobe for js/wasm once and returns the module.
-func buildFsProbe(t *testing.T) string {
-	t.Helper()
+// fsProbePath compiles e2e/testdata/fsprobe for js/wasm once and returns the module.
+func fsProbePath() (string, error) {
 	fsProbe.once.Do(func() {
 		dir, err := os.MkdirTemp("", "harness-e2e-fsprobe")
 		if err != nil {
@@ -31,10 +30,7 @@ func buildFsProbe(t *testing.T) string {
 			fsProbe.err = &buildError{err: err, out: string(msg)}
 		}
 	})
-	if fsProbe.err != nil {
-		t.Fatal(fsProbe.err)
-	}
-	return fsProbe.path
+	return fsProbe.path, fsProbe.err
 }
 
 // fsRows adds the rows of the file system adapter: the Go probe on memory and on

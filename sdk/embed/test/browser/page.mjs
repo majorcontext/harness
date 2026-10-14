@@ -269,6 +269,35 @@ const rows = {
   },
 };
 
+/**
+ * serve opens the harness with the default tool set and the page tool js_echo,
+ * and bridges its ACP stream to the driver: every frame of the agent goes to
+ * globalThis.emitFrame as a line, and globalThis.sendFrame writes a line of the
+ * client. globalThis.endHarness closes the harness and resolves when the last
+ * frame was emitted.
+ */
+export async function serve(row) {
+  const h = await createHarness({
+    transport: wasm({ module: "harness.wasm", wasmExec: "wasm_exec.js", worker: true }),
+    config: row.config,
+    tools: [echo],
+  });
+  const writer = h.stream.writable.getWriter();
+  const reader = h.stream.readable.getReader();
+  const drained = (async () => {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      globalThis.emitFrame(JSON.stringify(value));
+    }
+  })();
+  globalThis.sendFrame = (line) => writer.write(JSON.parse(line));
+  globalThis.endHarness = async () => {
+    await h.close();
+    await drained;
+  };
+}
+
 const lockName = () => "harness:store:" + location.origin;
 
 // tab is the harness of this page when a driver page runs it as a tab.

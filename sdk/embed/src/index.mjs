@@ -21,6 +21,15 @@ function absolute(value) {
   return value;
 }
 
+/**
+ * defaultBuiltinTools is the tool set of a session when createHarness gets no
+ * builtinTools: the file and search tools, read_tool_result, and session_info.
+ * The module has no exec, so bash and process stay out; task, model, and goal
+ * stay out because they start unattended work or switch providers. The names of
+ * the page tools join it.
+ */
+export const defaultBuiltinTools = Object.freeze(["read_file", "write_file", "edit_file", "ls", "glob", "grep", "read_tool_result", "session_info"]);
+
 const browserStoreDir = "/persist/sessions";
 
 function belowPersist(dir) {
@@ -46,7 +55,9 @@ async function lockStore(store) {
 /**
  * createHarness starts the module and resolves with {stream, close}. stream is
  * {readable, writable} of ACP messages (parsed JSON objects). tools are the
- * page tools {name, description, schema, run(input, {signal})}. fetch is an
+ * page tools {name, description, schema, run(input, {signal})}. builtinTools
+ * is the allowed tool names of every session; absent, it is defaultBuiltinTools
+ * and the names of the page tools. fetch is an
  * optional page fetch that carries the model requests. proxy is {baseURL,
  * headers} of a same-origin proxy. store is {persist, dir}: under Node, dir is
  * an exclusive directory; in the browser, persist keeps the sessions in
@@ -125,7 +136,7 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
   });
   const options = {
     config,
-    builtinTools,
+    builtinTools: builtinTools ?? [...defaultBuiltinTools, ...tools.map((t) => t.name)],
     proxy: { headers: proxy.headers, baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL) },
     storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
     persist: !isNode && Boolean(store.persist),

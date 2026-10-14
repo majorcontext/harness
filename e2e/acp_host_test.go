@@ -27,6 +27,10 @@ type acpEnv struct {
 	defaultDir string
 	// login is the scripted login of the row. Nil: the host offers none.
 	login *acpLoginRun
+	// jsTool gives the wasm hosts the page tool js_echo.
+	jsTool bool
+	// memoryStore marks a host whose sessions the test cannot read: the browser host keeps them in the Worker.
+	memoryStore bool
 }
 
 const acpDummyKey = "e2e-dummy-key"

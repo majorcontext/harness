@@ -26,7 +26,7 @@ export interface CreateHarnessOptions {
   /** A page fetch that carries the model requests. */
   fetch?: (url: string, init: { method: string; headers: Record<string, string>; body?: Uint8Array; signal: AbortSignal }) => Promise<Response>;
   tools?: PageTool[];
-  /** The allowed tool names of every session. Absent: every tool. */
+  /** The allowed tool names of every session. Absent: defaultBuiltinTools and the names of the page tools. A list that the caller passes is used as it is: page tools are not added to it. */
   builtinTools?: string[];
   /**
    * Under Node, dir is a directory that one process holds. In the browser, persist keeps the sessions in
@@ -44,6 +44,9 @@ export interface Harness {
   /** Ends the connection and the Worker. A second call returns the same promise. */
   close(): Promise<void>;
 }
+
+/** The tool set of a session when createHarness gets no builtinTools, before the names of the page tools. */
+export const defaultBuiltinTools: readonly string[];
 
 /** wasm names the WebAssembly transport. worker must be true. */
 export function wasm(options: {
