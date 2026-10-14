@@ -12,7 +12,7 @@ const h = await createHarness({
   fetch,                  // optional: a page fetch that carries the model requests
   tools: [{ name, description, schema, run: async (input, { signal }) => "text" }],
   builtinTools,           // allowed tool names; absent: every tool
-  store: { persist: true, dir },  // Node only: an exclusive directory; absent: memory
+  store: { persist: true, dir },  // Node: an exclusive directory. Browser: the origin private file system below dir (default /persist/sessions). Absent: memory
   log: (line) => {},
 });
 // h.stream is { readable, writable } of ACP messages. Connect an ACP client to it.
@@ -21,6 +21,7 @@ await h.close();
 
 - `wasm_exec.js` is the file of the same Go version as the module (`$(go env GOROOT)/lib/wasm/wasm_exec.js`).
 - `proxy.baseURL` sends all model traffic to a same-origin proxy: the module sets `base_url` of the native `anthropic` and `openai` providers and of each `config.providers` entry that sets none. Put no key in the page: the proxy holds it.
+- In a browser, one page of the origin holds the persistent store at a time. A second `createHarness` with `store.persist` waits up to 2 s for the store and then rejects with `error.code === "store_in_use"`; start it without `persist` to run with a memory store. The work directory `/work` is in memory.
 - `h.stream` has no backpressure in either direction: frames queue without a bound.
 - A write after `close()` rejects, and aborting the writable closes the connection. Cancelling the readable closes it too.
 - `run` returns a string, `{text, isError}`, or a promise of either. The signal aborts when the turn is canceled.

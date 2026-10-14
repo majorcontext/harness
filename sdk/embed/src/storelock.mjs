@@ -28,39 +28,73 @@ function readLock(file) {
   }
 }
 
-// Only a holder of the guard replaces a stale lock, so a process never removes
-// the live lock of another. A guard older than staleGuardMs belongs to a crashed
-// process.
-const staleGuardMs = 10_000;
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function withGuard(file, fn) {
-  const guard = file + ".takeover";
-  for (;;) {
-    try {
-      fs.mkdirSync(guard);
-      break;
-    } catch (err) {
-      if (err.code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - fs.statSync(guard).mtimeMs > staleGuardMs) fs.rmdirSync(guard);
-      } catch {
-        // The holder removed it first.
-      }
-    }
+const running = (text) => {
+  const pid = pidOf(text);
+  return pid > 0 && alive(pid);
+};
+
+// takeOver replaces the stale lock whose text is stale by the lock in tmp. The
+// claim file is named by the token of the stale lock and appears whole by a hard
+// link of tmp, so one process at a time holds a claim on that lock. The claimant
+// checks the lock again after it holds the claim: a process that read the stale
+// text late finds a live lock there and gives up. Then only the claimant changes
+// the lock file, and its rename is atomic. A claim of a dead process is moved
+// aside, and put back when it turns out to be live. A claimant checks that the
+// claim is still its own before it renames it, so a claim that another process
+// took away only makes the claimant try again.
+function takeOver(file, stale, tmp, mine) {
+  const claim = `${file}.takeover-${stale.split("\n")[1] ?? ""}`;
+  try {
+    fs.linkSync(tmp, claim);
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+    const holder = readLock(claim);
+    if (holder !== null && !running(holder)) removeDead(claim, holder);
+    else sleep(2);
+    return false;
+  }
+  if (readLock(file) !== stale || readLock(claim) !== mine) {
+    fs.rmSync(claim, { force: true });
+    return false;
   }
   try {
-    return fn();
-  } finally {
-    fs.rmdirSync(guard);
+    fs.renameSync(claim, file);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    return false;
   }
+  return true;
+}
+
+// removeDead removes the claim whose text was holder, the claim of a dead process.
+// The rename takes it out of the way at once; a claim that is not the dead one
+// goes back by a hard link, which fails when its owner already made another.
+function removeDead(claim, holder) {
+  const aside = `${claim}.dead-${crypto.randomBytes(8).toString("hex")}`;
+  try {
+    fs.renameSync(claim, aside);
+  } catch (err) {
+    if (err.code === "ENOENT") return;
+    throw err;
+  }
+  if (readLock(aside) !== holder) {
+    try {
+      fs.linkSync(aside, claim);
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
+  fs.rmSync(aside, { force: true });
 }
 
 // acquireStoreLock makes dir exclusive to this process. The lock file
 // <dir>/.embed.lock holds the pid and a random token. It appears whole, by a
 // hard link of a private file, so no process reads a partial lock. When the pid
-// in the file is dead, one process replaces the file under a guard directory
-// and re-checks the file inside it. The returned function removes the file only
-// when it still holds the token of this process.
+// in the file is dead, the processes that found it race for one claim on it
+// (takeOver), and the winner replaces the file. The returned function removes the
+// file only when it still holds the token of this process.
 export function acquireStoreLock(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, ".embed.lock");
@@ -78,15 +112,10 @@ export function acquireStoreLock(dir) {
       } catch (err) {
         if (err.code !== "EEXIST") throw err;
       }
-      const held = withGuard(file, () => {
-        const text = readLock(file);
-        if (text === null) return false;
-        const pid = pidOf(text);
-        if (pid > 0 && alive(pid)) throw new Error(`store directory ${dir} is in use by process ${pid}`);
-        fs.renameSync(tmp, file);
-        return true;
-      });
-      if (held) return release;
+      const text = readLock(file);
+      if (text === null) continue;
+      if (running(text)) throw new Error(`store directory ${dir} is in use by process ${pidOf(text)}`);
+      if (takeOver(file, text, tmp, mine)) return release;
     }
   } finally {
     fs.rmSync(tmp, { force: true });

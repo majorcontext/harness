@@ -120,7 +120,9 @@ type browserResult struct {
 	// OfflineFailures counts the model requests that failed while the page was offline.
 	OfflineFailures int      `json:"offlineFailures"`
 	Console         []string `json:"console"`
-	Error           *struct {
+	// Raw is the whole result of the row, for a row with its own fields.
+	Raw   json.RawMessage `json:"-"`
+	Error *struct {
 		Message string         `json:"message"`
 		Data    map[string]any `json:"data"`
 	} `json:"error"`
@@ -144,8 +146,11 @@ func browserPage(t *testing.T, wasm, execJS string, awaits *sync.Map) *httptest.
 		})
 	}
 	file("/app/harness.wasm", wasm, "application/wasm")
+	file("/app/fsprobe.wasm", buildFsProbe(t), "application/wasm")
 	file("/app/wasm_exec.js", execJS, "text/javascript")
-	file("/page/page.mjs", filepath.Join(root, "sdk", "embed", "test", "browser", "page.mjs"), "text/javascript")
+	for _, name := range []string{"page.mjs", "inspect-worker.mjs", "fsprobe-worker.mjs"} {
+		file("/page/"+name, filepath.Join(root, "sdk", "embed", "test", "browser", name), "text/javascript")
+	}
 	embed := filepath.Join(root, "sdk", "embed")
 	mux.HandleFunc("/await-canceled", func(w http.ResponseWriter, r *http.Request) {
 		wait, ok := awaits.Load(r.URL.Query().Get("row"))
@@ -154,12 +159,6 @@ func browserPage(t *testing.T, wasm, execJS string, awaits *sync.Map) *httptest.
 			return
 		}
 		_, _ = io.WriteString(w, strconv.FormatBool(wait.(func() bool)()))
-	})
-	file("/page/fsstub.mjs", filepath.Join(embed, "test", "browser", "fsstub.mjs"), "text/javascript")
-	file("/embed/worker-impl.mjs", filepath.Join(embed, "src", "worker.mjs"), "text/javascript")
-	mux.HandleFunc("/embed/worker.mjs", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/javascript")
-		_, _ = io.WriteString(w, "import \"/page/fsstub.mjs\";\nimport \"/embed/worker-impl.mjs\";\n")
 	})
 	mux.Handle("/embed/", http.StripPrefix("/embed/", http.FileServer(http.Dir(filepath.Join(embed, "src")))))
 	srv := httptest.NewServer(mux)
@@ -225,13 +224,21 @@ func runBrowser(t *testing.T, node, embed, origin, modulePath string, rows []map
 		}
 		t.Fatalf("browser.mjs ended with %s\n%s", cmd.ProcessState, stderr.String())
 	}
-	var out struct {
-		Rows map[string]browserResult `json:"rows"`
+	var raw struct {
+		Rows map[string]json.RawMessage `json:"rows"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
 		t.Fatalf("browser.mjs output: %v\n%s", err, stdout.String())
 	}
-	return out.Rows
+	out := make(map[string]browserResult, len(raw.Rows))
+	for name, r := range raw.Rows {
+		res := browserResult{Raw: r}
+		if err := json.Unmarshal(r, &res); err != nil {
+			t.Fatalf("browser.mjs result of %q: %v\n%s", name, err, r)
+		}
+		out[name] = res
+	}
+	return out
 }
 
 func headerNames(h http.Header) []string {
@@ -496,6 +503,8 @@ func TestBrowserRows(t *testing.T) {
 	k.streamRows()
 	k.failureRows()
 	k.headerRows()
+	k.storeRows()
+	k.fsRows()
 	specs := make([]map[string]any, len(k.rows))
 	for i, r := range k.rows {
 		specs[i] = r.spec

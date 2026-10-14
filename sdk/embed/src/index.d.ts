@@ -28,7 +28,11 @@ export interface CreateHarnessOptions {
   tools?: PageTool[];
   /** The allowed tool names of every session. Absent: every tool. */
   builtinTools?: string[];
-  /** Under Node, dir is a directory that one process holds. Without dir the store is in memory. */
+  /**
+   * Under Node, dir is a directory that one process holds. In the browser, persist keeps the sessions in
+   * the origin private file system below dir (default /persist/sessions), and the promise rejects with code "store_in_use" after 2 s while
+   * another page of the origin holds the store. Otherwise the store is in memory.
+   */
   store?: { persist?: boolean; dir?: string };
   /** Receives each JSON log line of the module. */
   log?: (line: string) => void;

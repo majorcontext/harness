@@ -21,9 +21,20 @@ function absolute(value) {
   return value;
 }
 
+const browserStoreDir = "/persist/sessions";
+
+function belowPersist(dir) {
+  const parts = dir.split("/");
+  return parts[0] === "" && parts[1] === "persist" && parts.length > 2 && parts.slice(1).every((p) => p !== "" && p !== "." && p !== "..");
+}
+
+// lockStore returns the function that releases the store of this page. In the
+// browser the Worker holds the store lock, so there is nothing to release here.
 async function lockStore(store) {
   if (!isNode) {
-    if (store.persist) throw new Error("a persistent store is not available in the browser");
+    if (store.persist && store.dir !== undefined && !belowPersist(store.dir)) {
+      throw new Error("store.dir must be a path below /persist in the browser, with no . or .. segment");
+    }
     return () => {};
   }
   if (store.persist && !store.dir) throw new Error("store.persist needs store.dir under Node");
@@ -38,7 +49,10 @@ async function lockStore(store) {
  * page tools {name, description, schema, run(input, {signal})}. fetch is an
  * optional page fetch that carries the model requests. proxy is {baseURL,
  * headers} of a same-origin proxy. store is {persist, dir}: under Node, dir is
- * an exclusive directory; otherwise the store is in memory. log receives each
+ * an exclusive directory; in the browser, persist keeps the sessions in
+ * the origin private file system below dir (default /persist/sessions) under a lock that one page of
+ * the origin holds, and createHarness rejects with code "store_in_use" after 2 s while
+ * another page holds it. Otherwise the store is in memory. log receives each
  * JSON log line of the module.
  */
 export async function createHarness({ transport, config = {}, proxy = {}, fetch: pageFetch, tools = [], builtinTools, store = {}, log } = {}) {
@@ -96,7 +110,7 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
   const ready = new Promise((resolve, reject) => {
     w.onMessage((m) => {
       if (m.ready) resolve();
-      else if (m.error) reject(new Error(m.error));
+      else if (m.error) reject(Object.assign(new Error(m.error), m.code ? { code: m.code } : {}));
       else if (m.frame !== undefined) emit(JSON.parse(m.frame));
       else if (m.log !== undefined) log?.(m.log);
       else if (m.closed) closed?.();
@@ -113,7 +127,8 @@ export async function createHarness({ transport, config = {}, proxy = {}, fetch:
     config,
     builtinTools,
     proxy: { headers: proxy.headers, baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL) },
-    storeDir: isNode ? store.dir : undefined,
+    storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
+    persist: !isNode && Boolean(store.persist),
     tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),
     bridgeFetch: typeof pageFetch === "function",
   };
