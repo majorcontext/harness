@@ -438,6 +438,25 @@ func (a claudeOfferedTools) run(t *testing.T, r *run) {
 	r.record(t, "offered_tools", a.as, callResult{Status: http.StatusOK, Body: names})
 }
 
+// claudeReadOnlyTools records the sorted names of the tools that the hosted
+// MCP server offered the CLI with the annotation readOnlyHint true.
+type claudeReadOnlyTools struct{ as string }
+
+func (a claudeReadOnlyTools) run(t *testing.T, r *run) {
+	body, _ := claudeDriverOf(t, r).lastToolCall(t).Body.(map[string]any)
+	result, _ := body["result"].(map[string]any)
+	list, _ := result["tools"].([]any)
+	names := []string{}
+	for _, tool := range list {
+		m, _ := tool.(map[string]any)
+		if ann, _ := m["annotations"].(map[string]any); ann["readOnlyHint"] == true {
+			names = append(names, m["name"].(string))
+		}
+	}
+	slices.Sort(names)
+	r.record(t, "read_only_tools", a.as, callResult{Status: http.StatusOK, Body: names})
+}
+
 // claudeOfferedModelTool records the description and the input schema of the
 // model tool that the hosted MCP server offered the CLI after its newest run.
 type claudeOfferedModelTool struct{ as string }

@@ -21,7 +21,7 @@ type ShellEnv func(ctx context.Context, command string) map[string]string
 // env, when set, adds variables to the environment of each bash command.
 func Tools(workDir string, env ShellEnv) []turn.Tool {
 	d := dir{root: workDir, read: &guard{hashes: map[string][32]byte{}}, mem: &budget{limit: readBudgetBytes}, env: env}
-	return []turn.Tool{d.keyed(d.readFile()), d.keyed(d.writeFile()), d.keyed(d.editFile()), d.glob(), d.grep(), d.ls(), d.bash()}
+	return []turn.Tool{d.keyed(readOnly(d.readFile())), d.keyed(d.writeFile()), d.keyed(d.editFile()), readOnly(d.glob()), readOnly(d.grep()), readOnly(d.ls()), d.bash()}
 }
 
 // dir resolves the paths of the tools of one session.
@@ -63,6 +63,11 @@ func newTool(name, description, schema string, run func(context.Context, json.Ra
 
 func newResultTool(name, description, schema string, run func(context.Context, json.RawMessage) (protocol.ToolResult, error)) tool {
 	return tool{spec: protocol.ToolSpec{Name: name, Description: description, InputSchema: json.RawMessage(schema)}, run: run}
+}
+
+func readOnly(t tool) tool {
+	t.spec.ReadOnly = true
+	return t
 }
 
 // keyed makes the calls of t on one file run in call order.

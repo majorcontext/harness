@@ -536,11 +536,23 @@ func TestContractClaudeCodeQuestionResults(t *testing.T) {
 }
 
 func TestContractClaudeCodeTools(t *testing.T) {
+	skipShort(t)
 	setArgs := map[string]any{"action": "set", "model": "anthropic/claude-fable-5"}
 	runScenarios(t, []scenario{{
 		name:    "claudecode_cli_gets_the_tools_of_the_engine_bridge",
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
 		actions: withActions(claudeOneTurn, claudeOfferedTools{as: "a"}),
+	}, {
+		name:    "claudecode_bridge_marks_exactly_the_read_only_tools_with_read_only_hint",
+		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
+		actions: withActions(claudeOneTurn, claudeReadOnlyTools{as: "a"}),
+	}, {
+		name: "claudecode_bridge_passes_the_read_only_hint_of_an_mcp_tool_through",
+		driver: claudeLane{mode: "hang_after_listing", listTools: true, initTools: "[]", extra: mcpSetup(nil, mcpServerDef{name: "notes", spec: harnesstest.MCPSpec{Name: "notes",
+			Tools: []harnesstest.MCPTool{{Name: "find", Description: "Find a note", ReadOnly: true, Result: mcpText("none")},
+				{Name: "add", Description: "Add a note", Result: mcpText("ok")}}}})(t, map[string]any{})}.newDriver,
+		actions: []action{create{as: "a", allowed: []string{"mcp__notes__find", "mcp__notes__add"}}, submit{as: "a", text: "run it"}, claudeAwaitText{as: "a", text: "Working on it."},
+			claudeReadOnlyTools{as: "a"}, interrupt{as: "a"}, waitIdle{as: "a"}},
 	}, {
 		name:    "claudecode_bridge_model_tool_offers_list_only",
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,

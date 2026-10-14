@@ -53,6 +53,8 @@ type MCPTool struct {
 	// Gated holds each call until Release names its "id" string argument. A
 	// call whose request ends first counts for AwaitAbandoned.
 	Gated bool
+	// ReadOnly lists the tool with the annotation readOnlyHint true.
+	ReadOnly bool `json:",omitempty"`
 }
 
 // MCPError is a scripted JSON-RPC error.
@@ -237,6 +239,9 @@ func (h *mcpHandler) listTools(params json.RawMessage) any {
 		def := mcp.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 		if len(def.InputSchema) == 0 {
 			def.InputSchema = json.RawMessage(`{"type":"object"}`)
+		}
+		if t.ReadOnly {
+			def.Annotations = json.RawMessage(`{"readOnlyHint":true}`)
 		}
 		tools = append(tools, def)
 	}

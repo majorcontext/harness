@@ -284,7 +284,7 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		}
 		resources = resources || sv.resources()
 		for _, t := range sv.tools {
-			spec := protocol.ToolSpec{Name: prefix + name + "__" + t.Name, Description: t.Description, InputSchema: t.InputSchema}
+			spec := protocol.ToolSpec{Name: prefix + name + "__" + t.Name, Description: t.Description, InputSchema: t.InputSchema, ReadOnly: readOnlyHint(t.Annotations)}
 			if ok(spec.Name) {
 				all = append(all, remote{server: name, name: t.Name, client: sv.client, spec: spec})
 			}
@@ -440,4 +440,12 @@ func binary(what, data, mime string) string {
 		return fmt.Sprintf("[%s, malformed base64, %s]", what, mime)
 	}
 	return fmt.Sprintf("[%s, %d bytes, %s]", what, n, mime)
+}
+
+// readOnlyHint reports whether the annotations of an MCP tool set readOnlyHint.
+func readOnlyHint(annotations json.RawMessage) bool {
+	var a struct {
+		ReadOnlyHint bool `json:"readOnlyHint"`
+	}
+	return json.Unmarshal(annotations, &a) == nil && a.ReadOnlyHint
 }

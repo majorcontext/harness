@@ -36,6 +36,7 @@ type ToolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
+	ReadOnly    bool            `json:"read_only,omitempty"`
 }
 
 // ToolCall is one call of a tool by the model. ID is the model's call ID.
