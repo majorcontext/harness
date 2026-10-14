@@ -47,11 +47,11 @@ func LoadProject(userPath, dir string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return MergeProject(user, userPath, dir)
+	return MergeProject(user, userPath, dir, "")
 }
 
-// MergeProject is LoadProject for a user config that the caller holds. userName labels it in errors.
-func MergeProject(user *Config, userName, dir string) (*Config, error) {
+// MergeProject is LoadProject for a user config that the caller holds. userName labels it in errors. A non-empty proxyBase fills the providers that set no BaseURL (see WithProxyBase) before the validation.
+func MergeProject(user *Config, userName, dir, proxyBase string) (*Config, error) {
 	projPath := filepath.Join(dir, ".harness.json")
 	proj, err := Load(projPath)
 	if err != nil {
@@ -60,7 +60,8 @@ func MergeProject(user *Config, userName, dir string) (*Config, error) {
 	if err := rejectSharedPlugins(user, proj, userName, projPath); err != nil {
 		return nil, err
 	}
-	return mergeAndValidate(user, proj)
+	out := merge(user, proj).WithProxyBase(proxyBase)
+	return &out, out.Validate()
 }
 
 // rejectSharedPlugins fails when a plugin name is in both layers, so a project cannot shadow a user plugin.

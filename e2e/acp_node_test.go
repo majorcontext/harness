@@ -432,3 +432,29 @@ func TestNodeWasmProxyBaseURLRoutesModelTraffic(t *testing.T) {
 	acpRequests(t, c, 1)
 	c.finish(stop)
 }
+
+// TestNodeWasmProxyBaseURLFillsAnOpenAIProviderWithNoBaseURL pins the sentence
+// of the WebAssembly section on proxy.baseURL: a providers entry that sets no
+// base_url gets the proxy base before the config is validated.
+func TestNodeWasmProxyBaseURLFillsAnOpenAIProviderWithNoBaseURL(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{APIKey: acpDummyKey}, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := `{"model":"codex/gpt-5.6-sol","providers":{"codex":{"type":"openai","api_key_env":"ANTHROPIC_API_KEY","responses_path":"/responses"}}}`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := acpEnv{configPath: cfgPath, sessDir: t.TempDir()}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{ConfigPath: cfgPath, StoreDir: env.sessDir,
+		Env:     map[string]string{"ANTHROPIC_API_KEY": acpDummyKey},
+		Connect: map[string]any{"proxy": map[string]any{"baseURL": fake.URL() + "/backend-api/codex"}}})
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake.Server, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a"}.run(t, c)
+	acpPrompt{as: "a", text: "go", stop: "end_turn"}.run(t, c)
+	acpRequests(t, c, 1)
+	c.finish(stop)
+}
