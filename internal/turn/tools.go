@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -213,7 +214,38 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	}
 	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
 	call.Call = t.run
+	if all {
+		call.Call = t.keyed()
+	}
 	return t
+}
+
+// keyed returns a run func that runs the calls of one key one at a time, in
+// the order they get the key, as a batch does. A backend that owns the loop
+// may run its calls at once, and calls to one file must not lose an edit.
+func (t runner) keyed() func(context.Context, protocol.ToolCall) protocol.ToolResult {
+	var mu sync.Mutex
+	locks := map[string]chan struct{}{}
+	return func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		key := t.key(c)
+		if key == "" {
+			return t.run(ctx, c)
+		}
+		mu.Lock()
+		lock, ok := locks[key]
+		if !ok {
+			lock = make(chan struct{}, 1)
+			locks[key] = lock
+		}
+		mu.Unlock()
+		select {
+		case lock <- struct{}{}:
+			defer func() { <-lock }()
+		case <-ctx.Done():
+			return protocol.ToolResult{IsError: true, Text: context.Cause(ctx).Error()}
+		}
+		return t.run(ctx, c)
+	}
 }
 
 // Restrict returns the tools that names lists, or every tool when names is nil.

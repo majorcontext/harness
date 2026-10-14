@@ -27,7 +27,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -63,7 +63,6 @@
       "body": [
         {
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
@@ -128,7 +127,7 @@
               ],
               "text": "Let me check that."
             },
-            "tool_call": "Bash"
+            "tool_call": "bash"
           },
           {
             "item": "tool"

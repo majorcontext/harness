@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -118,11 +119,14 @@ func question(f *fake) bool {
 	if _, err := os.Stat(state + ".asked"); err == nil {
 		return false
 	}
+	if !slices.Contains(os.Args, "--permission-prompt-tool") {
+		return false
+	}
 	_ = os.WriteFile(state+".asked", nil, 0o644)
 	_ = os.WriteFile(state, nil, 0o644)
 	calls := []obj{toolUse("toolu_q", "AskUserQuestion", askQuestionInput)}
 	if f.mode == "question_sibling" {
-		calls = append(calls, toolUse("toolu_s", "Bash", obj{"command": "echo hi"}))
+		calls = append(calls, toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"}))
 	}
 	f.emit(initFrame(f), assistant(calls...))
 	questionMirrorFrame(f, "parked")
@@ -179,7 +183,7 @@ func continueInTool(f *fake, answer string) {
 		user(toolResult("toolu_q", answer, false)),
 		initFrame(f),
 		assistant(textBlock(waitingMarker)).inMessage("id", "msg_marker"),
-		assistant(toolUse("toolu_c", "Bash", obj{"command": "sleep 1"})).inMessage("id", "msg_continue"),
+		assistant(toolUse("toolu_c", "mcp__harness__bash", obj{"command": "sleep 1"})).inMessage("id", "msg_continue"),
 	)
 	text := "no second message received"
 	if content, ok := awaitQueued(f); ok {
@@ -188,7 +192,7 @@ func continueInTool(f *fake, answer string) {
 	f.emit(user(toolResult("toolu_c", "slept", false)), say(text), success(text, 5, 5))
 }
 
-// initFrame is the init frame of a CLI that offers no tool.
+// initFrame is the init frame of a CLI whose only tool is the bash tool of the harness MCP server.
 func initFrame(f *fake) obj {
 	return system("init", obj{"session_id": f.sessionID, "tools": []string{}})
 }

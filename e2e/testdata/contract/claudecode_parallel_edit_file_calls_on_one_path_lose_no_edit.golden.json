@@ -17,10 +17,8 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "Task",
-            "arguments": {}
+            "type": "text",
+            "text": "Let me check that."
           }
         ]
       },
@@ -29,8 +27,12 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "Working inside the subagent."
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
           }
         ]
       },
@@ -41,7 +43,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "subagent done"
+            "content": "hi\n"
           }
         ]
       },
@@ -51,37 +53,27 @@
         "parts": [
           {
             "type": "text",
-            "text": "All done."
+            "text": "Done — it printed hi."
           }
         ]
       }
     ]
   },
   "calls": {
-    "message_parents.a": {
+    "tool_call.a": {
       "status": 200,
-      "body": [
-        {
-          "parent_tool_use_id": "",
-          "role": "user"
-        },
-        {
-          "parent_tool_use_id": "",
-          "role": "assistant"
-        },
-        {
-          "parent_tool_use_id": "toolu#1",
-          "role": "assistant"
-        },
-        {
-          "parent_tool_use_id": "toolu#1",
-          "role": "tool"
-        },
-        {
-          "parent_tool_use_id": "",
-          "role": "assistant"
+      "body": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "1→line-0-new\n2→line-1-new\n3→line-2-new\n4→line-3-new\n5→line-4-new\n6→line-5-new\n7→line-6-new\n8→line-7-new\n9→line-8-new\n10→line-9-new\n11→line-10-new\n12→line-11-new\n13→line-12-new\n14→line-13-new\n15→line-14-new\n16→line-15-new",
+              "type": "text"
+            }
+          ]
         }
-      ]
+      }
     }
   }
 }

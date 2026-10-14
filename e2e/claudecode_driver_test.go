@@ -45,6 +45,10 @@ type claudeLane struct {
 	// listTools makes each turn of the CLI list the tools of the hosted MCP
 	// server after the result.
 	listTools bool
+	// parallelEdits makes each turn of the CLI edit this file with 16
+	// edit_file calls at once on the hosted MCP server after the result, and
+	// read it back.
+	parallelEdits string
 	// initTools is the JSON list of tools in the init frame of the CLI, which a
 	// session with an allowed list checks.
 	initTools string
@@ -101,6 +105,9 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 	}
 	if lane.listTools {
 		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
+	}
+	if lane.parallelEdits != "" {
+		env["FAKE_CLAUDE_PARALLEL_EDITS"], env["FAKE_CLAUDE_TOOL_LOG"] = lane.parallelEdits, l.toolLog
 	}
 	if lane.initTools != "" {
 		env["FAKE_CLAUDE_INIT_TOOLS"] = lane.initTools
@@ -189,10 +196,9 @@ func argvFacts(argv []string) map[string]any {
 		"mcp_config":         slices.Contains(argv, "--mcp-config"),
 		"question_tool_open": slices.Contains(argv, "--permission-prompt-tool"),
 
-		"forward_subagent_text": slices.Contains(argv, "--forward-subagent-text"),
-		"thinking_display":      value("--thinking-display"),
-		"disallowed_tools":      value("--disallowedTools"),
-		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
+		"thinking_display":  value("--thinking-display"),
+		"disallowed_tools":  value("--disallowedTools"),
+		"strict_mcp_config": slices.Contains(argv, "--strict-mcp-config"),
 	}
 	if e := value("--effort"); e != nil {
 		facts["effort"] = e
@@ -475,14 +481,6 @@ func (a claudeSession) run(t *testing.T, r *run) {
 		}
 	}
 	r.record(t, "get_session", a.as, res)
-}
-
-// claudeMessageParents records the parent_tool_use_id of each transcript
-// message, which the oracle's transcript vocabulary leaves out.
-type claudeMessageParents struct{ as string }
-
-func (a claudeMessageParents) run(t *testing.T, r *run) {
-	r.record(t, "message_parents", a.as, claudeDriverOf(t, r).messageParents(t, r.id(t, a.as)))
 }
 
 // claudeJournalEvents records the type and compaction fields of the session's

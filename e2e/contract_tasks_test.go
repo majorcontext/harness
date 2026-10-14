@@ -193,28 +193,36 @@ func TestContractTaskPluginProfile(t *testing.T) {
 }
 
 func TestContractTaskClaudeChild(t *testing.T) {
-	onClaude := "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: claude-code/sonnet\n---\n\nOnly read files.\n"
-	runScenarios(t, []scenario{{
-		name:   "task_child_on_claude_code_gets_the_builtin_tools_of_its_profile",
-		driver: claudeLane{mode: "hang_after_listing", listTools: true, initTools: "[]"}.newDriver,
-		model: []harnesstest.Step{
-			taskStep("delegate", userStarts("delegate"), fixed(spawn("reader", "child work"))),
-			{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
-			{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
-		},
-		actions: []action{
-			writeFile{path: ".agents/reader.md", body: onClaude},
-			create{as: "a", model: "anthropic/claude-fable-5"},
-			submit{as: "a", text: "delegate"},
-			awaitRequests{n: 2},
-			waitIdle{as: "a"},
-			bindChild{as: "kid", parent: "a", record: true},
-			claudeAwaitText{as: "kid", text: "Working on it."},
-			claudeInvocations{as: "kid"},
-			claudeOfferedTools{as: "kid"},
-			interrupt{as: "kid"},
-			awaitRequests{n: 3},
-			waitIdle{as: "a"},
-		},
-	}})
+	profile := func(tools string) string {
+		return "---\nname: reader\ndescription: Reads.\ntools: " + tools + "\nmodel: claude-code/sonnet\n---\n\nOnly read files.\n"
+	}
+	row := func(name, tools string) scenario {
+		return scenario{
+			name:   name,
+			driver: claudeLane{mode: "hang_after_listing", listTools: true, initTools: "[]"}.newDriver,
+			model: []harnesstest.Step{
+				taskStep("delegate", userStarts("delegate"), fixed(spawn("reader", "child work"))),
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+				{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
+			},
+			actions: []action{
+				writeFile{path: ".agents/reader.md", body: profile(tools)},
+				create{as: "a", model: "anthropic/claude-fable-5"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 2},
+				waitIdle{as: "a"},
+				bindChild{as: "kid", parent: "a", record: true},
+				claudeAwaitText{as: "kid", text: "Working on it."},
+				claudeInvocations{as: "kid"},
+				claudeOfferedTools{as: "kid"},
+				interrupt{as: "kid"},
+				awaitRequests{n: 3},
+				waitIdle{as: "a"},
+			},
+		}
+	}
+	runScenarios(t, []scenario{
+		row("task_child_on_claude_code_gets_the_builtin_tools_of_its_profile", "ls"),
+		row("task_profile_maps_claude_code_tool_names_to_harness_tools", "Read, Grep, Glob, Frobnicate"),
+	})
 }

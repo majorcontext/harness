@@ -21,6 +21,7 @@
 //	FAKE_CLAUDE_SPAWN_MODES    "n=mode,..." runs mode in spawn n instead of FAKE_CLAUDE_MODE
 //	FAKE_CLAUDE_MCP_CONFIG_LOG append the --mcp-config file of each invocation as one line
 //	FAKE_CLAUDE_CALL_ARGS      JSON arguments of the FAKE_CLAUDE_CALL_TOOL call
+//	FAKE_CLAUDE_PARALLEL_EDITS path that 16 parallel edit_file calls edit, then FAKE_CLAUDE_TOOL_LOG receives its read_file response
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/skill"
@@ -47,6 +48,11 @@ var plan = Profile{Name: "plan", Tools: readOnly,
 		"You have no tool that edits a file or runs a command, so make no change."}
 
 // profileKeys are the agent frontmatter keys of Claude Code that a profile reads or ignores.
+// claudeToolNames maps the tool names of Claude Code to the harness tools that
+// do the same work, so one profile file serves every backend.
+var claudeToolNames = map[string]string{"Read": "read_file", "Write": "write_file", "Edit": "edit_file", "MultiEdit": "edit_file",
+	"Glob": "glob", "Grep": "grep", "LS": "ls", "Bash": "bash"}
+
 var profileKeys = []string{"name", "description", "tools", "model", "color"}
 
 // Profiles returns the built-in profiles and each valid *.md file of dirs in
@@ -124,7 +130,11 @@ func profile(path string) (Profile, error) {
 		p.Model = f["model"]
 	}
 	for t := range strings.SplitSeq(f["tools"], ",") {
-		if t = strings.TrimSpace(t); t != "" {
+		t = strings.TrimSpace(t)
+		if h, ok := claudeToolNames[t]; ok {
+			t = h
+		}
+		if t != "" && !slices.Contains(p.Tools, t) {
 			p.Tools = append(p.Tools, t)
 		}
 	}

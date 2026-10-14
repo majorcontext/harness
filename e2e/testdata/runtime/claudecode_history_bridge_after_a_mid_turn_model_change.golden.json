@@ -37,7 +37,7 @@
             },
             {
               "kind": "tool_use",
-              "tool_name": "Bash",
+              "tool_name": "bash",
               "tool_input": {
                 "command": "echo hi"
               },
@@ -51,7 +51,7 @@
             {
               "kind": "tool_result",
               "text": "hi\n",
-              "tool_name": "Bash",
+              "tool_name": "bash",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -110,7 +110,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -200,7 +200,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo hi"
             }
@@ -236,7 +236,6 @@
       "body": [
         {
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
@@ -247,7 +246,6 @@
         },
         {
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
           "history_directive": true,
           "mcp_config": true,
           "model": "sonnet",
@@ -266,7 +264,7 @@
         "result": {
           "content": [
             {
-              "text": "The following is PRIOR conversation history for this session that already happened. It is context for you to read, not a new message to respond to.\n\nShowing messages 1-13 of 13 total (oldest first).\n\nUser: run it\nAssistant: Let me check that.\nAssistant called tool Bash({\"command\":\"echo hi\"})\nTool result (Bash, ok): hi\n\nAssistant: Done — it printed hi.\nUser: native\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nUser: back\nAssistant: Let me check that.\nAssistant called tool Bash({\"command\":\"echo hi\"})\nTool result (Bash, ok): hi\n\nAssistant: Done — it printed hi.\n",
+              "text": "The following is PRIOR conversation history for this session that already happened. It is context for you to read, not a new message to respond to.\n\nShowing messages 1-13 of 13 total (oldest first).\n\nUser: run it\nAssistant: Let me check that.\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nAssistant: Done — it printed hi.\nUser: native\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nUser: back\nAssistant: Let me check that.\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nAssistant: Done — it printed hi.\n",
               "type": "text"
             }
           ]

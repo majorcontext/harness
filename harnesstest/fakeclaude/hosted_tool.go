@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 )
 
 const toolUseMeta = "claudecode/toolUseId"
@@ -27,13 +29,18 @@ func callHostedTool(f *fake) {
 	if list := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); list != "" {
 		name, log, method, params = "tools/list", list, "tools/list", obj{}
 	}
-	if name == "" || log == "" {
+	edits := os.Getenv("FAKE_CLAUDE_PARALLEL_EDITS")
+	if (name == "" || log == "") && edits == "" {
 		return
 	}
 	for {
 		if _, ok := f.readLine(); !ok {
 			break
 		}
+	}
+	if edits != "" {
+		parallelEdits(edits, log)
+		return
 	}
 	appendFile(log, hostedRPC(method, params)+"\n")
 }
@@ -112,4 +119,22 @@ func hostedServer() (hostedEntry, bool) {
 		}
 	}
 	return hostedEntry{}, false
+}
+
+// parallelEdits calls edit_file at once for each of the 16 lines of path, line
+// i from "line-i-old" to "line-i-new", as a CLI that runs MCP tools in
+// parallel does, and then appends the read_file response of path to log.
+func parallelEdits(path, log string) {
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			hostedRPC("tools/call", obj{"name": "edit_file", "arguments": obj{"path": path,
+				"old_string": fmt.Sprintf("line-%d-old", i), "new_string": fmt.Sprintf("line-%d-new", i)},
+				"_meta": obj{toolUseMeta: fmt.Sprintf("toolu_edit_%d", i)}})
+		}()
+	}
+	wg.Wait()
+	appendFile(log, hostedRPC("tools/call", obj{"name": "read_file", "arguments": obj{"path": path}, "_meta": obj{toolUseMeta: "toolu_read"}})+"\n")
 }

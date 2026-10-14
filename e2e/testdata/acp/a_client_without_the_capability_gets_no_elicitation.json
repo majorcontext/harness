@@ -17,40 +17,43 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "AskUserQuestion",
-            "arguments": {
-              "questions": [
-                {
-                  "header": "DB",
-                  "multiSelect": false,
-                  "options": [
-                    {
-                      "description": "a",
-                      "label": "PostgreSQL"
-                    },
-                    {
-                      "description": "b",
-                      "label": "SQLite"
-                    }
-                  ],
-                  "question": "Which database?"
-                }
-              ]
-            }
+            "type": "text",
+            "text": "Let me check that."
           }
         ]
       },
       {
         "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
         "role": "tool",
         "parts": [
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "is_error": true,
-            "content": "cut off before a result was recorded; check whether it took effect before running it again"
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
           }
         ]
       }
@@ -292,31 +295,33 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
-            "kind": "other",
-            "name": "AskUserQuestion",
+            "content": {
+              "text": "Let me check that.",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "kind": "execute",
+            "name": "bash",
             "rawInput": {
-              "questions": [
-                {
-                  "header": "DB",
-                  "multiSelect": false,
-                  "options": [
-                    {
-                      "description": "a",
-                      "label": "PostgreSQL"
-                    },
-                    {
-                      "description": "b",
-                      "label": "SQLite"
-                    }
-                  ],
-                  "question": "Which database?"
-                }
-              ]
+              "command": "echo hi"
             },
             "sessionUpdate": "tool_call",
             "status": "in_progress",
-            "title": "AskUserQuestion",
-            "toolCallId": "toolu_q"
+            "title": "bash echo hi",
+            "toolCallId": "toolu_1"
           }
         }
       }
@@ -332,16 +337,34 @@
             "content": [
               {
                 "content": {
-                  "text": "cut off before a result was recorded; check whether it took effect before running it again",
+                  "text": "hi\n",
                   "type": "text"
                 },
                 "type": "content"
               }
             ],
-            "rawOutput": "cut off before a result was recorded; check whether it took effect before running it again",
+            "rawOutput": "hi\n",
             "sessionUpdate": "tool_call_update",
-            "status": "failed",
-            "toolCallId": "toolu_q"
+            "status": "completed",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "Done — it printed hi.",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:2\u003e",
+            "sessionUpdate": "agent_message_chunk"
           }
         }
       }

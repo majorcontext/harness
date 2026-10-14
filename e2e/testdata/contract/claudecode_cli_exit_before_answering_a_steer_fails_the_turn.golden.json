@@ -19,7 +19,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "sleep 1"
             }

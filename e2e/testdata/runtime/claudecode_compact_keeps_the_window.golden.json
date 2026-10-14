@@ -19,7 +19,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo one"
             }
@@ -44,7 +44,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "Bash",
+            "name": "bash",
             "arguments": {
               "command": "echo two"
             }

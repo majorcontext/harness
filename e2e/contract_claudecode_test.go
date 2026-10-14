@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -188,11 +190,6 @@ func TestContractClaudeCodePartialMessages(t *testing.T) {
 			actions: withActions(watched, claudeInvocations{as: "a"}),
 		},
 		{
-			name:    "claudecode_subagent_frame_during_a_main_stream_keeps_each_item_its_deltas",
-			driver:  live("partial_crossing"),
-			actions: watched,
-		},
-		{
 			name:    "claudecode_retried_reply_starts_a_new_live_item",
 			driver:  live("partial_retry"),
 			actions: watched,
@@ -293,8 +290,6 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 	session := claudeSession{as: "a"}
 	runScenarios(t, []scenario{
 		row("claudecode_thinking_block_is_reasoning", "thinking", session),
-		row("claudecode_subagent_frames_keep_parent", "subagent", claudeMessageParents{as: "a"}),
-		row("claudecode_subagent_and_main_frames_keep_their_wire_order", "parallel_tools_crossing", claudeMessageParents{as: "a"}),
 		row("claudecode_queued_notification_result_does_not_end_the_turn", "queued_empty_result", session),
 		row("claudecode_compact_refuses_keep_turns", "normal", claudeCompactKeeping{as: "a", keep: 1}, session),
 		row("claudecode_cli_compaction_is_logged", "compact_boundary", claudeJournalEvents{as: "a", prefix: "compaction."}, session),
@@ -557,5 +552,22 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		name:    "claudecode_plugin_hook_denies_a_bash_call_of_the_cli",
 		driver:  claudeLane{mode: "normal", callTool: "bash", callArgs: map[string]any{"command": "echo block-me"}, extra: pluginConfig(t, nil)}.newDriver,
 		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+	}, {
+		name:    "claudecode_built_in_tool_call_fails_the_turn",
+		driver:  claudeLane{mode: "builtin_tool"}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
+	}, {
+		name:   "claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit",
+		driver: claudeLane{mode: "normal", parallelEdits: "lines.txt"}.newDriver,
+		actions: append([]action{writeFile{path: "lines.txt", body: numberedLines()}},
+			withActions(claudeOneTurn, claudeToolCall{as: "a"})...),
 	}})
+}
+
+func numberedLines() string {
+	var b strings.Builder
+	for i := range 16 {
+		fmt.Fprintf(&b, "line-%d-old\n", i)
+	}
+	return b.String()
 }

@@ -269,7 +269,7 @@ func (r *run) frame(line []byte) error {
 }
 
 func (r *run) handle(env envelope) error {
-	if r.restricted && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
+	if r.resolution == nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
 	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
@@ -369,6 +369,16 @@ func (r *run) system(env envelope) error {
 	return nil
 }
 
+// mayCall reports whether the CLI may call the tool name. A restricted run
+// calls only its allowed tools. Any run calls MCP tools, and AskUserQuestion
+// when it may ask. A built-in tool that acts on the machine fails the turn.
+func (r *run) mayCall(name string) bool {
+	if r.restricted {
+		return r.allowed[name]
+	}
+	return strings.HasPrefix(name, "mcp__") || r.allowed[name]
+}
+
 func (r *run) checkTools(tools *[]string) error {
 	if tools == nil {
 		return fmt.Errorf("%w: the init frame lists no tools", ErrToolsNotRestricted)
@@ -417,6 +427,11 @@ func (r *run) assistant(env envelope) error {
 	parts := assistantParts(m)
 	if len(parts) == 0 {
 		return nil
+	}
+	for _, p := range parts {
+		if p.Type == protocol.LogPartToolCall && !r.mayCall(p.Name) {
+			return fmt.Errorf("%w: tool call %s", ErrToolsNotRestricted, p.Name)
+		}
 	}
 	if r.pending == nil || m.ID == "" || m.ID != r.pendingID || r.pending.ParentCallID != env.ParentToolUseID {
 		if err := r.flush(); err != nil {
