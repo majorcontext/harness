@@ -254,7 +254,7 @@ func New(opts Options) (*Runtime, error) {
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log})
 	for _, t := range tools {
-		if name := t.Spec().Name; name == "" || r.known("", name) && !(r.shadowable(name) && !r.owns(name)) {
+		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
