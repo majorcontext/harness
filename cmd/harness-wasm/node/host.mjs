@@ -53,6 +53,7 @@ const echoTool = {
 };
 
 const jsTools = {
+  bash: { name: "bash", description: "Host shell.", schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] }, run: async (input) => "host:" + input.command },
   js_cyclic: { name: "js_cyclic", description: "Returns a cyclic object.", run: async () => { const o = {}; o.self = o; return o; } },
   js_reject: { name: "js_reject", description: "Rejects with a plain object.", run: async () => Promise.reject({ code: 1 }) },
 };

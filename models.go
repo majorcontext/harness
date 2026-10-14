@@ -24,6 +24,11 @@ func (r *Runtime) checkModel(model string, names []string, session bool) error {
 	}
 	caps := be.Capabilities(model)
 	if !caps.OwnsLoop {
+		if names == nil {
+			if taken := r.shadowed(); len(taken) > 0 {
+				return fmt.Errorf("%w: tool %q has the name of a built-in tool, which the session allows; list the allowed tools to replace it", ErrInvalidRequest, taken[0])
+			}
+		}
 		return nil
 	}
 	for _, n := range caps.Tools {
