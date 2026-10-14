@@ -54,7 +54,7 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 		if len(schema) == 0 {
 			schema = emptySchema
 		}
-		reg.RegisterTool(mcp.Tool{Name: s.Name, Description: s.Description, InputSchema: schema},
+		reg.RegisterTool(mcp.Tool{Name: s.Name, Description: s.Description, InputSchema: schema, Annotations: annotations(s)},
 			func(rctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
 				id := metaString(mcp.CallMeta(rctx), idMeta)
 				if id == "" {
@@ -77,6 +77,15 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 		_ = t.srv.Serve(ln)
 	}()
 	return t, nil
+}
+
+// annotations is the MCP annotations of a tool: readOnlyHint lets the
+// external harness run parallel calls of the tool at once.
+func annotations(s protocol.ToolSpec) json.RawMessage {
+	if !s.ReadOnly {
+		return nil
+	}
+	return json.RawMessage(`{"readOnlyHint":true}`)
 }
 
 // content is the MCP content of a tool result: the text, then each blob as

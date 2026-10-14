@@ -38,7 +38,7 @@ const historyDescription = "Read the PRIOR conversation history for this session
 type historyTool struct{ a *Actor }
 
 func (historyTool) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: turn.HistoryTool, Description: historyDescription, InputSchema: historySchema}
+	return protocol.ToolSpec{Name: turn.HistoryTool, Description: historyDescription, InputSchema: historySchema, ReadOnly: true}
 }
 
 func (h historyTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {

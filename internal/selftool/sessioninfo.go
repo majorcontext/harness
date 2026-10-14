@@ -140,7 +140,7 @@ func NewSessionInfo(host Sessions, id string, p *Prompt) *SessionInfo {
 
 // Spec returns the specification of the session_info tool.
 func (*SessionInfo) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: SessionInfoName, Description: sessionInfoDescription, InputSchema: json.RawMessage(sessionInfoSchema)}
+	return protocol.ToolSpec{Name: SessionInfoName, Description: sessionInfoDescription, InputSchema: json.RawMessage(sessionInfoSchema), ReadOnly: true}
 }
 
 // Run reports the session.

@@ -72,7 +72,7 @@ func NewTool(s Store) Tool { return Tool{s} }
 
 // Spec describes the tool.
 func (Tool) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: ToolName, Description: description, InputSchema: json.RawMessage(schema)}
+	return protocol.ToolSpec{Name: ToolName, Description: description, InputSchema: json.RawMessage(schema), ReadOnly: true}
 }
 
 type args struct {

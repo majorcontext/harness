@@ -32,8 +32,9 @@ type action interface{ run(t *testing.T, r *run) }
 
 type create struct {
 	as          string
-	model       string // empty takes the model of the config
-	staysActive bool   // the session never reads idle, so the final waitIdle skips it
+	model       string   // empty takes the model of the config
+	staysActive bool     // the session never reads idle, so the final waitIdle skips it
+	allowed     []string // the allowed_tools of the session; nil allows every tool
 }
 type submit struct{ as, text string }
 type enqueue struct{ as, text string }
@@ -113,7 +114,17 @@ func (a create) run(t *testing.T, r *run) {
 	if _, dup := r.ids[a.as]; dup {
 		t.Fatalf("alias %q created twice", a.as)
 	}
-	r.ids[a.as] = createdID(t, r.drv, a.model)
+	if a.allowed != nil {
+		res := r.drv.CreateAllowed(t, a.allowed)
+		body, _ := res.Body.(map[string]any)
+		id, _ := body["id"].(string)
+		if res.Status/100 != 2 || id == "" {
+			t.Fatalf("create with allowed_tools %v = %d %v", a.allowed, res.Status, res.Body)
+		}
+		r.ids[a.as] = id
+	} else {
+		r.ids[a.as] = createdID(t, r.drv, a.model)
+	}
 	r.aliases = append(r.aliases, a.as)
 	r.noIdle[a.as] = a.staysActive
 }
