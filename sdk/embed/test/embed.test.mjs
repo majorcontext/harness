@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { createHarness, defaultBuiltinTools, wasm } from "../src/index.mjs";
 import { workerBridge } from "../src/workerbridge.mjs";
 import { clientSuite } from "./suite.mjs";
-import { acpClient, bodyText, fakeModel, moduleFiles, tempDir, userConfig } from "./support.mjs";
+import { acpClient, bodyText, chatgptToken, fakeIssuer, fakeModel, moduleFiles, seedLogin, tempDir, userConfig } from "./support.mjs";
 
 clientSuite((options) => harness(options));
 
@@ -272,10 +272,10 @@ test("proxy.providerBaseURLs sends the native codex requests to the pass-through
   }
 });
 
-// withPageOrigin runs fn while globalThis.location names a page at http://127.0.0.1:8080. The module paths are file URLs, which a base URL leaves alone.
-async function withPageOrigin(fn) {
+// withPageOrigin runs fn while globalThis.location names a page. The module paths are file URLs, which a base URL leaves alone.
+async function withPageOrigin(fn, location = { href: "http://127.0.0.1:8080/", origin: "http://127.0.0.1:8080" }) {
   const saved = Object.getOwnPropertyDescriptor(globalThis, "location");
-  Object.defineProperty(globalThis, "location", { value: { href: "http://127.0.0.1:8080/", origin: "http://127.0.0.1:8080" }, configurable: true });
+  Object.defineProperty(globalThis, "location", { value: location, configurable: true });
   try {
     return await fn();
   } finally {
@@ -284,21 +284,62 @@ async function withPageOrigin(fn) {
   }
 }
 
-function pageHarness(providerBaseURLs) {
+function pageHarness(providerBaseURLs, extra = {}) {
   const files = moduleFiles();
   const transport = wasm({ module: pathToFileURL(files.module).href, wasmExec: pathToFileURL(files.wasmExec).href, worker: true });
-  return createHarness({ transport, config: { model: "codex/gpt-5.6-sol" }, proxy: { providerBaseURLs }, store: { persist: true, dir: tempDir() } });
+  return createHarness({ transport, config: { model: "codex/gpt-5.6-sol" }, proxy: { providerBaseURLs }, store: { persist: true, dir: tempDir() }, ...extra });
 }
 
-test("proxy.providerBaseURLs of the ChatGPT provider must be on the page origin", async () => {
-  await withPageOrigin(async () => {
-    const h = await pageHarness({ codex: "http://127.0.0.1:9090/codex" });
-    try {
-      await assert.rejects(acpClient(h).session(), /page origin/);
-    } finally {
-      await h.close();
+const chatgptEntry = (extra) => ({ type: "openai", auth: "chatgpt", responses_path: "/responses", ...extra });
+
+test("a request of a ChatGPT-login provider to another origin than the page fails before it is sent", async () => {
+  const model = await fakeModel([{ text: "unused" }]);
+  const foreign = model.url + "/codex";
+  const rows = {
+    "providerBaseURLs": { proxy: { providerBaseURLs: { codex: foreign } } },
+    "a base_url of the user config": { config: { model: "codex/gpt-5.6-sol", providers: { codex: chatgptEntry({ base_url: foreign }) } } },
+    "a base_url that proxy.baseURL fills": { config: { model: "gpt/x", providers: { gpt: chatgptEntry() } }, proxy: { baseURL: foreign } },
+  };
+  try {
+    for (const [name, row] of Object.entries(rows)) {
+      await withPageOrigin(async () => {
+        const dir = tempDir();
+        seedLogin(dir, chatgptToken(3600));
+        const files = moduleFiles();
+        const transport = wasm({ module: pathToFileURL(files.module).href, wasmExec: pathToFileURL(files.wasmExec).href, worker: true });
+        const h = await createHarness({ transport, config: { model: "codex/gpt-5.6-sol" }, store: { persist: true, dir }, ...row });
+        try {
+          const c = acpClient(h);
+          await assert.rejects(c.prompt(await c.session(), "go"), /page origin/, name);
+        } finally {
+          await h.close();
+        }
+      });
     }
-  });
+    assert.deepEqual((await model.requests()).filter((r) => r.path.startsWith("/codex") || r.path === "/responses"), [], "a request reached the foreign origin");
+  } finally {
+    model.close();
+  }
+});
+
+test("a page with an opaque origin sends the ChatGPT login nowhere", async () => {
+  const model = await fakeModel([{ text: "unused" }]);
+  try {
+    await withPageOrigin(async () => {
+      const dir = tempDir();
+      seedLogin(dir, chatgptToken(3600));
+      const h = await pageHarness({ codex: model.url + "/codex" }, { store: { persist: true, dir } });
+      try {
+        const c = acpClient(h);
+        await assert.rejects(c.prompt(await c.session(), "go"), /page origin/);
+      } finally {
+        await h.close();
+      }
+    }, { href: "file:///page.html", origin: "null" });
+    assert.equal((await model.requests()).length, 0);
+  } finally {
+    model.close();
+  }
 });
 
 test("proxy.providerBaseURLs of the ChatGPT provider accepts a path and a URL of the page origin", async () => {
@@ -313,6 +354,108 @@ test("proxy.providerBaseURLs of the ChatGPT provider accepts a path and a URL of
       }
     });
   }
+});
+
+test("a page fetch callback carries model traffic only: the refresh goes to the issuer directly", async () => {
+  const model = await fakeModel([{ text: "unused" }]);
+  const issuer = await fakeIssuer();
+  const dir = tempDir();
+  seedLogin(dir, chatgptToken(-3600));
+  const seen = [];
+  const pageFetch = async (url, init) => {
+    seen.push(String(url));
+    return fetch(url, { method: init.method, headers: init.headers, body: init.body });
+  };
+  const h = await harness({ config: { model: "codex/gpt-5.6-sol", codex_issuer: issuer.url }, proxy: { providerBaseURLs: { codex: model.url + "/codex" } }, fetch: pageFetch, store: { persist: true, dir } });
+  try {
+    const c = acpClient(h);
+    await c.prompt(await c.session(), "go").catch(() => {});
+    assert.ok(issuer.requests.some((r) => r.path === "/oauth/token"), "no refresh reached the issuer");
+    assert.deepEqual(seen.filter((u) => u.startsWith(issuer.url)), [], "the page callback saw an issuer request");
+    assert.ok(seen.some((u) => u === model.url + "/codex/responses"), "the page callback did not carry the model request");
+  } finally {
+    await h.close();
+    model.close();
+    issuer.close();
+  }
+});
+
+test("the device login goes to the issuer directly, not through the page fetch callback", async () => {
+  const issuer = await fakeIssuer();
+  const seen = [];
+  const pageFetch = async (url) => {
+    seen.push(String(url));
+    throw new Error("the page callback must not carry the login");
+  };
+  const h = await harness({ config: { codex_issuer: issuer.url }, fetch: pageFetch, store: { persist: true, dir: tempDir() } });
+  try {
+    const c = acpClient(h);
+    await c.request("initialize", { protocolVersion: 1, clientCapabilities: { elicitation: { url: {} } } });
+    await c.request("authenticate", { methodId: "chatgpt" });
+    assert.ok(issuer.requests.some((r) => r.path === "/oauth/token"), "the login did not reach the issuer");
+    assert.deepEqual(seen, []);
+  } finally {
+    await h.close();
+    issuer.close();
+  }
+});
+
+test("a redirect of the issuer is not followed", async () => {
+  const sink = await fakeIssuer();
+  const issuer = await fakeIssuer({ redirectTo: sink.url });
+  const dir = tempDir();
+  seedLogin(dir, chatgptToken(-3600));
+  const h = await harness({ config: { model: "codex/gpt-5.6-sol", codex_issuer: issuer.url }, store: { persist: true, dir } });
+  try {
+    const c = acpClient(h);
+    await c.prompt(await c.session(), "go").catch(() => {});
+    assert.ok(issuer.requests.length > 0, "the refresh did not reach the issuer");
+    assert.deepEqual(sink.requests, [], "the redirect was followed");
+  } finally {
+    await h.close();
+    sink.close();
+    issuer.close();
+  }
+});
+
+test("a redirect of the ChatGPT model endpoint is not followed", async () => {
+  const sink = await fakeIssuer();
+  const redirecting = await fakeIssuer({ redirectTo: sink.url });
+  const dir = tempDir();
+  seedLogin(dir, chatgptToken(3600));
+  const h = await harness({ config: { model: "codex/gpt-5.6-sol" }, proxy: { providerBaseURLs: { codex: redirecting.url + "/codex" } }, store: { persist: true, dir } });
+  try {
+    const c = acpClient(h);
+    await c.prompt(await c.session(), "go").catch(() => {});
+    assert.ok(redirecting.requests.length > 0, "the model request did not reach the endpoint");
+    assert.deepEqual(sink.requests, [], "the redirect was followed");
+  } finally {
+    await h.close();
+    sink.close();
+    redirecting.close();
+  }
+});
+
+test("a malformed proxy URL leaves no Worker and no held store", async () => {
+  const dir = tempDir();
+  const files = moduleFiles();
+  const transport = wasm({ module: files.module, wasmExec: files.wasmExec, worker: true });
+  let workers = 0;
+  const original = Worker.prototype.postMessage;
+  Worker.prototype.postMessage = function (...args) {
+    workers++;
+    return original.apply(this, args);
+  };
+  try {
+    await withPageOrigin(async () => {
+      await assert.rejects(createHarness({ transport, proxy: { baseURL: "http://[bad" }, store: { persist: true, dir } }));
+    });
+  } finally {
+    Worker.prototype.postMessage = original;
+  }
+  assert.equal(workers, 0, "a Worker started for options that cannot be built");
+  const again = await harness({ config: userConfig("http://127.0.0.1:1"), store: { persist: true, dir } });
+  await again.close();
 });
 
 test("an aborted signal does not run the page tool", async () => {

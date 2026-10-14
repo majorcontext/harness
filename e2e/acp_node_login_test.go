@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -97,4 +98,25 @@ func TestNodeWasmListsCodexModelsOnlyWithALogin(t *testing.T) {
 			c.finish(stop)
 		})
 	}
+}
+
+// TestNodeWasmOffersNoLoginForAnAuthFileWithoutAStoreDirectory pins that the login needs the store of the host,
+// which holds the file under its lock: a codex_auth_file in the config does not stand for it.
+func TestNodeWasmOffersNoLoginForAnAuthFileWithoutAStoreDirectory(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t)
+	authFile := filepath.Join(t.TempDir(), "auth", "codex.json")
+	env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), map[string]any{"codex_auth_file": authFile}), wasm: true}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{ConfigPath: env.configPath, Env: map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}})
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake, env
+	id := c.request("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": urlElicitationCaps, "clientInfo": map[string]any{"name": "e2e", "version": "0"}})
+	res := c.mustBeResult(c.response(id), "InitializeResponse")
+	if methods, _ := res["authMethods"].([]any); len(methods) != 0 {
+		t.Errorf("authMethods = %v, want none without a store directory", methods)
+	}
+	c.mustBeError(c.response(c.request("authenticate", map[string]any{"methodId": "chatgpt"})), acpMethodNotFound)
+	c.finish(stop)
 }

@@ -36,7 +36,9 @@ type options struct {
 	tools        []harness.Tool
 	proxyHeaders map[string]string
 	proxyBase    string
-	// pageOrigin is the origin of the page, or empty when the host has none (Node).
+	// modelFetch carries the model requests of a page fetch. Absent: the global fetch.
+	modelFetch js.Value
+	// pageOrigin is the origin of the page, or empty when the host has none (Node). "null" is an opaque origin.
 	pageOrigin string
 	// providerBases maps a provider name to the base_url of its entry.
 	providerBases map[string]string
@@ -61,6 +63,10 @@ func readOptions(o js.Value) *options {
 	keep(err)
 	opts.defaultDir, err = jshost.StringField(o, "defaultDir")
 	keep(err)
+	opts.modelFetch = o.Get("modelFetch")
+	if t := opts.modelFetch.Type(); t != js.TypeUndefined && t != js.TypeNull && t != js.TypeFunction {
+		keep(errors.New("modelFetch must be a function"))
+	}
 	opts.pageOrigin, err = jshost.StringField(o, "pageOrigin")
 	keep(err)
 	opts.env, err = jshost.StringMap("env", o.Get("env"))
@@ -125,9 +131,6 @@ func (o *options) applyHostConfig() error {
 					return fmt.Errorf("proxy.providerBaseURLs: %q is not a provider", name)
 				}
 			}
-			if origin, ok := o.foreignOrigin(p, base); ok {
-				return fmt.Errorf("proxy.providerBaseURLs.%s is on %s, not on the page origin %s, and the provider sends the ChatGPT token there", name, origin, o.pageOrigin)
-			}
 			p.BaseURL = base
 			providers[name] = p
 		}
@@ -137,19 +140,6 @@ func (o *options) applyHostConfig() error {
 		o.user.CodexAuthFile = path.Join(o.storeDir, "auth", "codex.json")
 	}
 	return nil
-}
-
-// foreignOrigin reports the origin of base when p sends the ChatGPT login to base and the page has another origin.
-func (o *options) foreignOrigin(p config.Provider, base string) (string, bool) {
-	if !p.UsesChatGPTLogin() || o.pageOrigin == "" {
-		return "", false
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		return base, true
-	}
-	origin := u.Scheme + "://" + u.Host
-	return origin, origin != o.pageOrigin
 }
 
 // proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
@@ -185,12 +175,17 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 		Version:    "wasm",
 		Getenv:     func(k string) string { return o.env[k] },
 		Logger:     o.logger,
-		ModelTransport: func(string) http.RoundTripper {
-			return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}
+		ModelTransport: func(name string) http.RoundTripper {
+			rt := jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin(), Fetch: o.modelFetch}
+			if o.user.ProviderEntries()[name].UsesChatGPTLogin() {
+				// The login must reach the page origin only, and a redirect must not carry it on.
+				rt.OnlyOrigin, rt.NoRedirect = o.pageOrigin, true
+			}
+			return rt
 		},
 		Tools:           o.tools,
 		Host:            harness.HostLimits{NoProcess: true, NoLogin: true},
-		IssuerTransport: jshost.FetchRT{},
+		IssuerTransport: jshost.FetchRT{NoRedirect: true},
 	})
 }
 
@@ -210,7 +205,8 @@ func (o *options) login() acp.Auth {
 			return config.MergeProject(o.user, "the config of harnessConnect", cwd, o.proxyBase)
 		},
 		DeviceCode: true,
-		HTTP:       codexauth.Client(jshost.FetchRT{}),
+		HTTP:       codexauth.Client(jshost.FetchRT{NoRedirect: true}),
+		LoginStore: o.storeDir != "",
 		LookPath:   func(string) (string, error) { return "", exec.ErrNotFound },
 	})
 }

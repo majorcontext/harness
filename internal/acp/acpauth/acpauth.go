@@ -42,8 +42,10 @@ type Options struct {
 	Out io.Writer
 	// Env is the environment of the Claude Code CLI. Nil is the environment of the process.
 	Env []string
-	// DeviceCode makes the ChatGPT login the device code flow, which the client shows as an elicitation in URL mode, in place of the browser callback on a loopback port. The login is then offered only to a client with that capability, and only when the config sets codex_auth_file. It has no terminal method, because the host has no command to run.
+	// DeviceCode makes the ChatGPT login the device code flow, which the client shows as an elicitation in URL mode, in place of the browser callback on a loopback port. The login is then offered only to a client with that capability, with LoginStore, and when the config sets codex_auth_file. It has no terminal method, because the host has no command to run.
 	DeviceCode bool
+	// LoginStore says that the host has a persistent store, held under a lock of its own, that keeps the login file. DeviceCode offers no login without it, whatever codex_auth_file says.
+	LoginStore bool
 	// HTTP sends the requests of the device code flow. Nil: a client with a 30 s timeout.
 	HTTP *http.Client
 	// LookPath resolves the program of the Claude Code CLI, as exec.LookPath does. Nil is exec.LookPath.
@@ -86,7 +88,7 @@ type target struct {
 
 // targets offers the ChatGPT login always, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
 func (a *Auth) targets(cfg *config.Config, c acp.ClientAuth) target {
-	t := target{chatgpt: !a.opts.DeviceCode || (c.URL && cfg.CodexAuthFile != "")}
+	t := target{chatgpt: !a.opts.DeviceCode || (c.URL && a.opts.LoginStore && cfg.CodexAuthFile != "")}
 	if bin, ok := cfg.ClaudeCLI(); ok {
 		if _, err := a.opts.LookPath(bin); err == nil {
 			t.claude = bin

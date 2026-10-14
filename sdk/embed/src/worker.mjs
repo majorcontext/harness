@@ -52,7 +52,6 @@ async function start({ module, wasmExec, options }) {
     ? { module: source, instance: await WebAssembly.instantiate(source, go.importObject) }
     : await WebAssembly.instantiate(source, go.importObject);
   go.run(result.instance);
-  if (options.bridgeFetch) globalThis.fetch = bridge.fetch;
   const connect = {
     config: options.config,
     builtinTools: options.builtinTools,
@@ -60,6 +59,7 @@ async function start({ module, wasmExec, options }) {
     defaultDir: globalThis.process.cwd(),
     proxy: options.proxy,
     pageOrigin: options.pageOrigin,
+    modelFetch: options.bridgeFetch ? bridge.fetch : undefined,
     tools: options.tools.map((spec) => ({ ...spec, run: (input, { signal }) => bridge.callTool(spec.name, input, signal) })),
     onFrame: (frame) => port.post({ frame }),
     onLog: (line) => port.post({ log: line }),
