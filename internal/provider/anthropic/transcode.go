@@ -64,7 +64,7 @@ type apiThinking struct {
 
 // thinkingBudget maps a unified reasoning-effort level to an Anthropic thinking
 // budget in tokens. It returns (0, false) for a level that requests no
-// reasoning (EffortUnset, EffortOff), so the caller emits no thinking block.
+// reasoning (EffortUnset, EffortOff), so the caller sends no budget.
 // 1024 is the Anthropic minimum budget. A budget has no level above high, so
 // xhigh and max take the high budget.
 func thinkingBudget(e modelref.Effort) (int, bool) {
