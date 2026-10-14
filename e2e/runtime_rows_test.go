@@ -651,8 +651,7 @@ var runtimeRows = map[string]runtimeRow{
 	"git_changes_uncommitted_scope_reports_modified_deleted_and_untracked_files": sameAsServe(),
 	"git_changes_branch_scope_diffs_the_work_tree_against_the_default_branch":    sameAsServe(),
 	"git_changes_uncommitted_scope_on_an_unborn_repo_reports_files_as_added":     sameAsServe(),
-	"git_changes_refusals":                          reGolden(specGitOracle, specErrors),
-	"workspace_changes_refusal_reads_as_the_reason": reGolden(specInvalidReason, specErrors),
+	"git_changes_refusals": reGolden(specGitOracle, specErrors, specInvalidReason),
 
 	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor": reGolden(specCmdMenuRoutes, specCmdUnsupport),
 }
