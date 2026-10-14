@@ -51,17 +51,13 @@
           "ref": {
             "type": "string"
           },
-          "sha": {
-            "type": "string"
-          },
           "rev": {
             "type": "string"
           }
         },
         "type": "object",
         "required": [
-          "ref",
-          "sha"
+          "ref"
         ]
       },
       "ChangedFile": {
@@ -434,7 +430,6 @@
               "invalid_request",
               "model_unavailable",
               "no_base",
-              "not_a_git_repo",
               "not_a_repo",
               "payload_too_large",
               "process_not_found",
@@ -1998,9 +1993,6 @@
           "branch": {
             "type": "string"
           },
-          "head": {
-            "type": "string"
-          },
           "head_rev": {
             "type": "string"
           },
@@ -2026,7 +2018,6 @@
           "scope",
           "engine",
           "branch",
-          "head",
           "files",
           "patch",
           "truncated"

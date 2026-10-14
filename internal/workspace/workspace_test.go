@@ -297,8 +297,8 @@ var changeRows = []struct {
 		setup: func(t *testing.T, dir string) { git(t, dir, "checkout", "-q", "--detach") },
 		files: "",
 		check: func(t *testing.T, dir string, c protocol.WorkspaceChanges) {
-			if c.Branch != "" || c.Head != git(t, dir, "rev-parse", "HEAD") {
-				t.Errorf("changes = branch %q head %q, want no branch at HEAD", c.Branch, c.Head)
+			if c.Branch != "" || c.HeadRev.ID != git(t, dir, "rev-parse", "HEAD") {
+				t.Errorf("changes = branch %q head %q, want no branch at HEAD", c.Branch, c.HeadRev.ID)
 			}
 		}},
 }

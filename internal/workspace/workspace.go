@@ -176,26 +176,14 @@ func changes(ctx context.Context, engines []Engine, root, dir, real, ceiling, sc
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err
 	}
-	//nolint:staticcheck // the deprecated fields keep their values for clients that read them
 	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: eng.Name(), Branch: head.Label, HeadRev: head.Rev}
-	if head.Rev.Kind == protocol.RevCommit {
-		c.Head = head.Rev.ID //nolint:staticcheck // the deprecated field keeps its value for clients that read it
-	}
 	var base Base
 	if scope == protocol.ScopeBranch {
 		if base, err = repo.Base(ctx, head); err != nil {
 			return protocol.WorkspaceChanges{}, err
 		}
-		//nolint:staticcheck // the deprecated field keeps its value for clients that read it
-		c.Base = &protocol.BaseRef{Ref: base.Ref, SHA: commitID(base.Rev), Rev: base.Rev}
+		c.Base = &protocol.BaseRef{Ref: base.Ref, Rev: base.Rev}
 	}
 	c.Files, c.Patch, c.Truncated, err = repo.Diff(ctx, head, base, maxPatch)
 	return c, err
-}
-
-func commitID(r protocol.Rev) string {
-	if r.Kind == protocol.RevCommit {
-		return r.ID
-	}
-	return ""
 }

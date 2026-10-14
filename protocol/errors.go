@@ -22,10 +22,6 @@ const (
 	CodePayloadTooLarge   Code = "payload_too_large"
 	CodeDraining          Code = "draining"
 	CodeInternal          Code = "internal"
-	// CodeNotAGitRepo is a deprecated name of CodeNotARepo.
-	//
-	// Deprecated: the server sends CodeNotARepo.
-	CodeNotAGitRepo Code = "not_a_git_repo"
 	// CodeNotARepo reports a directory outside a repository.
 	CodeNotARepo            Code = "not_a_repo"
 	CodeNoBase              Code = "no_base"
@@ -91,7 +87,6 @@ var statuses = map[Code]int{
 	CodeModelUnavailable:    http.StatusConflict,
 	CodePayloadTooLarge:     http.StatusRequestEntityTooLarge,
 	CodeDraining:            http.StatusServiceUnavailable,
-	CodeNotAGitRepo:         http.StatusConflict,
 	CodeNotARepo:            http.StatusConflict,
 	CodeNoBase:              http.StatusConflict,
 	CodeTooManyChanges:      http.StatusConflict,
