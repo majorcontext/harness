@@ -116,6 +116,7 @@
           "context_window": 1000000,
           "description": "Strongest Claude Opus model for coding, agents, and professional work",
           "efforts": [
+            "off",
             "low",
             "medium",
             "high",

@@ -18,6 +18,7 @@ var anthropicInfo = map[string]modelInfo{
 	"claude-a-1": {name: "Claude A 1", description: "Budget model.", released: "2025-10-15", efforts: []string{"off", "minimal", "low", "medium", "high"}, budgetTokens: true, listed: true},
 	"claude-a-2": {name: "Claude A 2", description: "Toggle and effort model.", released: "2026-06-29", efforts: []string{"off", "low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},
 	"claude-a-3": {name: "Claude A 3", description: "Effort and budget model.", released: "2026-02-17", efforts: []string{"off", "minimal", "low", "medium", "high", "max"}, effortField: true, budgetTokens: true, listed: true},
+	"claude-a-4": {name: "Claude A 4", description: "Effort model that accepts a disabled thinking request.", released: "2026-09-01", efforts: []string{"off", "low", "high"}, effortField: true, listed: true},
 }
 
 // openaiInfo holds the facts of the models.dev "openai" chat models, keyed by model ID.

@@ -65,7 +65,7 @@ func TestGenerateRejectsMissingProvider(t *testing.T) {
 // and budget_tokens to the levels of harness, the levels of a model with reasoning and no usable
 // option, an empty list for a model without reasoning, and the provider display names.
 func TestGenerateInfoGolden(t *testing.T) {
-	code, err := generateInfo(readFile(t, "testdata/catalog.json"), readFile(t, "testdata/overrides.json"))
+	code, _, err := generateInfo(readFile(t, "testdata/catalog.json"), readFile(t, "testdata/overrides.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
