@@ -436,7 +436,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "invalid request: limit must be at most 1000"
+          "message": "limit must be at most 1000"
         }
       }
     }

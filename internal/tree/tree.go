@@ -127,7 +127,7 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	}
 	effort, err := modelref.ParseEffort(ch.Effort)
 	if err != nil {
-		return "", fmt.Errorf("invalid effort %q: %w", ch.Effort, err)
+		return "", err
 	}
 	model := ch.Model
 	if model == "" && p.Model != "" {

@@ -135,7 +135,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "harness: invalid request: message: model ref \"fast\" is not of the form \"provider/model\""
+          "message": "model ref \"fast\" is not of the form \"provider/model\""
         }
       }
     },
@@ -145,7 +145,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "harness: invalid request: message: model ref \"gpt-5\" is not of the form \"provider/model\""
+          "message": "model ref \"gpt-5\" is not of the form \"provider/model\""
         }
       }
     },

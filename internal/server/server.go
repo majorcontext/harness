@@ -230,6 +230,8 @@ func (h *handler[S]) session(f func(S, http.ResponseWriter, *http.Request) error
 func errorBody(code protocol.Code, err error) protocol.ErrorBody {
 	msg := err.Error()
 	switch code {
+	case protocol.CodeInvalidRequest:
+		msg = protocol.Reason(err)
 	case protocol.CodeInternal:
 		msg = "internal error"
 	case protocol.CodeSessionUnreplayable:

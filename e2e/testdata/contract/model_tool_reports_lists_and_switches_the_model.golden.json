@@ -955,7 +955,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])",
+              "text": "model: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])",
               "tool_name": "model",
               "tool_use_id": "toolu#7",
               "is_error": true
@@ -1164,7 +1164,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])",
+              "text": "model: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])",
               "tool_name": "model",
               "tool_use_id": "toolu#7",
               "is_error": true
@@ -1398,7 +1398,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])",
+              "text": "model: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])",
               "tool_name": "model",
               "tool_use_id": "toolu#7",
               "is_error": true
@@ -1647,7 +1647,7 @@
             "type": "tool_result",
             "call_id": "toolu#7",
             "is_error": true,
-            "content": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])"
+            "content": "model: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai])"
           }
         ]
       },

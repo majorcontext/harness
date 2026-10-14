@@ -47,9 +47,9 @@
           "code": -32602,
           "data": {
             "code": "invalid_request",
-            "reason": "harness: invalid request: cwd \"/nonexistent/acp/dir\" is not a directory"
+            "reason": "cwd \"/nonexistent/acp/dir\" is not a directory"
           },
-          "message": "harness: invalid request: cwd \"/nonexistent/acp/dir\" is not a directory"
+          "message": "cwd \"/nonexistent/acp/dir\" is not a directory"
         },
         "id": 2,
         "jsonrpc": "2.0"

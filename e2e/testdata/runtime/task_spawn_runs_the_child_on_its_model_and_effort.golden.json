@@ -92,7 +92,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -156,7 +156,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -247,7 +247,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -301,7 +301,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#3",
               "is_error": true
@@ -365,7 +365,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -419,7 +419,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#3",
               "is_error": true
@@ -446,7 +446,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"quick\": model ref \"quick\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -510,7 +510,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -564,7 +564,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#3",
               "is_error": true
@@ -591,7 +591,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"quick\": model ref \"quick\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -682,7 +682,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -736,7 +736,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#3",
               "is_error": true
@@ -763,7 +763,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"quick\": model ref \"quick\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -879,7 +879,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -933,7 +933,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#3",
               "is_error": true
@@ -960,7 +960,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"quick\": model ref \"quick\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -1098,7 +1098,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
+              "text": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)",
               "tool_name": "task",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -1152,7 +1152,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#3",
               "is_error": true
@@ -1179,7 +1179,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "text": "task: invalid model \"quick\": model ref \"quick\" is not of the form \"provider/model\"",
               "tool_name": "task",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -1389,7 +1389,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)"
+            "content": "task: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)"
           }
         ]
       },
@@ -1445,7 +1445,7 @@
             "type": "tool_result",
             "call_id": "toolu#3",
             "is_error": true,
-            "content": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\""
+            "content": "task: invalid model \"bare\": model ref \"bare\" is not of the form \"provider/model\""
           }
         ]
       },
@@ -1473,7 +1473,7 @@
             "type": "tool_result",
             "call_id": "toolu#4",
             "is_error": true,
-            "content": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\""
+            "content": "task: invalid model \"quick\": model ref \"quick\" is not of the form \"provider/model\""
           }
         ]
       },

@@ -604,7 +604,7 @@
           "line": "/compact 0",
           "name": "compact",
           "status": "failed",
-          "text": "harness: invalid request: keep_turns must be \u003e= 1"
+          "text": "keep_turns must be \u003e= 1"
         },
         {
           "line": "/compact",

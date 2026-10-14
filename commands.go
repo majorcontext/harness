@@ -321,6 +321,8 @@ func outcome(typed string, spec *command.Spec, result any, err error) (status, t
 		return protocol.CommandRefused, refusal(typed), nil, false
 	case errors.Is(err, ErrDraining), errors.Is(err, ErrSessionNotOwned), errors.Is(err, context.Canceled):
 		return protocol.CommandInterrupted, "harness stopped before /" + typed + " finished; it will not run again", nil, false
+	case protocol.CodeOf(err) == protocol.CodeInvalidRequest:
+		return protocol.CommandFailed, protocol.Reason(err), nil, false
 	case apiError(err):
 		return protocol.CommandFailed, err.Error(), nil, false
 	}

@@ -409,9 +409,9 @@
           "code": -32602,
           "data": {
             "code": "invalid_request",
-            "reason": "harness: invalid request: after names no session"
+            "reason": "after names no session"
           },
-          "message": "harness: invalid request: after names no session"
+          "message": "after names no session"
         },
         "id": 7,
         "jsonrpc": "2.0"
