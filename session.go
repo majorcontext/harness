@@ -411,6 +411,15 @@ func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq
 	}
 }
 
+// checkEffort fails with ErrInvalidRequest when effort is not an effort level
+// or empty. Create and Update share it.
+func checkEffort(effort string) error {
+	if _, err := modelref.ParseEffort(effort); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return nil
+}
+
 // Update changes the settings of the session and returns its view. A running
 // turn that owns no loop uses them from its next model call; a backend that
 // owns its loop uses them from its next run.
@@ -419,8 +428,8 @@ func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq
 // the get_conversation_history tool, so any two models may follow each other.
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
 	if p.Effort != nil {
-		if _, err := modelref.ParseEffort(*p.Effort); err != nil {
-			return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		if err := checkEffort(*p.Effort); err != nil {
+			return protocol.Session{}, err
 		}
 	}
 	err := s.a.Update(ctx, protocol.SettingsChanged(p))

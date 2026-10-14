@@ -49,3 +49,11 @@ func buildInfo() (revision, at string) {
 	}
 	return v, ""
 }
+
+// banner renders the engine status line, or "" for an empty version.
+func banner(version string, started time.Time) string {
+	if version == "" {
+		return ""
+	}
+	return "[engine: harness " + version + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
+}
