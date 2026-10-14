@@ -191,7 +191,7 @@ func requestMentions(substr string) harnesstest.Matcher {
 	}
 }
 
-func not(m harnesstest.Matcher) harnesstest.Matcher {
+func notMatching(m harnesstest.Matcher) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool { return !m(r) }
 }
 
@@ -212,7 +212,7 @@ func taskCallsAre(n int) harnesstest.Matcher {
 // awaitReport keeps a parent turn open, one short bash call at a time, until a request holds report.
 func awaitReport(report string) harnesstest.Step {
 	return harnesstest.Step{Name: "await report", Repeat: true,
-		Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash"), not(requestMentions(report)), taskCallsAre(1)),
+		Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash"), notMatching(requestMentions(report)), taskCallsAre(1)),
 		Reply: harnesstest.Reply{Calls: func(r harnesstest.Request) []harnesstest.ToolCall {
 			return []harnesstest.ToolCall{{ID: fmt.Sprintf("toolu_await_%d", len(r.Messages)), Name: "bash", Input: ftArgs("command", "sleep 0.05")}}
 		}}}
