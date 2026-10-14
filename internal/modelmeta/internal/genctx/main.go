@@ -104,8 +104,8 @@ type overrideEntry struct {
 // thinkingOffTable names the overrides of the models that run with thinking off when a request omits the thinking field.
 const thinkingOffTable = "thinkingOffByDefault"
 
-// thinkingDisableTable names the overrides of the models that accept a disabled thinking request but that models.dev lists without an off level.
-const thinkingDisableTable = "thinkingCanBeDisabled"
+// thinkingDisableSuffix ends the name of the override table of a models.dev provider whose models accept a disabled thinking request but that models.dev lists without an off level. The provider name starts the table name.
+const thinkingDisableSuffix = "ThinkingCanBeDisabled"
 
 type overrides map[string]map[string]overrideEntry
 
@@ -183,7 +183,9 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 		known[t.varName] = true
 	}
 	known[thinkingOffTable] = true
-	known[thinkingDisableTable] = true
+	for _, t := range infoTables {
+		known[t.provider+thinkingDisableSuffix] = true
+	}
 	for name := range ovr {
 		if !known[name] {
 			return nil, nil, fmt.Errorf("overrides name unknown table %q", name)
@@ -310,7 +312,7 @@ func controls(opts []struct {
 // effortLiteral is the Go literal of the efforts of a model. A model that
 // models.dev says has no reasoning has an empty list. A model with reasoning
 // and no usable option takes every level, as harness maps a level for it. A
-// model in the thinkingCanBeDisabled overrides also lists off.
+// model in the thinking-disable overrides of its provider also lists off.
 func effortLiteral(reasoning bool, opts []struct {
 	Type   string   `json:"type"`
 	Values []string `json:"values"`
@@ -383,9 +385,10 @@ func generateInfo(catalogJSON, ovrJSON []byte) ([]byte, []string, error) {
 		for _, id := range keys {
 			m := prov.Models[id]
 			name := strings.TrimSuffix(strings.TrimSpace(m.Name), latestSuffix)
-			_, canDisable := ovr[thinkingDisableTable][id]
+			disableTable := t.provider + thinkingDisableSuffix
+			_, canDisable := ovr[disableTable][id]
 			if canDisable && slices.Contains(efforts(m.ReasoningOptions), "off") {
-				notes = append(notes, fmt.Sprintf("%s[%q] override repeats models.dev, which lists off", thinkingDisableTable, id))
+				notes = append(notes, fmt.Sprintf("%s[%q] override repeats models.dev, which lists off", disableTable, id))
 			}
 			listed := m.ToolCall && m.Status != "deprecated"
 			field, budget := controls(m.ReasoningOptions)

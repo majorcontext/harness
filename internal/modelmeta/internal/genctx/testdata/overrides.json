@@ -6,7 +6,7 @@
   "bifrostFireworksContextWindows": {
     "open-b": {"context": 512000, "note": "repeats models.dev"}
   },
-  "thinkingCanBeDisabled": {
+  "anthropicThinkingCanBeDisabled": {
     "claude-a-4": {"note": "accepts a disabled thinking request; models.dev lists no off level"}
   },
   "thinkingOffByDefault": {
