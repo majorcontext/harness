@@ -27,8 +27,6 @@ type held struct {
 
 	stop    context.CancelFunc
 	stopped chan struct{}
-	// gate, when not nil, holds the pump until it is closed.
-	gate chan struct{}
 
 	mu      sync.Mutex
 	done    uint64
@@ -105,13 +103,6 @@ func newPumpState(snap protocol.Session) *pumpState {
 func (h *held) pump(ctx context.Context, st *pumpState, after uint64) {
 	defer close(h.stopped)
 	defer h.finish()
-	if h.gate != nil {
-		select {
-		case <-h.gate:
-		case <-ctx.Done():
-			return
-		}
-	}
 	for e, err := range h.sess.Events(ctx, after) {
 		if err != nil {
 			if ctx.Err() == nil {
@@ -384,4 +375,36 @@ func (h *held) cancelled(p *prompt) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return p.cancelled
+}
+
+// holdSends returns a send function that queues each message until release
+// is called, and release, which sends the queue in order and then passes every
+// later message through. The pump keeps its subscription to the events, so a
+// frame that the log does not keep is queued and not lost.
+func holdSends(send func(string, any) error) (held func(string, any) error, release func()) {
+	var mu sync.Mutex
+	open := false
+	type message struct {
+		method string
+		params any
+	}
+	var queue []message
+	held = func(method string, params any) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !open {
+			queue = append(queue, message{method, params})
+			return nil
+		}
+		return send(method, params)
+	}
+	release = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range queue {
+			_ = send(m.method, m.params)
+		}
+		queue, open = nil, true
+	}
+	return held, release
 }

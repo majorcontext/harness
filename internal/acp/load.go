@@ -14,8 +14,8 @@ type setupResult struct {
 	after         func()
 }
 
-// AfterSent lets the pump of the session send its updates, so that no live
-// update comes before the answer.
+// AfterSent sends the updates that the pump queued, so that no live update
+// comes before the answer.
 func (r setupResult) AfterSent() {
 	if r.after != nil {
 		r.after()
@@ -96,13 +96,17 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	gate := make(chan struct{})
-	h.gate = gate
+	var release func()
+	h.send, release = holdSends(h.send)
 	h.start(a.base, sess, st, snap.HeadSeq)
+	started := h
 	if h, err = a.adopt(ctx, h); err != nil {
 		return nil, err
 	}
-	return setupResult{ConfigOptions: configOptions(h.models, snap), after: func() { close(gate) }}, nil
+	if h != started {
+		release = nil
+	}
+	return setupResult{ConfigOptions: configOptions(h.models, snap), after: release}, nil
 }
 
 // heldSetup answers a load or resume of a session that the connection holds.
