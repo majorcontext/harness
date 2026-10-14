@@ -67,7 +67,7 @@ func formOf(payload json.RawMessage) (questionForm, bool) {
 	return f, true
 }
 
-// optionProperty adds the options of a question to its property: a titled list for one answer, and a list of labels for more.
+// optionProperty adds the options of a question to its property: a titled oneOf for one answer, and an array of the same titled options for more.
 func optionProperty(prop map[string]any, multi bool, options []questionOption) map[string]any {
 	titled := make([]any, len(options))
 	for i, o := range options {
