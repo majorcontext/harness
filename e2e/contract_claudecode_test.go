@@ -562,6 +562,10 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		actions: append([]action{writeFile{path: "lines.txt", body: numberedLines()}},
 			withActions(claudeOneTurn, claudeToolCall{as: "a"})...),
 	}, {
+		name:    "claudecode_session_info_lists_the_tools_that_the_call_offered",
+		driver:  claudeLane{mode: "normal", callTool: "session_info", callArgs: map[string]any{}}.newDriver,
+		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+	}, {
 		name:   "claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads",
 		driver: claudeLane{mode: "normal", readRetained: "big.txt"}.newDriver,
 		actions: append([]action{writeFile{path: "big.txt", body: strings.Repeat("line of the large file with some padding text\n", 3000)}},

@@ -82,7 +82,7 @@ const (
 	specMCPNoLeak     = "An error that is not the server's own RPC error names a reason, never the endpoint URL or a response body."
 	specRetainBound   = "`read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`."
 	specNoReader      = "A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call."
-	specRetainIndex   = "Each compaction record holds an index of the newest 32 retained results in its `index` field, and the model reads it after the summary, so a handle stays reachable after its preview folds."
+	specRetainIndex   = "Each compaction record holds an index of the newest 32 retained results in its `index` field, and the model of the harness loop reads it after the summary, so a handle stays reachable after its preview folds. A backend that owns the context compacts on its own and never reads that index, so after its compaction a handle is reachable only when its own summary keeps it."
 	specFileCap       = "A file-size cap of 20 MiB bounds one file:"
 	specToolImages    = "shows no blob."
 	specProfileSkip   = "is skipped with a WARN log line"
@@ -308,6 +308,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_bridge_model_tool_offers_list_only":                                            sameAsServe(),
 	"claudecode_bridge_refuses_set_on_the_model_tool":                                          sameAsServe(),
 	"claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads": sameAsServe(),
+	"claudecode_session_info_lists_the_tools_that_the_call_offered":                            sameAsServe(),
 	"claudecode_built_in_tool_call_fails_the_turn":                                             sameAsServe(),
 	"claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit":                             sameAsServe(),
 	"task_profile_maps_claude_code_tool_names_to_harness_tools":                                sameAsServe(),
@@ -583,7 +584,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_cancel_of_a_grandchild_reports_to_the_nearest_live_ancestor":                 reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_tree_interrupt_stops_the_grandchild":                                         reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"task_profile_keeps_the_plugin_tools_of_its_list":                                  reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
-	"task_child_on_claude_code_gets_no_runtime_builtin":                                sameAsServe(),
+	"task_child_on_claude_code_gets_the_builtin_tools_of_its_profile":                  sameAsServe(),
 	"claudecode_turn_gets_no_plugin_system_segment":                                    sameAsServe(),
 	"claudecode_question_dismissed_by_resolve":                                         reGolden(specDismissed, specNoStart, specWaiting, specView, specClaudeGauge),
 	"claudecode_question_dismissed_by_a_model_of_another_provider":                     reGolden(specProviderSwap, specDismissed, specView, specErrors, specClaudeGauge),
