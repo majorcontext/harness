@@ -18,7 +18,6 @@
             "status": "added"
           }
         ],
-        "head": "",
         "patch": "diff --git a/first.txt b/first.txt\nnew file mode 100644\nindex 0000000..d00491f\n--- /dev/null\n+++ b/first.txt\n@@ -0,0 +1 @@\n+1\n",
         "scope": "uncommitted",
         "truncated": false
