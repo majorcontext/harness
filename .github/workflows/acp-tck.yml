@@ -1,22 +1,16 @@
 name: ACP TCK
 
 # Runs the ACP Test Compatibility Kit against the `harness acp` binary with a
-# scripted model. The job is advisory: it reports and never fails the workflow
-# run. `go run ./internal/acptck` exits non-zero when a MANDATORY requirement
-# fails outside testdata/acp-tck-allow.txt, so the step shows red.
+# scripted model. `go run ./internal/acptck` exits non-zero when a MANDATORY
+# requirement fails outside testdata/acp-tck-allow.txt, and the job fails. The
+# check is required to merge, so it runs on every pull request.
 on:
   workflow_dispatch: {}
   push:
     branches: [main]
   schedule:
     - cron: "0 10 * * *"
-  pull_request:
-    paths:
-      - "internal/acp/**"
-      - "internal/acptck/**"
-      - "cmd/harness/acp*"
-      - "testdata/acp-tck-allow.txt"
-      - ".github/workflows/acp-tck.yml"
+  pull_request: {}
 
 permissions:
   contents: read
@@ -26,7 +20,6 @@ jobs:
     name: TCK
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     env:
       # Exact commit of github.com/agentclientprotocol/acp-tck (Apache-2.0).
       # The TCK is third-party Python code: it runs here and nowhere else.
