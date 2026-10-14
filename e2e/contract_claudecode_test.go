@@ -220,7 +220,7 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 			actions: reported(2),
 		},
 		{
-			name:    "claudecode_long_child_result_has_no_readable_handle",
+			name:    "claudecode_long_child_result_has_a_readable_handle",
 			driver:  claudeLaneDriver("child_report_long"),
 			actions: reported(1),
 		},
@@ -560,6 +560,11 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		name:   "claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit",
 		driver: claudeLane{mode: "normal", parallelEdits: "lines.txt"}.newDriver,
 		actions: append([]action{writeFile{path: "lines.txt", body: numberedLines()}},
+			withActions(claudeOneTurn, claudeToolCall{as: "a"})...),
+	}, {
+		name:   "claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads",
+		driver: claudeLane{mode: "normal", readRetained: "big.txt"}.newDriver,
+		actions: append([]action{writeFile{path: "big.txt", body: strings.Repeat("line of the large file with some padding text\n", 3000)}},
 			withActions(claudeOneTurn, claudeToolCall{as: "a"})...),
 	}})
 }

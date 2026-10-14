@@ -215,9 +215,23 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
 	call.Call = t.run
 	if all {
-		call.Call = t.keyed()
+		call.Call = t.bridged()
 	}
 	return t
+}
+
+// bridged returns the Call of a backend that owns the loop: the calls of one
+// key run one at a time, and each result goes through the Join of the hooks, one
+// result at a time, so the retention of two results never shares a handle.
+func (t runner) bridged() func(context.Context, protocol.ToolCall) protocol.ToolResult {
+	run := t.keyed()
+	var mu sync.Mutex
+	return func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		r := run(ctx, c)
+		mu.Lock()
+		defer mu.Unlock()
+		return t.join(ctx, c, r)
+	}
 }
 
 // keyed returns a run func that runs the calls of one key one at a time, in

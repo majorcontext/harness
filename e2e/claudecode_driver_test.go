@@ -49,6 +49,9 @@ type claudeLane struct {
 	// edit_file calls at once on the hosted MCP server after the result, and
 	// read it back.
 	parallelEdits string
+	// readRetained makes each turn of the CLI read this file with read_file
+	// and then its retained result with read_tool_result, after the result.
+	readRetained string
 	// initTools is the JSON list of tools in the init frame of the CLI, which a
 	// session with an allowed list checks.
 	initTools string
@@ -105,6 +108,9 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 	}
 	if lane.listTools {
 		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
+	}
+	if lane.readRetained != "" {
+		env["FAKE_CLAUDE_READ_RETAINED"], env["FAKE_CLAUDE_TOOL_LOG"] = lane.readRetained, l.toolLog
 	}
 	if lane.parallelEdits != "" {
 		env["FAKE_CLAUDE_PARALLEL_EDITS"], env["FAKE_CLAUDE_TOOL_LOG"] = lane.parallelEdits, l.toolLog

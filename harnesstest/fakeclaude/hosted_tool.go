@@ -29,8 +29,8 @@ func callHostedTool(f *fake) {
 	if list := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); list != "" {
 		name, log, method, params = "tools/list", list, "tools/list", obj{}
 	}
-	edits := os.Getenv("FAKE_CLAUDE_PARALLEL_EDITS")
-	if (name == "" || log == "") && edits == "" {
+	edits, big := os.Getenv("FAKE_CLAUDE_PARALLEL_EDITS"), os.Getenv("FAKE_CLAUDE_READ_RETAINED")
+	if (name == "" || log == "") && edits == "" && big == "" {
 		return
 	}
 	for {
@@ -40,6 +40,10 @@ func callHostedTool(f *fake) {
 	}
 	if edits != "" {
 		parallelEdits(edits, log)
+		return
+	}
+	if big != "" {
+		readRetained(big, log)
 		return
 	}
 	appendFile(log, hostedRPC(method, params)+"\n")
@@ -137,4 +141,42 @@ func parallelEdits(path, log string) {
 	}
 	wg.Wait()
 	appendFile(log, hostedRPC("tools/call", obj{"name": "read_file", "arguments": obj{"path": path}, "_meta": obj{toolUseMeta: "toolu_read"}})+"\n")
+}
+
+type hostedText struct {
+	Result struct {
+		Content []struct{ Text string }
+		IsError bool
+	}
+}
+
+func hostedCall(name string, args obj, id string) hostedText {
+	var out hostedText
+	_ = json.Unmarshal([]byte(hostedRPC("tools/call", obj{"name": name, "arguments": args, "_meta": obj{toolUseMeta: id}})), &out)
+	return out
+}
+
+func (h hostedText) text() string {
+	if len(h.Result.Content) == 0 {
+		return ""
+	}
+	return h.Result.Content[0].Text
+}
+
+// readRetained reads path with read_file, which retains a large result, and
+// then reads the retained result back with read_tool_result. It appends the
+// shape of both responses to log.
+func readRetained(path, log string) {
+	first := hostedCall("read_file", obj{"path": path}, "toolu_big")
+	text := first.text()
+	handle := ""
+	if i := strings.Index(text, "trh_"); i >= 0 {
+		handle = text[i : i+strings.IndexAny(text[i:], `"\n )]`)]
+	}
+	second := hostedCall("read_tool_result", obj{"handle": handle, "offset": 1, "limit": 2}, "toolu_back")
+	b, _ := json.Marshal(obj{
+		"first":  obj{"bytes_under_limit": len(text) < 25000, "has_hint": strings.Contains(text, "— read the rest with read_tool_result(handle=\""+handle+"\")]"), "handle": handle, "is_error": first.Result.IsError},
+		"second": obj{"text": second.text(), "is_error": second.Result.IsError},
+	})
+	appendFile(log, string(b)+"\n")
 }

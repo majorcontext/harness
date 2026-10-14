@@ -1,0 +1,79 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "tool_call.a": {
+      "status": 200,
+      "body": {
+        "first": {
+          "bytes_under_limit": true,
+          "handle": "trh_1",
+          "has_hint": true,
+          "is_error": false
+        },
+        "second": {
+          "is_error": false,
+          "text": "trh_1 (tool=read_file, 104934 bytes, 2001 lines) lines 1-2:\n1→line of the large file with some padding text\n2→line of the large file with some padding text\n[1999 more line(s); continue with offset=3]\n"
+        }
+      }
+    }
+  }
+}
