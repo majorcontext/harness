@@ -334,6 +334,9 @@ type EffortControl struct {
 	Field bool
 	// Budget is true when the model takes a thinking budget.
 	Budget bool
+	// ThinksByDefault is true when a request that omits the thinking field
+	// runs adaptive thinking.
+	ThinksByDefault bool
 }
 
 // AnthropicEfforts returns the effort control of an Anthropic model id, with
@@ -344,7 +347,10 @@ func AnthropicEfforts(model string) (EffortControl, bool) {
 	if suffix, bedrock := stripBedrockAnthropicPrefix(model); bedrock {
 		model = suffix
 	}
-	return controlOf(anthropicInfo, stripBedrockVersionSuffix(model))
+	model = stripBedrockVersionSuffix(model)
+	c, ok := controlOf(anthropicInfo, model)
+	c.ThinksByDefault = ok && c.Field && !c.Budget && !thinkingOffByDefault[model]
+	return c, ok
 }
 
 // OpenAIEfforts returns the effort control of an OpenAI model id, or false for

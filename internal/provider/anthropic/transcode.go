@@ -262,9 +262,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// KNOWN LIMITATION (live-gated), the ENABLE direction: turning thinking ON
 	// does not synthesize a leading thinking block for a prior assistant turn
 	// that made tool calls without one. The API can reject a request that
-	// continues such a turn ("thinking blocks expected before tool_use"). (The
-	// OFF direction — a stored thinking block replayed with thinking disabled —
-	// IS fixed, by the strip in transcodeParts below.)
+	// continues such a turn ("thinking blocks expected before tool_use").
 	//
 	// The general trigger is any mid-turn enable, not only abort. The turn loop
 	// rebuilds the request with the effort of the session FRESH on every tool
@@ -280,7 +278,6 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// API — the turn completed, no reject — so this limitation is
 	// theoretical, not confirmed. No fix is warranted unless a probe
 	// reproduces a reject.
-	// (The OFF direction, by contrast, DID wedge and is fixed below.)
 	//
 	// A model that takes the level as an effort field gets output_config.effort
 	// with the level. A model with that field and no budget gets adaptive
@@ -336,7 +333,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
-		blocks, err := transcodeParts(m.Parts, thinkingEnabled, true)
+		blocks, err := transcodeParts(m.Parts, out.Thinking != nil || req.ThinksByDefault, true)
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
@@ -363,9 +360,9 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 }
 
 // transcodeParts renders parts to wire blocks. thinkingEnabled reports whether
-// THIS request enables extended thinking; when false, stored Reasoning parts
-// are stripped (see the *message.Reasoning case below). topLevel is true for a
-// message's own parts and false when recursing into a ToolResult's content
+// THIS request thinks (it sends thinking, or omits the field on a model that
+// thinks by default); when false, stored Reasoning parts are stripped (see the
+// *message.Reasoning case below). topLevel is true for a message's own parts and false when recursing into a ToolResult's content
 // (see the ToolResult case below). The topLevel distinction matters ONLY for
 // *message.EngineContext: the trusted engine-context sentinel is keyed on wire
 // POSITION, not part type alone, so a genuine top-level ambient block is
@@ -454,16 +451,12 @@ func transcodeParts(parts message.Parts, thinkingEnabled, topLevel bool) ([]apiB
 
 		case *message.Reasoning:
 			if !thinkingEnabled {
-				// Thinking is OFF for this request. A stored thinking/
-				// redacted_thinking block sent with thinking disabled is
-				// rejected by the API ("thinking blocks require thinking to be
-				// enabled") — and, once in durable history, it 400s EVERY later
-				// turn, a permanent wedge. This is the symmetric opposite of the
-				// enable-direction limitation. Strip it here: a transcode-time
-				// throwaway request may drop a part destructively (it never
-				// touches the durable record), the same license NormalizeForWire
-				// relies on. A later turn that re-enables thinking replays the
-				// block again from the intact history.
+				// Thinking is off for this request. The API documents no
+				// error for a thinking block sent with thinking off: it
+				// strips the blocks that would make an invalid turn, or
+				// disables thinking for the request. This request leaves
+				// the stored blocks out and never edits the durable record,
+				// so a later request that thinks sends them again.
 				continue
 			}
 			raw, ok := v.ProviderData.Get(Family)

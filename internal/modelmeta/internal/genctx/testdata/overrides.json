@@ -5,5 +5,8 @@
   },
   "bifrostFireworksContextWindows": {
     "open-b": {"context": 512000, "note": "repeats models.dev"}
+  },
+  "thinkingOffByDefault": {
+    "claude-off": {"note": "thinking is off when a request omits the field"}
   }
 }

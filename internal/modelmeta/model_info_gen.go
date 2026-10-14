@@ -8,6 +8,12 @@ var providerNames = map[string]string{
 	"openai":    "OpenAI",
 }
 
+// thinkingOffByDefault holds the Anthropic models that run with thinking off when a request omits the thinking field.
+var thinkingOffByDefault = map[string]bool{
+	"claude-opus-4-7": true,
+	"claude-opus-4-8": true,
+}
+
 // anthropicInfo holds the facts of the models.dev "anthropic" chat models, keyed by model ID.
 var anthropicInfo = map[string]modelInfo{
 	"claude-fable-5":             {name: "Claude Fable 5", description: "Claude model for creative writing, analysis, and controlled agent workflows", released: "2026-06-07", efforts: []string{"low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},

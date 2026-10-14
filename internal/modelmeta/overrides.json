@@ -1,4 +1,12 @@
 {
+  "thinkingOffByDefault": {
+    "claude-opus-4-7": {
+      "note": "models.dev lists no off level, but platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting lists its thinking default as Off."
+    },
+    "claude-opus-4-8": {
+      "note": "models.dev lists no off level, but platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting lists its thinking default as Off."
+    }
+  },
   "bifrostFireworksContextWindows": {
     "firerouter": {
       "context": 1000000,

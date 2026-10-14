@@ -86,7 +86,7 @@ func effortNotice(r *Runtime, v protocol.Session) string {
 	case c != e:
 		return fmt.Sprintf("%s is not offered by %s; using %s", e, v.Model, c)
 	case e == modelref.EffortOff && len(caps.Efforts) > 0 && !slices.Contains(caps.Efforts, "off"):
-		return fmt.Sprintf("off is not offered by %s; it always thinks", v.Model)
+		return fmt.Sprintf("off is not offered by %s", v.Model)
 	}
 	return ""
 }
