@@ -300,7 +300,9 @@ func (t *Tree) live(ctx context.Context, up []string, fallback string) (string, 
 
 // send admits text to child as an input with source parent. When the
 // parent of child has settled it, the parent spawns it again first, so the
-// child reports the turn that text starts. queued reports a running turn.
+// child reports the turn that text starts. A report of child that is in flight
+// settles first, so that the parent decides on a settled child. queued reports
+// a running turn.
 func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool, error) {
 	c, err := t.s.Open(ctx, child)
 	if err != nil {
@@ -314,6 +316,14 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool,
 	case <-p.Recovered:
 	case <-ctx.Done():
 		return false, ctx.Err()
+	}
+	for done := t.inFlight(child); done != nil; done = t.inFlight(child) {
+		seamSendWaits(child)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
 	rearm := !slices.Contains(p.Actor.View().Unsettled, child)
 	if rearm {

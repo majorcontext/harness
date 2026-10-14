@@ -163,6 +163,9 @@ const (
 // reasonRetryHeld is the id of the reason that the rows with a server that fails its first initialize cite.
 const reasonRetryHeld = "mcp-retry-held"
 
+// reasonReportHeld is the id of the reason that the row with a held child report cites.
+const reasonReportHeld = "child-report-held"
+
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
 
 // reGolden gives each reason that decides a difference of the row, and each
@@ -196,6 +199,7 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_reasoning_effort_carries_xhigh_and_max":                                                             reGolden(specUpdate),
 	"codex_clamps_a_level_that_the_model_does_not_list":                                                        reGolden(specUpdate),
 	"claudecode_effort_flag_carries_xhigh_and_max":                                                             reGolden(specUpdate),
+	"send_between_the_end_of_a_child_turn_and_its_report_reports_the_second_turn":                              runtimeOnly(reasonReportHeld),
 	"mcp_connect_adds_tools_but_not_instructions":                                                              runtimeOnly(reasonRetryHeld),
 	"skills_listed_sorted_and_read_through_read_file":                                                          reGolden(specBlankJoin),
 	"skills_dirs_config_replaces_the_default_dir":                                                              reGolden(specBlankJoin),
