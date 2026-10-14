@@ -1,9 +1,9 @@
 name: ACP TCK
 
 # Runs the ACP Test Compatibility Kit against the `harness acp` binary with a
-# scripted model. `go run ./internal/acptck` exits non-zero when a MANDATORY
-# requirement fails outside testdata/acp-tck-allow.txt, and the job fails. The
-# check is required to merge, so it runs on every pull request.
+# scripted model. `go run ./internal/acptck` exits non-zero when a MANDATORY or
+# CAPABILITY requirement fails outside testdata/acp-tck-allow.txt, and the job
+# fails. The check is required to merge, so it runs on every pull request.
 on:
   workflow_dispatch: {}
   push:
