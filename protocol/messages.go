@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -45,6 +47,19 @@ type Message struct {
 	SourceLabel string `json:"source_label,omitempty"`
 	// OperatorBatch holds one entry for each input that a user message of steer inputs joined, in the order that the message numbers them.
 	OperatorBatch []OperatorBatchEntry `json:"operator_batch,omitempty"`
+}
+
+// CompactionSummaryIDPrefix starts the ID of the summary message of a compaction.
+const CompactionSummaryIDPrefix = "cmpsum_"
+
+// CompactionSummaryID returns the ID of the summary message of the compaction that the record at seq made.
+func CompactionSummaryID(seq uint64) string {
+	return CompactionSummaryIDPrefix + strconv.FormatUint(seq, 10)
+}
+
+// IsCompactionSummary reports whether m is the summary message of a compaction. It reads the ID, never the text.
+func (m Message) IsCompactionSummary() bool {
+	return strings.HasPrefix(m.ID, CompactionSummaryIDPrefix)
 }
 
 // OperatorBatchEntry is one input that joined a running turn, with its provenance.

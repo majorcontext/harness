@@ -88,6 +88,9 @@ func (h *held) replayCommands(cmds []protocol.MessageCommand, after string, sent
 func (h *held) replayMessage(ctx context.Context, r harness.Reader, m protocol.Message, st *pumpState) error {
 	switch m.Role {
 	case protocol.RoleUser:
+		if m.IsCompactionSummary() {
+			return h.replayCompaction(m)
+		}
 		return h.replayUser(ctx, r, m)
 	case protocol.RoleAssistant:
 		lm := logMessage(m)

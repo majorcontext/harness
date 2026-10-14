@@ -94,6 +94,7 @@ type agent struct {
 	cancel context.CancelFunc
 
 	notices      atomic.Bool
+	compaction   atomic.Bool
 	terminalAuth atomic.Bool
 
 	mu       sync.Mutex
@@ -195,7 +196,8 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 		ProtocolVersion    *int `json:"protocolVersion"`
 		ClientCapabilities struct {
 			Session struct {
-				Notices json.RawMessage `json:"notices"`
+				Notices    json.RawMessage `json:"notices"`
+				Compaction json.RawMessage `json:"compaction"`
 			} `json:"session"`
 			Auth struct {
 				Terminal bool `json:"terminal"`
@@ -207,6 +209,7 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 	}
 	a.terminalAuth.Store(p.ClientCapabilities.Auth.Terminal)
 	a.notices.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Notices), []byte("{")))
+	a.compaction.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Compaction), []byte("{")))
 	version := LatestVersion
 	caps := map[string]any{
 		"loadSession":         true,

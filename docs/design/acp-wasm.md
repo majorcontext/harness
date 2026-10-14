@@ -431,7 +431,7 @@ One event pump per held session and connection reads `Session.Events(ctx, after)
 | `config_option_update` | `settings.changed` event | maps | After `/model` or the model tool. |
 | `session_info_update` | `turn.ended` | maps | `updatedAt`. `title`: gap. |
 | `usage_update{used,size,cost}` | `Snapshot().Context{Tokens, Window}` | maps | Emit on `context.measured` and `turn.ended`. `cost{amount, currency:"USD"}` comes from `SubscriptionUsage.SessionCostUSD` (`protocol/protocol.go:98`) when set, which only the Claude Code lane reports. Otherwise omitted. |
-| `compaction_update`, `compaction_summary_chunk` | `compaction.applied` | maps | Only when the client advertises `session.compaction`. Without it, a compaction shows only as a fall of `usage_update.used`. |
+| `compaction_update`, `compaction_summary_chunk` | `status` frames `compacting` and `compaction_failed`, `compaction.applied`, and the summary message of the replay (`cmpsum_` ID) | maps | Only when the client advertises `session.compaction`. Without it, no compaction message at all (the replay skips the summary), and a compaction shows only as a fall of `usage_update.used`. |
 | `notice` | adapter diagnostics, lost ownership | maps | Only with `session.notices`. |
 
 Tool `kind` comes from a table in `internal/acp` keyed by tool name: `read_file` read; `write_file`, `edit_file` edit; `glob`, `grep`, `ls` search; `bash`, `process` execute; `task`, `goal`, `model`, MCP tools, plugin tools other; the Claude Code names in the same table; unknown names other. A tool name is not a provider name (rule 3).
