@@ -48,9 +48,9 @@ func TestContractEffortLevels(t *testing.T) {
 			name: "thinking_command_accepts_max_and_names_the_clamp",
 			actions: []action{
 				create{as: "a", model: "anthropic/claude-haiku-4-5"},
-				command{as: "a", text: "/thinking max"}, waitIdle{as: "a"},
-				command{as: "a", text: "/model anthropic/claude-opus-5-5"}, waitIdle{as: "a"},
-				command{as: "a", text: "/thinking max"}, waitIdle{as: "a"},
+				command{as: "a", text: "/thinking max"}, awaitCommands{as: "a"},
+				command{as: "a", text: "/model anthropic/claude-opus-5-5"}, awaitCommands{as: "a"},
+				command{as: "a", text: "/thinking max"}, awaitCommands{as: "a"},
 				commandRecords{as: "a"},
 			},
 		},
