@@ -10,9 +10,11 @@ var anthropicContextWindows = map[string]int{
 
 // openaiContextWindows holds models.dev "openai" entries, keyed by model ID.
 var openaiContextWindows = map[string]int{
-	"gpt-missing": 128000,
-	"gpt-x":       300000,
-	"gpt-x-new":   1050000,
+	"gpt-missing":  128000,
+	"gpt-x":        300000,
+	"gpt-x-chat":   128000,
+	"gpt-x-new":    1050000,
+	"gpt-x-opaque": 128000,
 }
 
 // bedrockAnthropicContextWindows holds models.dev "amazon-bedrock" anthropic.* entries, keyed by model ID without region prefix, "anthropic." family segment, or version suffix. Bedrock can report a different window than the first-party route for the same model, and lookup keeps that divergence.

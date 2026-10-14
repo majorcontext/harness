@@ -63,23 +63,28 @@ func providerLabel(key string) string {
 	return strings.Join(words, " ")
 }
 
-// shortDescription is the first sentence of d, cut at descriptionLimit
-// characters at a word boundary.
-func shortDescription(d string) string {
-	if i := strings.Index(d, ". "); i >= 0 {
-		d = d[:i]
+// optionDescription is the reference of a model followed by the first
+// sentence of its description, cut at descriptionLimit characters at a word
+// boundary.
+func optionDescription(ref, description string) string {
+	if i := strings.Index(description, ". "); i >= 0 {
+		description = description[:i]
 	}
-	d = strings.TrimSuffix(d, ".")
-	if utf8.RuneCountInString(d) <= descriptionLimit {
-		return d
+	description = strings.TrimSuffix(description, ".")
+	out := ref
+	if description != "" {
+		out += " · " + description
 	}
-	runes := []rune(d)
-	end := descriptionLimit
-	for end > 0 && runes[end-1] != ' ' {
-		end--
+	runes := []rune(out)
+	if len(runes) <= descriptionLimit {
+		return out
 	}
-	if end == 0 {
-		end = descriptionLimit
+	end := descriptionLimit - 1
+	for cut := end; cut > 0; cut-- {
+		if runes[cut-1] == ' ' {
+			end = cut
+			break
+		}
 	}
 	return strings.TrimRight(string(runes[:end]), " ") + "…"
 }
@@ -104,10 +109,7 @@ func modelValues(models []protocol.Model, s protocol.Session) []configGroup {
 		if name == "" {
 			name = m.ID
 		}
-		desc := m.ID
-		if d := shortDescription(m.Description); d != "" {
-			desc += " · " + d
-		}
+		desc := optionDescription(m.ID, m.Description)
 		label := m.ProviderName
 		if label == "" {
 			label = providerLabel(m.Provider)

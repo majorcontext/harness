@@ -20,5 +20,19 @@
       "context": 1000000,
       "note": "Absent from models.dev; a Bifrost deployment can still serve it."
     }
+  },
+  "bifrostVertexContextWindows": {
+    "gemini-flash-latest": {
+      "context": 1048576,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    },
+    "gemini-flash-lite-latest": {
+      "context": 1048576,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    },
+    "gemini-3.1-flash-lite-preview": {
+      "context": 1048576,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    }
   }
 }

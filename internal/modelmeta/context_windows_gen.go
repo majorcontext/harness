@@ -129,6 +129,7 @@ var bifrostVertexContextWindows = map[string]int{
 	"gemini-2.5-pro":                     1048576,
 	"gemini-3-flash-preview":             1048576,
 	"gemini-3.1-flash-lite":              1048576,
+	"gemini-3.1-flash-lite-preview":      1048576,
 	"gemini-3.1-pro-preview":             1048576,
 	"gemini-3.1-pro-preview-customtools": 1048576,
 	"gemini-3.5-flash":                   1048576,
@@ -137,4 +138,6 @@ var bifrostVertexContextWindows = map[string]int{
 	"gemini-3.7-flash":                   1048576,
 	"gemini-3.8-flash":                   1048576,
 	"gemini-4-argon":                     1048576,
+	"gemini-flash-latest":                1048576,
+	"gemini-flash-lite-latest":           1048576,
 }
