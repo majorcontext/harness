@@ -127,7 +127,7 @@ var structureCases = []struct {
 	{
 		name: "the_engine_list_is_named_outside_its_walker_fails",
 		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
-			"internal/workspace/workspace.go": goFile("", "var engineList = []int{1}\nvar copyList = engineList\nfunc changes() { _ = engineList }\nfunc other() { _ = engineList }"),
+			"internal/workspace/workspace.go": goFile("", "var engineList = []int{1}\nvar copyList = engineList\nfunc Changes() { _ = engineList }\nfunc other() { _ = engineList }"),
 			"internal/workspace/other.go":     goFile("", "func F() { _ = engineList }")},
 		want: []string{"engine_list_walker:internal/workspace/workspace.go", "engine_list_walker:internal/workspace/workspace.go", "engine_list_walker:internal/workspace/other.go"},
 	},

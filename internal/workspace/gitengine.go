@@ -10,16 +10,16 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// gitEngine reads a git work tree.
-type gitEngine struct{}
+// GitEngine reads a git work tree.
+type GitEngine struct{}
 
 // Name returns protocol.EngineGit.
-func (gitEngine) Name() string { return protocol.EngineGit }
+func (GitEngine) Name() string { return protocol.EngineGit }
 
 // Open finds the work tree root of dir below ceiling. GIT_CEILING_DIRECTORIES
 // has no escape for a colon in a path, so git can walk past a ceiling that
 // holds one; Changes checks the root that Open returns.
-func (gitEngine) Open(ctx context.Context, dir, ceiling string) (Repo, bool, error) {
+func (GitEngine) Open(ctx context.Context, dir, ceiling string) (Repo, bool, error) {
 	root, ok, err := repoRootAt(ctx, dir, ceiling)
 	if err != nil || !ok {
 		return nil, false, err
