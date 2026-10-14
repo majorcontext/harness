@@ -717,8 +717,8 @@ func TestContractCLIRunSendsNoOpenAIKeyToAProjectProvider(t *testing.T) {
 	if code == 0 || strings.Contains(errOut, "sk-e2e-must-not-leave") {
 		t.Fatalf("run = %d, want a failure that does not print the key\n%s", code, errOut)
 	}
-	if hits.Load() != 0 || auth.Load() {
-		t.Errorf("endpoint of the project got %d requests (Authorization: %v), want none", hits.Load(), auth.Load())
+	if hits.Load() == 0 || auth.Load() {
+		t.Errorf("endpoint of the project got %d requests (Authorization: %v), want a request with no Authorization", hits.Load(), auth.Load())
 	}
 }
 

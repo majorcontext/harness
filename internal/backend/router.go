@@ -101,16 +101,16 @@ func client(name string, p config.Provider, transport func(provider string) http
 		if p.Auth == "" {
 			key, reason = env.key(cmp.Or(p.APIKeyEnv, config.NativeKeyEnv(name)))
 		}
-		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL, Log: env.Log,
+		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless, BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
-		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
+		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless, BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
 		key, reason := env.key(cmp.Or(p.APIKeyEnv, config.NativeKeyEnv(name)))
-		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
+		return &anthropic.Client{APIKey: key, NoKeyReason: reason, NoKey: p.Keyless, BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil

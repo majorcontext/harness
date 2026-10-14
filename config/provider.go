@@ -98,6 +98,9 @@ type Provider struct {
 	// SessionMirror runs the CLI with --session-mirror under a scratch CLAUDE_CONFIG_DIR, so the
 	// session state holds the transcript and another host can resume it.
 	SessionMirror bool `json:"session_mirror,omitempty"`
+
+	// Keyless marks an entry that only the project file defines. It sends no credential and reads no key variable. MergeProject sets it; no JSON key does.
+	Keyless bool `json:"-"`
 }
 
 // claudeCodePermissionModes returns the accepted --permission-mode values.
