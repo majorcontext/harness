@@ -25,6 +25,9 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": true,
@@ -45,7 +48,13 @@
             "title": "Harness",
             "version": "\u003cversion\u003e"
           },
-          "authMethods": [],
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            }
+          ],
           "protocolVersion": 1
         }
       }
@@ -73,6 +82,9 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": true,
@@ -93,7 +105,13 @@
             "title": "Harness",
             "version": "\u003cversion\u003e"
           },
-          "authMethods": [],
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            }
+          ],
           "protocolVersion": 1
         }
       }

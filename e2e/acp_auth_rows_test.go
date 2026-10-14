@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -28,6 +29,10 @@ type acpLoginSpec struct {
 	// chatgpt adds the provider entry "codex" with auth chatgpt, and the sign-in issuer. stored writes a login file;
 	// refreshRejected makes the issuer refuse every refresh.
 	chatgpt, stored, refreshRejected bool
+	// native drops the provider entry "codex" of chatgpt, so the native codex provider serves the model.
+	native bool
+	// claudeOnPath puts a program named claude on the PATH of the host and adds no provider entry.
+	claudeOnPath bool
 	// claude adds the provider entry "claude-code" over fakeclaude. claudeOut makes fakeclaude report no login.
 	claude, claudeOut bool
 	// claudeHold makes `claude auth login` start a child and wait, as a login that waits for a browser does.
@@ -52,7 +57,7 @@ type acpLoginRun struct {
 	// sink receives the sign-in text of the host, which is what the host writes to stderr.
 	sink                               *signInSink
 	claudeState, claudeLog, claudeHold string
-	emptyPath                          string
+	emptyPath, nativeBase              string
 	signIn                             *url.URL
 	opened                             chan string
 	heldPIDs                           []int
@@ -110,6 +115,10 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 		l.openai, l.fake = o, o.Server
 		l.cfg = codexConfig(o.URL(), false, nil)
 		l.codex.configure(l.cfg)
+		if spec.native {
+			l.nativeBase = l.cfg["providers"].(map[string]any)["codex"].(map[string]any)["base_url"].(string)
+			delete(l.cfg["providers"].(map[string]any), "codex")
+		}
 	} else {
 		l.fake = harnesstest.NewAnthropic(t)
 		l.cfg["providers"] = map[string]any{}
@@ -142,6 +151,11 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 	if l.emptyPath == "" {
 		l.emptyPath = t.TempDir()
 	}
+	if spec.claudeOnPath {
+		if err := os.Symlink(fakeClaudePath(), filepath.Join(l.emptyPath, "claude")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	l.cfg["goal_evaluator_model"] = l.cfg["model"]
 	return l
 }
@@ -153,13 +167,20 @@ func (l *acpLoginRun) register(c *acpConn) {
 	}
 	if l.codex != nil {
 		c.paths[l.codex.path] = "<codex-auth-file>"
-		c.paths[l.cfg["providers"].(map[string]any)["codex"].(map[string]any)["base_url"].(string)] = "<model-server>/backend-api/codex"
+		base := l.nativeBase
+		if e, ok := l.cfg["providers"].(map[string]any)["codex"].(map[string]any); ok {
+			base = e["base_url"].(string)
+		}
+		c.paths[base] = "<model-server>/backend-api/codex"
 	}
 }
 
 func (l *acpLoginRun) config() map[string]any { return l.cfg }
 
 func (l *acpLoginRun) claudeEnv() []string {
+	if l == nil {
+		return nil
+	}
 	return []string{"FAKE_CLAUDE_AUTH=" + l.claudeState, "FAKE_CLAUDE_AUTH_LOG=" + l.claudeLog, "FAKE_CLAUDE_AUTH_HOLD=" + l.claudeHold}
 }
 
@@ -170,10 +191,13 @@ func (l *acpLoginRun) procEnv() map[string]string {
 
 // auth builds the login of the in-process host, with the opener replaced by one that opens nothing.
 func (l *acpLoginRun) auth(env acpEnv) acp.Auth {
-	if l == nil {
-		return nil
+	var sink io.Writer
+	var opened chan string
+	if l != nil {
+		sink, opened = l.sink, l.opened
 	}
 	return acpauth.New(acpauth.Options{
+		LookPath: l.lookPath,
 		Config: func(cwd string) (*config.Config, error) {
 			if cwd == "" {
 				cwd = env.defaultDir
@@ -181,17 +205,72 @@ func (l *acpLoginRun) auth(env acpEnv) acp.Auth {
 			return config.LoadProject(env.configPath, cwd)
 		},
 		Open: func(u string) error {
-			l.opened <- u
+			if opened != nil {
+				opened <- u
+			}
 			return nil
 		},
-		Out: l.sink,
+		Out: sink,
 		Env: append(os.Environ(), l.claudeEnv()...),
 	})
 }
 
-// checkACPAuthMethods compares the ids of authMethods with want, and the logout capability with the methods.
-func checkACPAuthMethods(t *testing.T, res map[string]any, want []string) {
+// lookPath hides the claude program of the machine from the in-process host, so a row offers the method claude-code only for an entry with a binary_path.
+func (l *acpLoginRun) lookPath(file string) (string, error) {
+	switch {
+	case file != "claude":
+	case l != nil && l.spec.claudeOnPath:
+		return filepath.Join(l.emptyPath, "claude"), nil
+	default:
+		return "", exec.ErrNotFound
+	}
+	return exec.LookPath(file)
+}
+
+// shadowPath is the PATH of the process with each directory that holds a program named claude replaced by a directory of symlinks to the other programs of it.
+var shadowPath = sync.OnceValue(func() string {
+	root, err := os.MkdirTemp("", "path-")
+	if err != nil {
+		panic(err)
+	}
+	shadowRoot = root
+	var dirs []string
+	for i, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if _, err := os.Stat(filepath.Join(dir, "claude")); err != nil {
+			dirs = append(dirs, dir)
+			continue
+		}
+		shadow := filepath.Join(root, strconv.Itoa(i))
+		if err := os.Mkdir(shadow, 0o755); err != nil {
+			panic(err)
+		}
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() != "claude" {
+				_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(shadow, e.Name()))
+			}
+		}
+		dirs = append(dirs, shadow)
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
+})
+
+// shadowRoot is the directory that shadowPath made, if it ran.
+var shadowRoot string
+
+// removeShadowPath removes the directories of shadowPath.
+func removeShadowPath() {
+	if shadowRoot != "" {
+		_ = os.RemoveAll(shadowRoot)
+	}
+}
+
+// checkACPAuthMethods compares the ids of authMethods with want, and the logout capability with the methods. A nil want is the method chatgpt alone, which every host offers except the wasm hosts, which offer none.
+func checkACPAuthMethods(t *testing.T, res map[string]any, want []string, wasm bool) {
 	t.Helper()
+	if want == nil && !wasm {
+		want = []string{"chatgpt"}
+	}
 	var got []string
 	list, _ := res["authMethods"].([]any)
 	for _, m := range list {
@@ -337,7 +416,7 @@ var codexReplyHi = []harnesstest.Step{{Name: "reply", Reply: codexText("hi")}}
 var acpAuthScenarios = []acpScenario{
 	{
 		name:  "initialize_lists_the_chatgpt_method_for_a_chatgpt_provider",
-		cite:  "A provider entry with `auth` `chatgpt` offers the method `chatgpt`, \"Log in with ChatGPT\".",
+		cite:  "`initialize` always offers the method `chatgpt`, \"Log in with ChatGPT\", because the native `codex` provider needs no entry.",
 		login: &acpLoginSpec{chatgpt: true},
 		steps: []acpStep{acpInit{version: 1, want: 1, methods: []string{"chatgpt"}}},
 	},
@@ -388,6 +467,21 @@ var acpAuthScenarios = []acpScenario{
 			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
 			acpNew{as: "a", code: acpAuthRequired},
 		},
+	},
+	{
+		name:  "new_session_on_the_native_codex_provider_without_a_login_is_auth_required",
+		cite:  "A ChatGPT provider has no login when the file of `harness login codex` is missing or empty.",
+		login: &acpLoginSpec{chatgpt: true, native: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt"}},
+			acpNew{as: "a", code: acpAuthRequired},
+		},
+	},
+	{
+		name:  "initialize_lists_the_claude_code_method_when_the_program_is_on_the_path",
+		cite:  "It offers the method `claude-code`, \"Log in with Claude Code\", when the program of the Claude Code CLI resolves on `PATH`",
+		login: &acpLoginSpec{claudeOnPath: true},
+		steps: []acpStep{acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}}},
 	},
 	{
 		name:  "prompt_after_the_chatgpt_login_vanished_is_auth_required",
@@ -469,16 +563,16 @@ var acpAuthScenarios = []acpScenario{
 	},
 	{
 		name:  "initialize_lists_the_claude_code_method_for_a_claude_code_provider",
-		cite:  "A provider entry of type `claude-code-cli` offers the method `claude-code`, \"Log in with Claude Code\".",
+		cite:  "It offers the method `claude-code`, \"Log in with Claude Code\", when the program of the Claude Code CLI resolves on `PATH`",
 		login: &acpLoginSpec{claude: true},
-		steps: []acpStep{acpInit{version: 1, want: 1, methods: []string{"claude-code"}}},
+		steps: []acpStep{acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}}},
 	},
 	{
 		name:  "claude_code_logged_out_session_new_is_auth_required",
 		cite:  "A Claude Code provider has no login when `claude auth status --json` reports `loggedIn` false, and only when `initialize` advertised the method `claude-code`",
 		login: &acpLoginSpec{claude: true, claudeOut: true},
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a", code: acpAuthRequired},
 		},
 	},
@@ -487,7 +581,7 @@ var acpAuthScenarios = []acpScenario{
 		cite:  "The result of the CLI is cached for 30 s and read again after `authenticate` and after a failed turn.",
 		login: &acpLoginSpec{claude: true},
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpCheck(func(t *testing.T, c *acpConn) {
 				if err := os.WriteFile(c.env.login.claudeState, []byte("out"), 0o644); err != nil {
@@ -502,7 +596,7 @@ var acpAuthScenarios = []acpScenario{
 		cite:  "The `claude-code` method runs `claude auth login` as a child with no terminal, which opens the browser itself",
 		login: &acpLoginSpec{claude: true, claudeOut: true},
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a", code: acpAuthRequired},
 			acpAuthStart{id: "auth", method: "claude-code"},
 			acpAuthDone{id: "auth"},
@@ -548,20 +642,11 @@ var acpAuthScenarios = []acpScenario{
 		},
 	},
 	{
-		name:  "logout_is_not_offered_for_a_claude_code_provider_alone",
-		cite:  "`agentCapabilities.auth.logout` is `{}` when the method `chatgpt` is offered, and absent otherwise.",
-		login: &acpLoginSpec{claude: true},
-		steps: []acpStep{
-			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
-			acpCall{method: "logout", params: map[string]any{}, code: acpMethodNotFound},
-		},
-	},
-	{
 		name:  "cancel_request_during_claude_authenticate_kills_the_login_process_tree",
 		cite:  "`$/cancel_request` stops the sign-in, closes the listener or kills the process group of the child, and answers `-32800`.",
 		login: &acpLoginSpec{claude: true, claudeOut: true, claudeHold: true},
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
 			acpAuthStart{id: "auth", method: "claude-code"},
 			acpHoldPIDs{},
 			acpCancelRequest{id: "auth"},

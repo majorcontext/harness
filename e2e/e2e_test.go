@@ -62,6 +62,7 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 		cleanup()
+		removeShadowPath()
 		cleanupNodeModule()
 		if err := finishCover(); err != nil {
 			fmt.Fprintln(os.Stderr, "e2e: coverage report:", err)

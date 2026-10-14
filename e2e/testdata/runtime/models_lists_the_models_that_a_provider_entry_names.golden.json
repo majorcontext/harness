@@ -22,6 +22,183 @@
           "provider_name": "Anthropic"
         },
         {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/fable",
+          "name": "Claude Fable (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/haiku",
+          "name": "Claude Haiku (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/opus",
+          "name": "Claude Opus (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "efforts": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "claude-code/sonnet",
+          "name": "Claude Sonnet (Claude Code)",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 1000000,
+          "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6.1-sol",
+          "name": "GPT-6.1 Sol",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "OpenAI's most efficient model for focused, high-volume tasks",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6-luna",
+          "name": "GPT-6 Luna",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "OpenAI model for complex coding and agentic workflows",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6-sol",
+          "name": "GPT-6 Sol",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6-astra",
+          "name": "GPT-6 Astra",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-5.6-luna",
+          "name": "GPT-5.6 Luna",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-5.6-terra",
+          "name": "GPT-5.6 Terra",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "Default frontier GPT for coding, computer use, research, and knowledge work",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "id": "codex/gpt-5.5",
+          "name": "GPT-5.5",
+          "provider": "codex"
+        },
+        {
           "context_window": 1000000,
           "efforts": [
             "off",

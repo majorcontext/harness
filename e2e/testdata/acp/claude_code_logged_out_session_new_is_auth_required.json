@@ -25,6 +25,9 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": true,
@@ -46,6 +49,11 @@
             "version": "\u003cversion\u003e"
           },
           "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            },
             {
               "description": "Sign in with the Claude Code CLI. The CLI opens your browser.",
               "id": "claude-code",

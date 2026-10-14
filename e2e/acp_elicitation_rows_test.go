@@ -102,7 +102,7 @@ var acpElicitationScenarios = []acpScenario{
 		cite:  "When the turn that opened it ends `awaiting_input` and the client has the capability, the agent sends the request `elicitation/create` for it.",
 		login: acpQuestionLogin,
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
 			acpAwaitElicitation{as: "q", check: func(t *testing.T, params map[string]any) {
@@ -152,7 +152,7 @@ var acpElicitationScenarios = []acpScenario{
 		cite:  "An `accept` with no value for any question, the `decline` action, and the `cancel` action dismiss the request.",
 		login: acpQuestionLogin,
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
 			acpAwaitElicitation{as: "q"},
@@ -165,7 +165,7 @@ var acpElicitationScenarios = []acpScenario{
 		cite:  "Without the capability, the agent does not set it, no question opens, and the agent sends no `elicitation/create`.",
 		login: acpQuestionLogin,
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
 			acpCheck(func(t *testing.T, c *acpConn) {
@@ -188,7 +188,7 @@ var acpElicitationScenarios = []acpScenario{
 		cite:  "The agent then sends `$/cancel_request` for the `elicitation/create` that has no answer yet, and it drops a late answer.",
 		login: acpQuestionLogin,
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
 			acpAwaitElicitation{as: "q"},
@@ -213,7 +213,7 @@ var acpElicitationScenarios = []acpScenario{
 		cite:  "`session/close` sends `$/cancel_request` for each `elicitation/create` of the session that has no answer, after the answers of its prompts.",
 		login: acpQuestionLogin,
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, elicitation: true, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "pick a db", stop: "end_turn"},
 			acpAwaitElicitation{as: "q"},

@@ -1,13 +1,16 @@
 package harness_test
 
 import (
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
@@ -170,5 +173,79 @@ func TestEachWireRunsATurn(t *testing.T) {
 				t.Errorf("transport calls = %q, want one %s POST", got, name)
 			}
 		})
+	}
+}
+
+// toDouble sends each request of the codex provider to the scripted server, and records it.
+type toDouble struct {
+	t    *transport
+	host string
+}
+
+func (d toDouble) RoundTrip(req *http.Request) (*http.Response, error) {
+	d.t.mu.Lock()
+	d.t.calls = append(d.t.calls, req.Method+" "+req.URL.Host+req.URL.Path)
+	d.t.mu.Unlock()
+	req = req.Clone(req.Context())
+	req.URL.Scheme, req.URL.Host = "http", d.host
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// nativeRuntime runs a Runtime over a config that names no provider, with the Codex login in a file that the test writes when label is set.
+func nativeRuntime(t *testing.T, s *harnesstest.OpenAI, label string) (*harness.Runtime, harness.Store, *transport, *strings.Builder) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "auth", "codex.json")
+	if label != "" {
+		body := `{"access_token":"` + harnesstest.AccessToken(label, "acct-1", time.Hour) + `","refresh_token":"r","account_id":"acct-1"}`
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retries, st, rec, logs := 0, store.NewMemStore(), &transport{}, &strings.Builder{}
+	r, err := harness.New(harness.Options{Store: st, Logger: slog.New(slog.NewTextHandler(logs, nil)),
+		Config:         config.Config{CodexAuthFile: file, RequestMaxRetries: &retries, StreamMaxRetries: &retries},
+		ModelTransport: func(string) http.RoundTripper { return toDouble{rec, strings.TrimPrefix(s.URL(), "http://")} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeRuntime(t, r) })
+	return r, st, rec, logs
+}
+
+func TestNativeCodexRunsATurnWithAnEmptyConfig(t *testing.T) {
+	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Credentials: harnesstest.TokenLabel, AccountID: "acct-1"},
+		harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
+	r, st, rec, _ := nativeRuntime(t, s, "seed")
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5.6-sol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	converse(t, sess, "hi")
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed")
+	if got, want := rec.Calls(), []string{"POST chatgpt.com/backend-api/codex/responses"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("transport calls = %q, want %q", got, want)
+	}
+}
+
+func TestNativeProvidersListTheirModelsWithoutALogin(t *testing.T) {
+	r, _, rec, logs := nativeRuntime(t, harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}), "")
+	providers := map[string]bool{}
+	for _, m := range r.Models(bg) {
+		providers[m.Provider] = true
+	}
+	for _, p := range []string{"anthropic", "openai", "codex", "claude-code"} {
+		if !providers[p] {
+			t.Errorf("Models lists nothing of provider %s", p)
+		}
+	}
+	if got := rec.Calls(); len(got) != 0 {
+		t.Errorf("transport calls = %q, want none without a login", got)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("log without a login: %s", logs)
 	}
 }

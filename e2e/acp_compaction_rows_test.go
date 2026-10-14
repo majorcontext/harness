@@ -211,7 +211,7 @@ var acpCompactionScenarios = []acpScenario{
 			{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "result": "Continuing.", "session_id": "S", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
 		}},
 		steps: []acpStep{
-			acpInit{version: 1, want: 1, compaction: true, methods: []string{"claude-code"}},
+			acpInit{version: 1, want: 1, compaction: true, methods: []string{"chatgpt", "claude-code"}},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "go", stop: "end_turn"},
 			acpCheck(func(t *testing.T, c *acpConn) {

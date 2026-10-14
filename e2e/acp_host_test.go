@@ -31,6 +31,8 @@ type acpEnv struct {
 	jsTool bool
 	// memoryStore marks a host whose sessions the test cannot read: the browser host keeps them in the Worker.
 	memoryStore bool
+	// wasm marks a wasm host, which offers no login.
+	wasm bool
 }
 
 const acpDummyKey = "e2e-dummy-key"

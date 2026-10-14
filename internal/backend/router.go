@@ -60,20 +60,12 @@ type Env struct {
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
-// need no entry: the native anthropic and openai.
+// need no entry: the native anthropic, openai, codex, and claude-code.
 // The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper, env Env) *Router {
 	env.Log = cmp.Or(env.Log, slog.Default())
 	backends := map[string]turn.Backend{}
-	cfg.Providers = maps.Clone(cfg.Providers)
-	if cfg.Providers == nil {
-		cfg.Providers = map[string]config.Provider{}
-	}
-	for _, name := range config.NativeProviders() {
-		if _, ok := cfg.Providers[name]; !ok {
-			cfg.Providers[name] = config.Provider{}
-		}
-	}
+	cfg.Providers = cfg.ProviderEntries()
 	codex := sync.OnceValue(func() *codexauth.Source {
 		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
 	})
