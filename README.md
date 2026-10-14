@@ -289,8 +289,8 @@ settings:
 ```
 
 The client gets a model and effort picker, image and file attachments, and
-session list, load, and resume. When the client supports elicitation forms, it
-shows the questions of the model as a form and sends the answers back.
+session list, load, and resume. When the client supports elicitation forms, a
+Claude Code session can ask you questions in a form.
 
 ## Embed Harness in Go
 
@@ -496,10 +496,9 @@ everything else.
 ## Embed Harness in JavaScript
 
 [`sdk/embed`](sdk/embed/README.md) runs Harness as a WebAssembly module in a
-browser Worker, or spawns `harness acp` under Node. Either way, you get an ACP
-stream. The browser has no `bash` or `process` tool. Keep model keys behind a
-same-origin proxy, never in the page. The
-[package README](sdk/embed/README.md) shows the options.
+Worker, or spawns `harness acp` under Node. Either way, you get an ACP stream.
+The browser has no `bash` or `process` tool. Keep model keys behind a
+same-origin proxy, never in the page.
 
 ## Examples
 
@@ -577,7 +576,7 @@ and `extra_headers` (sent on every request).
 To list the models of a gateway or a local server, set `models` on the entry:
 `"models": ["llama3.1", "qwen3"]`. `Runtime.Models`, `GET /models`, and the
 model picker of an ACP client then list exactly those ids, in order. An id that
-models.dev knows keeps its name and effort levels. An empty or duplicate id
+models.dev knows gets its name and effort levels from models.dev. An empty or duplicate id
 fails config loading.
 
 ### OpenRouter
