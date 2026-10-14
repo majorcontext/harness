@@ -12,16 +12,12 @@ import (
 )
 
 // ccCompactionRow is one scripted CLI stream with the events and the summary that its compaction logs.
-// ccCompactionRow is one scripted CLI stream with the events that its compaction sends.
 type ccCompactionRow struct {
 	name   string
 	frames []map[string]any
 	want   []string
 	// summary, when set, is the summary of the compaction.applied record.
 	summary string
-}
-
-func ccCompactionRows() []ccCompactionRow {
 }
 
 func ccCompactionRows() ([]ccCompactionRow, map[string]string) {
@@ -41,7 +37,6 @@ func ccCompactionRows() ([]ccCompactionRow, map[string]string) {
 	boundaryLine := "Claude Code compacted its context (auto, 167000 tokens before)."
 	settledLines := []string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}
 	cliSummary := "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion.\n\nSummary:\nthe plain body\n\nIf you need specific details from before compaction (like exact code snippets), read the full transcript at: /x.jsonl\nContinue the conversation from where it left off."
-	return []ccCompactionRow{
 	held := map[string]any{"type": "transcript_mirror", "filePath": "/home/u/cfg/projects/p/S.jsonl", "entries": []json.RawMessage{json.RawMessage(ccEntry("a00", 100))}}
 	// acts names the action that a row takes at the compacting frame; the CLI of those rows hangs at its first mirror frame.
 	acts := map[string]string{
@@ -64,13 +59,12 @@ func ccCompactionRows() ([]ccCompactionRow, map[string]string) {
 		{"claude_code_compaction_cut_off_by_the_end_of_the_stream_sends_compaction_failed",
 			[]map[string]any{init, compacting},
 			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}, ""},
-			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}},
 		{"claude_code_compaction_stopped_by_an_interrupt_sends_compaction_canceled",
 			[]map[string]any{init, compacting, held},
-			[]string{"turn.started", "~status compacting", "~status compaction_canceled", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status compaction_canceled", "turn.ended"}, ""},
 		{"claude_code_compaction_cut_off_by_a_handoff_sends_compaction_failed",
 			[]map[string]any{init, compacting, held},
-			[]string{"turn.started", "~status compacting", "~status compaction_failed"}},
+			[]string{"turn.started", "~status compacting", "~status compaction_failed"}, ""},
 		{"claude_code_boundary_without_a_compacting_status_sends_no_frame",
 			[]map[string]any{init, boundary, summary, reply, result},
 			[]string{"turn.started", "compaction.applied", "turn.ended"}, ""},
@@ -87,15 +81,11 @@ func ccCompactionRows() ([]ccCompactionRow, map[string]string) {
 		{"claude_code_boundary_without_a_summary_frame_logs_the_boundary_text",
 			[]map[string]any{init, compacting, settled, boundary, reply, result}, settledLines, boundaryLine},
 	}
-=======
 	return rows, acts
->>>>>>> 74edf425 (fix(session): classify a cancelled compaction by the stop cause alone)
 }
 
 func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 	skipShort(t)
-<<<<<<< HEAD
-	for _, row := range ccCompactionRows() {
 	rows, acts := ccCompactionRows()
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
