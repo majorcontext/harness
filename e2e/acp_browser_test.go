@@ -18,6 +18,10 @@ const browserHostName = "browser"
 // directory of the Worker file system.
 const browserWorkDir = "/work"
 
+// browserDefaultTools is the sorted tool list of a browser session: the default
+// set of sdk/embed and the page tool js_echo.
+var browserDefaultTools = []string{"edit_file", "glob", "grep", "js_echo", "ls", "read_file", "read_tool_result", "session_info", "write_file"}
+
 // startACPBrowser runs the harness module in a Worker of headless Chromium
 // and speaks ACP on stdio through sdk/embed/test/browser-host.mjs. The model
 // origin is the scripted server of the row behind a CORS wrapper.
@@ -63,7 +67,7 @@ func startACPBrowser(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, func(
 // alignBrowserGolden makes the golden of the browser host comparable with the
 // golden of the native hosts. The browser host offers the default tool set of
 // sdk/embed and the page tool, so its tool list differs from a native host by
-// design: the function checks that list and takes the tools of the golden. The
+// design: the function checks that list against browserDefaultTools and takes the tools of the golden. The
 // browser host has no session directory that the test reads, so the golden
 // sessions are the ones of the golden file.
 func alignBrowserGolden(t *testing.T, got acpGolden, path string) acpGolden {
@@ -78,8 +82,8 @@ func alignBrowserGolden(t *testing.T, got acpGolden, path string) acpGolden {
 	}
 	for i := range got.Requests {
 		tools := got.Requests[i].Tools
-		if slices.Contains(tools, "bash") || slices.Contains(tools, "process") || !slices.Contains(tools, "js_echo") || !slices.Contains(tools, "read_file") {
-			t.Errorf("tools of request %d = %v, want the default tool set and the page tool, with no bash or process", i+1, tools)
+		if !slices.Equal(tools, browserDefaultTools) {
+			t.Errorf("tools of request %d = %v, want %v", i+1, tools, browserDefaultTools)
 		}
 		if i < len(want.Requests) {
 			got.Requests[i].Tools = want.Requests[i].Tools

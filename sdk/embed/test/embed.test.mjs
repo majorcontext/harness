@@ -299,7 +299,7 @@ async function firstTools(options) {
   try {
     const c = acpClient(h);
     await c.prompt(await c.session(), "go");
-    return (await model.requests())[0].body.tools.map((t) => t.name).sort();
+    return (await model.requests())[0].body.tools?.map((t) => t.name).sort() ?? [];
   } finally {
     await h.close();
     model.close();
@@ -310,6 +310,10 @@ test("the first request of a host lists the default tools, the page tools, and n
   const names = await firstTools({ tools: [echo] });
   assert.deepEqual(names, [...defaultBuiltinTools, "js_echo"].sort());
   assert.ok(!names.includes("bash") && !names.includes("process"));
+});
+
+test("an empty builtinTools gives the model no tools", async () => {
+  assert.deepEqual(await firstTools({ tools: [echo], builtinTools: [] }), []);
 });
 
 test("builtinTools replaces the default set", async () => {

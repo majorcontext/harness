@@ -11,7 +11,7 @@ const h = await createHarness({
   proxy: { baseURL: "/model-proxy", headers: {} },
   fetch,                  // optional: a page fetch that carries the model requests
   tools: [{ name, description, schema, run: async (input, { signal }) => "text" }],
-  builtinTools,           // allowed tool names; absent: defaultBuiltinTools and the names of tools
+  builtinTools,           // allowed tool names; absent: defaultBuiltinTools and the names of tools. A list you pass is used as it is: page tools are not added
   store: { persist: true, dir },  // Node: an exclusive directory. Browser: the origin private file system below dir (default /persist/sessions). Absent: memory
   log: (line) => {},
 });

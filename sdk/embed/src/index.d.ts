@@ -26,7 +26,7 @@ export interface CreateHarnessOptions {
   /** A page fetch that carries the model requests. */
   fetch?: (url: string, init: { method: string; headers: Record<string, string>; body?: Uint8Array; signal: AbortSignal }) => Promise<Response>;
   tools?: PageTool[];
-  /** The allowed tool names of every session. Absent: defaultBuiltinTools and the names of the page tools. */
+  /** The allowed tool names of every session. Absent: defaultBuiltinTools and the names of the page tools. A list that the caller passes is used as it is: page tools are not added to it. */
   builtinTools?: string[];
   /**
    * Under Node, dir is a directory that one process holds. In the browser, persist keeps the sessions in

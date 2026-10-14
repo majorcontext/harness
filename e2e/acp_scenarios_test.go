@@ -321,6 +321,9 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				}
 				c.dirs["main"] = writeACPDir(t, sc.files)
 				if host.name == browserHostName {
+					if len(sc.files) > 0 || len(sc.dirs) > 0 {
+						t.Fatalf("row %s sets files or dirs, which the browser host cannot seed", sc.name)
+					}
 					c.dirs["main"] = browserWorkDir
 				}
 				for name, files := range sc.dirs {

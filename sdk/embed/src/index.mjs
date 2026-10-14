@@ -30,7 +30,7 @@ function absolute(value) {
  */
 export const defaultBuiltinTools = Object.freeze(["read_file", "write_file", "edit_file", "ls", "glob", "grep", "read_tool_result", "session_info"]);
 
-const browserStoreDir ="/persist/sessions";
+const browserStoreDir = "/persist/sessions";
 
 function belowPersist(dir) {
   const parts = dir.split("/");
