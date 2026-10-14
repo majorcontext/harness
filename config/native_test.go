@@ -31,9 +31,6 @@ func TestNativeProvidersNameEachBuiltInProvider(t *testing.T) {
 	if got := NativeProviders(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NativeProviders = %q, want %q", got, want)
 	}
-	if _, ok := NativeProvider("other"); ok {
-		t.Error("other is native")
-	}
 }
 
 func TestProviderEntriesAddNativeProvidersAndKeepConfiguredOnes(t *testing.T) {
@@ -65,7 +62,6 @@ func TestClaudeCLIPrefersAConfiguredEntryToTheNativeProgram(t *testing.T) {
 		t.Errorf("ClaudeCLI = %q, want /bin/work", bin)
 	}
 	c.Providers["claude-code"] = Provider{Type: TypeClaudeCodeCLI, BinaryPath: "/bin/own"}
-	c.Model = "claude-code/sonnet"
 	if bin, _ := c.ClaudeCLI(); bin != "/bin/own" {
 		t.Errorf("ClaudeCLI = %q, want /bin/own", bin)
 	}

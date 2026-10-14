@@ -168,10 +168,8 @@ func (c *Config) ClaudeCLI() (bin string, ok bool) {
 			return p.CLIBinary(), true
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(entries)) {
-		if p := entries[name]; p.UsesClaudeCLI() {
-			return p.CLIBinary(), true
-		}
+	if p := entries["claude-code"]; p.UsesClaudeCLI() {
+		return p.CLIBinary(), true
 	}
 	return "", false
 }

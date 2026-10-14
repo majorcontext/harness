@@ -227,15 +227,42 @@ func (l *acpLoginRun) lookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
-// pathWithoutClaude is the PATH of the process without each directory that holds a program named claude, for the binary host.
-func pathWithoutClaude() string {
-	var keep []string
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if _, err := os.Stat(filepath.Join(dir, "claude")); err != nil {
-			keep = append(keep, dir)
-		}
+// shadowPath is the PATH of the process with each directory that holds a program named claude replaced by a directory of symlinks to the other programs of it.
+var shadowPath = sync.OnceValue(func() string {
+	root, err := os.MkdirTemp("", "path-")
+	if err != nil {
+		panic(err)
 	}
-	return strings.Join(keep, string(os.PathListSeparator))
+	shadowRoot = root
+	var dirs []string
+	for i, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if _, err := os.Stat(filepath.Join(dir, "claude")); err != nil {
+			dirs = append(dirs, dir)
+			continue
+		}
+		shadow := filepath.Join(root, strconv.Itoa(i))
+		if err := os.Mkdir(shadow, 0o755); err != nil {
+			panic(err)
+		}
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() != "claude" {
+				_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(shadow, e.Name()))
+			}
+		}
+		dirs = append(dirs, shadow)
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
+})
+
+// shadowRoot is the directory that shadowPath made, if it ran.
+var shadowRoot string
+
+// removeShadowPath removes the directories of shadowPath.
+func removeShadowPath() {
+	if shadowRoot != "" {
+		_ = os.RemoveAll(shadowRoot)
+	}
 }
 
 // checkACPAuthMethods compares the ids of authMethods with want, and the logout capability with the methods. A nil want is the method chatgpt alone, which every host offers except the wasm hosts, which offer none.

@@ -47,6 +47,8 @@ type acpScenario struct {
 	login *acpLoginSpec
 	// jsTool adds the page tool js_echo to the wasm hosts. The native hosts have no JavaScript tools, so the row runs on the wasm hosts only.
 	jsTool bool
+	// wasmOnly runs the row on the wasm hosts only, because the native hosts always offer a login.
+	wasmOnly bool
 	// browser marks a row that also runs on the browser host. It needs no file, no directory beyond "main", and no restart.
 	browser bool
 }
@@ -201,6 +203,16 @@ var acpWireScenarios = []acpScenario{
 		},
 	},
 	{
+		name:     "authenticate_and_logout_are_not_found_on_a_host_with_no_login",
+		cite:     "`authenticate` and `logout` are `-32601`",
+		wasmOnly: true,
+		steps: []acpStep{
+			acpCall{method: "authenticate", params: map[string]any{"methodId": "chatgpt"}, code: acpMethodNotFound},
+			acpCall{method: "logout", params: map[string]any{}, code: acpMethodNotFound},
+			acpInit{version: 1, want: 1},
+		},
+	},
+	{
 		name: "unknown_method_is_not_found",
 		cite: "A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.",
 		steps: []acpStep{
@@ -282,9 +294,9 @@ func (sc acpScenario) runsOn(host string) bool {
 	}
 	switch host {
 	case "binary":
-		return len(sc.allowed) == 0 && !sc.jsTool
+		return len(sc.allowed) == 0 && !sc.jsTool && !sc.wasmOnly
 	case "in-process":
-		return !sc.jsTool
+		return !sc.jsTool && !sc.wasmOnly
 	case nodeHostName:
 		return sc.login == nil && !sc.needsExec && !sc.needsMCP
 	case browserHostName:
@@ -352,7 +364,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 					step.run(t, c)
 				}
 				c.finish(stop)
-				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process" || sc.jsTool && host.name == nodeHostName)
+				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process" || (sc.jsTool || sc.wasmOnly) && host.name == nodeHostName)
 				got := acpGoldenOf(t, c, sc.wireOnly)
 				if host.name == nodeHostName || host.name == browserHostName {
 					got = alignNodeGolden(t, got)

@@ -277,7 +277,7 @@ func startACPProcEnv(t *testing.T, env acpEnv) (io.WriteCloser, io.Reader, *proc
 	t.Helper()
 	cmd := exec.Command(harnessBin, "acp")
 	cmd.Dir = t.TempDir()
-	vars := map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey, "PATH": pathWithoutClaude()}
+	vars := map[string]string{"HARNESS_SESSION_DIR": env.sessDir, "HARNESS_CONFIG": env.configPath, "ANTHROPIC_API_KEY": acpDummyKey, "PATH": shadowPath()}
 	if env.login != nil {
 		maps.Copy(vars, env.login.procEnv())
 		cmd.Stderr = env.login.sink
