@@ -125,7 +125,7 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
-	// AskUserQuestion lets a backend ask the user a question; the embedder
+	// AskUserQuestion lets a session ask the user a question; the embedder
 	// answers with Resolve.
 	AskUserQuestion bool
 	// Banner is the engine status that each model call of a turn sends as
@@ -138,6 +138,8 @@ type Config struct {
 	// Source gives the tools of each model call, and the hooks around each
 	// tool call. nil: no tool.
 	Source turn.Source
+	// Record wraps the whole Source of a turn, the tools of the actor included, to observe what each model call sends. nil: none.
+	Record func(turn.Source) turn.Source
 	// Retain gives a harness-loop turn read_tool_result and keeps each large
 	// result out of the history, after the hooks of Source.
 	Retain bool

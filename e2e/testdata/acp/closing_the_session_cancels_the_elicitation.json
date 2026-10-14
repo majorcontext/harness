@@ -364,11 +364,13 @@
                 ],
                 "title": "DB",
                 "type": "string"
+              },
+              "question_1_other": {
+                "description": "Your own answer to: Which database?",
+                "title": "Other",
+                "type": "string"
               }
             },
-            "required": [
-              "question_1"
-            ],
             "type": "object"
           },
           "sessionId": "\u003csession:a\u003e",

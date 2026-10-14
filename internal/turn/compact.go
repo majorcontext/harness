@@ -100,6 +100,8 @@ func (*answer) Ask(string, string, json.RawMessage) error {
 	return errors.New("turn: a model call with no tools opens no request")
 }
 
+func (*answer) Asked(string) (json.RawMessage, bool) { return nil, false }
+
 func (*answer) Resolution(string) (protocol.RequestResolved, bool) {
 	return protocol.RequestResolved{}, false
 }

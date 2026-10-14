@@ -181,6 +181,8 @@ type Sink interface {
 	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.
 	Ask(callID, kind string, payload json.RawMessage) error
 	Resolution(id string) (protocol.RequestResolved, bool)
+	// Asked returns the payload of request id as it opened.
+	Asked(id string) (json.RawMessage, bool)
 }
 
 // Threaded is a Sink that gives each key a live item of its own. A backend
@@ -253,7 +255,18 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
 	}
-	for {
+	record := func(c protocol.ToolCall, r protocol.ToolResult) error {
+		m, err := result(to, c, r)
+		if err != nil {
+			return err
+		}
+		if err := to.Item(m); err != nil {
+			return err
+		}
+		req.History = append(req.History, m)
+		return nil
+	}
+	for first := true; ; first = false {
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
@@ -264,7 +277,14 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := applyParams(step, b, caps, req, &call); err != nil {
 			return err
 		}
-		t := describe(step, &call, src, to, caps.OwnsLoop)
+		ts := toolsetOf(step, &call, src)
+		if first && !caps.OwnsLoop {
+			if err := answerAsks(ctx, runner{hooks: ts.Hooks}, to, &req, record); err != nil {
+				return err
+			}
+			call.History = req.History
+		}
+		t := describe(&call, ts, to, caps.OwnsLoop)
 		err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
@@ -280,18 +300,11 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		req.History = append(req.History, s.items...)
-		record := func(c protocol.ToolCall, r protocol.ToolResult) error {
-			m, err := result(to, c, r)
-			if err != nil {
-				return err
-			}
-			if err := to.Item(m); err != nil {
-				return err
-			}
-			req.History = append(req.History, m)
-			return nil
-		}
+		asks, calls := splitAsks(t, calls)
 		if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
+			return err
+		}
+		if opened, err := openAsk(ctx, step, t, to, asks, record); opened || err != nil {
 			return err
 		}
 		in, err := to.Steer()

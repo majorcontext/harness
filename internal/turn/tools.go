@@ -183,14 +183,18 @@ func (t runner) key(c protocol.ToolCall) (key string) {
 	return ""
 }
 
-// describe sets the tools, prompt, and Call of call, pins its notices and
+// toolsetOf returns the tools of the model call call from src. A nil src gives none.
+func toolsetOf(ctx context.Context, call *Request, src Source) Toolset {
+	if src == nil {
+		return Toolset{}
+	}
+	return src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
+}
+
+// describe sets the tools, prompt, and Call of call from ts, pins its notices and
 // banner through to, and returns the runner of its calls. all describes every
 // tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
-func describe(ctx context.Context, call *Request, src Source, to Turn, all bool) runner {
-	var ts Toolset
-	if src != nil {
-		ts = src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
-	}
+func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
 	}

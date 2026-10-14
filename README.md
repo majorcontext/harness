@@ -290,7 +290,7 @@ settings:
 
 The client gets a model and effort picker, image and file attachments, and
 session list, load, and resume. When the client supports elicitation forms, a
-Claude Code session can ask you questions in a form.
+session can ask you questions in a form.
 
 ## Embed Harness in Go
 

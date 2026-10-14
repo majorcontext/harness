@@ -24,11 +24,18 @@ type questionForm struct {
 	schema    map[string]any
 	keys      []string
 	questions []string
+	// others holds the key of the free-text property of each question in keys, or "" for a question that has none.
+	others []string
+	multi  []bool
 }
+
+// previewRunes bounds the preview that an option description carries.
+const previewRunes = 200
 
 type questionOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
+	Preview     string `json:"preview"`
 }
 
 type questionPayload struct {
@@ -48,6 +55,7 @@ func formOf(payload json.RawMessage) (questionForm, bool) {
 	}
 	var f questionForm
 	props := map[string]any{}
+	var required []string
 	for i, q := range p.Questions {
 		key := fmt.Sprintf("question_%d", i+1)
 		title := q.Header
@@ -55,15 +63,25 @@ func formOf(payload json.RawMessage) (questionForm, bool) {
 			title = q.Question
 		}
 		prop := map[string]any{"type": "string", "title": title, "description": q.Question}
+		other := ""
 		if len(q.Options) > 0 {
 			prop = optionProperty(prop, q.MultiSelect, q.Options)
+			other = key + "_other"
+			props[other] = map[string]any{"type": "string", "title": "Other", "description": "Your own answer to: " + q.Question}
+		} else {
+			required = append(required, key)
 		}
 		props[key] = prop
 		f.keys = append(f.keys, key)
+		f.others = append(f.others, other)
+		f.multi = append(f.multi, q.MultiSelect)
 		f.questions = append(f.questions, q.Question)
 	}
 	f.message = strings.Join(f.questions, "\n")
-	f.schema = map[string]any{"type": "object", "properties": props, "required": f.keys}
+	f.schema = map[string]any{"type": "object", "properties": props}
+	if len(required) > 0 {
+		f.schema["required"] = required
+	}
 	return f, true
 }
 
@@ -72,8 +90,8 @@ func optionProperty(prop map[string]any, multi bool, options []questionOption) m
 	titled := make([]any, len(options))
 	for i, o := range options {
 		option := map[string]any{"const": o.Label, "title": o.Label}
-		if o.Description != "" {
-			option["description"] = o.Description
+		if d := optionText(o, multi); d != "" {
+			option["description"] = d
 		}
 		titled[i] = option
 	}
@@ -84,6 +102,21 @@ func optionProperty(prop map[string]any, multi bool, options []questionOption) m
 	}
 	prop["oneOf"] = titled
 	return prop
+}
+
+// optionText is the description of an option, followed by its preview when the question allows one answer. The preview is cut at previewRunes.
+func optionText(o questionOption, multi bool) string {
+	if multi || o.Preview == "" {
+		return o.Description
+	}
+	p := []rune(o.Preview)
+	if len(p) > previewRunes {
+		p = append(p[:previewRunes], '…')
+	}
+	if o.Description == "" {
+		return string(p)
+	}
+	return o.Description + "\n\n" + string(p)
 }
 
 // answer maps the text of each answered question to the answer text. It reports false when the client answered no question.
@@ -102,6 +135,15 @@ func (f questionForm) answer(content map[string]any) (json.RawMessage, bool) {
 			answers[f.questions[i]] = strings.Join(parts, ", ")
 		default:
 			answers[f.questions[i]] = fmt.Sprint(v)
+		}
+		if f.others[i] == "" {
+			continue
+		}
+		if text, _ := content[f.others[i]].(string); strings.TrimSpace(text) != "" {
+			if prev, ok := answers[f.questions[i]]; ok && prev != "" && f.multi[i] {
+				text = prev + ", " + text
+			}
+			answers[f.questions[i]] = text
 		}
 	}
 	if len(answers) == 0 {

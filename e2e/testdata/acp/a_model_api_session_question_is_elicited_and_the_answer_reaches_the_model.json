@@ -1,0 +1,586 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "ask_user_question",
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "pick a db"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "ask_user_question",
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "pick a db"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "ask_user_question",
+              "tool_input": {
+                "questions": [
+                  {
+                    "header": "DB",
+                    "multiSelect": false,
+                    "options": [
+                      {
+                        "description": "a",
+                        "label": "PostgreSQL"
+                      },
+                      {
+                        "description": "b",
+                        "label": "SQLite"
+                      }
+                    ],
+                    "question": "Which database?"
+                  }
+                ]
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind.",
+              "tool_name": "ask_user_question",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "pick a db"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "ask_user_question",
+            "arguments": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Noted."
+          }
+        ]
+      }
+    ]
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "clientCapabilities": {
+            "elicitation": {
+              "form": {}
+            }
+          },
+          "clientInfo": {
+            "name": "e2e",
+            "version": "0"
+          },
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
+            "loadSession": true,
+            "mcpCapabilities": {
+              "http": true,
+              "sse": false
+            },
+            "promptCapabilities": {
+              "embeddedContext": true,
+              "image": true
+            },
+            "sessionCapabilities": {
+              "close": {},
+              "list": {},
+              "resume": {}
+            }
+          },
+          "agentInfo": {
+            "name": "harness",
+            "title": "Harness",
+            "version": "\u003cversion\u003e"
+          },
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            }
+          ],
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "anthropic/claude-fable-5",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "Default",
+                  "value": "default"
+                },
+                {
+                  "name": "Low",
+                  "value": "low"
+                },
+                {
+                  "name": "Medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "High",
+                  "value": "high"
+                },
+                {
+                  "name": "XHigh",
+                  "value": "xhigh"
+                },
+                {
+                  "name": "Max",
+                  "value": "max"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "pick a db",
+              "type": "text"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 5
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "kind": "other",
+            "name": "ask_user_question",
+            "rawInput": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            },
+            "sessionUpdate": "tool_call",
+            "status": "in_progress",
+            "title": "ask_user_question",
+            "toolCallId": "toolu_ask"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "elicitation/create",
+        "params": {
+          "message": "Which database?",
+          "mode": "form",
+          "requestedSchema": {
+            "properties": {
+              "question_1": {
+                "description": "Which database?",
+                "oneOf": [
+                  {
+                    "const": "PostgreSQL",
+                    "description": "a",
+                    "title": "PostgreSQL"
+                  },
+                  {
+                    "const": "SQLite",
+                    "description": "b",
+                    "title": "SQLite"
+                  }
+                ],
+                "title": "DB",
+                "type": "string"
+              },
+              "question_1_other": {
+                "description": "Your own answer to: Which database?",
+                "title": "Other",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "sessionId": "\u003csession:a\u003e",
+          "toolCallId": "toolu_ask"
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "action": "accept",
+          "content": {
+            "question_1": "SQLite"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "content": {
+                  "text": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind.",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "rawOutput": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind.",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "toolu_ask"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": {
+              "text": "Noted.",
+              "type": "text"
+            },
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    }
+  ]
+}

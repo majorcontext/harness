@@ -11,7 +11,6 @@ import (
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/tool/proc"
-	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -57,11 +56,10 @@ type Prompt struct {
 }
 
 // modelCall is what the newest model call took from the Source: the names of
-// its tools, the allowed tools, and the prompt that follows the system prompt.
+// its tools and the prompt that follows the system prompt.
 type modelCall struct {
-	tools   []string
-	allowed []string
-	prompt  string
+	tools  []string
+	prompt string
 }
 
 // NewPrompt returns the prompt of a session that read describes. agent and p
@@ -102,7 +100,7 @@ type recorded struct {
 
 func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	ts := c.src.Toolset(ctx, history, allowed, model)
-	call := modelCall{allowed: slices.Clone(allowed), prompt: ts.Prompt}
+	call := modelCall{prompt: ts.Prompt}
 	for _, t := range ts.Tools {
 		call.tools = append(call.tools, t.Spec().Name)
 	}
@@ -113,8 +111,7 @@ func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, al
 }
 
 // sent returns the system segments and the sorted tool names of the newest
-// model call. read_tool_result comes from the actor, so it is not in the
-// recorded names.
+// model call.
 func (p *Prompt) sent() (system, tools []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -123,9 +120,6 @@ func (p *Prompt) sent() (system, tools []string) {
 		system = append(system, p.call.prompt)
 	}
 	tools = slices.Clone(p.call.tools)
-	if p.call.allowed == nil || slices.Contains(p.call.allowed, toolresult.ToolName) {
-		tools = append(tools, toolresult.ToolName)
-	}
 	slices.Sort(tools)
 	return system, tools
 }

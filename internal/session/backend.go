@@ -111,12 +111,28 @@ func (a *Actor) onRun(r *running, f func() error) error {
 func (t *turnRun) Ask(callID, kind string, payload json.RawMessage) error {
 	a := t.a
 	return a.onRun(t.r, func() error {
+		if !t.r.ownsLoop && !a.questions() {
+			return turn.ErrNoQuestions
+		}
 		i := slices.IndexFunc(a.state.OpenToolCalls(), func(c eventlog.OpenToolCall) bool { return c.CallID == callID })
 		if i < 0 {
 			return fmt.Errorf("session: tool call %s is not open", callID)
 		}
 		return a.append(protocol.RequestOpened{RequestID: callID, ItemID: a.state.OpenToolCalls()[i].ItemID, RequestKind: kind, Payload: payload})
 	})
+}
+
+// Asked returns the payload of request id as it opened.
+func (t *turnRun) Asked(id string) (json.RawMessage, bool) {
+	type found struct {
+		p  json.RawMessage
+		ok bool
+	}
+	f, _ := call(context.Background(), t.a, func(reply func(found, error)) {
+		p, ok := t.a.state.Asked(id)
+		reply(found{p, ok}, nil)
+	})
+	return f.p, f.ok
 }
 
 // Resolution returns the record that closed request id, if one did.
