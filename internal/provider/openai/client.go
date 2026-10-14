@@ -34,7 +34,9 @@ type Client struct {
 	APIKey string
 	// NoKeyReason says why APIKey is empty. The error of an empty APIKey names it.
 	NoKeyReason string
-	BaseURL     string // defaults to https://api.openai.com
+	// NoKey says that the entry reads no key and sends no key header of its own, so an empty APIKey is no error.
+	NoKey   bool
+	BaseURL string // defaults to https://api.openai.com
 	// ExtraHeaders are sent verbatim on every request, first, so the fixed
 	// Authorization, Content-Type and Accept headers overwrite them.
 	ExtraHeaders map[string]string
@@ -121,7 +123,7 @@ type preparedRequest struct {
 }
 
 func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
-	if c.APIKey == "" && c.HTTPClient == nil {
+	if c.APIKey == "" && c.HTTPClient == nil && !c.NoKey {
 		return nil, provider.NoKeyError("openai", c.NoKeyReason)
 	}
 	wire, err := transcodeRequestFamilyWithOptions(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas, transcodeRequestOptions{

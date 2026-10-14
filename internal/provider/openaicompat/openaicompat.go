@@ -41,6 +41,8 @@ type Client struct {
 	APIKey string
 	// NoKeyReason says why APIKey is empty. The error of an empty APIKey names it.
 	NoKeyReason string
+	// NoKey says that the entry reads no key and sends no key header of its own, so an empty APIKey is no error.
+	NoKey bool
 	// BaseURL is the API root; the client POSTs to BaseURL+"/chat/completions".
 	BaseURL string
 	// HTTPClient defaults to http.DefaultClient.
@@ -69,7 +71,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if c.Family == "" {
 		return nil, fmt.Errorf("openaicompat: no Family configured")
 	}
-	if c.APIKey == "" && c.HTTPClient == nil {
+	if c.APIKey == "" && c.HTTPClient == nil && !c.NoKey {
 		return nil, provider.NoKeyError("openaicompat("+c.Family+")", c.NoKeyReason)
 	}
 	wire, err := transcodeRequestOpts(req, c.Family, c.transcodeOptions())

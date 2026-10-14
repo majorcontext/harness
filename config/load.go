@@ -66,7 +66,20 @@ func MergeProject(user *Config, userName, dir, proxyBase string) (*Config, error
 		return nil, err
 	}
 	out := merge(user, proj).WithProxyBase(proxyBase)
+	markKeyless(&out, user, proj)
 	return &out, out.Validate()
+}
+
+// markKeyless sets the keyless mark on each provider that only the project file defines.
+func markKeyless(out, user, proj *Config) {
+	for name := range proj.Providers {
+		if _, defined := user.Providers[name]; defined || NativeKeyEnv(name) != "" {
+			continue
+		}
+		p := out.Providers[name]
+		p.keyless = true
+		out.Providers[name] = p
+	}
 }
 
 // rejectProjectProviderKeys fails when the project file sets auth, sets api_key_env on any provider, or

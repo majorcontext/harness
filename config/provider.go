@@ -98,7 +98,12 @@ type Provider struct {
 	// SessionMirror runs the CLI with --session-mirror under a scratch CLAUDE_CONFIG_DIR, so the
 	// session state holds the transcript and another host can resume it.
 	SessionMirror bool `json:"session_mirror,omitempty"`
+
+	keyless bool
 }
+
+// Keyless reports that only the project file defines the entry, so it reads no API key. Only MergeProject sets it.
+func (p Provider) Keyless() bool { return p.keyless }
 
 // claudeCodePermissionModes returns the accepted --permission-mode values.
 func claudeCodePermissionModes() []string {

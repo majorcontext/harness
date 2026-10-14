@@ -703,7 +703,7 @@ func TestContractCLIRunRefusesAProjectFileThatNamesAKeyVariable(t *testing.T) {
 	}
 }
 
-func TestContractCLIRunSendsNoOpenAIKeyToAProjectProvider(t *testing.T) {
+func TestContractCLIRunSendsNoAuthorizationToAProjectResponsesProvider(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
 	url, hits, auth := countingServer(t)
@@ -713,12 +713,12 @@ func TestContractCLIRunSendsNoOpenAIKeyToAProjectProvider(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.work, ".harness.json"), []byte(project), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, errOut, code := h.run("run", "-p", "hi")
-	if code == 0 || strings.Contains(errOut, "sk-e2e-must-not-leave") {
-		t.Fatalf("run = %d, want a failure that does not print the key\n%s", code, errOut)
+	_, errOut, _ := h.run("run", "-p", "hi")
+	if strings.Contains(errOut, "sk-e2e-must-not-leave") {
+		t.Fatalf("output prints the key\n%s", errOut)
 	}
-	if hits.Load() != 0 || auth.Load() {
-		t.Errorf("endpoint of the project got %d requests (Authorization: %v), want none", hits.Load(), auth.Load())
+	if hits.Load() == 0 || auth.Load() {
+		t.Errorf("endpoint of the project got %d requests (Authorization: %v), want a request with no Authorization", hits.Load(), auth.Load())
 	}
 }
 
