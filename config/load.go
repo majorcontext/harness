@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -60,8 +62,42 @@ func MergeProject(user *Config, userName, dir, proxyBase string) (*Config, error
 	if err := rejectSharedPlugins(user, proj, userName, projPath); err != nil {
 		return nil, err
 	}
+	if err := rejectProjectProviderKeys(user, proj, userName, projPath); err != nil {
+		return nil, err
+	}
 	out := merge(user, proj).WithProxyBase(proxyBase)
 	return &out, out.Validate()
+}
+
+// rejectProjectProviderKeys fails when the project file sets auth, or sets a key that picks the endpoint or
+// the secret of a request on a provider that the user config defines or that is built in. A project file
+// then cannot send the API key or the login to a URL of its own.
+func rejectProjectProviderKeys(user, proj *Config, userName, projPath string) error {
+	for _, name := range slices.Sorted(maps.Keys(proj.Providers)) {
+		p := proj.Providers[name]
+		if p.Auth != "" {
+			return fmt.Errorf("providers.%s.auth is set in %s, but only the user config %s sets auth", name, projPath, userName)
+		}
+		_, defined := user.Providers[name]
+		if !defined && !nativeProviderKeys[name] {
+			continue
+		}
+		for _, k := range []struct {
+			key string
+			set bool
+		}{
+			{"base_url", p.BaseURL != ""},
+			{"responses_path", p.ResponsesPath != ""},
+			{"extra_headers", len(p.ExtraHeaders) > 0},
+			{"api_key_env", p.APIKeyEnv != ""},
+			{"permission_mode", p.PermissionMode != ""},
+		} {
+			if k.set {
+				return fmt.Errorf("providers.%s.%s is set in %s, but the provider is built in or defined in %s, and a project file cannot set this key on such a provider", name, k.key, projPath, userName)
+			}
+		}
+	}
+	return nil
 }
 
 // rejectSharedPlugins fails when a plugin name is in both layers, so a project cannot shadow a user plugin.

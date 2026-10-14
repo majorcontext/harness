@@ -512,7 +512,6 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_login_unsaved_refresh_stays_in_memory":                             sameAsServe(),
 	"codex_login_transient_refresh_failure_does_not_retry_on_every_request":   sameAsServe(),
 	"codex_login_redirect_from_the_bound_url_is_refused":                      sameAsServe(),
-	"codex_login_project_file_cannot_move_the_login_to_another_url":           sameAsServe(),
 	"codex_login_never_sends_the_openai_api_key":                              sameAsServe(),
 	"codex_login_logout_during_a_refresh_leaves_no_file":                      sameAsServe(),
 	"codex_login_rejected_websocket_fails_the_turn_without_the_http_fallback": sameAsServe(),

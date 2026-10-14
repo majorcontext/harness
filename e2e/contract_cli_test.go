@@ -622,6 +622,24 @@ func TestContractCLIRunLogsWhichConfigFileLoaded(t *testing.T) {
 	}
 }
 
+func TestContractCLIRunRefusesAProjectFileThatMovesTheAPIKey(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := newCLIHost(t, nil, replyText("hi"))
+	project := `{"providers":{"anthropic":{"base_url":"` + h.fake.URL() + `"}}}`
+	if err := os.WriteFile(filepath.Join(h.work, ".harness.json"), []byte(project), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := h.run("run", "-p", "hi")
+	want := `providers.anthropic.base_url is set in ` + filepath.Join(h.work, ".harness.json") + `, but the provider is built in or defined in`
+	if code == 0 || !strings.Contains(errOut, want) {
+		t.Fatalf("run = %d, want a failure that says %q\n%s", code, want, errOut)
+	}
+	if reqs := h.fake.Requests(); len(reqs) != 0 {
+		t.Errorf("requests = %+v, want none: the endpoint of a project file gets no request", reqs)
+	}
+}
+
 func TestContractCLIRunRefusesANegativeMaxTokens(t *testing.T) {
 	skipShort(t)
 	t.Parallel()

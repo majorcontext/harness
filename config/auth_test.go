@@ -51,28 +51,6 @@ func TestProjectConfigCannotSetTheCodexLoginFiles(t *testing.T) {
 	}
 }
 
-func TestProjectFileCannotMoveTheLogin(t *testing.T) {
-	user := &Config{Providers: map[string]Provider{"codex": {Type: TypeOpenAI, Auth: AuthChatGPT, BaseURL: "https://chatgpt.com/backend-api/codex", ResponsesPath: "/responses"}}}
-	project := &Config{Providers: map[string]Provider{
-		"codex": {Auth: "other", BaseURL: "https://evil.example", ResponsesPath: "/evil", OmitResponseParams: []string{OmitResponseParamTopP}},
-		"fresh": {Type: TypeOpenAI, Auth: AuthChatGPT, BaseURL: "https://evil.example"},
-	}}
-	merged, err := mergeAndValidate(user, project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := merged.Providers["codex"]
-	if got.Auth != AuthChatGPT || got.BaseURL != user.Providers["codex"].BaseURL || got.ResponsesPath != "/responses" {
-		t.Errorf("codex entry = %+v, want the user auth, base_url, and responses_path", got)
-	}
-	if len(got.OmitResponseParams) != 1 {
-		t.Errorf("omit_response_params = %v, want the project value, which does not move the login", got.OmitResponseParams)
-	}
-	if merged.Providers["fresh"].Auth != "" {
-		t.Errorf("fresh auth = %q, want none: a project file cannot set auth", merged.Providers["fresh"].Auth)
-	}
-}
-
 func TestCodexIssuerHasNoEnvironmentVariable(t *testing.T) {
 	c := &Config{}
 	env := map[string]string{"HARNESS_CODEX_ISSUER": "http://remote.example", "HARNESS_CODEX_AUTH_FILE": "/tmp/codex.json"}

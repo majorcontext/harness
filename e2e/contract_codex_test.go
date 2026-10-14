@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -484,23 +482,12 @@ func codexRetryRows() []codexScenario {
 	}
 }
 
-// codexDriver opens h on the config, with the project file of the login row when it has one.
+// codexDriver opens h on the config.
 func codexDriver(t *testing.T, h host, ca *codexAuthRun, env map[string]string, modelURL string, cfg map[string]any) driver {
 	t.Helper()
 	path := writeGoalConfigWith(t, modelURL, scenarioConfig(cfg))
 	if ca != nil {
 		ca.configPath = path
 	}
-	if ca == nil || ca.spec.project == nil {
-		return h.openIn(t, path, t.TempDir(), env)
-	}
-	work := t.TempDir()
-	body, err := json.Marshal(ca.spec.project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(work, ".harness.json"), body, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return h.openIn(t, path, work, env)
+	return h.openIn(t, path, t.TempDir(), env)
 }
