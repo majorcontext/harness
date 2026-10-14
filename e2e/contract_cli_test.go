@@ -495,7 +495,10 @@ func childScript(sendOn harnesstest.Matcher) []harnesstest.Step {
 func TestContractCLIRunPrintsEachOutputOfATaskChildOnceWhenTheParentSendsToItAfterItSettled(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
-	h := newCLIHost(t, nil, childScript(matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash")))...)
+	const report = "done: first child text"
+	steps := childScript(matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash"), requestMentions(report)))
+	steps = append(steps[:2], append([]harnesstest.Step{awaitReport(report)}, steps[2:]...)...)
+	h := newCLIHost(t, nil, steps...)
 	out, errOut, code := h.run("run", "-p", "delegate")
 	if first, second := strings.Count(out, "first child text"), strings.Count(out, "second child text"); code != 0 || first != 1 || second != 1 {
 		t.Errorf("run with a send to a settled child = %d, want 0 and each child text once (first %d, second %d)\nstdout: %s\nstderr: %s", code, first, second, out, errOut)
