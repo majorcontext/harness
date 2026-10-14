@@ -32,6 +32,20 @@ type browserStore struct {
 	} `json:"sessions"`
 }
 
+// browserListed is the answer of session/list with no cwd.
+type browserListed struct {
+	IDs   []string        `json:"ids"`
+	Error json.RawMessage `json:"error"`
+}
+
+// wants fails unless the list holds exactly the session id.
+func (l browserListed) wants(t *testing.T, id string) {
+	t.Helper()
+	if len(l.Error) > 0 || !slices.Equal(l.IDs, []string{id}) {
+		t.Errorf("session/list = %v, error %s, want [%s]", l.IDs, l.Error, id)
+	}
+}
+
 // log returns the lines of a session, or fails when the store has no such session.
 func (s browserStore) log(t *testing.T, id string) []string {
 	t.Helper()
@@ -87,6 +101,7 @@ func (k *browserKit) reloadRows() {
 			Stored, Final browserStore
 			Boot          browserBoot
 			Resumed       struct{ Error json.RawMessage }
+			Listed        browserListed
 		}
 		rowData(t, res, &r)
 		if r.First.Text != "first answer" || r.Second.Text != "second answer" || !r.Boot.OK {
@@ -95,6 +110,7 @@ func (k *browserKit) reloadRows() {
 		if len(r.Resumed.Error) > 0 {
 			t.Errorf("session/resume after the reload: %s", r.Resumed.Error)
 		}
+		r.Listed.wants(t, r.SessionID)
 		r.Stored.holds(t, r.SessionID, "first answer")
 		r.Stored.holds(t, r.SessionID, `"one"`)
 		r.Final.holds(t, r.SessionID, "second answer")

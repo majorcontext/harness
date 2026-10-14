@@ -361,6 +361,12 @@ func (k *browserKit) turnRows() {
 			if res.StopReason != "end_turn" || res.Text != "hello from the browser" {
 				t.Errorf("stopReason = %q, text = %q, error %+v", res.StopReason, res.Text, res.Error)
 			}
+			var r struct {
+				SessionID string
+				Listed    browserListed
+			}
+			rowData(t, res, &r)
+			r.Listed.wants(t, r.SessionID)
 		})
 	}
 }
