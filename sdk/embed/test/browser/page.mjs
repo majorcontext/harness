@@ -101,14 +101,23 @@ async function open(row, log) {
   return { h, c, bootMs, sessionId: await newSession(c, logs) };
 }
 
+// listIDs lists the sessions with no cwd and returns their ids, or the error.
+async function listIDs(c) {
+  const done = await c.call("session/list", {});
+  return { ids: done.result?.sessions?.map((s) => s.sessionId), error: done.error };
+}
+
 const prompt = (c, sessionId, text) => c.call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
 
 const rows = {
   async turn(row) {
-    const { h, c, bootMs, sessionId } = await open(row);
+    const { h, c, bootMs, logs } = await start(row);
+    const empty = await listIDs(c);
+    const sessionId = await newSession(c, logs);
     const done = await prompt(c, sessionId, "go");
+    const listed = await listIDs(c);
     await h.close();
-    return { bootMs, stopReason: done.result?.stopReason, error: done.error, text: c.text.join("") };
+    return { bootMs, sessionId, empty, listed, stopReason: done.result?.stopReason, error: done.error, text: c.text.join("") };
   },
 
   async cancel(row) {
@@ -135,12 +144,13 @@ const rows = {
     await tabs.reload(t);
     const stored = await peek();
     const boot = await run("boot", { ...row, persist: true });
+    const listed = await run("list");
     const resumed = await run("resume", { sessionId });
     const second = await run("prompt", { sessionId, text: "two" });
     await run("close");
     const final = await peek();
     await tabs.close(t);
-    return { sessionId, first, second, stored, boot, resumed, final };
+    return { sessionId, first, second, stored, boot, resumed, listed, final };
   },
 
   // twoTabs starts a second tab on a store that the first tab holds. The first
@@ -396,6 +406,7 @@ export const tabOps = {
     const done = await tab.c.call("session/resume", { sessionId, cwd: "/work" });
     return { error: done.error };
   },
+  list: () => listIDs(tab.c),
   async close() {
     await tab.h.close();
     return {};

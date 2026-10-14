@@ -102,6 +102,35 @@ export function clientSuite(start) {
     }
   });
 
+  test("session/list returns the sessions and pages with a cursor", async () => {
+    const cwd = tempDir();
+    const store = { persist: true, dir: tempDir() };
+    const config = userConfig("http://127.0.0.1:1");
+    const ids = [];
+    const seed = await start({ config, store });
+    try {
+      const c = acpClient(seed);
+      await c.request("initialize", initialize);
+      for (let i = 0; i < 51; i++) ids.push((await c.request("session/new", { cwd, mcpServers: [] })).sessionId);
+    } finally {
+      await seed.close();
+    }
+    const h = await start({ config, store });
+    try {
+      const c = acpClient(h);
+      const init = await c.request("initialize", initialize);
+      assert.ok(init.agentCapabilities.sessionCapabilities.list);
+      const first = await c.request("session/list", {});
+      assert.deepEqual(first.sessions.map((s) => s.sessionId), ids.slice(0, 50));
+      assert.ok(first.nextCursor);
+      const second = await c.request("session/list", { cursor: first.nextCursor });
+      assert.deepEqual(second.sessions.map((s) => s.sessionId), ids.slice(50));
+      assert.equal(second.nextCursor, undefined);
+    } finally {
+      await h.close();
+    }
+  });
+
   test("a store directory keeps the session for the next harness", async () => {
     const dir = tempDir();
     const cwd = tempDir();
