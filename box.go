@@ -100,7 +100,9 @@ func processError(err error) error {
 }
 
 // heldProcess runs action as work that Close waits for. A Close whose ctx ends
-// ends the wait for the ready gate.
+// ends the wait for the ready gate. An action that returns no error after Close
+// canceled the runtime returns ErrDraining, because the cancel of ctx can lag
+// the kill. An action that returns an error keeps it.
 func (r *Runtime) heldProcess(ctx context.Context, name string, action func(*process.Manager, context.Context, string) (process.Status, error)) (protocol.ProcessStatus, error) {
 	if r.procs == nil {
 		return protocol.ProcessStatus{}, unknownProcess(name)
@@ -113,5 +115,8 @@ func (r *Runtime) heldProcess(ctx context.Context, name string, action func(*pro
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	st, err := action(r.procs, ctx, name)
+	if err == nil && r.base.Err() != nil {
+		err = ErrDraining
+	}
 	return processStatus(st), processError(err)
 }
