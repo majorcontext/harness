@@ -52,6 +52,7 @@ func (r *recorder) Steer() ([]protocol.LogMessage, error) {
 func (*recorder) Settings() (string, protocol.Settings)     { return "", protocol.Settings{} }
 func (*recorder) Pin([]turn.Notice, int) []turn.Pin         { return nil }
 func (*recorder) Ask(string, string, json.RawMessage) error { return nil }
+func (*recorder) Asked(string) (json.RawMessage, bool)      { return nil, false }
 func (*recorder) Resolution(string) (protocol.RequestResolved, bool) {
 	return protocol.RequestResolved{}, false
 }

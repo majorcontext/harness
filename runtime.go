@@ -393,6 +393,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Evaluator:       r.evaluator,
 		MCPServers:      l.mcp,
 		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
+		Record:          sp.Recording,
 		Retain:          r.workDir != "",
 		Prompt:          sp.System,
 		Appended:        r.appended(id, plug),

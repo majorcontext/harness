@@ -181,6 +181,8 @@ type Sink interface {
 	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.
 	Ask(callID, kind string, payload json.RawMessage) error
 	Resolution(id string) (protocol.RequestResolved, bool)
+	// Asked returns the payload of request id as it opened.
+	Asked(id string) (json.RawMessage, bool)
 }
 
 // Threaded is a Sink that gives each key a live item of its own. A backend
@@ -271,17 +273,16 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err
 		}
+		if first && !caps.OwnsLoop {
+			if err := answerAsks(ctx, src, to, &req, record); err != nil {
+				return err
+			}
+		}
 		s, call := &sink{Turn: to, log: cmp.Or(lim.Log, slog.Default())}, req
 		if err := applyParams(step, b, caps, req, &call); err != nil {
 			return err
 		}
 		t := describe(step, &call, src, to, caps.OwnsLoop)
-		if first && !caps.OwnsLoop {
-			if err := answerAsks(ctx, t, to, req.History, record); err != nil {
-				return err
-			}
-			call.History = req.History
-		}
 		err := callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {

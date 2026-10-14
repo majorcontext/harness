@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"time"
@@ -171,6 +172,11 @@ func (s *State) applyRequestOpened(e protocol.RequestOpened) error {
 		return illegal("no open tool call %s on item %s", e.RequestID, e.ItemID)
 	}
 	s.requests[e.RequestID] = pendingRequest{e, s.turn.ID}
+	s.asked = maps.Clone(s.asked)
+	if s.asked == nil {
+		s.asked = map[string]json.RawMessage{}
+	}
+	s.asked[e.RequestID] = slices.Clone(e.Payload)
 	return nil
 }
 

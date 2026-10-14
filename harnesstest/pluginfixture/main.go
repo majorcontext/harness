@@ -100,6 +100,8 @@ var config struct {
 	} `json:"rewrite"`
 	// Deny denies a bash command that contains this substring.
 	Deny string `json:"deny"`
+	// DenyAsk denies a call to ask_user_question whose arguments contain this substring.
+	DenyAsk string `json:"deny_ask"`
 	// DenyOnFailure flags tool.execute.before as deny-on-failure in the manifest.
 	DenyOnFailure bool `json:"deny_on_failure"`
 	// DenyHook flags this hook instead of tool.execute.before.
@@ -394,6 +396,9 @@ func before(params json.RawMessage) (any, *rpcError) {
 		} `json:"args"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if req.Tool == "ask_user_question" && config.DenyAsk != "" && strings.Contains(string(params), config.DenyAsk) {
+		return map[string]any{"deny": "denied by " + cmp.Or(config.Name, "fixture")}, nil
+	}
 	if req.Tool != "bash" {
 		return map[string]any{}, nil
 	}

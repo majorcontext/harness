@@ -142,7 +142,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			return plug
 		}})
 	}
-	return sp.Recording(srcs)
+	return srcs
 }
 
 // perModel gives each model call the Source that pick chooses for the

@@ -71,9 +71,12 @@ func (askTool) Run(context.Context, protocol.ToolCall) (protocol.ToolResult, err
 
 type askInput struct {
 	Questions []struct {
-		Question string `json:"question"`
-		Options  []struct {
-			Label string `json:"label"`
+		Question    string  `json:"question"`
+		Header      *string `json:"header"`
+		MultiSelect *bool   `json:"multiSelect"`
+		Options     []struct {
+			Label       string  `json:"label"`
+			Description *string `json:"description"`
 		} `json:"options"`
 	} `json:"questions"`
 }
@@ -88,8 +91,13 @@ func checkAsk(args json.RawMessage) error {
 		return fmt.Errorf("invalid input: ask one to four questions, not %d", n)
 	}
 	for _, q := range in.Questions {
-		if strings.TrimSpace(q.Question) == "" || len(q.Options) < 2 || len(q.Options) > 4 {
-			return errors.New("invalid input: each question needs text and two to four options")
+		if strings.TrimSpace(q.Question) == "" || q.Header == nil || q.MultiSelect == nil || len(q.Options) < 2 || len(q.Options) > 4 {
+			return errors.New("invalid input: each question needs question, header, multiSelect, and two to four options")
+		}
+		for _, o := range q.Options {
+			if strings.TrimSpace(o.Label) == "" || o.Description == nil {
+				return errors.New("invalid input: each option needs label and description")
+			}
 		}
 	}
 	return nil
@@ -130,52 +138,55 @@ func splitAsks(t runner, calls []protocol.ToolCall) (asks, rest []protocol.ToolC
 	return asks, rest
 }
 
-// openAsk gives each call of asks an error result, except the first that a
-// hook allows and that holds a valid question: it opens the request of that
-// call, and the call stays open. It reports whether a request opened.
+// openAsk handles the question calls of one model call. It tries the first
+// call only: a hook may deny it, and its input may be invalid, and each gives
+// an error result. Otherwise it opens the request of that call, and the call
+// stays open. Every later call gets an error result. It reports whether a
+// request opened.
 func openAsk(ctx context.Context, t runner, to Sink, asks []protocol.ToolCall, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
 	opened := false
-	for _, c := range asks {
-		deny, args := "", c.Arguments
-		switch {
-		case opened:
-			deny = "Only one question is open at a time. Ask this question again after the user answers."
-		case t.hooks != nil:
-			var run protocol.ToolCall
-			run, deny = t.hooks.Before(ctx, c)
-			args = run.Arguments
-		}
-		if deny == "" && !opened {
-			if err := checkAsk(args); err != nil {
+	for i, c := range asks {
+		deny, args := "Only one question is open at a time. Ask this question again after the user answers.", c.Arguments
+		if i == 0 {
+			deny = ""
+			if t.hooks != nil {
+				var run protocol.ToolCall
+				run, deny = t.hooks.Before(ctx, c)
+				args = run.Arguments
+			}
+			if err := checkAsk(args); deny == "" && err != nil {
 				deny = err.Error()
 			}
-		}
-		if deny != "" {
-			if err := record(c, protocol.ToolResult{Text: deny, IsError: true}); err != nil {
-				return opened, err
+			if deny == "" {
+				if err := to.Ask(c.ID, protocol.RequestQuestion, args); err != nil {
+					return false, err
+				}
+				opened = true
+				continue
 			}
-			continue
 		}
-		if err := to.Ask(c.ID, protocol.RequestQuestion, args); err != nil {
+		if err := record(c, protocol.ToolResult{Text: deny, IsError: true}); err != nil {
 			return opened, err
 		}
-		opened = true
 	}
 	return opened, nil
 }
 
-// answerAsks records the result of each question call of history that has no
-// result and that the user answered.
-func answerAsks(ctx context.Context, t runner, to Sink, history []protocol.LogMessage, record func(protocol.ToolCall, protocol.ToolResult) error) error {
+// answerAsks records the result of each question call of req.History that has
+// no result and that the user answered. It reads the questions from the
+// payload of the request, which the hooks may have rewritten. It runs before
+// the pins of the first model call, so that no pin comes between a call and its result.
+func answerAsks(ctx context.Context, src Source, to Sink, req *Request, record func(protocol.ToolCall, protocol.ToolResult) error) error {
 	done := map[string]bool{}
-	for _, m := range history {
+	for _, m := range req.History {
 		for _, p := range m.Parts {
 			if p.Type == protocol.LogPartToolResult {
 				done[p.CallID] = true
 			}
 		}
 	}
-	for _, m := range history {
+	var t *runner
+	for _, m := range slices.Clone(req.History) {
 		for _, p := range m.Parts {
 			if p.Type != protocol.LogPartToolCall || p.Name != AskTool || done[p.CallID] {
 				continue
@@ -184,8 +195,19 @@ func answerAsks(ctx context.Context, t runner, to Sink, history []protocol.LogMe
 			if !ok || res.Resolution != protocol.ResolutionAnswered {
 				continue
 			}
+			if t == nil {
+				var ts Toolset
+				if src != nil {
+					ts = src.Toolset(ctx, req.History, req.AllowedTools, req.Model)
+				}
+				t = &runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
+			}
+			args, ok := to.Asked(p.CallID)
+			if !ok {
+				args = p.Arguments
+			}
 			c := protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: p.Arguments}
-			r := protocol.ToolResult{Text: answerText(p.Arguments, res.Answer)}
+			r := protocol.ToolResult{Text: answerText(args, res.Answer)}
 			if t.hooks != nil {
 				r = t.hooks.After(ctx, c, r)
 			}

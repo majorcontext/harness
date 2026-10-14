@@ -138,6 +138,8 @@ type Config struct {
 	// Source gives the tools of each model call, and the hooks around each
 	// tool call. nil: no tool.
 	Source turn.Source
+	// Record wraps the whole Source of a turn, the tools of the actor included, to observe what each model call sends. nil: none.
+	Record func(turn.Source) turn.Source
 	// Retain gives a harness-loop turn read_tool_result and keeps each large
 	// result out of the history, after the hooks of Source.
 	Retain bool

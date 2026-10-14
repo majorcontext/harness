@@ -104,6 +104,7 @@ type State struct {
 	calls     []OpenToolCall
 	requests  map[string]pendingRequest
 	resolved  map[string]protocol.RequestResolved
+	asked     map[string]json.RawMessage
 	// evaluated is the last turn that the goal judged, or the last turn that ended before goal.set.
 	evaluated string
 	usage     protocol.Usage
@@ -215,6 +216,12 @@ func (s *State) Resolution(id string) (protocol.RequestResolved, bool) {
 	r, ok := s.resolved[id]
 	r.Answer = slices.Clone(r.Answer)
 	return r, ok
+}
+
+// Asked returns the payload of request id as it opened, whether the request is open or closed.
+func (s *State) Asked(id string) (json.RawMessage, bool) {
+	p, ok := s.asked[id]
+	return slices.Clone(p), ok
 }
 
 // OpenToolCalls returns the tool calls with no result, oldest first.

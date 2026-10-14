@@ -119,6 +119,19 @@ func (t *turnRun) Ask(callID, kind string, payload json.RawMessage) error {
 	})
 }
 
+// Asked returns the payload of request id as it opened.
+func (t *turnRun) Asked(id string) (json.RawMessage, bool) {
+	type found struct {
+		p  json.RawMessage
+		ok bool
+	}
+	f, _ := call(context.Background(), t.a, func(reply func(found, error)) {
+		p, ok := t.a.state.Asked(id)
+		reply(found{p, ok}, nil)
+	})
+	return f.p, f.ok
+}
+
 // Resolution returns the record that closed request id, if one did.
 func (t *turnRun) Resolution(id string) (protocol.RequestResolved, bool) {
 	type found struct {
