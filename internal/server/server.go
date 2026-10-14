@@ -15,6 +15,7 @@ import (
 	"strconv"
 
 	"github.com/majorcontext/harness/internal/command"
+	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -231,7 +232,7 @@ func errorBody(code protocol.Code, err error) protocol.ErrorBody {
 	msg := err.Error()
 	switch code {
 	case protocol.CodeInvalidRequest:
-		msg = protocol.Reason(err)
+		msg = protocol.Reason(err, errInvalid, workspace.ErrInvalid)
 	case protocol.CodeInternal:
 		msg = "internal error"
 	case protocol.CodeSessionUnreplayable:

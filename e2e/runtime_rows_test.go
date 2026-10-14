@@ -8,7 +8,7 @@ const (
 	specMessages             = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that a reader sees, oldest first"
 	specBootstrapGone        = "one-page-route"
 	specRestartOpens         = "A restart opens no session by itself: the embedder opens each session that has work to resume"
-	specInvalidReason        = "The message of an `invalid_request` error is only the reason, such as `keep_turns must be >= 1`."
+	specInvalidReason        = "The message of an `invalid_request` error is only the reason, such as `keep_turns must be >= 1`:"
 	specErrors               = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
 	specReceipt              = "| New id | `201 {input_id, seq}` |"
 	specDiscard              = "the backend sends an `item.discarded` frame with the `item_id` of the dropped item before the first delta of the new one"
@@ -651,7 +651,8 @@ var runtimeRows = map[string]runtimeRow{
 	"git_changes_uncommitted_scope_reports_modified_deleted_and_untracked_files": sameAsServe(),
 	"git_changes_branch_scope_diffs_the_work_tree_against_the_default_branch":    sameAsServe(),
 	"git_changes_uncommitted_scope_on_an_unborn_repo_reports_files_as_added":     sameAsServe(),
-	"git_changes_refusals": reGolden(specGitOracle, specErrors),
+	"git_changes_refusals":                          reGolden(specGitOracle, specErrors),
+	"workspace_changes_refusal_reads_as_the_reason": reGolden(specInvalidReason, specErrors),
 
 	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor": reGolden(specCmdMenuRoutes, specCmdUnsupport),
 }

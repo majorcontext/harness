@@ -204,5 +204,12 @@ func TestContractWorkspace(t *testing.T) {
 				workspaceChanges{dir: "nobase"},
 			},
 		},
+		{
+			name: "workspace_changes_refusal_reads_as_the_reason",
+			actions: []action{
+				workspaceChanges{scope: "bogus"},
+				workspaceChanges{dir: "/nonexistent"},
+			},
+		},
 	})
 }

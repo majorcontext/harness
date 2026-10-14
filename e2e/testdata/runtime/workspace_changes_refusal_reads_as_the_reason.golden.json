@@ -1,0 +1,26 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "workdir \"/nonexistent\" is not under an allowed workspace root"
+        }
+      }
+    },
+    "workspace_changes.bogus": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "scope \"bogus\" must be \"branch\" or \"uncommitted\""
+        }
+      }
+    }
+  }
+}

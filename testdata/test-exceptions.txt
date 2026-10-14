@@ -35,3 +35,4 @@ internal/testtime/main_test.go the budget tool is a CI program with no contract 
 internal/process/process_race_test.go the select race at the ready gate needs a canceled context and a closed ready channel at once, which no scenario action times
 internal/session/failreason_test.go failReason is a pure function of a turn end; a child scenario can reach the login_required class only through a Responses double that rejects a refresh inside a child turn, which no scenario action scripts
 internal/modelmeta/internal/genctx/main_test.go The generator is pure code: it maps a fixed catalog to Go source, so a golden pins its output.
+protocol/errors_test.go Reason is a pure function of an error chain; a serve binary cannot build a chain that wraps a sentinel of another category
