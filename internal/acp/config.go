@@ -19,7 +19,7 @@ const (
 )
 
 // effortNames are the labels of the effort values.
-var effortNames = map[string]string{effortDefault: "Default", "off": "Off", "minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High"}
+var effortNames = map[string]string{effortDefault: "Default", "off": "Off", "minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High", "xhigh": "XHigh", "max": "Max"}
 
 // allEfforts are the levels of a model that the model list does not hold.
 var allEfforts = []string{"off", "minimal", "low", "medium", "high"}

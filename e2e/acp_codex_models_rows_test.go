@@ -12,7 +12,7 @@ import (
 var chatgptCatalog = []harnesstest.CodexModel{
 	{Slug: "live-b", DisplayName: "Live B", Description: "Second in the catalog.", Priority: 2},
 	{Slug: "live-hidden", DisplayName: "Live Hidden", Description: "Hidden from the picker.", Visibility: "hide", Priority: 0},
-	{Slug: "live-a", DisplayName: "Live A", Description: "First in the catalog.", Priority: 1, Efforts: []string{"none", "low", "high", "xhigh"}},
+	{Slug: "live-a", DisplayName: "Live A", Description: "First in the catalog.", Priority: 1, Efforts: []string{"none", "low", "high", "xhigh", "max"}},
 }
 
 // acpCodexGroup checks the codex group of the model option of the first session/new answer against want, a list of model ids.
@@ -52,7 +52,7 @@ var acpCodexModelsScenarios = []acpScenario{
 			}),
 			acpSetConfig{as: "a", id: "model", value: "codex/live-a"},
 			acpCheck(func(t *testing.T, c *acpConn) {
-				if got := acpLastEffortValues(c); got != "default,off,low,high" {
+				if got := acpLastEffortValues(c); got != "default,off,low,high,xhigh,max" {
 					t.Errorf("effort values of live-a = %v, want default and the levels of the backend that harness knows", got)
 				}
 			}),
@@ -60,6 +60,27 @@ var acpCodexModelsScenarios = []acpScenario{
 			acpCheck(func(t *testing.T, c *acpConn) {
 				if n := c.env.login.openai.ModelRequests(); n != 1 {
 					t.Errorf("the backend served %d model lists, want 1", n)
+				}
+			}),
+		},
+	},
+	{
+		name:  "live_catalog_levels_decide_the_effort_a_request_sends",
+		cite:  "a request then sends the nearest listed level (see Reasoning effort)",
+		login: &acpLoginSpec{chatgpt: true, stored: true, models: chatgptCatalog},
+		model: codexReplyHi,
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpSetConfig{as: "a", id: "model", value: "codex/live-a"},
+			acpSetConfig{as: "a", id: "effort", value: "max"},
+			acpPrompt{as: "a", text: "hello", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				var efforts []string
+				for _, w := range c.env.login.openai.WireEvents() {
+					efforts = append(efforts, w.ReasoningEffort)
+				}
+				if !slices.Contains(efforts, "max") {
+					t.Errorf("reasoning efforts on the wire = %v, want max for a live-only model that lists max", efforts)
 				}
 			}),
 		},

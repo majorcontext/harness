@@ -16,6 +16,9 @@ type wireRequest struct {
 		Type         string `json:"type"`
 		BudgetTokens int    `json:"budget_tokens"`
 	} `json:"thinking"`
+	OutputConfig struct {
+		Effort string `json:"effort"`
+	} `json:"output_config"`
 	ServiceTier string          `json:"service_tier"`
 	Temperature *float64        `json:"temperature"`
 	TopP        *float64        `json:"top_p"`
@@ -54,7 +57,7 @@ func decodeRequest(body []byte) (Request, error) {
 	}
 	req := Request{
 		System: joinText(w.System), Model: w.Model, MaxTokens: w.MaxTokens, ServiceTier: w.ServiceTier,
-		ThinkingType: w.Thinking.Type, ThinkingBudget: w.Thinking.BudgetTokens, Temperature: w.Temperature, TopP: w.TopP,
+		Effort: w.OutputConfig.Effort, ThinkingType: w.Thinking.Type, ThinkingBudget: w.Thinking.BudgetTokens, Temperature: w.Temperature, TopP: w.TopP,
 	}
 	for _, t := range w.Tools {
 		req.Tools = append(req.Tools, t.Name)

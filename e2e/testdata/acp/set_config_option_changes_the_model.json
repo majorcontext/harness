@@ -57,6 +57,14 @@
                 {
                   "name": "High",
                   "value": "high"
+                },
+                {
+                  "name": "XHigh",
+                  "value": "xhigh"
+                },
+                {
+                  "name": "Max",
+                  "value": "max"
                 }
               ],
               "type": "select"
@@ -196,6 +204,14 @@
                   {
                     "name": "High",
                     "value": "high"
+                  },
+                  {
+                    "name": "XHigh",
+                    "value": "xhigh"
+                  },
+                  {
+                    "name": "Max",
+                    "value": "max"
                   }
                 ],
                 "type": "select"
@@ -251,6 +267,14 @@
                 {
                   "name": "High",
                   "value": "high"
+                },
+                {
+                  "name": "XHigh",
+                  "value": "xhigh"
+                },
+                {
+                  "name": "Max",
+                  "value": "max"
                 }
               ],
               "type": "select"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/command"
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/protocol"
@@ -40,7 +41,7 @@ var ops = map[command.Op]op{
 		return nil, s.ClearGoal(ctx)
 	},
 	command.OpSetModel:       update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Model: &v} }, "model"),
-	command.OpSetThinking:    update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Effort: &v} }, "effort"),
+	command.OpSetThinking:    setThinking,
 	command.OpSetServiceTier: update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{ServiceTier: &v} }, "service_tier"),
 	command.OpStatus: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		return s.Snapshot(), nil
@@ -54,6 +55,40 @@ var ops = map[command.Op]op{
 		}
 		return s.r.procs.List(), nil
 	},
+}
+
+// noted is a result that adds a sentence to the text of a succeeded command.
+type noted struct {
+	protocol.Session
+	note string
+}
+
+func (n noted) Notice() string { return n.note }
+
+func setThinking(ctx context.Context, s *Session, args map[string]any) (any, error) {
+	effort := args["effort"].(string)
+	v, err := s.Update(ctx, protocol.SettingsPatch{Effort: &effort})
+	if err != nil {
+		return nil, err
+	}
+	return noted{v, effortNotice(s.r, v)}, nil
+}
+
+// effortNotice says which level a request of the session sends when the model
+// of the session does not list the effort of the session.
+func effortNotice(r *Runtime, v protocol.Session) string {
+	e, err := modelref.ParseEffort(v.Effort)
+	if err != nil || !e.Reasoning() && e != modelref.EffortOff {
+		return ""
+	}
+	caps := r.models.Capabilities(v.Model)
+	switch c := e.Fit(caps.Efforts); {
+	case c != e:
+		return fmt.Sprintf("%s is not offered by %s; using %s", e, v.Model, c)
+	case e == modelref.EffortOff && len(caps.Efforts) > 0 && !slices.Contains(caps.Efforts, "off"):
+		return fmt.Sprintf("off is not offered by %s; it always thinks", v.Model)
+	}
+	return ""
 }
 
 // errNoFold reports a compaction that appended nothing.
@@ -269,6 +304,9 @@ func outcome(typed string, spec *command.Spec, result any, err error) (status, t
 	switch {
 	case err == nil:
 		text = "/" + typed + " succeeded"
+		if n, ok := result.(interface{ Notice() string }); ok && n.Notice() != "" {
+			text += ": " + n.Notice()
+		}
 		if result == nil {
 			return protocol.CommandSucceeded, text, nil, false
 		}

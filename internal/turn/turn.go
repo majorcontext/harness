@@ -58,6 +58,8 @@ type Capabilities struct {
 	ContextWindow int
 	// WindowEstimated marks ContextWindow as the default for an unknown model.
 	WindowEstimated bool
+	// Efforts are the levels the model lists; none: unknown.
+	Efforts []string
 	// Tools names the built-in tools of a backend that owns the loop. A
 	// session of that backend may allow only these and the embedder tools.
 	Tools []string

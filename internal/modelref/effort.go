@@ -1,6 +1,9 @@
 package modelref
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Effort is a unified reasoning-effort level for one model request. It is the
 // canonical, provider-agnostic control the runtime carries. Each provider
@@ -13,11 +16,9 @@ import "fmt"
 // provider can (Anthropic: no thinking block); adapters that cannot disable
 // reasoning treat EffortOff the same as EffortUnset (send no control).
 //
-// Effort does NOT police which model accepts which level. That is a
-// provider-and-model fact the runtime cannot know from the model ref alone —
-// the adapter sends the requested level and the provider is the final judge.
-// A caller that must gate levels per model (a dashboard picker) holds its own
-// mapping; see the boxes bifrost catalog.
+// Effort does NOT police which model accepts which level. The model API
+// backend clamps a level to the levels that the facts of the model list; the
+// adapter sends the level it gets.
 type Effort string
 
 const (
@@ -30,17 +31,75 @@ const (
 	EffortLow     Effort = "low"
 	EffortMedium  Effort = "medium"
 	EffortHigh    Effort = "high"
+	// EffortXHigh is the level above high.
+	EffortXHigh Effort = "xhigh"
+	// EffortMax is the highest level.
+	EffortMax Effort = "max"
 )
+
+// reasoningEfforts are the levels that request reasoning, lowest first.
+var reasoningEfforts = []Effort{EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+
+func (e Effort) rank() int { return slices.Index(reasoningEfforts, e) }
+
+// Cap returns e, or top when e is above top. A level that does not request
+// reasoning is unchanged.
+func (e Effort) Cap(top Effort) Effort {
+	if e.rank() > top.rank() {
+		return top
+	}
+	return e
+}
+
+// Fit returns the level that a request sends for e on a model that lists
+// levels: ClampTo, or at most high when levels is empty.
+func (e Effort) Fit(levels []string) Effort {
+	if len(levels) == 0 {
+		return e.Cap(EffortHigh)
+	}
+	return e.ClampTo(levels)
+}
+
+// ClampTo returns the level of levels that a request at e uses. A reasoning
+// level is kept when listed, else it becomes the highest listed reasoning
+// level below it, else the lowest listed reasoning level. It becomes off only
+// when levels list no reasoning level and list off. Off and unset are
+// unchanged.
+func (e Effort) ClampTo(levels []string) Effort {
+	if !e.Reasoning() || slices.Contains(levels, string(e)) {
+		return e
+	}
+	best, lowest := -1, -1
+	for _, l := range levels {
+		o := slices.Index(reasoningEfforts, Effort(l))
+		switch {
+		case o < 0:
+		case o < e.rank() && o > best:
+			best = o
+		case lowest < 0 || o < lowest:
+			lowest = o
+		}
+	}
+	switch {
+	case best >= 0:
+		return reasoningEfforts[best]
+	case lowest >= 0:
+		return reasoningEfforts[lowest]
+	case slices.Contains(levels, string(EffortOff)):
+		return EffortOff
+	}
+	return e
+}
 
 // ParseEffort validates s as an effort level. An empty string parses to
 // EffortUnset. An unknown value errors, naming the valid set.
 func ParseEffort(s string) (Effort, error) {
 	e := Effort(s)
 	switch e {
-	case EffortUnset, EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh:
+	case EffortUnset, EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return e, nil
 	default:
-		return EffortUnset, fmt.Errorf("message: invalid effort %q (want one of: off, minimal, low, medium, high, or empty)", s)
+		return EffortUnset, fmt.Errorf("message: invalid effort %q (want one of: off, minimal, low, medium, high, xhigh, max, or empty)", s)
 	}
 }
 
@@ -48,15 +107,10 @@ func ParseEffort(s string) (Effort, error) {
 func (e Effort) IsZero() bool { return e == EffortUnset }
 
 // Reasoning reports whether e requests any reasoning at all — true for the
-// four non-off levels, false for EffortUnset and EffortOff. Adapters use it to
+// non-off levels, false for EffortUnset and EffortOff. Adapters use it to
 // decide whether to emit a reasoning control at all.
 func (e Effort) Reasoning() bool {
-	switch e {
-	case EffortMinimal, EffortLow, EffortMedium, EffortHigh:
-		return true
-	default:
-		return false
-	}
+	return e.rank() >= 0
 }
 
 func (e Effort) String() string { return string(e) }

@@ -365,7 +365,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "harness: invalid request: message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)"
+          "message": "harness: invalid request: message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)"
         }
       }
     },

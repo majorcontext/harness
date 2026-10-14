@@ -6,6 +6,7 @@ package modelmeta
 var anthropicContextWindows = map[string]int{
 	"claude-a-1": 200000,
 	"claude-a-2": 1000000,
+	"claude-a-3": 1000000,
 }
 
 // openaiContextWindows holds models.dev "openai" entries, keyed by model ID.

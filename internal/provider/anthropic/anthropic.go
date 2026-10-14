@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
 )
@@ -60,6 +61,11 @@ type Client struct {
 }
 
 func (c *Client) Name() string { return Family }
+
+// EffortControl returns the effort control of an Anthropic model id.
+func (c *Client) EffortControl(model string) (modelmeta.EffortControl, bool) {
+	return modelmeta.AnthropicEfforts(model)
+}
 
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
 	if c.APIKey == "" && c.HTTPClient == nil {

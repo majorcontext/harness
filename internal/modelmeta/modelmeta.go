@@ -95,21 +95,24 @@ var codexModels = []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-lun
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves,
 // with the name that a client shows for each.
 var claudeCodeModels = []Model{
-	{ID: "fable", Name: "Claude Fable (Claude Code)", Efforts: allEfforts},
-	{ID: "haiku", Name: "Claude Haiku (Claude Code)", Efforts: allEfforts},
-	{ID: "opus", Name: "Claude Opus (Claude Code)", Efforts: allEfforts},
-	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: allEfforts},
+	{ID: "fable", Name: "Claude Fable (Claude Code)", Efforts: claudeCodeEfforts},
+	{ID: "haiku", Name: "Claude Haiku (Claude Code)", Efforts: claudeCodeEfforts},
+	{ID: "opus", Name: "Claude Opus (Claude Code)", Efforts: claudeCodeEfforts},
+	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: claudeCodeEfforts},
 }
 
-// allEfforts are the levels of a model whose backend decides what it takes.
-var allEfforts = []string{"off", "minimal", "low", "medium", "high"}
+// claudeCodeEfforts are the levels of a model whose backend decides what it takes.
+var claudeCodeEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // modelInfo holds the models.dev facts of one chat model. A model that is not
 // listed is deprecated or cannot call tools.
 type modelInfo struct {
 	name, description, released string
 	efforts                     []string
-	listed                      bool
+	// effortField is true when the model takes a level as a wire effort field,
+	// and budgetTokens is true when it takes a thinking budget.
+	effortField, budgetTokens bool
+	listed                    bool
 	// noImageInput is set when models.dev lists the input modalities of the model and image is not one.
 	noImageInput bool
 }
@@ -123,7 +126,7 @@ type Model struct {
 	// Description is one line about the model, or empty when unknown.
 	Description string
 	// Efforts are the effort levels that the model supports, from off to
-	// high. It is empty for a model that has no reasoning control.
+	// max. It is empty for a model that has no reasoning control.
 	Efforts []string
 }
 
@@ -321,4 +324,43 @@ func stripBedrockAnthropicPrefix(model string) (suffix string, isAnthropic bool)
 		return "", false
 	}
 	return rest, true
+}
+
+// EffortControl is how a model takes a reasoning level.
+type EffortControl struct {
+	// Levels are the levels that the model lists.
+	Levels []string
+	// Field is true when the model takes a level as a wire effort field.
+	Field bool
+	// Budget is true when the model takes a thinking budget.
+	Budget bool
+}
+
+// AnthropicEfforts returns the effort control of an Anthropic model id, with
+// a Bedrock-style id and a routing namespace read as the model they name. It
+// returns false for a model that the table does not hold.
+func AnthropicEfforts(model string) (EffortControl, bool) {
+	model = lastPathSegment(model)
+	if suffix, bedrock := stripBedrockAnthropicPrefix(model); bedrock {
+		model = suffix
+	}
+	return controlOf(anthropicInfo, stripBedrockVersionSuffix(model))
+}
+
+// OpenAIEfforts returns the effort control of an OpenAI model id, or false for
+// a model that the table does not hold.
+func OpenAIEfforts(model string) (EffortControl, bool) {
+	model = strings.TrimPrefix(lastPathSegment(model), "openai.")
+	return controlOf(openaiInfo, model)
+}
+
+// ClaudeCodeEfforts returns the levels that the Claude Code CLI takes.
+func ClaudeCodeEfforts() []string { return slices.Clone(claudeCodeEfforts) }
+
+func controlOf(info map[string]modelInfo, id string) (EffortControl, bool) {
+	i, ok := info[id]
+	if !ok {
+		return EffortControl{}, false
+	}
+	return EffortControl{Levels: slices.Clone(i.efforts), Field: i.effortField, Budget: i.budgetTokens}, true
 }

@@ -69,7 +69,9 @@ type Request struct {
 	MaxTokens      int // the response cap; 0 when the request sends none
 	ThinkingType   string
 	ThinkingBudget int
-	ServiceTier    string
+	// Effort is the output_config effort. Only the Anthropic wire fills it.
+	Effort      string
+	ServiceTier string
 	// Temperature and TopP are nil when the request sends none. Only the Anthropic wire fills them.
 	Temperature, TopP *float64
 	Messages          []Message

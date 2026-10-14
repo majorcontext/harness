@@ -60,17 +60,32 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 	if err != nil {
 		return turn.Capabilities{}
 	}
+	control, _ := b.effortControl(ref)
 	if b.window > 0 {
-		return turn.Capabilities{ContextWindow: b.window}
+		return turn.Capabilities{ContextWindow: b.window, Efforts: control.Levels}
 	}
 	window, ok := modelmeta.ContextWindow(ref)
 	if ok {
-		return turn.Capabilities{ContextWindow: window}
+		return turn.Capabilities{ContextWindow: window, Efforts: control.Levels}
 	}
 	if _, seen := warned.LoadOrStore(model, true); !seen {
 		b.log.Warn("harness: the model has no known context window, so it runs on the default", "model", model, "window", defaultContextWindow)
 	}
-	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true}
+	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true, Efforts: control.Levels}
+}
+
+// effortSource is a provider client that knows the effort control of its models.
+type effortSource interface {
+	EffortControl(model string) (modelmeta.EffortControl, bool)
+}
+
+// effortControl returns the effort control of ref from the client, or false
+// when the client does not know the model.
+func (b *Backend) effortControl(ref modelref.ModelRef) (modelmeta.EffortControl, bool) {
+	if s, ok := b.client.(effortSource); ok {
+		return s.EffortControl(ref.Model)
+	}
+	return modelmeta.EffortControl{}, false
 }
 
 // Run makes one model call on the history of req and reports its assistant item.
@@ -203,6 +218,8 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	if err != nil {
 		return nil, err
 	}
+	control, _ := b.effortControl(ref)
+	effort = effort.Fit(control.Levels)
 	msgs := make([]message.Message, len(req.History))
 	for i, m := range req.History {
 		msgs[i], err = b.toMessage(ctx, req, m)
@@ -218,7 +235,7 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, ServiceTier: req.Settings.ServiceTier,
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ServiceTier: req.Settings.ServiceTier,
 		SessionKey:  req.SessionID,
 		Temperature: req.Temperature, TopP: req.TopP}
 	if req.Instructions != "" {

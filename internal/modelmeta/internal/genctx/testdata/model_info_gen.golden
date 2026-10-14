@@ -10,14 +10,15 @@ var providerNames = map[string]string{
 
 // anthropicInfo holds the facts of the models.dev "anthropic" chat models, keyed by model ID.
 var anthropicInfo = map[string]modelInfo{
-	"claude-a-1": {name: "Claude A 1", description: "Budget model.", released: "2025-10-15", efforts: []string{"off", "minimal", "low", "medium", "high"}, listed: true},
-	"claude-a-2": {name: "Claude A 2", description: "Toggle and effort model.", released: "2026-06-29", efforts: []string{"off", "low", "medium", "high"}, listed: true},
+	"claude-a-1": {name: "Claude A 1", description: "Budget model.", released: "2025-10-15", efforts: []string{"off", "minimal", "low", "medium", "high"}, budgetTokens: true, listed: true},
+	"claude-a-2": {name: "Claude A 2", description: "Toggle and effort model.", released: "2026-06-29", efforts: []string{"off", "low", "medium", "high", "xhigh", "max"}, effortField: true, listed: true},
+	"claude-a-3": {name: "Claude A 3", description: "Effort and budget model.", released: "2026-02-17", efforts: []string{"off", "minimal", "low", "medium", "high", "max"}, effortField: true, budgetTokens: true, listed: true},
 }
 
 // openaiInfo holds the facts of the models.dev "openai" chat models, keyed by model ID.
 var openaiInfo = map[string]modelInfo{
 	"gpt-x":        {name: "GPT X", description: "Deprecated model.", released: "2024-01-01", efforts: []string{}, listed: false},
 	"gpt-x-chat":   {name: "GPT X Chat", description: "No tools.", released: "2025-01-01", efforts: []string{}, listed: false},
-	"gpt-x-new":    {name: "GPT X New", description: "Effort model.", released: "2026-09-22", efforts: []string{"off", "low", "high"}, listed: true},
+	"gpt-x-new":    {name: "GPT X New", description: "Effort model.", released: "2026-09-22", efforts: []string{"off", "low", "high"}, effortField: true, listed: true},
 	"gpt-x-opaque": {name: "GPT X Opaque", description: "Reasoning with no usable option.", released: "2025-06-01", efforts: []string{"off", "minimal", "low", "medium", "high"}, listed: true},
 }

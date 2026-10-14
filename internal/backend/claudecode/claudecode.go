@@ -21,6 +21,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -80,7 +81,7 @@ func New(p config.Provider, system []string, workDir string, servers map[string]
 // owns its context and the MCP servers, and takes steer input. It reports
 // the context window itself.
 func (b *Backend) Capabilities(string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins)}
+	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts()}
 }
 
 // Run runs one turn of the CLI on the external session in the saved state. A
@@ -337,6 +338,10 @@ func effortArg(e modelref.Effort) (string, bool) {
 		return "medium", true
 	case modelref.EffortHigh:
 		return "high", true
+	case modelref.EffortXHigh:
+		return "xhigh", true
+	case modelref.EffortMax:
+		return "max", true
 	}
 	return "", false
 }
