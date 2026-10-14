@@ -257,10 +257,14 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 }
 
 // infoTables lists the tables of model facts. A table holds the chat models
-// of one models.dev provider.
-var infoTables = []struct{ varName, provider string }{
-	{"anthropicInfo", "anthropic"},
-	{"openaiInfo", "openai"},
+// of one models.dev provider. offTypes is true when modelmeta reads the
+// offType of the thinking-disable table of the provider.
+var infoTables = []struct {
+	varName, provider string
+	offTypes          bool
+}{
+	{"anthropicInfo", "anthropic", true},
+	{"openaiInfo", "openai", false},
 }
 
 // latestSuffix marks the undated alias of a model in a models.dev name.
@@ -356,26 +360,30 @@ func noImageLiteral(input []string) string {
 	return ", noImageInput: true"
 }
 
-// writeOffTypes writes the map of each provider whose thinking-disable table holds a model that sends a thinking type other than "disabled" for off. An unknown offType is an error.
+// writeOffTypes writes anthropicThinkingOffType, the model ids whose off level sends a thinking type other than "disabled". The map is empty when no entry sets one. An unknown offType, or an offType in a table that modelmeta does not read, is an error.
 func writeOffTypes(buf *bytes.Buffer, ovr overrides) error {
 	for _, t := range infoTables {
-		disableTable := t.provider + thinkingDisableSuffix
-		var ids []string
-		for _, id := range slices.Sorted(maps.Keys(ovr[disableTable])) {
-			switch ovr[disableTable][id].OffType {
-			case "", offTypeDisabled:
-			case offTypeBetweenTools:
-				ids = append(ids, id)
-			default:
-				return fmt.Errorf("%s[%q] has unknown offType %q", disableTable, id, ovr[disableTable][id].OffType)
+		table := t.provider + thinkingDisableSuffix
+		for _, id := range slices.Sorted(maps.Keys(ovr[table])) {
+			switch typ := ovr[table][id].OffType; {
+			case typ == "":
+			case !t.offTypes:
+				return fmt.Errorf("%s[%q] sets offType, which modelmeta does not read for this provider", table, id)
+			case typ != offTypeDisabled && typ != offTypeBetweenTools:
+				return fmt.Errorf("%s[%q] has unknown offType %q", table, id, typ)
 			}
 		}
-		if len(ids) == 0 {
+	}
+	for _, t := range infoTables {
+		if !t.offTypes {
 			continue
 		}
+		table := ovr[t.provider+thinkingDisableSuffix]
 		fmt.Fprintf(buf, "\n// %sThinkingOffType holds the thinking type that the off level sends in place of %q for a model of the %s provider.\nvar %sThinkingOffType = map[string]string{\n", t.provider, offTypeDisabled, t.provider, t.provider)
-		for _, id := range ids {
-			fmt.Fprintf(buf, "\t%q: %q,\n", id, ovr[disableTable][id].OffType)
+		for _, id := range slices.Sorted(maps.Keys(table)) {
+			if typ := table[id].OffType; typ != "" && typ != offTypeDisabled {
+				fmt.Fprintf(buf, "\t%q: %q,\n", id, typ)
+			}
 		}
 		buf.WriteString("}\n")
 	}

@@ -327,6 +327,9 @@ func stripBedrockAnthropicPrefix(model string) (suffix string, isAnthropic bool)
 	return rest, true
 }
 
+// offThinkingDisabled is the thinking type that off sends unless the model names another.
+const offThinkingDisabled = "disabled"
+
 // EffortControl is how a model takes a reasoning level.
 type EffortControl struct {
 	// Levels are the levels that the model lists.
@@ -355,7 +358,7 @@ func AnthropicEfforts(model string) (EffortControl, bool) {
 	c, ok := controlOf(anthropicInfo, model)
 	c.ThinksByDefault = ok && c.Field && !c.Budget && !thinkingOffByDefault[model]
 	if c.ThinksByDefault && slices.Contains(c.Levels, "off") {
-		c.OffThinking = cmp.Or(anthropicThinkingOffType[model], "disabled")
+		c.OffThinking = cmp.Or(anthropicThinkingOffType[model], offThinkingDisabled)
 	}
 	return c, ok
 }
