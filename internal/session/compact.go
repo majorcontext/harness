@@ -139,6 +139,11 @@ func (a *Actor) recordUsage(u protocol.Usage) error {
 	return a.append(protocol.ContextMeasured{Usage: u})
 }
 
+// stopsByRequest reports whether cause is an interrupt or the end of the session, the stops that a compaction reports as canceled.
+func stopsByRequest(cause error) bool {
+	return errors.Is(cause, errStopTurn) || errors.Is(cause, errEndTurn)
+}
+
 // compacted appends the summary of run r, then starts the next queued
 // input with no new compaction. A failed summary appends only its usage.
 func (a *Actor) compacted(r *running, c protocol.CompactionApplied, runErr error) {
@@ -160,7 +165,7 @@ func (a *Actor) compacted(r *running, c protocol.CompactionApplied, runErr error
 	}
 	status := protocol.StatusIdle
 	switch {
-	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(cause, errStopTurn) || errors.Is(cause, errEndTurn)):
+	case runErr != nil && (errors.Is(runErr, context.Canceled) || stopsByRequest(cause)):
 		status = protocol.StatusCompactionCanceled
 	case runErr != nil || appendErr != nil:
 		status = protocol.StatusCompactionFailed
