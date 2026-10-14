@@ -52,14 +52,14 @@ func (a *codexAuthRun) secrets() []string {
 	return append(a.issuer.Secrets(), a.tokens...)
 }
 
-// holdsSecret returns the first of secrets that text holds.
-func holdsSecret(text string, secrets []string) (string, bool) {
+// holdsSecret reports whether text holds one of secrets.
+func holdsSecret(text string, secrets []string) bool {
 	for _, s := range secrets {
 		if s != "" && strings.Contains(text, s) {
-			return s, true
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 func (a *codexAuthRun) write(t *testing.T, label string, lifetime time.Duration, refresh string) {
@@ -256,7 +256,7 @@ func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 	}
 	state["error_says_login"] = strings.Contains(msg, "run `harness login codex`")
 	logs := r.drv.Stderr() + msg
-	_, leak := holdsSecret(logs, secrets)
+	leak := holdsSecret(logs, secrets)
 	state["secret_in_error_or_log"] = leak
 	if a.stable {
 		delete(state, "refreshes")

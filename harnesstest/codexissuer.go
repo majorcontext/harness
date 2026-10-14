@@ -137,11 +137,13 @@ func s256(verifier string) string {
 
 // Secrets lists the exact values that a leak check must not find: the access
 // token, id token, and refresh token of every answer, the claims segment of
-// each JWT, the initial refresh token, and the authorization code.
+// each JWT, the PKCE verifier of each code grant, the initial refresh token,
+// the codes of both sign-in flows, and the JWT header that every fake token
+// starts with. The header makes a cut token match.
 func (i *CodexIssuer) Secrets() []string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return append([]string{CodexInitialRefresh, CodexAuthCode}, i.minted...)
+	return append([]string{CodexInitialRefresh, CodexAuthCode, codexDeviceCd, codexDeviceVerifier, jwtHeader()}, i.minted...)
 }
 
 // URL is the base URL of the issuer.
@@ -172,11 +174,13 @@ func (i *CodexIssuer) account() string {
 
 // FakeJWT returns an unsigned JWT with claims.
 func FakeJWT(claims map[string]any) string {
-	enc := func(v any) string {
-		b, _ := json.Marshal(v)
-		return base64.RawURLEncoding.EncodeToString(b)
-	}
-	return enc(map[string]string{"alg": "none"}) + "." + enc(claims) + ".sig"
+	b, _ := json.Marshal(claims)
+	return jwtHeader() + "." + base64.RawURLEncoding.EncodeToString(b) + ".sig"
+}
+
+func jwtHeader() string {
+	b, _ := json.Marshal(map[string]string{"alg": "none"})
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // AccessToken returns an access token with the label, an account claim, and
@@ -284,6 +288,9 @@ func (i *CodexIssuer) token(w http.ResponseWriter, r *http.Request) {
 			i.issue(w, next)
 		}
 	case "authorization_code":
+		if f["code_verifier"] != "" {
+			i.minted = append(i.minted, f["code_verifier"])
+		}
 		want := i.challenge
 		if f["code"] == codexDeviceCd {
 			want = s256(codexDeviceVerifier)

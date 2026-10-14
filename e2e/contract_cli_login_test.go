@@ -28,7 +28,7 @@ func loginHost(t *testing.T, opts harnesstest.CodexIssuerOptions) (*cliHost, *ha
 
 func noSecret(t *testing.T, issuer *harnesstest.CodexIssuer, what, text string) {
 	t.Helper()
-	if _, leak := holdsSecret(text, issuer.Secrets()); leak {
+	if holdsSecret(text, issuer.Secrets()) {
 		t.Errorf("%s holds a token:\n%s", what, text)
 	}
 }
