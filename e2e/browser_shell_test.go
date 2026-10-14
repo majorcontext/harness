@@ -19,6 +19,7 @@ func (k *browserKit) shellRows() {
 		ftTool("bash", ftArgs("command", "jq '[.people[].age] | add' people.json")),
 		ftTool("bash", ftArgs("command", "curl -s https://example.com")),
 		ftTool("bash", ftArgs("command", "while true; do :; done")),
+		ftTool("bash", ftArgs("command", "cat /work")),
 	)
 	f := newBrowserFront(t, nil, steps...)
 	add("the shell tool and h.fs share the work directory with the file tools", map[string]any{"kind": "shell", "baseURL": f.URL}, func(t *testing.T, res browserResult, _ string) {
@@ -27,11 +28,15 @@ func (k *browserKit) shellRows() {
 			t.Fatalf("stopReason = %q, error %+v, console %v", res.StopReason, res.Error, res.Console)
 		}
 		reqs := f.fake.Requests()
-		if len(reqs) != 9 {
-			t.Fatalf("model requests = %d, want 9", len(reqs))
+		if len(reqs) != 10 {
+			t.Fatalf("model requests = %d, want 10", len(reqs))
 		}
 		if n := strings.Count(strings.Join(reqs[0].Tools, " ")+" ", "bash "); n != 1 {
 			t.Errorf("tools of the first request = %v, want one bash", reqs[0].Tools)
+		}
+		spec := reqs[0].ToolSpecs["bash"]
+		if !strings.Contains(spec.Description, "sandboxed shell") || !strings.Contains(string(spec.InputSchema), `"command"`) {
+			t.Errorf("bash tool of the first request = %+v, want the shell description and the command schema", spec)
 		}
 		for i, want := range map[int]string{
 			2: "banana\napple\ncherry",
@@ -40,6 +45,7 @@ func (k *browserKit) shellRows() {
 			6: "58",
 			7: "command not found",
 			8: "[exit 126]",
+			9: "cat: /work: ",
 		} {
 			if got := requestText(reqs[i]); !strings.Contains(got, want) {
 				t.Errorf("request %d lacks %q: %s", i, want, got)
@@ -68,6 +74,7 @@ func checkHostFs(t *testing.T, res browserResult) {
 			RenamedText string
 			RemovedCode string
 			MissingCode string
+			DirReadCode string
 			Tmp         string
 			ForceOK     bool
 			NotEmpty    string
@@ -92,6 +99,9 @@ func checkHostFs(t *testing.T, res browserResult) {
 	}
 	if fs.RemovedCode != "ENOENT" || fs.MissingCode != "ENOENT" || !fs.ForceOK || fs.NotEmpty != "ENOTEMPTY" {
 		t.Errorf("h.fs remove: %+v", fs)
+	}
+	if fs.DirReadCode != "EISDIR" {
+		t.Errorf("h.fs readFile of a directory gave code %q, want EISDIR", fs.DirReadCode)
 	}
 	if fs.Tmp != "tmp" {
 		t.Errorf("h.fs in /tmp read %q", fs.Tmp)

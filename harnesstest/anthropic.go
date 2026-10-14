@@ -28,7 +28,9 @@ type wireRequest struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
 	Tools []struct {
-		Name string `json:"name"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"input_schema"`
 	} `json:"tools"`
 }
 
@@ -61,6 +63,10 @@ func decodeRequest(body []byte) (Request, error) {
 	}
 	for _, t := range w.Tools {
 		req.Tools = append(req.Tools, t.Name)
+		if req.ToolSpecs == nil {
+			req.ToolSpecs = map[string]ToolSpec{}
+		}
+		req.ToolSpecs[t.Name] = ToolSpec{Description: t.Description, InputSchema: t.InputSchema}
 	}
 	sort.Strings(req.Tools)
 

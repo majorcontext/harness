@@ -53,7 +53,9 @@ const h = await createHarness({
 
 The tool takes `{command}` and returns stdout, stderr, and the exit code. The working directory is `/work`; `/tmp` is mounted when the module has it. There is no network (`curl` does not exist), no process, no symbolic link, no version control, and no `tar`. Each call starts a new shell: `cd` and variables end with the call. A call stops after `timeoutMs` (default 10000) or `maxCommands` (default 10000), and each of stdout and stderr is cut to `maxOutput` characters (default 20000). The tool takes `h.fs` from the harness, so it needs no reference to `h`.
 
-just-bash has a browser build, `just-bash/browser`, which has dependencies of its own. A bundler resolves it. Without a bundler, pass `load` with your own build: `shellTool({ load: () => import("/vendor/just-bash.js") })`. The tool does not allow the network, and nothing here lets a caller turn it on.
+The default `load` is `import("just-bash/browser")`. That build has dependencies of its own and imports the names `gzipSync`, `gunzipSync`, and `constants` from `node:zlib`, which a browser bundler cannot resolve. Bundle it with `node:zlib` aliased to the stub of this package, `@majorcontext/harness-embed/zlib-stub`; with the stub, `gzip`, `gunzip`, and `zcat` fail with "gzip is not available in the browser" and no other command is affected. With esbuild: `alias: { "node:zlib": "@majorcontext/harness-embed/zlib-stub" }` (the test fixture builds this way). Vite (`resolve.alias`) and webpack 5 (`resolve.alias`) take the same alias; they are not tested here. Without a bundler, build just-bash once that way, serve the file, and pass `load`: `shellTool({ load: () => import("/vendor/just-bash.js") })`. The tool does not allow the network, and nothing here lets a caller turn it on.
+
+Every page tool gets `fs`, and `fs` can write `/persist`, the session store of the harness. Give `fs` only to code that you trust, and do not pass it to code that takes input from the model. The shell tool mounts `/work` and `/tmp` only.
 
 ## Reach a model
 

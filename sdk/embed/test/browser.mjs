@@ -8,6 +8,7 @@
 // pages in its context, its tabs, through the tab function: open returns an id,
 // run evaluates a tab operation of page.mjs in the tab, reload and close act on it.
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
 import { chromium } from "playwright";
@@ -16,7 +17,7 @@ import { build } from "esbuild";
 const { origin, rows, modulePath } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 
 // justBash bundles just-bash for the page, once, when the first row asks for it.
-// A browser cannot resolve its bare imports, and node:zlib has no browser build.
+// This is the bundler setup that the README documents: node:zlib is aliased to the stub of the package.
 let justBash;
 const bundleJustBash = () =>
   (justBash ??= build({
@@ -26,15 +27,12 @@ const bundleJustBash = () =>
     platform: "browser",
     minify: true,
     write: false,
-    plugins: [{ name: "no-zlib", setup: (b) => {
-      b.onResolve({ filter: /^node:zlib$/ }, () => ({ path: "zlib", namespace: "stub" }));
-      b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({ contents: "export const gunzipSync = null, gzipSync = null, constants = {}; export default {};", loader: "js" }));
-    } }],
+    alias: { "node:zlib": fileURLToPath(new URL("../src/zlib-stub.mjs", import.meta.url)) },
   }).then((r) => r.outputFiles[0].text));
 
 async function runRow(browser, row) {
   const context = await browser.newContext();
-  // A route makes the browser skip the CORS preflight of its context, so only the rows that load the bundle have one.
+  // A route on a context stops Chromium from sending the CORS preflight of that context, so only the shell row has one.
   if (row.kind === "shell") {
     await context.route("**/vendor/just-bash.js", async (route) =>
       route.fulfill({ contentType: "text/javascript", body: await bundleJustBash() }));

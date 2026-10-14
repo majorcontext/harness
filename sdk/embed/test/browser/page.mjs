@@ -267,6 +267,7 @@ const rows = {
     out.renamedText = await text("/work/d/c.txt");
     await fs.rm("/work/d", { recursive: true });
     out.removedCode = await code(fs.stat("/work/d"));
+    out.dirReadCode = await code(fs.readFile("/work"));
     out.missingCode = await code(fs.readFile("/work/missing"));
     out.forceOK = (await code(fs.rm("/work/missing", { force: true }))) === "";
     await fs.writeFile("/tmp/x.txt", "tmp");

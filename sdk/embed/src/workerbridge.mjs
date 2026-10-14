@@ -19,7 +19,9 @@ async function readWhole(path) {
   const fs = globalThis.fs;
   const fd = await call(fs.open, path, 0, 0);
   try {
-    const size = (await call(fs.fstat, fd)).size;
+    const info = await call(fs.fstat, fd);
+    if (info.isDirectory()) throw Object.assign(new Error(`EISDIR: illegal operation on a directory, read '${path}'`), { code: "EISDIR" });
+    const size = info.size;
     const bytes = new Uint8Array(size);
     let offset = 0;
     while (offset < size) {

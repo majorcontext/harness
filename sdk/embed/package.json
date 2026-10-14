@@ -12,6 +12,9 @@
     "./shell": {
       "types": "./src/shell.d.ts",
       "default": "./src/shell.mjs"
+    },
+    "./zlib-stub": {
+      "default": "./src/zlib-stub.mjs"
     }
   },
   "files": [

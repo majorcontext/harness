@@ -11,9 +11,10 @@ const description =
   "Each call starts a new shell: cd and variables do not last to the next call. " +
   "A long or endless command stops at a limit.";
 
-const schema = { type: "object", properties: { command: { type: "string", description: "The command line." } }, required: ["command"] };
+// outputHeadroom lets a command write more than maxOutput before just-bash stops it, so that the result still shows the head and the tail.
+const outputHeadroom = 8;
 
-const perFs = new WeakMap();
+const schema = { type: "object", properties: { command: { type: "string", description: "The command line." } }, required: ["command"] };
 
 function clip(text, max) {
   if (text.length <= max) return text;
@@ -29,14 +30,14 @@ async function isDirectory(fs, path) {
   }
 }
 
-async function createBash(fs, { load, maxCommands, timeoutMs }) {
+async function createBash(fs, { load, maxCommands, timeoutMs, maxOutput }) {
   const { Bash, InMemoryFs, MountableFs } = await load();
   const mounts = [{ mountPoint: "/work", filesystem: shellFs(fs, "/work") }];
   if (await isDirectory(fs, "/tmp")) mounts.push({ mountPoint: "/tmp", filesystem: shellFs(fs, "/tmp") });
   return new Bash({
     fs: new MountableFs({ base: new InMemoryFs(), mounts }),
     cwd: "/work",
-    executionLimits: { maxCommandCount: maxCommands, maxLoopIterations: maxCommands, maxExecutionTimeMs: timeoutMs },
+    executionLimits: { maxCommandCount: maxCommands, maxLoopIterations: maxCommands, maxExecutionTimeMs: timeoutMs, maxOutputSize: maxOutput * outputHeadroom },
   });
 }
 
@@ -47,9 +48,12 @@ async function createBash(fs, { load, maxCommands, timeoutMs }) {
  * tool name (default bash). load returns the just-bash module and defaults to
  * import("just-bash/browser"), which a bundler or an import map resolves.
  * timeoutMs and maxCommands limit one call; maxOutput clips stdout and stderr
- * each. The shell has no network.
+ * each, and the command stops at 8 times that size while it runs. Each tool keeps one
+ * shell for each harness, so two tools have their own limits. The shell has no
+ * network.
  */
 export function shellTool({ name = "bash", load = () => import("just-bash/browser"), timeoutMs = 10000, maxCommands = 10000, maxOutput = 20000 } = {}) {
+  const perFs = new WeakMap();
   return {
     name,
     description,
@@ -59,7 +63,7 @@ export function shellTool({ name = "bash", load = () => import("just-bash/browse
       if (typeof input?.command !== "string") throw new Error("command must be a string");
       let bash = perFs.get(fs);
       if (!bash) {
-        bash = createBash(fs, { load, maxCommands, timeoutMs });
+        bash = createBash(fs, { load, maxCommands, timeoutMs, maxOutput });
         perFs.set(fs, bash);
         bash.catch(() => perFs.delete(fs));
       }
