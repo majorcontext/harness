@@ -37,11 +37,14 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", async () => {
   if (pending !== "") send(pending);
+  let code = 0;
   try {
     await sending;
     await page.evaluate(() => globalThis.endHarness());
-  } finally {
-    await Promise.race([browser.close(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
-    process.stdout.write("", () => process.exit(0));
+  } catch (err) {
+    process.stderr.write("host failed: " + String(err?.stack ?? err) + "\n");
+    code = 1;
   }
+  await Promise.race([browser.close(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
+  process.stdout.write("", () => process.exit(code));
 });
