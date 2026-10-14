@@ -57,6 +57,12 @@ func (o *LoginOptions) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}
 }
 
+// Client returns a client over rt that follows no redirect and gives up after 30 s. A host that has its own
+// transport, such as a WebAssembly host, sends the requests to the issuer through it.
+func Client(rt http.RoundTripper) *http.Client {
+	return &http.Client{Transport: rt, Timeout: 30 * time.Second, CheckRedirect: noRedirect}
+}
+
 func randomSecret() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -183,8 +189,25 @@ func waitForCallback(ctx context.Context, ln net.Listener, state string) (string
 	}
 }
 
-// LoginDevice runs the device code flow: it prints a code and the URL where the user enters it, then polls until the user did.
-func LoginDevice(ctx context.Context, o LoginOptions) error {
+// DeviceCode is a device sign-in that the issuer started and the user has not finished.
+type DeviceCode struct {
+	// UserCode is the one-time code that the user enters.
+	UserCode string
+	// VerificationURL is the page where the user enters the code.
+	VerificationURL string
+
+	o        LoginOptions
+	id       string
+	interval time.Duration
+}
+
+// URL returns the verification page with the user code filled in.
+func (d *DeviceCode) URL() string {
+	return d.VerificationURL + "?" + url.Values{"user_code": {d.UserCode}}.Encode()
+}
+
+// StartDevice asks the issuer for a device code. It reads and writes no file.
+func StartDevice(ctx context.Context, o LoginOptions) (*DeviceCode, error) {
 	api := o.issuer() + "/api/accounts/deviceauth"
 	var uc struct {
 		DeviceAuthID string          `json:"device_auth_id"`
@@ -195,24 +218,39 @@ func LoginDevice(ctx context.Context, o LoginOptions) error {
 	status, err := postJSON(ctx, o.client(), api+"/usercode", map[string]string{"client_id": ClientID}, &uc)
 	switch {
 	case err != nil:
-		return err
+		return nil, err
 	case status == http.StatusNotFound:
-		return errors.New("codex login: device code sign-in is not enabled for this account; use the browser sign-in")
+		return nil, errors.New("codex login: device code sign-in is not enabled for this account; use the browser sign-in")
 	case status != http.StatusOK:
-		return fmt.Errorf("codex login: the device code request failed: HTTP %d", status)
+		return nil, fmt.Errorf("codex login: the device code request failed: HTTP %d", status)
 	}
 	if uc.UserCode == "" {
 		uc.UserCode = uc.Alias
 	}
 	if uc.UserCode == "" || uc.DeviceAuthID == "" {
-		return errors.New("codex login: the device code answer is incomplete")
+		return nil, errors.New("codex login: the device code answer is incomplete")
 	}
-	_, _ = fmt.Fprintf(o.Out, "Follow these steps to sign in with ChatGPT:\n\n1. Open this link in your browser and sign in:\n   %s/codex/device\n\n2. Enter this one-time code (it expires in 15 minutes):\n   %s\n\nContinue only if you started this sign-in.\n", o.issuer(), uc.UserCode)
-	grant, err := pollDevice(ctx, o, api+"/token", uc.DeviceAuthID, uc.UserCode, intervalOf(uc.Interval))
+	return &DeviceCode{UserCode: uc.UserCode, VerificationURL: o.issuer() + "/codex/device", o: o, id: uc.DeviceAuthID, interval: intervalOf(uc.Interval)}, nil
+}
+
+// Wait polls the issuer at the interval that it gave, until the user enters the code or the sign-in expires. Then it exchanges the grant and stores the login.
+func (d *DeviceCode) Wait(ctx context.Context) error {
+	o := d.o
+	grant, err := pollDevice(ctx, o, o.issuer()+"/api/accounts/deviceauth/token", d.id, d.UserCode, d.interval)
 	if err != nil {
 		return err
 	}
 	return exchange(ctx, o, "authorization_code", grant.AuthorizationCode, grant.CodeVerifier, o.issuer()+"/deviceauth/callback")
+}
+
+// LoginDevice runs the device code flow: it prints a code and the URL where the user enters it, then polls until the user did.
+func LoginDevice(ctx context.Context, o LoginOptions) error {
+	d, err := StartDevice(ctx, o)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(o.Out, "Follow these steps to sign in with ChatGPT:\n\n1. Open this link in your browser and sign in:\n   %s\n\n2. Enter this one-time code (it expires in 15 minutes):\n   %s\n\nContinue only if you started this sign-in.\n", d.VerificationURL, d.UserCode)
+	return d.Wait(ctx)
 }
 
 // intervalOf reads the poll interval, which the issuer sends as a string or a number.

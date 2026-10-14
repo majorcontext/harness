@@ -502,6 +502,14 @@ func (c *Conn) cancelRequest(params json.RawMessage) {
 	}
 }
 
+type requestIDKey struct{}
+
+// RequestID returns the JSON-RPC id of the request that ctx belongs to, as the peer wrote it, or nil outside a request.
+func RequestID(ctx context.Context) json.RawMessage {
+	id, _ := ctx.Value(requestIDKey{}).(json.RawMessage)
+	return id
+}
+
 var errRequestCancelled = errors.New("rpc: request cancelled by the peer")
 
 func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGroup) {
@@ -516,6 +524,7 @@ func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGro
 	}
 	c.running[key] = cancel
 	c.mu.Unlock()
+	rctx = context.WithValue(rctx, requestIDKey{}, m.ID)
 	if ad, ok := h.(Admitter); ok {
 		rctx = ad.Admit(rctx, *m.Method, m.Params)
 	}

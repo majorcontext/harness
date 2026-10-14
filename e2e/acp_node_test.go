@@ -176,7 +176,7 @@ func startACPNodeOpts(t *testing.T, opts nodeHostOptions) (io.WriteCloser, io.Re
 const (
 	nodeMCPOff = `"mcpCapabilities":{"http":false`
 	nodeMCPOn  = `"mcpCapabilities":{"http":true`
-	// nodeAuthMethods is the authMethods of the native hosts, for the wasm host, which offers no login.
+	// nodeAuthMethods is the authMethods of the native hosts, for the wasm host, which offers a login only to a client with elicitation.url.
 	nodeAuthMethods = `"authMethods":[{"description":"Open your browser and sign in with your ChatGPT subscription.","id":"chatgpt","name":"Log in with ChatGPT"}]`
 )
 

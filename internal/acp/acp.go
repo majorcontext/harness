@@ -48,6 +48,8 @@ type Config struct {
 type RuntimeOptions struct {
 	// AskUserQuestion says that the client answers the question of a session.
 	AskUserQuestion bool
+	// Login says that the connection offers a login to its client.
+	Login bool
 }
 
 // Runtimes gives the adapter the Runtime of a work directory. The host builds
@@ -104,6 +106,8 @@ type agent struct {
 	compaction   atomic.Bool
 	terminalAuth atomic.Bool
 	elicitation  atomic.Bool
+	// urlElicitation is the client capability elicitation.url.
+	urlElicitation atomic.Bool
 
 	mu       sync.Mutex
 	sessions map[string]*held
@@ -212,6 +216,7 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 			} `json:"auth"`
 			Elicitation struct {
 				Form json.RawMessage `json:"form"`
+				URL  json.RawMessage `json:"url"`
 			} `json:"elicitation"`
 		} `json:"clientCapabilities"`
 	}
@@ -220,6 +225,7 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 	}
 	a.terminalAuth.Store(p.ClientCapabilities.Auth.Terminal)
 	a.elicitation.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Elicitation.Form), []byte("{")))
+	a.urlElicitation.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Elicitation.URL), []byte("{")))
 	a.notices.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Notices), []byte("{")))
 	a.compaction.Store(bytes.HasPrefix(bytes.TrimSpace(p.ClientCapabilities.Session.Compaction), []byte("{")))
 	version := LatestVersion

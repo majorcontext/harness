@@ -20,12 +20,39 @@ type Method struct {
 	Logout bool
 }
 
+// ClientAuth is what the client of a connection can do for a login.
+type ClientAuth struct {
+	// Terminal says that the client runs a method of type terminal.
+	Terminal bool
+	// URL says that the client takes an elicitation in URL mode.
+	URL bool
+}
+
+// LoginClient lets a login talk to the user through the client of the connection.
+type LoginClient interface {
+	// ElicitURL asks the client to send the user to url, tied to the authenticate request that ctx belongs to.
+	ElicitURL(ctx context.Context, url, message string) (URLElicitation, error)
+}
+
+// ErrDeclined is the error of an elicitation that the user declined.
+var ErrDeclined = errors.New("the sign-in was declined")
+
+// URLElicitation is an elicitation in URL mode that the client has not completed.
+type URLElicitation interface {
+	// Refused delivers one error when the client declines the elicitation (ErrDeclined), cancels it (context.Canceled), or fails it.
+	Refused() <-chan error
+	// Complete tells the client that the login ended.
+	Complete()
+	// Close withdraws the request when the client has not answered it.
+	Close()
+}
+
 // Auth is the login that the host offers through ACP. The adapter calls it on first use and never at startup.
 type Auth interface {
-	// Methods returns the methods to advertise. It returns a method with Terminal set only when terminal is true.
-	Methods(terminal bool) []Method
-	// Authenticate runs the login of the agent method id. It stops when ctx ends.
-	Authenticate(ctx context.Context, id string) error
+	// Methods returns the methods to advertise. It returns a method with Terminal set only when c.Terminal is true.
+	Methods(c ClientAuth) []Method
+	// Authenticate runs the login of the agent method id. It stops when ctx ends. client reaches the user.
+	Authenticate(ctx context.Context, id string, client LoginClient) error
 	// Logout ends the logins of the methods with Logout set.
 	Logout(ctx context.Context) error
 	// Check fails with an *AuthRequiredError when a session of the work directory cwd needs a login that does not exist.
@@ -45,7 +72,7 @@ func (a *agent) methods() []Method {
 	if a.cfg.Auth == nil {
 		return nil
 	}
-	return a.cfg.Auth.Methods(a.terminalAuth.Load())
+	return a.cfg.Auth.Methods(ClientAuth{Terminal: a.terminalAuth.Load(), URL: a.urlElicitation.Load()})
 }
 
 // authMethods is the authMethods member of the initialize answer.
@@ -90,10 +117,12 @@ func (a *agent) authenticate(ctx context.Context, params json.RawMessage) (any, 
 	if !a.agentMethod(*p.MethodID) {
 		return nil, invalidParams("methodId names no method of the agent type")
 	}
-	if err := a.cfg.Auth.Authenticate(ctx, *p.MethodID); err != nil {
+	if err := a.cfg.Auth.Authenticate(ctx, *p.MethodID, loginClient{conn: a.conn, request: rpc.RequestID(ctx)}); err != nil {
 		switch {
 		case ctx.Err() != nil:
 			return nil, ctx.Err()
+		case errors.Is(err, ErrDeclined):
+			return nil, &rpc.Error{Code: rpc.CodeInternal, Message: err.Error()}
 		case errors.Is(err, context.Canceled):
 			return nil, &rpc.Error{Code: rpc.CodeCancelled, Message: "Request cancelled"}
 		case errors.Is(err, context.DeadlineExceeded):
@@ -147,3 +176,52 @@ func authRequired(msg string) error {
 	}
 	return &rpc.Error{Code: codeAuthRequired, Message: msg, Data: map[string]string{"code": "login_required"}}
 }
+
+// loginClient implements LoginClient over the connection.
+type loginClient struct {
+	conn    *rpc.Conn
+	request json.RawMessage
+}
+
+func (l loginClient) ElicitURL(_ context.Context, url, message string) (URLElicitation, error) {
+	e := &urlElicitation{conn: l.conn, id: "elicit_" + newULID(), refused: make(chan error, 1)}
+	pending, err := l.conn.Start("elicitation/create", map[string]any{"mode": "url", "requestId": l.request, "elicitationId": e.id, "url": url, "message": message})
+	if err != nil {
+		return nil, err
+	}
+	e.pending = pending
+	go e.wait()
+	return e, nil
+}
+
+type urlElicitation struct {
+	conn    *rpc.Conn
+	id      string
+	pending *rpc.Pending
+	refused chan error
+}
+
+// wait reads the answer of the client. An accept says that the user opens the URL, and the login goes on.
+func (e *urlElicitation) wait() {
+	var res struct {
+		Action string `json:"action"`
+	}
+	err := e.pending.Wait(context.Background(), &res)
+	switch {
+	case errors.Is(err, rpc.ErrCancelled):
+	case err != nil:
+		e.refused <- err
+	case res.Action == "decline":
+		e.refused <- ErrDeclined
+	case res.Action == "cancel":
+		e.refused <- context.Canceled
+	}
+}
+
+func (e *urlElicitation) Refused() <-chan error { return e.refused }
+
+func (e *urlElicitation) Complete() {
+	_ = e.conn.Notify("elicitation/complete", map[string]any{"elicitationId": e.id})
+}
+
+func (e *urlElicitation) Close() { e.pending.Cancel() }

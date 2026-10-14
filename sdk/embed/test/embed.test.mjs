@@ -3,6 +3,8 @@
 // module in a worker_threads Worker against a scripted model server. Run with
 // `node --test sdk/embed/test/*.test.mjs` after setting HARNESS_WASM and
 // HARNESS_WASM_EXEC (see support.mjs).
+import fs from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
@@ -241,6 +243,31 @@ test("proxy.headers go to the proxy origin and to no other provider origin", asy
   } finally {
     await h.close();
     direct.close();
+  }
+});
+
+test("proxy.providerBaseURLs sends the native codex requests to the pass-through path with the stored login", async () => {
+  const model = await fakeModel([{ text: "unused" }]);
+  const dir = tempDir();
+  const segment = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = [segment({ alg: "none" }), segment({ exp: Math.floor(Date.now() / 1000) + 3600, "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }), "sig"].join(".");
+  fs.mkdirSync(path.join(dir, "auth"), { mode: 0o700 });
+  fs.writeFileSync(path.join(dir, "auth", "codex.json"), JSON.stringify({ access_token: token, refresh_token: "refresh-1", account_id: "acct-1" }), { mode: 0o600 });
+  const h = await harness({
+    config: { model: "codex/gpt-5.6-sol" },
+    proxy: { providerBaseURLs: { codex: model.url + "/codex" } },
+    store: { persist: true, dir },
+  });
+  try {
+    const c = acpClient(h);
+    await c.prompt(await c.session(), "go").catch(() => {});
+    const request = (await model.requests()).find((r) => r.path === "/codex/responses");
+    assert.ok(request, "the codex request did not reach the pass-through path");
+    assert.equal(request.headers.authorization, "Bearer " + token);
+    assert.equal(request.headers["chatgpt-account-id"], "acct-1");
+  } finally {
+    await h.close();
+    model.close();
   }
 });
 

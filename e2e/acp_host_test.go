@@ -31,7 +31,7 @@ type acpEnv struct {
 	jsTool bool
 	// memoryStore marks a host whose sessions the test cannot read: the browser host keeps them in the Worker.
 	memoryStore bool
-	// wasm marks a wasm host, which offers no login.
+	// wasm marks a wasm host, which offers a login only to a client with elicitation.url.
 	wasm bool
 }
 

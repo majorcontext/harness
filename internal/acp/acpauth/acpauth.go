@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
@@ -49,6 +50,10 @@ type Options struct {
 	Out io.Writer
 	// Env is the environment of the Claude Code CLI. Nil is the environment of the process.
 	Env []string
+	// DeviceCode makes the ChatGPT login the device code flow, which the client shows as an elicitation in URL mode, in place of the browser callback on a loopback port. The login is then offered only to a client with that capability, and only when the config sets codex_auth_file. It has no terminal method, because the host has no command to run.
+	DeviceCode bool
+	// HTTP sends the requests of the device code flow. Nil: a client with a 30 s timeout.
+	HTTP *http.Client
 	// LookPath resolves the program of the Claude Code CLI, as exec.LookPath does. Nil is exec.LookPath.
 	LookPath func(file string) (string, error)
 }
@@ -88,8 +93,8 @@ type target struct {
 }
 
 // targets offers the ChatGPT login always, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
-func (a *Auth) targets(cfg *config.Config) target {
-	t := target{chatgpt: true}
+func (a *Auth) targets(cfg *config.Config, c acp.ClientAuth) target {
+	t := target{chatgpt: !a.opts.DeviceCode || (c.URL && cfg.CodexAuthFile != "")}
 	if bin, ok := cfg.ClaudeCLI(); ok {
 		if _, err := a.opts.LookPath(bin); err == nil {
 			t.claude = bin
@@ -98,17 +103,18 @@ func (a *Auth) targets(cfg *config.Config) target {
 	return t
 }
 
-func (a *Auth) userTargets() target {
+func (a *Auth) userTargets(c acp.ClientAuth) target {
 	cfg, err := a.opts.Config("")
 	if err != nil || cfg == nil {
 		return target{}
 	}
-	return a.targets(cfg)
+	return a.targets(cfg, c)
 }
 
 // Methods implements acp.Auth.
-func (a *Auth) Methods(terminal bool) []acp.Method {
-	t := a.userTargets()
+func (a *Auth) Methods(c acp.ClientAuth) []acp.Method {
+	t := a.userTargets(c)
+	terminal := c.Terminal && !a.opts.DeviceCode
 	var out []acp.Method
 	if t.chatgpt {
 		out = append(out, acp.Method{ID: chatGPT, Name: "Log in with ChatGPT", Description: "Open your browser and sign in with your ChatGPT subscription.", Logout: true})
@@ -130,14 +136,14 @@ func store(cfg *config.Config) codexauth.Store {
 }
 
 // logins runs the login of each agent method.
-var logins = map[string]func(a *Auth, ctx context.Context, cfg *config.Config) error{
+var logins = map[string]func(a *Auth, ctx context.Context, cfg *config.Config, client acp.LoginClient) error{
 	chatGPT:    (*Auth).chatGPTLogin,
 	claudeCode: (*Auth).claudeLogin,
 }
 
 // Authenticate implements acp.Auth. A newer call cancels the one that runs, whatever its method, and waits for it to end.
 // The cancelled call fails with context.Canceled.
-func (a *Auth) Authenticate(ctx context.Context, id string) error {
+func (a *Auth) Authenticate(ctx context.Context, id string, client acp.LoginClient) error {
 	login, ok := logins[id]
 	if !ok {
 		return fmt.Errorf("unknown authentication method %q", id)
@@ -164,10 +170,13 @@ func (a *Auth) Authenticate(ctx context.Context, id string) error {
 	}
 	a.stop = cancel
 	a.mu.Unlock()
-	return login(a, ctx, cfg)
+	return login(a, ctx, cfg, client)
 }
 
-func (a *Auth) chatGPTLogin(ctx context.Context, cfg *config.Config) error {
+func (a *Auth) chatGPTLogin(ctx context.Context, cfg *config.Config, client acp.LoginClient) error {
+	if a.opts.DeviceCode {
+		return a.chatGPTDeviceLogin(ctx, cfg, client)
+	}
 	return codexauth.LoginBrowser(ctx, codexauth.LoginOptions{Store: store(cfg), Issuer: cfg.CodexIssuer, Out: a.opts.Out, Open: a.opts.Open})
 }
 
@@ -179,7 +188,7 @@ func (a *Auth) claudeCmd(ctx context.Context, bin string, args ...string) *exec.
 	return cmd
 }
 
-func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config) error {
+func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config, _ acp.LoginClient) error {
 	bin, _ := cfg.ClaudeCLI()
 	cmd := a.claudeCmd(ctx, bin, "auth", "login")
 	cmd.Stdout, cmd.Stderr = a.opts.Out, a.opts.Out
@@ -221,7 +230,7 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 		if _, err := store(cfg).Load(); codexauth.IsLoginRequired(err) {
 			return &acp.AuthRequiredError{Message: err.Error()}
 		}
-	case p.UsesClaudeCLI() && a.userTargets().claude != "":
+	case p.UsesClaudeCLI() && a.userTargets(acp.ClientAuth{}).claude != "":
 		if ok, known := a.loggedIn(ctx, p.CLIBinary(), fresh); known && !ok {
 			return &acp.AuthRequiredError{Message: "not logged in to Claude Code; run `harness login claude-code`"}
 		}

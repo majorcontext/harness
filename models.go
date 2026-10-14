@@ -88,3 +88,11 @@ func (r *Runtime) lineageOf(ctx context.Context, own session.Ownership, id strin
 	}
 	return c, root, depth, err
 }
+
+// HostLimits says what the host of a Runtime cannot do.
+type HostLimits struct {
+	// NoProcess says that the host starts no process. A provider that runs a child process, such as the Claude Code CLI, has no backend.
+	NoProcess bool
+	// NoLogin says that the host has no way to create the ChatGPT login. A provider that uses the login then lists its models only when the login file exists.
+	NoLogin bool
+}
