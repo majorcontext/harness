@@ -300,7 +300,9 @@ func (t *Tree) live(ctx context.Context, up []string, fallback string) (string, 
 
 // send admits text to child as an input with source parent. When the
 // parent of child has settled it, the parent spawns it again first, so the
-// child reports the turn that text starts. queued reports a running turn.
+// child reports the turn that text starts. A report of child that is in flight
+// settles first, so that the parent decides on a settled child. queued reports
+// a running turn.
 func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool, error) {
 	c, err := t.s.Open(ctx, child)
 	if err != nil {
@@ -315,20 +317,38 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool,
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
-	rearm := !slices.Contains(p.Actor.View().Unsettled, child)
-	if rearm {
-		if _, err := t.SpawnChild(ctx, p, child, c.Actor.View().Session.Agent); err != nil {
-			return false, err
+	for {
+		for done := t.inFlight(child); done != nil; done = t.inFlight(child) {
+			seamSendWaits(child)
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
 		}
-	}
-	queued := c.Actor.View().Session.TurnID != ""
-	in := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliverySteer, Source: "parent",
-		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
-	if _, _, err := c.Actor.Submit(ctx, in, ""); err != nil {
+		turn := c.Actor.View().Session.TurnID
+		rearm := !slices.Contains(p.Actor.View().Unsettled, child)
 		if rearm {
+			if _, err := t.SpawnChild(ctx, p, child, c.Actor.View().Session.Agent); err != nil {
+				return false, err
+			}
+		}
+		seamDecided(child)
+		in := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliverySteer, Source: "parent",
+			Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
+		expected := ""
+		if !rearm {
+			expected = turn
+		}
+		_, _, err := c.Actor.Submit(ctx, in, expected)
+		switch {
+		case err == nil:
+			return turn != "", nil
+		case errors.Is(err, session.ErrTurnMismatch):
+			continue
+		case rearm:
 			err = errors.Join(err, p.Actor.Settle(context.WithoutCancel(ctx), protocol.ChildSettled{ChildID: child, Outcome: protocol.OutcomeFailed}, nil))
 		}
 		return false, err
 	}
-	return queued, nil
 }

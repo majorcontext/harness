@@ -89,12 +89,13 @@ type Tree struct {
 	ending map[string]int
 	muted  map[string]int
 	held   map[string]int
+	flying map[string]*flight
 	routed map[string][]*route
 }
 
 // New returns the Tree of runtime s.
 func New(s Sessions, cfg Config) *Tree {
-	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, held: map[string]int{}, routed: map[string][]*route{}}
+	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, held: map[string]int{}, flying: map[string]*flight{}, routed: map[string][]*route{}}
 }
 
 // The refusals of a spawn.
@@ -312,6 +313,7 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // the parent. It holds that child until it has settled, so Recover never
 // settles the child with the report that the ancestor gets.
 func (t *Tree) Report(parent string, s protocol.ChildSettled, report *session.Report) {
+	t.fly(s.ChildID, 1)
 	quiet, ending, rt := t.hushed(s.ChildID)
 	relay := report
 	if quiet {
@@ -322,6 +324,8 @@ func (t *Tree) Report(parent string, s protocol.ChildSettled, report *session.Re
 		t.hold(s.ChildID, 1)
 	}
 	t.cfg.Go(func() {
+		defer t.fly(s.ChildID, -1)
+		seamSettling(parent, s.ChildID)
 		if quiet {
 			defer t.mute(s.ChildID, -1)
 		}
@@ -504,7 +508,9 @@ func (t *Tree) mute(child string, n int) {
 }
 
 // hold adds n to the routed reports of child that Report has not settled yet,
-// under the rule of mute. Recover leaves a held child to Report.
+// under the rule of mute. Recover leaves a held child to Report. A report that
+// is in flight but not held can find its parent not running, so Recover still
+// settles that child.
 func (t *Tree) hold(child string, n int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -515,6 +521,40 @@ func (t *Tree) holding(child string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.held[child] > 0
+}
+
+// flight counts the reports of one child that Report has started and has not
+// settled. done closes when the count reaches zero.
+type flight struct {
+	n    int
+	done chan struct{}
+}
+
+// fly adds n to the reports of child in flight. A report is in flight from the
+// end of the child turn, which calls Report, until it is settled in its parent.
+func (t *Tree) fly(child string, n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	f := t.flying[child]
+	if f == nil {
+		f = &flight{done: make(chan struct{})}
+		t.flying[child] = f
+	}
+	if f.n += n; f.n <= 0 {
+		close(f.done)
+		delete(t.flying, child)
+	}
+}
+
+// inFlight returns a channel that closes when no report of child is in flight,
+// or nil when none is.
+func (t *Tree) inFlight(child string) <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if f := t.flying[child]; f != nil {
+		return f.done
+	}
+	return nil
 }
 
 func (t *Tree) muting(child string) bool {

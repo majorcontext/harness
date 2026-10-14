@@ -56,7 +56,7 @@ func TestContractTaskActions(t *testing.T) {
 
 func TestContractTaskSend(t *testing.T) {
 	general := "general-purpose"
-	runScenarios(t, []scenario{
+	runScenarios(t, append([]scenario{
 		{
 			name:       "task_send_runs_a_settled_child_again",
 			concurrent: true,
@@ -107,7 +107,7 @@ func TestContractTaskSend(t *testing.T) {
 				waitIdle{as: "kid"},
 			}),
 		},
-	})
+	}, heldReportRows()...))
 }
 
 func TestContractTaskRefusedActions(t *testing.T) {
