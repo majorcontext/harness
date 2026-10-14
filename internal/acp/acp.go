@@ -214,6 +214,7 @@ func (a *agent) initialize(params json.RawMessage) (any, error) {
 	caps := map[string]any{
 		"loadSession":         true,
 		"mcpCapabilities":     map[string]any{"http": a.cfg.MCP, "sse": false},
+		"promptCapabilities":  map[string]any{"image": true, "embeddedContext": true},
 		"sessionCapabilities": a.sessionCapabilities(),
 	}
 	methods := a.methods()

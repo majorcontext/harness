@@ -110,6 +110,8 @@ type modelInfo struct {
 	name, description, released string
 	efforts                     []string
 	listed                      bool
+	// noImageInput is set when models.dev lists the input modalities of the model and image is not one.
+	noImageInput bool
 }
 
 // Model is a model that a provider serves, with the facts a client shows.
@@ -165,6 +167,43 @@ func OpenAIModel(id string) (Model, bool) {
 		return Model{}, false
 	}
 	return Model{ID: id, Name: i.name, Description: i.description, Efforts: slices.Clone(i.efforts)}, true
+}
+
+// ImageInput reports whether the model of ref accepts an image as input, from
+// the models.dev input modalities. known is false for a model that the tables
+// do not hold or whose input modalities models.dev does not list; the caller
+// must then assume that the backend decides.
+func ImageInput(ref modelref.ModelRef) (accepts, known bool) {
+	i, ok := infoOf(ref)
+	if !ok {
+		return false, false
+	}
+	return !i.noImageInput, true
+}
+
+// infoOf finds the models.dev facts of ref with the normalization that ContextWindow applies.
+func infoOf(ref modelref.ModelRef) (modelInfo, bool) {
+	model := lastPathSegment(ref.Model)
+	var i modelInfo
+	var ok bool
+	switch ref.Provider {
+	case "anthropic", "amazon-bedrock":
+		suffix, bedrock := stripBedrockAnthropicPrefix(model)
+		switch {
+		case bedrock:
+			i, ok = anthropicInfo[stripBedrockVersionSuffix(suffix)]
+		case ref.Provider == "anthropic":
+			i, ok = anthropicInfo[stripBedrockVersionSuffix(model)]
+		}
+	case "openai":
+		if suffix, cut := strings.CutPrefix(model, "openai."); cut {
+			model = stripBedrockVersionSuffix(suffix)
+		}
+		i, ok = openaiInfo[model]
+	case codexProvider:
+		i, ok = openaiInfo[model]
+	}
+	return i, ok
 }
 
 // ProviderName returns the display name of a provider from models.dev, or

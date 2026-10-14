@@ -351,7 +351,7 @@ Status words: **maps**, **gap** (the Go API lacks it), **non-goal** (the spec ex
 
 | ACP | Harness | Status | Notes |
 | --- | --- | --- | --- |
-| `initialize` | none (answered before a `Runtime` is built) | maps | `agentInfo{name:"harness", title, version}`. `authMethods: []` unless the host offers a login (decision 21). `promptCapabilities` by phase: `{image:true, embeddedContext:true}` once the PR that maps image and resource blocks lands. `mcpCapabilities{http:true, sse:false}` once C1 lands, on the native host only (7.4). `sessionCapabilities` by phase. |
+| `initialize` | none (answered before a `Runtime` is built) | maps | `agentInfo{name:"harness", title, version}`. `authMethods: []` unless the host offers a login (decision 21). `promptCapabilities{image:true, embeddedContext:true}` on every host, because the runtime admits attachments on every host. `mcpCapabilities{http:true, sse:false}` once C1 lands, on the native host only (7.4). `sessionCapabilities` by phase. |
 | `authenticate`, `logout` | none | ignore | Offered only by the native host, for a login that the user config uses (decision 21). Without one, a call answers `-32601`. Other credentials come from the environment that the editor passes and from config (`Options.Getenv = os.Getenv`). |
 | `session/new {cwd, mcpServers, additionalDirectories}` | `Runtimes.For(cwd)`, then `Runtime.Create(req, WithSessionMCP(servers))` | maps after C1 | 7.4. `additionalDirectories` is not advertised. |
 | `session/load` | `Runtime.Read` for replay, then `Runtime.Open` | maps | 7.5. |
@@ -376,9 +376,9 @@ The v1 `PromptRequest` is `{sessionId, prompt, _meta}` and `PromptResponse` is `
 | --- | --- | --- |
 | `text` | `{type:"text"}` | A prompt that is exactly one `text` block whose text starts with `/` is sent with `Source = protocol.SourceTyped`. `Session.Prompt` then runs the slash-command resolution, which needs a non-empty `ID` and exactly one text part (`session.go:99`). |
 | text plus other blocks | all blocks as parts, `Source` unset | `slash-commands.md` allows "any other user message content types (images, audio, etc.) in the same prompt array". Harness runs a command only for one text part, so the line goes to the model as text. This is a limit; a spec change could lift it. |
-| `image` | `{type:"blob"}` | png, jpeg, gif, webp, each at most 20 MiB. Other types: `-32602`. |
+| `image` | `{type:"blob"}` | png, jpeg, gif, webp, each at most 20 MiB. The adapter decodes the base64 and leaves the media type, size, and content checks to the runtime; a runtime `invalid_request` is `-32602`. Input admission, not the adapter, refuses an image for a session whose model the models.dev facts list without image input: `invalid_request`, which the adapter maps to `-32602` with a message that names the model. A model that the facts lack passes. |
 | `resource_link` | `{type:"text"}` with the name and URI | Baseline content that every agent MUST accept. The adapter does not fetch it. |
-| `resource` (text) | `{type:"text"}` with the URI and the text | Needs `embeddedContext`. |
+| `resource` (text) | `{type:"text"}`: a `<resource uri="…">` line, the text, and a `</resource>` line | Needs `embeddedContext`. The header line lets the model tell a file or a selection from the words of the user. |
 | `resource` (blob) | `{type:"blob"}` for png, jpeg, gif, webp, pdf | A PDF travels only as an embedded resource, because `promptCapabilities` has no PDF flag. |
 | `audio` | none | Not advertised. |
 | delivery | `Input.Delivery = "queue"` | A second prompt during a turn waits for the next turn and gets its own `Turn`. `steer` has no ACP form. |

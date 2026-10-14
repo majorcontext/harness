@@ -23,7 +23,7 @@
             "code": "invalid_request",
             "reason": "harness: invalid request: config of \u003cdir:main\u003e: providers.anthropic.base_url is set in \u003cdir:main\u003e/.harness.json, but the provider is built in or defined in \u003cuser-config\u003e, and a project file cannot set this key on such a provider"
           },
-          "message": "harness: invalid request"
+          "message": "harness: invalid request: config of \u003cdir:main\u003e: providers.anthropic.base_url is set in \u003cdir:main\u003e/.harness.json, but the provider is built in or defined in \u003cuser-config\u003e, and a project file cannot set this key on such a provider"
         },
         "id": 1,
         "jsonrpc": "2.0"

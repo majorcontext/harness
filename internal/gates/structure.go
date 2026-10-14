@@ -30,7 +30,7 @@ var providerOwners = []string{
 	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
 	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders", "config/provider.go#WithProxyBase", "config/provider.go#UsesClaudeCLI",
 	"internal/backend/router.go#New", "internal/backend/router.go#client",
-	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models",
+	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models", "internal/modelmeta/modelmeta.go#infoOf",
 	"internal/modelmeta/internal/genctx/main.go#",
 	"internal/provider/",
 }
@@ -113,7 +113,7 @@ var nodeRules = []nodeRule{
 		name:   "single_error_envelope",
 		detail: "only internal/server, the serve token check, and the sentinel errors build the error body (spec: Errors)",
 		match:  literalOf(modulePath+"/protocol", "ErrorBody", "Error"),
-		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer", "runtime.go#", "box.go#processError", "internal/session/actor.go#", "internal/session/actor.go#notOwned", "internal/session/compact.go#", "internal/session/requests.go#", "internal/session/sync.go#", "internal/backend/router.go#"},
+		allow:  []string{"protocol/", "internal/server/server.go#errorBody", "cmd/harness/serve.go#bearer", "runtime.go#", "box.go#processError", "inputerror.go#invalidInput", "internal/session/actor.go#", "internal/session/actor.go#notOwned", "internal/session/compact.go#", "internal/session/requests.go#", "internal/session/sync.go#", "internal/backend/router.go#"},
 	},
 	{
 		name:   "single_route_mount",

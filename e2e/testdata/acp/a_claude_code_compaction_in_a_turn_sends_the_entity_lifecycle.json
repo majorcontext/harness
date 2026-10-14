@@ -67,6 +67,10 @@
               "http": true,
               "sse": false
             },
+            "promptCapabilities": {
+              "embeddedContext": true,
+              "image": true
+            },
             "sessionCapabilities": {
               "close": {},
               "list": {},

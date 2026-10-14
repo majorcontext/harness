@@ -1,0 +1,337 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": []
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "anthropic/claude-fable-5",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "Default",
+                  "value": "default"
+                },
+                {
+                  "name": "Low",
+                  "value": "low"
+                },
+                {
+                  "name": "Medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "High",
+                  "value": "high"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "data": "PHN2Zy8+",
+              "mimeType": "image/svg+xml",
+              "type": "image"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "prompt[0] image has the media type \"image/svg+xml\""
+          },
+          "message": "Invalid params"
+        },
+        "id": 2,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "data": "AAAA",
+              "mimeType": "audio/wav",
+              "type": "audio"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "prompt[0] has the unsupported type \"audio\""
+          },
+          "message": "Invalid params"
+        },
+        "id": 3,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "resource": {
+                "blob": "AAAA",
+                "mimeType": "application/zip",
+                "uri": "file:///a.zip"
+              },
+              "type": "resource"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "invalid_request",
+            "reason": "unsupported attachment media type \"application/zip\": use one of application/pdf, image/gif, image/jpeg, image/png, image/webp"
+          },
+          "message": "unsupported attachment media type \"application/zip\": use one of application/pdf, image/gif, image/jpeg, image/png, image/webp"
+        },
+        "id": 4,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "data": "not base64!",
+              "mimeType": "image/png",
+              "type": "image"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "prompt[0] is not valid base64"
+          },
+          "message": "Invalid params"
+        },
+        "id": 5,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 6,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "data": "AAAA",
+              "mimeType": "image/png",
+              "type": "image"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "invalid_request",
+            "reason": "attachment does not decode as image/png: image: unknown format"
+          },
+          "message": "attachment does not decode as image/png: image: unknown format"
+        },
+        "id": 6,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 7,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "data": "JVBERi0xLjQKJSVFT0YK",
+              "mimeType": "application/pdf",
+              "type": "image"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "reason": "prompt[0] image has the media type \"application/pdf\""
+          },
+          "message": "Invalid params"
+        },
+        "id": 7,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

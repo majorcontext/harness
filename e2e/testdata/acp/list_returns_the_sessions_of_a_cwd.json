@@ -395,7 +395,7 @@
             "code": "invalid_request",
             "reason": "harness: invalid request: after names no session"
           },
-          "message": "harness: invalid request"
+          "message": "harness: invalid request: after names no session"
         },
         "id": 7,
         "jsonrpc": "2.0"

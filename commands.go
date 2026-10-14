@@ -219,7 +219,7 @@ func (s *Session) prompt(in protocol.Input, name string) (*plan, protocol.Input,
 	}
 	label, err := admit.Provenance(in.SourceID, in.Parts[0].Text)
 	if err != nil {
-		return nil, in, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
+		return nil, in, invalidInput(in.ID, err)
 	}
 	in.Parts, in.Source, in.SourceLabel = []protocol.Part{{Type: protocol.PartText, Text: expanded}}, "command", label
 	return nil, in, nil

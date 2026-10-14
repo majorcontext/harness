@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -83,6 +84,7 @@ type catalog map[string]struct {
 			Context int `json:"context"`
 		} `json:"limit"`
 		Modalities struct {
+			Input  []string `json:"input"`
 			Output []string `json:"output"`
 		} `json:"modalities"`
 		ToolCall    bool `json:"tool_call"`
@@ -288,6 +290,16 @@ func effortLiteral(reasoning bool, opts []struct {
 	return fmt.Sprintf("%#v", effortLevels)
 }
 
+// noImageLiteral is the struct field that marks a model whose models.dev
+// input modalities are known and lack images. A model without the list of
+// input modalities stays unmarked, because its input is unknown.
+func noImageLiteral(input []string) string {
+	if len(input) == 0 || slices.Contains(input, "image") {
+		return ""
+	}
+	return ", noImageInput: true"
+}
+
 // generateInfo renders the Go source of the model-fact tables for
 // catalogJSON. A model is listed when it supports tool calls and is not
 // deprecated. An entry without a name is skipped.
@@ -325,8 +337,8 @@ func generateInfo(catalogJSON []byte) ([]byte, error) {
 			m := prov.Models[id]
 			name := strings.TrimSuffix(strings.TrimSpace(m.Name), latestSuffix)
 			listed := m.ToolCall && m.Status != "deprecated"
-			fmt.Fprintf(&buf, "\t%q: {name: %q, description: %q, released: %q, efforts: %s, listed: %t},\n",
-				id, name, strings.TrimSpace(m.Description), m.ReleaseDate, effortLiteral(m.Reasoning, m.ReasoningOptions), listed)
+			fmt.Fprintf(&buf, "\t%q: {name: %q, description: %q, released: %q, efforts: %s, listed: %t%s},\n",
+				id, name, strings.TrimSpace(m.Description), m.ReleaseDate, effortLiteral(m.Reasoning, m.ReasoningOptions), listed, noImageLiteral(m.Modalities.Input))
 		}
 		buf.WriteString("}\n")
 	}

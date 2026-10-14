@@ -96,7 +96,7 @@ func TestSessionServersRefusesWhatItCannotRun(t *testing.T) {
 	}
 }
 
-func TestPromptPartsTakeTheBaselineBlocks(t *testing.T) {
+func TestPromptPartsTakeTheBlocksTheAgentAdvertises(t *testing.T) {
 	parts, err := promptParts([]json.RawMessage{
 		json.RawMessage(`{"type":"text","text":"hello"}`),
 		json.RawMessage(`{"type":"resource_link","name":"doc","uri":"file:///doc"}`),
@@ -107,7 +107,7 @@ func TestPromptPartsTakeTheBaselineBlocks(t *testing.T) {
 	if len(parts) != 2 || parts[0].Text != "hello" || parts[1].Text != "doc (file:///doc)" {
 		t.Errorf("parts = %+v", parts)
 	}
-	for _, bad := range []string{`{"type":"image","data":"","mimeType":"image/png"}`, `[]`, `7`} {
+	for _, bad := range []string{`{"type":"audio","data":"","mimeType":"audio/wav"}`, `[]`, `7`} {
 		if _, err := promptParts([]json.RawMessage{json.RawMessage(bad)}); err == nil {
 			t.Errorf("promptParts accepted %s", bad)
 		}

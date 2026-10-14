@@ -31,8 +31,8 @@ var anthropicInfo = map[string]modelInfo{
 
 // openaiInfo holds the facts of the models.dev "openai" chat models, keyed by model ID.
 var openaiInfo = map[string]modelInfo{
-	"gpt-3.5-turbo":            {name: "GPT-3.5-turbo", description: "Compact GPT model for low-latency assistance and high-volume workloads", released: "2023-03-01", efforts: []string{}, listed: false},
-	"gpt-4":                    {name: "GPT-4", description: "GPT model for general reasoning, writing, coding, and tool-assisted tasks", released: "2023-11-06", efforts: []string{}, listed: false},
+	"gpt-3.5-turbo":            {name: "GPT-3.5-turbo", description: "Compact GPT model for low-latency assistance and high-volume workloads", released: "2023-03-01", efforts: []string{}, listed: false, noImageInput: true},
+	"gpt-4":                    {name: "GPT-4", description: "GPT model for general reasoning, writing, coding, and tool-assisted tasks", released: "2023-11-06", efforts: []string{}, listed: false, noImageInput: true},
 	"gpt-4-turbo":              {name: "GPT-4 Turbo", description: "Compact GPT model for low-latency assistance and high-volume workloads", released: "2023-11-06", efforts: []string{}, listed: false},
 	"gpt-4.1":                  {name: "GPT-4.1", description: "Long-lived GPT workhorse for coding, instruction following, and production apps", released: "2025-04-14", efforts: []string{}, listed: true},
 	"gpt-4.1-mini":             {name: "GPT-4.1 mini", description: "Affordable GPT-4.1 lane for fast coding help and structured extraction", released: "2025-04-14", efforts: []string{}, listed: true},
@@ -72,7 +72,7 @@ var openaiInfo = map[string]modelInfo{
 	"o1":                       {name: "o1", description: "O-series reasoning model for hard analysis, math, coding, and planning", released: "2024-12-05", efforts: []string{"low", "medium", "high"}, listed: false},
 	"o1-pro":                   {name: "o1-pro", description: "O-series reasoning model for hard analysis, math, coding, and planning", released: "2025-03-19", efforts: []string{"low", "medium", "high"}, listed: false},
 	"o3":                       {name: "o3", description: "Deliberate o-series reasoner for hard math, coding, and multi-step analysis", released: "2025-04-16", efforts: []string{"low", "medium", "high"}, listed: true},
-	"o3-mini":                  {name: "o3-mini", description: "Smaller o-series reasoner for economical coding, math, and planning tasks", released: "2024-12-20", efforts: []string{"low", "medium", "high"}, listed: false},
+	"o3-mini":                  {name: "o3-mini", description: "Smaller o-series reasoner for economical coding, math, and planning tasks", released: "2024-12-20", efforts: []string{"low", "medium", "high"}, listed: false, noImageInput: true},
 	"o3-pro":                   {name: "o3-pro", description: "High-effort o3 tier for difficult technical reasoning and careful answers", released: "2025-06-10", efforts: []string{"low", "medium", "high"}, listed: true},
 	"o4-mini":                  {name: "o4-mini", description: "Fast o-series model for compact reasoning, coding, and tool use", released: "2025-04-16", efforts: []string{"low", "medium", "high"}, listed: false},
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/storecheck"
@@ -94,7 +95,7 @@ func (s *Session) Turn(a protocol.Admitted) *Turn { return &Turn{s: s, adm: a} }
 
 func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
-		return protocol.Admitted{}, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
+		return protocol.Admitted{}, invalidInput(in.ID, err)
 	}
 	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
 		p, next, err := s.resolve(in)
@@ -108,7 +109,10 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 	}
 	ev, blobs, err := admit.Input(in)
 	if err != nil {
-		return protocol.Admitted{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		return protocol.Admitted{}, invalidInput(in.ID, err)
+	}
+	if err := s.checkImageInput(in); err != nil {
+		return protocol.Admitted{}, err
 	}
 	for _, b := range blobs {
 		if err := s.r.store.PutBlob(ctx, s.id, b.Key, bytes.NewReader(b.Data)); err != nil {
@@ -120,6 +124,25 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 		return protocol.Admitted{}, err
 	}
 	return protocol.Admitted{InputID: in.ID, Seq: seq, Repeat: repeat}, nil
+}
+
+// checkImageInput refuses an image attachment for a session whose model the
+// model facts list without image input. A model that the facts lack passes.
+func (s *Session) checkImageInput(in protocol.Input) error {
+	if !slices.ContainsFunc(in.Parts, func(p protocol.Part) bool {
+		return p.Type == protocol.PartBlob && strings.HasPrefix(p.MediaType, "image/")
+	}) {
+		return nil
+	}
+	model := s.Snapshot().Model
+	ref, err := modelref.ParseModelRef(model)
+	if err != nil {
+		return nil
+	}
+	if accepts, known := modelmeta.ImageInput(ref); known && !accepts {
+		return invalidInput(in.ID, fmt.Errorf("the model %s does not accept image input", model))
+	}
+	return nil
 }
 
 // Interrupt stops the running turn and returns after it has ended. The
