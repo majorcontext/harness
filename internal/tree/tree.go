@@ -88,13 +88,14 @@ type Tree struct {
 	quiet  map[string]int
 	ending map[string]int
 	muted  map[string]int
+	held   map[string]int
 	flying map[string]*flight
 	routed map[string][]*route
 }
 
 // New returns the Tree of runtime s.
 func New(s Sessions, cfg Config) *Tree {
-	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, flying: map[string]*flight{}, routed: map[string][]*route{}}
+	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}, held: map[string]int{}, flying: map[string]*flight{}, routed: map[string][]*route{}}
 }
 
 // The refusals of a spawn.
@@ -319,11 +320,17 @@ func (t *Tree) Report(parent string, s protocol.ChildSettled, report *session.Re
 		report = nil
 		t.mute(s.ChildID, 1)
 	}
+	if rt != nil {
+		t.hold(s.ChildID, 1)
+	}
 	t.cfg.Go(func() {
 		defer t.fly(s.ChildID, -1)
 		seamSettling(parent, s.ChildID)
 		if quiet {
 			defer t.mute(s.ChildID, -1)
+		}
+		if rt != nil {
+			defer t.hold(s.ChildID, -1)
 		}
 		if rt != nil && relay != nil {
 			if to, err := t.live(t.cfg.Base, rt.up, rt.fallback); err == nil && to != parent {
@@ -368,7 +375,7 @@ func (t *Tree) Recover(a *session.Actor) {
 			_ = a.Settle(t.cfg.Base, protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
-			if t.inFlight(id) != nil {
+			if t.holding(id) {
 				continue
 			}
 			if t.muting(id) {
@@ -498,6 +505,22 @@ func (t *Tree) mute(child string, n int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	count(t.muted, child, n)
+}
+
+// hold adds n to the routed reports of child that Report has not settled yet,
+// under the rule of mute. Recover leaves a held child to Report. A report that
+// is in flight but not held can find its parent not running, so Recover still
+// settles that child.
+func (t *Tree) hold(child string, n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count(t.held, child, n)
+}
+
+func (t *Tree) holding(child string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.held[child] > 0
 }
 
 // flight counts the reports of one child that Report has started and has not

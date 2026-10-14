@@ -118,7 +118,9 @@ type openSend struct{ g *childGate }
 
 func (a openSend) run(*testing.T, *run) { a.g.openSend() }
 
-func TestContractChildSettleSend(t *testing.T) {
+// heldReportRows are the rows of TestContractTaskSend that hold a step of the
+// report or of the send of a child with a seam, so they run on the runtime host only.
+func heldReportRows() []scenario {
 	inFlight, mid := newChildGate(), newChildGate()
 	sendSteps := func() []harnesstest.Step {
 		return []harnesstest.Step{
@@ -132,7 +134,7 @@ func TestContractChildSettleSend(t *testing.T) {
 			{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
 		}
 	}
-	runScenarios(t, []scenario{{
+	return []scenario{{
 		name:       "send_between_the_end_of_a_child_turn_and_its_report_reports_the_second_turn",
 		concurrent: true,
 		model:      sendSteps(),
@@ -169,5 +171,5 @@ func TestContractChildSettleSend(t *testing.T) {
 			awaitSettled{as: "kid", parent: "a"},
 			waitIdle{as: "a"},
 		},
-	}})
+	}}
 }
