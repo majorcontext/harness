@@ -287,7 +287,8 @@
     "offered_tools.kid": {
       "status": 200,
       "body": [
-        "get_conversation_history"
+        "get_conversation_history",
+        "ls"
       ]
     }
   }

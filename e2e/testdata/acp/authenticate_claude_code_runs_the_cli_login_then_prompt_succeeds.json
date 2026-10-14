@@ -358,7 +358,7 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
-            "kind": "execute",
+            "kind": "other",
             "name": "Bash",
             "rawInput": {
               "command": "echo hi"

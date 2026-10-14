@@ -553,5 +553,9 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		name:    "claudecode_bridge_refuses_set_on_the_model_tool",
 		driver:  claudeLane{mode: "normal", callTool: "model", callArgs: setModel}.newDriver,
 		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+	}, {
+		name:    "claudecode_plugin_hook_denies_a_bash_call_of_the_cli",
+		driver:  claudeLane{mode: "normal", callTool: "bash", callArgs: map[string]any{"command": "echo block-me"}, extra: pluginConfig(t, nil)}.newDriver,
+		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}})
 }

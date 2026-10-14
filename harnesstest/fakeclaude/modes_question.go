@@ -60,7 +60,7 @@ func compactTurn(f *fake) bool {
 		res["local_command"] = localCommand
 	}
 	f.emit(
-		system("init", obj{"session_id": f.sessionID}),
+		initFrame(f),
 		system("compact_boundary", obj{"compact_metadata": obj{"trigger": "manual", "pre_tokens": 42010, "post_tokens": 7039}, "session_id": f.sessionID}),
 		userString("This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nfake CLI summary\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /fake/transcript.jsonl\nContinue the conversation from where it left off without asking the user any further questions."),
 		userString("<local-command-stdout>Compacted </local-command-stdout>"),
@@ -81,10 +81,10 @@ func compactAfterTokens(f *fake) bool {
 // queuedEmptyResult prints a task notification, init, and an empty zero-turn
 // result, a second init, a reply, and a final result.
 func queuedEmptyResult(f *fake) bool {
-	f.emit(system("task_notification", obj{"session_id": f.sessionID}), system("init", obj{"session_id": f.sessionID}))
+	f.emit(system("task_notification", obj{"session_id": f.sessionID}), initFrame(f))
 	f.emit(
 		success("", 3, 1).set("num_turns", 0).set("duration_ms", 80),
-		system("init", obj{"session_id": f.sessionID}),
+		initFrame(f),
 		say("second"),
 		success("second", 9, 4).set("num_turns", 1),
 	)
@@ -124,7 +124,7 @@ func question(f *fake) bool {
 	if f.mode == "question_sibling" {
 		calls = append(calls, toolUse("toolu_s", "Bash", obj{"command": "echo hi"}))
 	}
-	f.emit(system("init", obj{"session_id": f.sessionID}), assistant(calls...))
+	f.emit(initFrame(f), assistant(calls...))
 	questionMirrorFrame(f, "parked")
 	f.emit(obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
 	return true
@@ -164,7 +164,7 @@ func resumeParkedQuestion(f *fake, state string) {
 		f.emit(user(toolResult("toolu_q", line, false)))
 	}
 	f.emit(
-		system("init", obj{"session_id": f.sessionID}),
+		initFrame(f),
 		say("Noted."),
 		obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "end_turn", "result": "Noted."},
 	)
@@ -177,7 +177,7 @@ func resumeParkedQuestion(f *fake, state string) {
 func continueInTool(f *fake, answer string) {
 	f.emit(
 		user(toolResult("toolu_q", answer, false)),
-		system("init", obj{"session_id": f.sessionID}),
+		initFrame(f),
 		assistant(textBlock(waitingMarker)).inMessage("id", "msg_marker"),
 		assistant(toolUse("toolu_c", "Bash", obj{"command": "sleep 1"})).inMessage("id", "msg_continue"),
 	)
@@ -186,4 +186,9 @@ func continueInTool(f *fake, answer string) {
 		text = "received queued: " + content
 	}
 	f.emit(user(toolResult("toolu_c", "slept", false)), say(text), success(text, 5, 5))
+}
+
+// initFrame is the init frame of a CLI that offers no tool.
+func initFrame(f *fake) obj {
+	return system("init", obj{"session_id": f.sessionID, "tools": []string{}})
 }

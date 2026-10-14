@@ -1,6 +1,6 @@
 // Package claudecode delegates each turn to the Claude Code CLI. One turn
-// is one --resume run of the CLI over stream-json. The CLI runs its own
-// tools and compacts its own context.
+// is one --resume run of the CLI over stream-json. The CLI runs the harness
+// tools through MCP and compacts its own context.
 package claudecode
 
 import (
@@ -46,9 +46,10 @@ const grace = 5 * time.Second
 // ErrToolsNotRestricted reports a CLI whose init frame shows a tool outside the restriction.
 var ErrToolsNotRestricted = errors.New("claudecode: the CLI did not apply the tool restriction")
 
-// builtins are the built-in CLI tools that a restriction can name.
-var builtins = []string{"Bash", "BashOutput", "Edit", "Glob", "Grep", "KillShell", "MultiEdit",
-	"NotebookEdit", "Read", "Skill", "TodoWrite", "WebFetch", "WebSearch", "Write"}
+// builtins are the only built-in CLI tools that a run offers. Every tool that
+// acts on the machine or the network reaches the CLI as a harness tool, so
+// the hooks of the plugins see each call.
+var builtins = []string{askTool}
 
 // mcpPrefix starts the CLI name of each harness tool.
 const mcpPrefix = "mcp__" + external.ToolServer + "__"
@@ -77,7 +78,7 @@ func New(p config.Provider, system []string, workDir string, servers map[string]
 	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, servers: servers}
 }
 
-// Capabilities reports that the CLI runs the loop with its built-in tools,
+// Capabilities reports that the CLI runs the loop with the harness tools,
 // owns its context and the MCP servers, and takes steer input. It reports
 // the context window itself.
 func (b *Backend) Capabilities(string) turn.Capabilities {
@@ -116,8 +117,9 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	if err != nil {
 		return err
 	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), names: map[string]string{}, calls: map[string]bool{},
-		continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: req.Questions || res != nil}
+	questions := req.Questions || res != nil
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req, questions, res != nil), restricted: req.AllowedTools != nil,
+		names: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: questions}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {
@@ -131,18 +133,15 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	return r.finish(ctx, err)
 }
 
-// restriction is the set of tools that the CLI may show, or nil to allow
-// every tool. The init frame check keeps a CLI that does not apply it from
-// running. req.Tools holds only the allowed harness tools.
-func restriction(req turn.Request) map[string]bool {
-	if req.AllowedTools == nil {
-		return nil
-	}
+// restriction is the set of tools that the CLI may show: AskUserQuestion on a
+// run that may ask a question, and each harness tool of req. The init frame
+// check keeps a CLI that does not apply it from running. req.Tools holds only
+// the allowed harness tools. A run that answers a parked question keeps
+// AskUserQuestion.
+func restriction(req turn.Request, questions, answers bool) map[string]bool {
 	allowed := map[string]bool{}
-	for _, n := range req.AllowedTools {
-		if slices.Contains(builtins, n) {
-			allowed[n] = true
-		}
+	if questions && (answers || req.AllowedTools == nil || slices.Contains(req.AllowedTools, askTool)) {
+		allowed[askTool] = true
 	}
 	for _, t := range req.Tools {
 		allowed[mcpPrefix+t.Name] = true
@@ -172,10 +171,8 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		}
 		args = append(args, "--permission-prompt-tool", "stdio", "--settings", questionSettings(pass))
 	}
-	if r.allowed != nil {
-		tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
-		args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
-	}
+	tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
+	args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
 	mcpArgs, err := r.mcpArgs(ctx, req, b.servers)
 	if err != nil {
 		return nil, err
@@ -238,7 +235,7 @@ func scratch(m external.Mirror) (string, error) {
 // CLI the configured servers, beside the harness tools of req.
 func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[string]config.MCPServerSpec) ([]string, error) {
 	servers := map[string]mcpServer{}
-	if r.allowed == nil {
+	if !r.restricted {
 		for name, spec := range configured {
 			servers[name] = serverOf(spec)
 		}
@@ -261,9 +258,6 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[stri
 		return nil, err
 	}
 	args := []string{"--mcp-config", path}
-	if r.allowed == nil {
-		args = append(args, "--strict-mcp-config")
-	}
 	if len(req.Tools) > 0 {
 		args = append(args, "--allowedTools", "mcp__"+external.ToolServer)
 	}

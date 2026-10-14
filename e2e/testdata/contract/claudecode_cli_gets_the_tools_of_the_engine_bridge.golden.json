@@ -63,10 +63,18 @@
     "offered_tools.a": {
       "status": 200,
       "body": [
+        "bash",
+        "edit_file",
         "get_conversation_history",
+        "glob",
+        "grep",
+        "ls",
         "model",
         "process",
-        "task"
+        "read_file",
+        "session_info",
+        "task",
+        "write_file"
       ]
     }
   }

@@ -257,10 +257,9 @@ func TestDescribeCallMapsKindLocationAndDiff(t *testing.T) {
 		{"read_file", `{"path":"/abs/a.go"}`, "read", "read_file /abs/a.go", []location{{"/abs/a.go", 0}}, false},
 		{"edit_file", `{"path":"a.go","old_string":"x","new_string":"y"}`, "edit", "edit_file a.go", []location{{"/w/a.go", 0}}, true},
 		{"write_file", `{"path":"a.go","content":""}`, "edit", "write_file a.go", []location{{"/w/a.go", 0}}, true},
-		{"Edit", `{"file_path":"a.go","old_string":"x","new_string":"y"}`, "edit", "Edit a.go", []location{{"/w/a.go", 0}}, true},
 		{"grep", `{"pattern":"x\ny","path":"src"}`, "search", "grep x", nil, false},
 		{"bash", `{"command":"ls\nrm"}`, "execute", "bash ls", nil, false},
-		{"WebFetch", `{}`, "fetch", "WebFetch", nil, false},
+		{"AskUserQuestion", `{}`, "other", "AskUserQuestion", nil, false},
 		{"mcp__weather__forecast", `{"city":"Oslo"}`, "other", "mcp__weather__forecast", nil, false},
 		{"edit_file", `not json`, "edit", "edit_file", nil, false},
 	}

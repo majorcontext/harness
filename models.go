@@ -13,8 +13,8 @@ import (
 var ErrModelUnavailable = backend.ErrUnavailable
 
 // checkModel reports why model cannot start a session that allows the
-// names. A backend that owns the loop runs only its built-in tools and the
-// tools that no model owns.
+// names. A backend that owns the loop runs only its built-in tools, the
+// built-in tools of the WorkDir, and the tools that no model owns.
 func (r *Runtime) checkModel(model string, names []string, session bool) error {
 	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
@@ -24,9 +24,12 @@ func (r *Runtime) checkModel(model string, names []string, session bool) error {
 	if err != nil {
 		return err
 	}
+	if err := r.checkShadowed(names); err != nil {
+		return err
+	}
 	caps := be.Capabilities(model)
 	if !caps.OwnsLoop {
-		return r.checkShadowed(names)
+		return nil
 	}
 	for _, n := range caps.Tools {
 		if r.owns(n) {
@@ -64,7 +67,7 @@ func (r *Runtime) checkShadowed(names []string) error {
 // its tool names as Create does.
 func (r *Runtime) createdForOpen(ctx context.Context, id string) (protocol.SessionCreated, error) {
 	c, err := r.created(ctx, id)
-	if err == nil && !r.models.Capabilities(c.Model).OwnsLoop {
+	if err == nil {
 		err = r.checkShadowed(c.AllowedTools)
 	}
 	return c, err

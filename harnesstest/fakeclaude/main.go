@@ -220,7 +220,7 @@ func main() {
 		f.emit(failed(0, 0, "Not logged in · Please run /login"))
 		return
 	}
-	init := system("init", obj{"session_id": f.sessionID})
+	init := initFrame(f)
 	if mode == "per_call_usage" || mode == "compact_after_window" {
 		init["model"] = "claude-opus-5-5[1m]"
 	}

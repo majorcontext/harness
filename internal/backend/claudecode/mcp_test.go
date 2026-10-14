@@ -30,7 +30,7 @@ const hist = "get_conversation_history"
 func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *testing.T) {
 	dir := t.TempDir()
 	mcpLog, configLog := filepath.Join(dir, "mcp"), filepath.Join(dir, "config")
-	argvLog := fakeClaude(t, "mcp", toolsInit, `["Read"]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
+	argvLog := fakeClaude(t, "mcp", toolsInit, `["mcp__gateway__ping"]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG", configLog)
 	reg := mcp.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -51,7 +51,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 		t.Fatal(err)
 	}
 	defer closeRuntime(t, r)
-	turnOf(t, createClaude(t, r, []string{"Read", "echo", "mcp__gateway__ping"}), text("a", "hi"))
+	turnOf(t, createClaude(t, r, []string{"echo", "mcp__gateway__ping"}), text("a", "hi"))
 	offered := []string{"echo", "mcp__gateway__ping", hist}
 	runs := jsonLines[mcpRun](t, mcpLog)
 	if len(runs) != 1 || !slices.Equal(runs[0].Tools, offered) {
@@ -160,12 +160,9 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		allowed []string
 		env     []string
 		offered []string
-		args    []string
 	}{
-		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden", hist},
-			args: []string{"--strict-mcp-config", "--allowedTools", "mcp__harness"}},
-		{name: "a restricted tool is not offered", allowed: []string{"Read", "echo"}, env: []string{toolsInit, `["Read"]`},
-			offered: []string{"echo", hist}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
+		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden", hist}},
+		{name: "a restricted tool is not offered", allowed: []string{"echo"}, env: []string{toolsInit, `[]`}, offered: []string{"echo", hist}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")
@@ -184,8 +181,10 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			if c := endedCall(t, echo, runs[0], argv); c.ID != "toolu_m" || c.Name != "echo" {
 				t.Errorf("call = %+v, want ID toolu_m and name echo", c)
 			}
-			if !hasArgs(argv, tc.args...) {
-				t.Errorf("argv = %q, want %q in it", argv, tc.args)
+			for _, want := range [][]string{{"--tools", "", "--strict-mcp-config"}, {"--allowedTools", "mcp__harness"}} {
+				if !hasArgs(argv, want...) {
+					t.Errorf("argv = %q, want %q in it", argv, want)
+				}
 			}
 			if names := toolPartNames(t, st); !slices.Equal(names, []string{"echo", "echo"}) {
 				t.Errorf("recorded tool part names = %q, want the embedder name echo for the call and the result", names)

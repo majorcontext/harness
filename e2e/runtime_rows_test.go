@@ -307,6 +307,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                          sameAsServe(),
 	"claudecode_bridge_model_tool_offers_list_only":                               sameAsServe(),
 	"claudecode_bridge_refuses_set_on_the_model_tool":                             sameAsServe(),
+	"claudecode_plugin_hook_denies_a_bash_call_of_the_cli":                        sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":                             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                                  reGolden(specView, specClaudeGauge),
 	"claudecode_compact_reads_post_tokens":                                        reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),

@@ -195,7 +195,7 @@ func TestContractTaskPluginProfile(t *testing.T) {
 func TestContractTaskClaudeChild(t *testing.T) {
 	onClaude := "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: claude-code/sonnet\n---\n\nOnly read files.\n"
 	runScenarios(t, []scenario{{
-		name:   "task_child_on_claude_code_gets_no_runtime_builtin",
+		name:   "task_child_on_claude_code_gets_the_builtin_tools_of_its_profile",
 		driver: claudeLane{mode: "hang_after_listing", listTools: true, initTools: "[]"}.newDriver,
 		model: []harnesstest.Step{
 			taskStep("delegate", userStarts("delegate"), fixed(spawn("reader", "child work"))),

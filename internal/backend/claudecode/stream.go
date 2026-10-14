@@ -25,8 +25,11 @@ type run struct {
 	dir       string
 	mirror    external.Mirror
 	allowed   map[string]bool
-	bridged   map[string]bool
-	names     map[string]string
+	// restricted is a run whose session lists its allowed tools: the CLI gets
+	// no configured MCP server.
+	restricted bool
+	bridged    map[string]bool
+	names      map[string]string
 	// questions reports a run with the question channel; resolution answers
 	// the parked call, and question is the call that the main thread asked.
 	questions  bool
@@ -266,7 +269,7 @@ func (r *run) frame(line []byte) error {
 }
 
 func (r *run) handle(env envelope) error {
-	if r.allowed != nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
+	if r.restricted && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
 	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
@@ -367,13 +370,13 @@ func (r *run) system(env envelope) error {
 }
 
 func (r *run) checkTools(tools *[]string) error {
-	if r.allowed == nil {
-		return nil
-	}
 	if tools == nil {
 		return fmt.Errorf("%w: the init frame lists no tools", ErrToolsNotRestricted)
 	}
 	for _, t := range *tools {
+		if strings.HasPrefix(t, "mcp__") && !r.restricted {
+			continue
+		}
 		if !r.allowed[t] {
 			return fmt.Errorf("%w: %s", ErrToolsNotRestricted, t)
 		}
