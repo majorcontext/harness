@@ -10,6 +10,10 @@
   "anthropicThinkingCanBeDisabled": {
     "claude-opus-5": {
       "note": "models.dev lists no off level, but platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting says Claude Opus 5 accepts thinking type disabled at effort high or below."
+    },
+    "claude-sonnet-5-5": {
+      "offType": "between_tools",
+      "note": "models.dev lists no off level, but platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting says Claude Sonnet 5.5 rejects thinking type disabled and takes between_tools in its place, at effort high or below."
     }
   },
   "bifrostFireworksContextWindows": {

@@ -65,10 +65,12 @@ func TestContractEffortLevels(t *testing.T) {
 			actions: effortTurns("anthropic/claude-opus-5", "off"),
 		},
 		{
-			name: "thinking_off_is_not_offered_by_a_model_that_takes_between_tools",
+			name:  "thinking_off_on_a_model_that_takes_between_tools_sends_between_tools",
+			model: effortSteps("off"),
 			actions: []action{
 				create{as: "a", model: "anthropic/claude-sonnet-5-5"},
 				command{as: "a", text: "/thinking off"}, awaitCommands{as: "a"},
+				submit{as: "a", text: "off"}, waitIdle{as: "a"},
 				commandRecords{as: "a"},
 			},
 		},
@@ -119,6 +121,11 @@ func TestContractEffortStoredThinking(t *testing.T) {
 			name:    "stored_thinking_stays_in_a_tool_round_of_a_model_that_thinks_by_default",
 			model:   toolSteps,
 			actions: []action{create{as: "a", model: "anthropic/claude-haiku-5-5"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}},
+		},
+		{
+			name:    "stored_thinking_stays_in_a_tool_round_when_off_sends_between_tools",
+			model:   toolSteps,
+			actions: []action{create{as: "a", model: "anthropic/claude-sonnet-5-5"}, setThinking{as: "a", level: "off"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}},
 		},
 		{
 			name:    "stored_thinking_leaves_the_history_of_a_model_with_thinking_off_by_default",

@@ -95,11 +95,20 @@ type catalog map[string]struct {
 }
 
 // overrideEntry is one hand-written entry for a model that models.dev lacks
-// or reports wrongly. Note is documentation for maintainers only.
+// or reports wrongly. Note is documentation for maintainers only. OffType
+// names the thinking type that the off level sends, and only an entry of a
+// thinking-disable table may set it.
 type overrideEntry struct {
 	Context int    `json:"context"`
+	OffType string `json:"offType"`
 	Note    string `json:"note"`
 }
+
+// offTypeDisabled and offTypeBetweenTools are the thinking types that the off level can send. An entry without an offType sends the first.
+const (
+	offTypeDisabled     = "disabled"
+	offTypeBetweenTools = "between_tools"
+)
 
 // thinkingOffTable names the overrides of the models that run with thinking off when a request omits the thinking field.
 const thinkingOffTable = "thinkingOffByDefault"
@@ -186,9 +195,17 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 	for _, t := range infoTables {
 		known[t.provider+thinkingDisableSuffix] = true
 	}
-	for name := range ovr {
+	for name, entries := range ovr {
 		if !known[name] {
 			return nil, nil, fmt.Errorf("overrides name unknown table %q", name)
+		}
+		if strings.HasSuffix(name, thinkingDisableSuffix) {
+			continue
+		}
+		for id, e := range entries {
+			if e.OffType != "" {
+				return nil, nil, fmt.Errorf("%s[%q] sets offType outside a %s table", name, id, thinkingDisableSuffix)
+			}
 		}
 	}
 
@@ -339,6 +356,32 @@ func noImageLiteral(input []string) string {
 	return ", noImageInput: true"
 }
 
+// writeOffTypes writes the map of each provider whose thinking-disable table holds a model that sends a thinking type other than "disabled" for off. An unknown offType is an error.
+func writeOffTypes(buf *bytes.Buffer, ovr overrides) error {
+	for _, t := range infoTables {
+		disableTable := t.provider + thinkingDisableSuffix
+		var ids []string
+		for _, id := range slices.Sorted(maps.Keys(ovr[disableTable])) {
+			switch ovr[disableTable][id].OffType {
+			case "", offTypeDisabled:
+			case offTypeBetweenTools:
+				ids = append(ids, id)
+			default:
+				return fmt.Errorf("%s[%q] has unknown offType %q", disableTable, id, ovr[disableTable][id].OffType)
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		fmt.Fprintf(buf, "\n// %sThinkingOffType holds the thinking type that the off level sends in place of %q for a model of the %s provider.\nvar %sThinkingOffType = map[string]string{\n", t.provider, offTypeDisabled, t.provider, t.provider)
+		for _, id := range ids {
+			fmt.Fprintf(buf, "\t%q: %q,\n", id, ovr[disableTable][id].OffType)
+		}
+		buf.WriteString("}\n")
+	}
+	return nil
+}
+
 // generateInfo renders the Go source of the model-fact tables for
 // catalogJSON. A model is listed when it supports tool calls and is not
 // deprecated. An entry without a name is skipped.
@@ -370,6 +413,9 @@ func generateInfo(catalogJSON, ovrJSON []byte) ([]byte, []string, error) {
 		fmt.Fprintf(&buf, "\t%q: true,\n", id)
 	}
 	buf.WriteString("}\n")
+	if err := writeOffTypes(&buf, ovr); err != nil {
+		return nil, nil, err
+	}
 	for _, t := range infoTables {
 		prov := cat[t.provider]
 		keys := make([]string, 0, len(prov.Models))

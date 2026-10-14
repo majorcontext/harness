@@ -79,3 +79,17 @@ func TestGenerateInfoGolden(t *testing.T) {
 		t.Errorf("generated output differs from %s; rerun with -update and review the diff\ngot:\n%s", golden, code)
 	}
 }
+
+func TestGenerateRejectsUnknownOffType(t *testing.T) {
+	ovr := `{"anthropicThinkingCanBeDisabled":{"claude-a-4":{"offType":"enabled"}}}`
+	if _, _, err := generateInfo(readFile(t, "testdata/catalog.json"), []byte(ovr)); err == nil {
+		t.Fatal("generateInfo accepted an unknown offType")
+	}
+}
+
+func TestGenerateRejectsOffTypeOutsideThinkingDisableTable(t *testing.T) {
+	ovr := `{"thinkingOffByDefault":{"claude-off":{"offType":"between_tools"}}}`
+	if _, _, err := generate(readFile(t, "testdata/catalog.json"), []byte(ovr)); err == nil {
+		t.Fatal("generate accepted offType in a table that is not a thinking-disable table")
+	}
+}
