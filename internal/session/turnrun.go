@@ -76,9 +76,7 @@ func (*turnRun) Alive() {}
 // Status sends f.
 func (t *turnRun) Status(f protocol.StatusFrame) {
 	f.TurnID = t.r.id
-	if f.Status == protocol.StatusCompactionCanceled && !stopsByRequest(context.Cause(t.r.ctx)) {
-		f.Status = protocol.StatusCompactionFailed
-	}
+	f.Status = compactionOutcome(f.Status, context.Cause(t.r.ctx))
 	t.a.frame(protocol.KindStatus, f)
 }
 

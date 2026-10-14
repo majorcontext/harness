@@ -165,11 +165,7 @@ func (r *run) finish(ctx context.Context, err error) error {
 		r.proc.Interrupt()
 	}
 	exit := r.proc.Finish(grace, r.tail)
-	if r.stopped {
-		r.settleCompaction(protocol.StatusCompactionCanceled)
-	} else {
-		r.settleCompaction(protocol.StatusCompactionFailed)
-	}
+	r.settleCompaction(protocol.StatusCompactionFailed)
 	if r.stopped {
 		err = stopError(err, context.Cause(ctx), r.result)
 	}
