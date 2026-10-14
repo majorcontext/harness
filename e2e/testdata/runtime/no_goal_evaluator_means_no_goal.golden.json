@@ -74,7 +74,7 @@
           "line": "/goal ship it",
           "name": "goal",
           "status": "failed",
-          "text": "harness: invalid request: a goal needs goal_evaluator_model"
+          "text": "a goal needs goal_evaluator_model"
         }
       ]
     },
@@ -111,7 +111,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "harness: invalid request: a goal needs goal_evaluator_model"
+          "message": "a goal needs goal_evaluator_model"
         }
       }
     }

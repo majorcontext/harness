@@ -3,6 +3,8 @@ package protocol
 import (
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 )
 
 // Code names the kind of an Error. It is the code member of an HTTP error body.
@@ -73,6 +75,44 @@ func CodeOf(err error) Code {
 		return e.Code
 	}
 	return CodeInternal
+}
+
+// Reason returns the text of err without the leading text of its invalid_request sentinels, so an
+// invalid_request message holds only the reason. A sentinel is an error of the chain that wraps no
+// error and is either a *Error with CodeInvalidRequest or one of extra. A bare sentinel keeps its text.
+func Reason(err error, extra ...error) string {
+	msg := err.Error()
+	for {
+		rest, ok := trimSentinel(err, msg, extra)
+		if !ok {
+			return msg
+		}
+		msg = rest
+	}
+}
+
+// trimSentinel removes from msg the text and ": " of the first sentinel in the chain of err that leads msg.
+func trimSentinel(err error, msg string, extra []error) (string, bool) {
+	switch u := err.(type) {
+	case interface{ Unwrap() error }:
+		if inner := u.Unwrap(); inner != nil {
+			return trimSentinel(inner, msg, extra)
+		}
+	case interface{ Unwrap() []error }:
+		for _, inner := range u.Unwrap() {
+			if rest, ok := trimSentinel(inner, msg, extra); ok {
+				return rest, true
+			}
+		}
+		return "", false
+	}
+	if e, ok := err.(*Error); !ok || e.Code != CodeInvalidRequest {
+		if !slices.Contains(extra, err) {
+			return "", false
+		}
+	}
+	rest, ok := strings.CutPrefix(msg, err.Error()+": ")
+	return rest, ok && rest != ""
 }
 
 var statuses = map[Code]int{

@@ -22,7 +22,7 @@ type ModelRef struct {
 func ParseModelRef(s string) (ModelRef, error) {
 	provider, model, ok := strings.Cut(s, "/")
 	if !ok || provider == "" || model == "" {
-		return ModelRef{}, fmt.Errorf(`message: model ref %q is not of the form "provider/model"`, s)
+		return ModelRef{}, fmt.Errorf(`model ref %q is not of the form "provider/model"`, s)
 	}
 	return ModelRef{Provider: provider, Model: model}, nil
 }

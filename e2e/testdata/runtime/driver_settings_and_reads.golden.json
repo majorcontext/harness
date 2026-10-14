@@ -251,7 +251,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "harness: invalid request: message: model ref \"\" is not of the form \"provider/model\""
+          "message": "model ref \"\" is not of the form \"provider/model\""
         }
       }
     },

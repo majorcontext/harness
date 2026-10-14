@@ -99,7 +99,7 @@ func ParseEffort(s string) (Effort, error) {
 	case EffortUnset, EffortOff, EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return e, nil
 	default:
-		return EffortUnset, fmt.Errorf("message: invalid effort %q (want one of: off, minimal, low, medium, high, xhigh, max, or empty)", s)
+		return EffortUnset, fmt.Errorf("invalid effort %q (want one of: off, minimal, low, medium, high, xhigh, max, or empty)", s)
 	}
 }
 

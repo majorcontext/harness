@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 
 	"github.com/majorcontext/harness/protocol"
@@ -14,7 +13,7 @@ import (
 var ErrRequestNotPending = &protocol.Error{Code: protocol.CodeRequestNotPending, Message: "harness: request not pending"}
 
 // ErrBadAnswer reports an answer that the kind of its request does not take.
-var ErrBadAnswer = errors.New("harness: bad answer")
+var ErrBadAnswer = errors.New("a question takes a map of questions to text")
 
 // checkAnswer accepts for a question only a non-empty map of text.
 func checkAnswer(kind string, answer json.RawMessage) error {
@@ -23,7 +22,7 @@ func checkAnswer(kind string, answer json.RawMessage) error {
 	}
 	var choices map[string]string
 	if err := json.Unmarshal(answer, &choices); err != nil || len(choices) == 0 {
-		return fmt.Errorf("%w: a question takes a map of questions to text", ErrBadAnswer)
+		return ErrBadAnswer
 	}
 	return nil
 }

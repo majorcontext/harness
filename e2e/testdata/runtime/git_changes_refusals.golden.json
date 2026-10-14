@@ -8,7 +8,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "invalid request: workdir \"/nonexistent\" is not under an allowed workspace root"
+          "message": "workdir \"/nonexistent\" is not under an allowed workspace root"
         }
       }
     },
@@ -18,7 +18,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "invalid request: dir \"\u003cworkdir\u003e/missing\": stat \u003cworkdir\u003e/missing: no such file or directory"
+          "message": "dir \"\u003cworkdir\u003e/missing\": stat \u003cworkdir\u003e/missing: no such file or directory"
         }
       }
     },
@@ -48,7 +48,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "invalid request: scope \"bogus\" must be \"branch\" or \"uncommitted\""
+          "message": "scope \"bogus\" must be \"branch\" or \"uncommitted\""
         }
       }
     },

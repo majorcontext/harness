@@ -228,7 +228,7 @@ func (c Catalog) modelChoices() string {
 func (c Catalog) CheckChild(model string) error {
 	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
-		return fmt.Errorf("invalid model %q: %w", model, err)
+		return err
 	}
 	return c.servesProvider(ref)
 }

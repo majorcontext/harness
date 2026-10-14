@@ -30,14 +30,14 @@ func rpcError(err error) error {
 		}
 	}
 	if code == protocol.CodeInvalidRequest {
-		data["reason"] = err.Error()
+		data["reason"] = protocol.Reason(err)
 	}
 	e := &rpc.Error{Code: RPCCode(code), Message: "Internal error", Data: data}
 	if ok && code != protocol.CodeInternal && code != protocol.CodeSessionUnreplayable {
 		e.Message = pe.Message
 	}
 	if code == protocol.CodeInvalidRequest {
-		e.Message = err.Error()
+		e.Message = protocol.Reason(err)
 	}
 	return e
 }
