@@ -63,6 +63,47 @@ func (a claudeSessionInfoSkills) run(t *testing.T, r *run) {
 	r.record(t, "session_info_skills", a.as, callResult{Status: http.StatusOK, Body: info.Skills})
 }
 
+// claudeSessionInfoSystem checks that the system prompt that session_info
+// reported to the CLI is the --append-system-prompt value of the run that
+// called it.
+type claudeSessionInfoSystem struct{ as string }
+
+func (a claudeSessionInfoSystem) run(t *testing.T, r *run) {
+	d := claudeDriverOf(t, r)
+	body, _ := d.lastToolCall(t).Body.(map[string]any)
+	result, _ := body["result"].(map[string]any)
+	content, _ := result["content"].([]any)
+	if len(content) == 0 {
+		t.Fatalf("session_info returned no content: %v", body)
+	}
+	item, _ := content[0].(map[string]any)
+	text, _ := item["text"].(string)
+	var info struct {
+		System []string `json:"system"`
+	}
+	if err := json.Unmarshal([]byte(text), &info); err != nil {
+		t.Fatalf("decode session_info %q: %v", text, err)
+	}
+	data, err := os.ReadFile(d.argvLog)
+	if err != nil {
+		t.Fatalf("read argv log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var argv []string
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &argv); err != nil {
+		t.Fatalf("decode argv: %v", err)
+	}
+	sent := ""
+	if i := slices.Index(argv, "--append-system-prompt"); i >= 0 && i+1 < len(argv) {
+		sent = argv[i+1]
+	}
+	same := len(info.System) == 1 && info.System[0] == sent
+	if !same {
+		t.Errorf("session_info system differs from the value the CLI got:\n got %q\nwant [%q]", info.System, sent)
+	}
+	r.record(t, "session_info_system_is_the_cli_value", a.as, callResult{Status: http.StatusOK, Body: same})
+}
+
 func TestContractClaudeCodeSkills(t *testing.T) {
 	demo := writeFile{path: ".agents/skills/demo/SKILL.md", body: skillFile("demo", "Demonstrates discovery.", "The skill body.")}
 	picked := writeFile{path: "custom/picked/SKILL.md", body: skillFile("picked", "Scanned.", "x")}
@@ -80,6 +121,6 @@ func TestContractClaudeCodeSkills(t *testing.T) {
 	}, {
 		name:    "claudecode_session_info_lists_the_skills",
 		driver:  claudeLane{mode: "normal", callTool: "session_info", callArgs: map[string]any{}}.newDriver,
-		actions: withTurn([]action{demo}, claudeSessionInfoSkills{as: "a"}),
+		actions: append(withTurn([]action{demo}, claudeSessionInfoSkills{as: "a"}), claudeSessionInfoSystem{as: "a"}),
 	}})
 }

@@ -98,7 +98,7 @@ func sameJSON(x, y any) bool {
 // modelRequest returns the request of the next model call before its inputs:
 // the conversation as the model reads it, with each pinned segment.
 func (a *Actor) modelRequest() turn.Request {
-	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(), Skills: a.cfg.Skills,
+	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(), Skills: a.cfg.Skills, Sent: a.cfg.Sent,
 		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params, MCPServers: a.mcpServers()}
 }
 

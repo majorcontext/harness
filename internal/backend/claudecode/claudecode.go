@@ -197,7 +197,11 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if e, ok := effortArg(effort); ok {
 		args = append(args, "--effort", e)
 	}
-	args = append(args, "--append-system-prompt", b.systemPrompt(req))
+	system := b.systemPrompt(req)
+	args = append(args, "--append-system-prompt", system)
+	if req.Sent != nil {
+		req.Sent(system)
+	}
 	env := os.Environ()
 	if b.p.SessionMirror {
 		dir, err := scratch(r.mirror)

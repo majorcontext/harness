@@ -77,6 +77,14 @@ func NewPrompt(read prompt.Info, agent string, p prompt.Profile, procs *process.
 // SkillList returns the skill segment that the session read, or "".
 func (p *Prompt) SkillList() string { return p.read.SkillList }
 
+// Sent records system as the system prompt of the newest turn, in place of the
+// segments of the session, for a backend that builds its own prompt.
+func (p *Prompt) Sent(system string) {
+	p.mu.Lock()
+	p.turn = []string{system}
+	p.mu.Unlock()
+}
+
 // System returns the system prompt of a turn: the prompt of the session, the
 // prompt of its agent profile, and the process status line. It records the
 // segments as the segments of the turn.

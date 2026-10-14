@@ -68,6 +68,10 @@
           "path": "\u003cworkdir\u003e/.agents/skills/demo/SKILL.md"
         }
       ]
+    },
+    "session_info_system_is_the_cli_value.a": {
+      "status": 200,
+      "body": true
     }
   }
 }
