@@ -20,7 +20,7 @@ type ccCompactionRow struct {
 	summary string
 }
 
-func ccCompactionRows() []ccCompactionRow {
+func ccCompactionRows() ([]ccCompactionRow, map[string]string) {
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": "S", "model": "claude-haiku-4-5-20251001", "tools": []string{}}
 	compacting := map[string]any{"type": "system", "subtype": "status", "status": "compacting", "session_id": "S"}
 	settled := map[string]any{"type": "system", "subtype": "status", "status": nil, "compact_result": "success", "session_id": "S"}
@@ -37,7 +37,13 @@ func ccCompactionRows() []ccCompactionRow {
 	boundaryLine := "Claude Code compacted its context (auto, 167000 tokens before)."
 	settledLines := []string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}
 	cliSummary := "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion.\n\nSummary:\nthe plain body\n\nIf you need specific details from before compaction (like exact code snippets), read the full transcript at: /x.jsonl\nContinue the conversation from where it left off."
-	return []ccCompactionRow{
+	held := map[string]any{"type": "transcript_mirror", "filePath": "/home/u/cfg/projects/p/S.jsonl", "entries": []json.RawMessage{json.RawMessage(ccEntry("a00", 100))}}
+	// acts names the action that a row takes at the compacting frame; the CLI of those rows hangs at its first mirror frame.
+	acts := map[string]string{
+		"claude_code_compaction_stopped_by_an_interrupt_sends_compaction_canceled": "interrupt",
+		"claude_code_compaction_cut_off_by_a_handoff_sends_compaction_failed":      "handoff",
+	}
+	rows := []ccCompactionRow{
 		{"claude_code_compaction_sends_compacting_then_running_at_the_boundary",
 			[]map[string]any{init, compacting, settled, boundary, summary, reply, result},
 			[]string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}, ""},
@@ -53,6 +59,12 @@ func ccCompactionRows() []ccCompactionRow {
 		{"claude_code_compaction_cut_off_by_the_end_of_the_stream_sends_compaction_failed",
 			[]map[string]any{init, compacting},
 			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}, ""},
+		{"claude_code_compaction_stopped_by_an_interrupt_sends_compaction_canceled",
+			[]map[string]any{init, compacting, held},
+			[]string{"turn.started", "~status compacting", "~status compaction_canceled", "turn.ended"}, ""},
+		{"claude_code_compaction_cut_off_by_a_handoff_sends_compaction_failed",
+			[]map[string]any{init, compacting, held},
+			[]string{"turn.started", "~status compacting", "~status compaction_failed"}, ""},
 		{"claude_code_boundary_without_a_compacting_status_sends_no_frame",
 			[]map[string]any{init, boundary, summary, reply, result},
 			[]string{"turn.started", "compaction.applied", "turn.ended"}, ""},
@@ -69,20 +81,30 @@ func ccCompactionRows() []ccCompactionRow {
 		{"claude_code_boundary_without_a_summary_frame_logs_the_boundary_text",
 			[]map[string]any{init, compacting, settled, boundary, reply, result}, settledLines, boundaryLine},
 	}
+	return rows, acts
 }
 
 func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 	skipShort(t)
-	for _, row := range ccCompactionRows() {
+	rows, acts := ccCompactionRows()
+	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			l := newCCLane(t, "", ccStream(t, row.frames...))
+			hang := ""
+			if acts[row.name] != "" {
+				hang = "0"
+			}
+			l := newCCLane(t, hang, ccStream(t, row.frames...))
 			r := l.runtime()
 			s := l.create(r)
 			var got []string
 			var gotSummary string
+			closed := false
 			head := s.Snapshot().HeadSeq
 			for e, err := range s.Events(t.Context(), head-1) {
 				if err != nil {
+					if acts[row.name] == "handoff" {
+						break
+					}
 					t.Fatal(err)
 				}
 				if e.Seq == head && !e.Ephemeral {
@@ -97,12 +119,23 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 				}
 				if line, ok := compactionLine(e); ok {
 					got = append(got, line)
+					switch {
+					case line == "~status compacting" && acts[row.name] == "interrupt":
+						if err := s.Interrupt(t.Context(), protocol.Interrupt{}); err != nil {
+							t.Fatal(err)
+						}
+					case line == "~status compacting" && acts[row.name] == "handoff":
+						l.close(r)
+						closed = true
+					}
 				}
 				if e.Kind == "turn.ended" && !e.Ephemeral {
 					break
 				}
 			}
-			l.close(r)
+			if !closed {
+				l.close(r)
+			}
 			if !slices.Equal(got, row.want) {
 				t.Errorf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(row.want, "\n"))
 			}

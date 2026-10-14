@@ -388,7 +388,7 @@ export interface ProcessStatus {
 
 export interface Progress {
   seq: number;
-  status?: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
+  status?: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed" | "compaction_canceled";
   turn_id?: string;
   queued?: string[];
   requests?: string[];
@@ -437,7 +437,7 @@ export interface Session {
   model: string;
   effort?: string;
   service_tier?: string;
-  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
+  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed" | "compaction_canceled";
   turn_id?: string;
   queued?: string[];
   goal?: GoalView;
@@ -486,7 +486,7 @@ export interface SettingsPatch {
 }
 
 export interface StatusFrame {
-  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed";
+  status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed" | "compaction_canceled";
   turn_id: string;
   attempt?: number;
   next_at?: string;

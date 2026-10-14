@@ -1348,7 +1348,8 @@
               "waiting",
               "retrying",
               "compacting",
-              "compaction_failed"
+              "compaction_failed",
+              "compaction_canceled"
             ]
           },
           "turn_id": {
@@ -1513,7 +1514,8 @@
               "waiting",
               "retrying",
               "compacting",
-              "compaction_failed"
+              "compaction_failed",
+              "compaction_canceled"
             ]
           },
           "turn_id": {
@@ -1687,7 +1689,8 @@
               "waiting",
               "retrying",
               "compacting",
-              "compaction_failed"
+              "compaction_failed",
+              "compaction_canceled"
             ]
           },
           "turn_id": {

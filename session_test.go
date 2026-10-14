@@ -1,11 +1,13 @@
 package harness_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
@@ -121,14 +123,36 @@ type windowed struct{ *scripted }
 
 func (windowed) Capabilities(string) turn.Capabilities { return turn.Capabilities{ContextWindow: 1000} }
 
+// blockedSummary is a backend whose third call, the summary, waits until its run stops.
+type blockedSummary struct {
+	windowed
+	runs atomic.Int32
+}
+
+func (b *blockedSummary) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
+	if b.runs.Add(1) == 3 {
+		<-ctx.Done()
+		return fmt.Errorf("summary: %w", ctx.Err())
+	}
+	return b.windowed.Run(ctx, req, out)
+}
+
 func compactingRuntime(t *testing.T, summary func(turn.Sink) error) *harness.Session {
+	t.Helper()
+	return compactingSession(t, summary, nil)
+}
+
+func compactingSession(t *testing.T, summary func(turn.Sink) error, wrap func(windowed) turn.Backend) *harness.Session {
 	t.Helper()
 	full := func(out turn.Sink) error {
 		out.Telemetry(turn.Telemetry{Context: protocol.ContextMeasured{Tokens: 900, Window: 1000, Source: "test"}})
 		return out.Item(say("full"))
 	}
 	reply := func(out turn.Sink) error { return out.Item(say("ok")) }
-	b := windowed{&scripted{steps: []func(turn.Sink) error{reply, full, summary, reply}}}
+	var b turn.Backend = windowed{&scripted{steps: []func(turn.Sink) error{reply, full, summary, reply}}}
+	if wrap != nil {
+		b = wrap(b.(windowed))
+	}
 	r, err := harness.NewWithBackend(harness.Options{Store: store.NewMemStore(), Config: config.Config{CompactionKeepTurns: 1}}, b)
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +169,53 @@ func TestEventsAutoCompactionFrames(t *testing.T) {
 		head := s.Snapshot().HeadSeq
 		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "13 compaction.applied", "~13 status idle",
 			"14 turn.started", "15 item.completed i1", "16 turn.ended")
+	})
+}
+
+// stopDuringCompaction runs a third input over a compaction whose summary waits, calls stop when the compaction starts, and returns the frames through the end of the compaction.
+func stopDuringCompaction(t *testing.T, stop func(*harness.Session)) []protocol.Event {
+	s := compactingSession(t, func(out turn.Sink) error { return out.Item(say("unused")) }, func(w windowed) turn.Backend { return &blockedSummary{windowed: w} })
+	head := s.Snapshot().HeadSeq
+	var out []protocol.Event
+	for e, err := range s.Events(bg, head-1) {
+		if err != nil {
+			break
+		}
+		out = append(out, e)
+		if len(out) == 1 {
+			if _, err := s.Prompt(bg, text("c", "three")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if e.Ephemeral && e.Kind == protocol.KindStatus && strings.Contains(string(e.Data), `"status":"compacting"`) {
+			stop(s)
+		}
+		if e.Ephemeral && e.Kind == protocol.KindStatus && strings.Contains(string(e.Data), `"status":"compaction_`) {
+			break
+		}
+	}
+	return out[1:]
+}
+
+func TestEventsInterruptedCompactionFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		got := stopDuringCompaction(t, func(s *harness.Session) {
+			if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		wantEvents(t, got, "12 input.admitted", "~12 status compacting", "~12 status compaction_canceled")
+	})
+}
+
+func TestEventsReleasedCompactionFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		got := stopDuringCompaction(t, func(s *harness.Session) {
+			if err := s.Release(bg); err != nil {
+				t.Fatal(err)
+			}
+		})
+		wantEvents(t, got, "12 input.admitted", "~12 status compacting", "~12 status compaction_failed")
 	})
 }
 
