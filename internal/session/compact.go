@@ -140,7 +140,7 @@ func (a *Actor) recordUsage(u protocol.Usage) error {
 }
 
 // compactionOutcome returns the status that ends a failed compaction whose run stopped with cause: canceled when cause is an
-// interrupt or the end of the session, else status.
+// interrupt or the end of an ancestor session, else status.
 func compactionOutcome(status protocol.Status, cause error) protocol.Status {
 	if status == protocol.StatusCompactionFailed && stopsByRequest(cause) {
 		return protocol.StatusCompactionCanceled
@@ -148,7 +148,7 @@ func compactionOutcome(status protocol.Status, cause error) protocol.Status {
 	return status
 }
 
-// stopsByRequest reports whether cause is an interrupt or the end of the session, the stops that a compaction reports as canceled.
+// stopsByRequest reports whether cause is an interrupt or the end of an ancestor session, the stops that a compaction reports as canceled.
 func stopsByRequest(cause error) bool {
 	return errors.Is(cause, errStopTurn) || errors.Is(cause, errEndTurn)
 }
