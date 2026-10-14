@@ -47,10 +47,28 @@ type codexAuthRun struct {
 	logoutOut  *bytes.Buffer
 }
 
+// secrets lists every token that the issuer minted or that a row seeded.
+func (a *codexAuthRun) secrets() []string {
+	return append(a.issuer.Secrets(), a.tokens...)
+}
+
+// holdsSecret reports whether text holds one of secrets.
+func holdsSecret(text string, secrets []string) bool {
+	for _, s := range secrets {
+		if s != "" && strings.Contains(text, s) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *codexAuthRun) write(t *testing.T, label string, lifetime time.Duration, refresh string) {
 	t.Helper()
 	access := harnesstest.AccessToken(label, codexAccount, lifetime)
-	a.tokens = append(a.tokens, access)
+	a.tokens = append(a.tokens, access, refresh)
+	if parts := strings.Split(access, "."); len(parts) == 3 {
+		a.tokens = append(a.tokens, parts[1])
+	}
 	body, err := json.Marshal(map[string]string{
 		"access_token":  access,
 		"refresh_token": refresh,
@@ -221,7 +239,7 @@ func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 		Refresh string `json:"refresh_token"`
 		Account string `json:"account_id"`
 	}
-	secrets := r.codex.tokens
+	secrets := r.codex.secrets()
 	if raw, err := os.ReadFile(r.codex.path); err == nil && json.Unmarshal(raw, &stored) == nil {
 		label, _ := harnesstest.TokenLabel(stored.Access)
 		info, _ := os.Stat(r.codex.path)
@@ -229,7 +247,7 @@ func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 		state["stored_access"], state["stored_refresh"], state["stored_account"] = label, stored.Refresh, stored.Account
 		state["file_exists"] = true
 		state["file_mode"], state["dir_mode"] = info.Mode().Perm().String(), dir.Mode().Perm().String()
-		secrets = append(secrets[:len(secrets):len(secrets)], stored.Access)
+		secrets = append(secrets, stored.Access, stored.Refresh)
 	}
 	res := r.drv.GetSession(t, r.id(t, a.as))
 	msg := ""
@@ -241,10 +259,7 @@ func (a recordCodexAuth) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 	}
 	state["error_says_login"] = strings.Contains(msg, "run `harness login codex`")
 	logs := r.drv.Stderr() + msg
-	leak := strings.Contains(logs, "refresh-") || strings.Contains(logs, "eyJ")
-	for _, s := range secrets {
-		leak = leak || strings.Contains(logs, s)
-	}
+	leak := holdsSecret(logs, secrets)
 	state["secret_in_error_or_log"] = leak
 	if a.stable {
 		delete(state, "refreshes")
