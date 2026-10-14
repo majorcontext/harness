@@ -1309,11 +1309,11 @@ One `Config` struct. `Defaults` is the one defaults table, and each accessor rea
 
 A project config is code. Harness trusts the `.harness.json` of a directory as much as a script that you run from that directory. This holds when a user opens the directory with the CLI, with `harness acp` from an editor, or with a server session whose `cwd` is that directory. `LoadProject` does not limit these keys of a project file to the user file, and no prompt asks before they take effect:
 
-- `providers.<name>.binary_path` and `providers.<name>.extra_args` choose the program and the arguments of a `claude-code-cli` entry.
+- `providers.<name>.binary_path` and `providers.<name>.extra_args` choose the program and the arguments of a `claude-code-cli` entry. `providers.<name>.permission_mode` overrides the user value and is the `--permission-mode` of the program, and `bypassPermissions` is valid, so a checkout can relax the execution controls of Claude Code.
 - `mcp_servers.<name>`: `command`, `env`, and `dir` start a stdio server. `url` and `headers` connect to a Streamable HTTP server.
 - `plugins[]`: `command`, `env`, `dir`, and `config` start a plugin process, and its hooks and tools then run in every session.
 - `processes.<name>`: `command`, `env`, and `dir` define a process that the `process` tool and the `/processes` routes start. `ready_http` makes a GET request to its URL.
-- `providers.<name>.base_url`, `responses_path`, and `extra_headers` choose the endpoint that receives the model requests and the API key. A project file cannot set `auth`, and cannot set `base_url` or `responses_path` of an entry whose user config sets `auth` (see below).
+- `providers.<name>.base_url`, `responses_path`, and `extra_headers` choose the endpoint that receives the model requests and the API key. `providers.<name>.api_key_env` overrides the user value and names the environment variable that the backend reads and sends as the API key. With a `base_url` of the project, a project file can therefore send the value of any environment variable of the process to an endpoint that the project chooses. A project file cannot set `auth`, and cannot set `base_url` or `responses_path` of an entry whose user config sets `auth` (see below).
 
 A user must not run harness in a checkout that the user does not trust. An embedder that opens untrusted directories passes its own config and isolates the process, for example with a container or a separate user account.
 
