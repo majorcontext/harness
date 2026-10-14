@@ -212,26 +212,56 @@ func (c *Conn) sendRequest(id *int64, method string, params any) error {
 // Call sends a request to the peer and waits for its response. A non-nil
 // result receives the decoded result. A peer error returns as *Error.
 func (c *Conn) Call(ctx context.Context, method string, params, result any) error {
+	p, err := c.Start(method, params)
+	if err != nil {
+		return err
+	}
+	return p.Wait(ctx, result)
+}
+
+// Pending is a request to the peer that has no response yet.
+type Pending struct {
+	c  *Conn
+	id int64
+	ch chan reply
+}
+
+// ErrCancelled is the error of a Wait on a Pending that Cancel ended.
+var ErrCancelled = errors.New("rpc: request cancelled")
+
+// Start sends a request to the peer and returns without waiting for the
+// response. The request is queued behind every message that the caller sent
+// before.
+func (c *Conn) Start(method string, params any) (*Pending, error) {
 	ch := make(chan reply, 1)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return ErrClosed
+		return nil, ErrClosed
 	}
 	c.nextID++
 	id := c.nextID
 	c.pending[id] = ch
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-	}()
 	if err := c.sendRequest(&id, method, params); err != nil {
-		return err
+		c.forget(id)
+		return nil, err
 	}
+	return &Pending{c: c, id: id, ch: ch}, nil
+}
+
+func (c *Conn) forget(id int64) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	c.mu.Unlock()
+}
+
+// Wait waits for the response. A non-nil result receives the decoded result.
+// A peer error returns as *Error.
+func (p *Pending) Wait(ctx context.Context, result any) error {
+	defer p.c.forget(p.id)
 	select {
-	case r := <-ch:
+	case r := <-p.ch:
 		if r.err != nil {
 			return r.err
 		}
@@ -242,6 +272,20 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
+}
+
+// Cancel sends $/cancel_request for a request that has no response yet, and
+// ends its Wait with ErrCancelled. It does nothing when the response came.
+func (p *Pending) Cancel() {
+	p.c.mu.Lock()
+	_, waiting := p.c.pending[p.id]
+	delete(p.c.pending, p.id)
+	p.c.mu.Unlock()
+	if !waiting {
+		return
+	}
+	deliver(p.ch, reply{err: ErrCancelled})
+	_ = p.c.Notify("$/cancel_request", map[string]any{"requestId": p.id})
 }
 
 type line struct {

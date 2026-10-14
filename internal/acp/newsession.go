@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/acp/rpc"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -74,7 +75,7 @@ func (a *agent) runtime(ctx context.Context, cwd string) (Runtime, error) {
 	if a.rts == nil {
 		return nil, rpcError(errNoRuntimes)
 	}
-	rt, err := a.rts.For(ctx, cwd)
+	rt, err := a.rts.For(ctx, cwd, a.runtimeOptions())
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -83,7 +84,7 @@ func (a *agent) runtime(ctx context.Context, cwd string) (Runtime, error) {
 
 // newHeld returns a held session of the work directory cwd, served by rt.
 func (a *agent) newHeld(ctx context.Context, id, cwd string, rt Runtime) *held {
-	return newHeld(id, heldConfig{cwd: cwd, models: rt.Models(ctx), notices: a.notices.Load(), compaction: a.compaction.Load(), log: a.cfg.Logger, send: a.conn.Notify,
+	return newHeld(id, heldConfig{cwd: cwd, models: rt.Models(ctx), notices: a.notices.Load(), compaction: a.compaction.Load(), log: a.cfg.Logger, send: a.conn.Notify, elicit: a.elicitFunc(),
 		toolImage: func(ctx context.Context, key string) (io.ReadCloser, error) { return a.rts.ToolImage(ctx, id, key) }})
 }
 
@@ -126,4 +127,17 @@ func (a *agent) isClosed() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.closed
+}
+
+// runtimeOptions are the choices of the client for the runtimes of the connection.
+func (a *agent) runtimeOptions() RuntimeOptions {
+	return RuntimeOptions{AskUserQuestion: a.elicitation.Load()}
+}
+
+// elicitFunc returns how a held session sends a request to the client, or nil when the client takes no elicitation.
+func (a *agent) elicitFunc() func(string, any) (*rpc.Pending, error) {
+	if !a.elicitation.Load() {
+		return nil
+	}
+	return func(method string, params any) (*rpc.Pending, error) { return a.conn.Start(method, params) }
 }

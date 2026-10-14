@@ -49,6 +49,8 @@ type acpConn struct {
 	scanned int
 	// cursor is the nextCursor of the last session/list.
 	cursor string
+	// asked maps a name to the id of an elicitation/create request of the agent.
+	asked map[string]any
 }
 
 type acpLine struct {

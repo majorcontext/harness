@@ -100,11 +100,11 @@ func (a *agent) listRuntime(ctx context.Context, cwd string) (Runtime, error) {
 	var rt Runtime
 	var err error
 	if cwd == "" {
-		if rt, err = a.rts.Default(ctx); err == nil && rt == nil {
+		if rt, err = a.rts.Default(ctx, a.runtimeOptions()); err == nil && rt == nil {
 			return nil, nil
 		}
 	} else {
-		rt, err = a.rts.For(ctx, cwd)
+		rt, err = a.rts.For(ctx, cwd, a.runtimeOptions())
 	}
 	if err != nil {
 		return nil, rpcError(err)

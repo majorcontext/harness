@@ -54,7 +54,7 @@ func New(opts Options) *Runtimes {
 }
 
 // For returns the Runtime of cwd. After Close it fails with harness.ErrDraining. A directory that does not exist, and a config that does not load, fail with harness.ErrInvalidRequest.
-func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
+func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (acp.Runtime, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.shut {
@@ -80,7 +80,7 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 	}
 	rt, err := harness.New(harness.Options{Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
 		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
-		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools})
+		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (r *Runtimes) For(_ context.Context, cwd string) (acp.Runtime, error) {
 }
 
 // Default returns the Runtime that For built first, else the one of DefaultDir, else nil.
-func (r *Runtimes) Default(ctx context.Context) (acp.Runtime, error) {
+func (r *Runtimes) Default(ctx context.Context, opts acp.RuntimeOptions) (acp.Runtime, error) {
 	r.mu.Lock()
 	if len(r.order) > 0 {
 		rt := r.rts[r.order[0]]
@@ -101,7 +101,7 @@ func (r *Runtimes) Default(ctx context.Context) (acp.Runtime, error) {
 	if r.opts.DefaultDir == "" {
 		return nil, nil
 	}
-	return r.For(ctx, r.opts.DefaultDir)
+	return r.For(ctx, r.opts.DefaultDir, opts)
 }
 
 // ToolImage returns a tool-result image of a session from the shared Store. It

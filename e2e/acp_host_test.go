@@ -118,8 +118,8 @@ type hookRuntimes struct {
 	after func(rt *harness.Runtime, id string)
 }
 
-func (h hookRuntimes) For(ctx context.Context, cwd string) (acp.Runtime, error) {
-	rt, err := h.Runtimes.For(ctx, cwd)
+func (h hookRuntimes) For(ctx context.Context, cwd string, opts acp.RuntimeOptions) (acp.Runtime, error) {
+	rt, err := h.Runtimes.For(ctx, cwd, opts)
 	if err != nil {
 		return nil, err
 	}
