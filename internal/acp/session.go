@@ -376,3 +376,35 @@ func (h *held) cancelled(p *prompt) bool {
 	defer h.mu.Unlock()
 	return p.cancelled
 }
+
+// holdSends returns a send function that queues each message until release
+// is called, and release, which sends the queue in order and then passes every
+// later message through. The pump keeps its subscription to the events, so a
+// frame that the log does not keep is queued and not lost.
+func holdSends(send func(string, any) error) (held func(string, any) error, release func()) {
+	var mu sync.Mutex
+	open := false
+	type message struct {
+		method string
+		params any
+	}
+	var queue []message
+	held = func(method string, params any) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !open {
+			queue = append(queue, message{method, params})
+			return nil
+		}
+		return send(method, params)
+	}
+	release = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range queue {
+			_ = send(m.method, m.params)
+		}
+		queue, open = nil, true
+	}
+	return held, release
+}

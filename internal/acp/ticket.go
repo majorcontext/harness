@@ -76,9 +76,10 @@ type releasing struct {
 // MarshalJSON writes the wrapped result.
 func (r releasing) MarshalJSON() ([]byte, error) { return json.Marshal(r.result) }
 
-// AfterSent releases the ticket, then runs the follow-up of the result.
+// AfterSent runs the follow-up of the result, then releases the ticket, so the
+// next request for the session runs behind the updates that the follow-up sends.
 func (r releasing) AfterSent() {
-	r.t.release()
+	defer r.t.release()
 	if f, ok := r.result.(interface{ AfterSent() }); ok {
 		f.AfterSent()
 	}
