@@ -885,7 +885,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - A line that is not JSON is answered with `-32700` and a null id, and the connection stays open.
 - A line that is JSON but not a request, a notification, or a response is answered with `-32600` and a null id. An `id` that is not a string, a number, or null is the same error.
 - A request with a null `id` is a request and is answered. A message with no `id` is a notification.
-- Two numbers that are equal name one id, so `1` and `1.0` are the same id. A request whose id names a request that still runs is answered with `-32600`.
+- Two numbers that are equal name one id, so `1` and `1.0` are the same id. A request whose id names a request that still runs is answered with `-32600`. A request id is free when the agent has decided its answer. A client that gets the answer and then sends a new request with the same id is not refused.
 - A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.
 - `$/cancel_request` cancels the context of the request that `requestId` names. If that request then fails, the answer is `-32800`. A `requestId` that names no running request is ignored.
 - A handler that fails with an error that is not a JSON-RPC error is answered with `-32603` and the text `Internal error`. The error text never reaches the client.

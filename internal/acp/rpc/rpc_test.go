@@ -169,6 +169,40 @@ func TestHandlerErrorsMapToCodes(t *testing.T) {
 	p.finish()
 }
 
+type heldAfterSent struct {
+	entered chan<- struct{}
+	release <-chan struct{}
+}
+
+func (h heldAfterSent) AfterSent() {
+	h.entered <- struct{}{}
+	<-h.release
+}
+
+func TestRequestIDIsFreeOnceItsAnswerIsSent(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	p := startPeer(t, handlerFunc(func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "first" {
+			return heldAfterSent{entered: entered, release: release}, nil
+		}
+		return map[string]string{"method": method}, nil
+	}))
+	p.send(`{"jsonrpc":"2.0","id":1,"method":"first"}`)
+	if got := p.next(); got["id"] != float64(1) || got["error"] != nil {
+		t.Fatalf("first answer = %v, want a result", got)
+	}
+	<-entered
+	p.send(`{"jsonrpc":"2.0","id":1,"method":"second"}`)
+	got := p.next()
+	res, _ := got["result"].(map[string]any)
+	if got["error"] != nil || got["id"] != float64(1) || res["method"] != "second" {
+		t.Errorf("answer of a request that reuses an answered id = %v, want the result of second", got)
+	}
+	close(release)
+	p.finish()
+}
+
 func TestNotificationsGetNoResponse(t *testing.T) {
 	r := &recorder{handlerFunc: echo, notes: make(chan string, 1)}
 	p := startPeer(t, r)

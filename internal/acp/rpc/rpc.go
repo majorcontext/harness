@@ -476,13 +476,12 @@ func (c *Conn) start(ctx context.Context, h Handler, m message, wg *sync.WaitGro
 		rctx = ad.Admit(rctx, *m.Method, m.Params)
 	}
 	wg.Go(func() {
-		defer func() {
-			c.mu.Lock()
-			delete(c.running, key)
-			c.mu.Unlock()
-			cancel(nil)
-		}()
+		defer cancel(nil)
 		result, err := c.invoke(rctx, h, *m.Method, m.Params)
+		// The id is free before the answer is written: a peer may reuse it at once.
+		c.mu.Lock()
+		delete(c.running, key)
+		c.mu.Unlock()
 		switch {
 		case err != nil:
 			if errors.Is(context.Cause(rctx), errRequestCancelled) {
