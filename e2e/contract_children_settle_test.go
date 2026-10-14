@@ -8,64 +8,98 @@ import (
 	treeseam "github.com/majorcontext/harness/internal/tree"
 )
 
-// settleGate stops the report of one child after its turn ended and before its
-// parent records it, and tells the row when a send waits for that report.
-type settleGate struct {
-	child               string
-	entered, waits      chan struct{}
-	release             chan struct{}
-	enterOnce, waitOnce sync.Once
-	releaseOnceFn       sync.Once
+// childGate stops one step of the report and send of one child. Settling holds
+// the report after the turn ended; Decided holds the send after it decided.
+type childGate struct {
+	entered, waits, decided chan struct{}
+	release, proceed        chan struct{}
+	once                    [5]sync.Once
 }
 
-func newSettleGate() *settleGate {
-	return &settleGate{entered: make(chan struct{}), waits: make(chan struct{}), release: make(chan struct{})}
+func newChildGate() *childGate {
+	return &childGate{entered: make(chan struct{}), waits: make(chan struct{}), decided: make(chan struct{}),
+		release: make(chan struct{}), proceed: make(chan struct{})}
 }
 
-func (g *settleGate) open() { g.releaseOnceFn.Do(func() { close(g.release) }) }
+func (g *childGate) openReport() { g.once[3].Do(func() { close(g.release) }) }
+func (g *childGate) openSend()   { g.once[4].Do(func() { close(g.proceed) }) }
 
-// armSettleGate holds the report of the child as until the gate opens.
-type armSettleGate struct {
-	g  *settleGate
-	as string
+// childGates maps the ID of a child to its gate. One seam serves every row of
+// the process, because the seam is global and the rows run in parallel.
+var (
+	childGates   sync.Map
+	installSeam  sync.Once
+	gateOfChild  = func(child string) *childGate { g, _ := childGates.Load(child); gate, _ := g.(*childGate); return gate }
+	installGates = func() {
+		installSeam.Do(func() {
+			treeseam.SetSeam(&treeseam.Seam{
+				Settling: func(_, child string) {
+					if g := gateOfChild(child); g != nil {
+						g.once[0].Do(func() { close(g.entered) })
+						<-g.release
+					}
+				},
+				SendWaits: func(child string) {
+					if g := gateOfChild(child); g != nil {
+						g.once[1].Do(func() { close(g.waits) })
+					}
+				},
+				Decided: func(child string) {
+					if g := gateOfChild(child); g != nil {
+						g.once[2].Do(func() { close(g.decided) })
+						<-g.proceed
+					}
+				},
+			})
+		})
+	}
+)
+
+// armGate puts the gate g on the child as. holdReport holds its report after
+// the turn ended; holdSend holds its first send after the send decided.
+type armGate struct {
+	g                    *childGate
+	as                   string
+	holdReport, holdSend bool
 }
 
-func (a armSettleGate) run(t *testing.T, r *run) {
-	a.g.child = r.id(t, a.as)
-	restore := treeseam.SetSeam(&treeseam.Seam{
-		Settling: func(_, child string) {
-			if child == a.g.child {
-				a.g.enterOnce.Do(func() { close(a.g.entered) })
-				<-a.g.release
-			}
-		},
-		SendWaits: func(child string) {
-			if child == a.g.child {
-				a.g.waitOnce.Do(func() { close(a.g.waits) })
-			}
-		},
-	})
+func (a armGate) run(t *testing.T, r *run) {
+	installGates()
+	id := r.id(t, a.as)
+	if !a.holdReport {
+		a.g.openReport()
+	}
+	if !a.holdSend {
+		a.g.openSend()
+	}
+	childGates.Store(id, a.g)
 	t.Cleanup(func() {
-		a.g.open()
-		restore()
+		a.g.openReport()
+		a.g.openSend()
+		childGates.Delete(id)
 	})
 }
 
-// awaitHeldReport waits until the report of the child is in flight.
-type awaitHeldReport struct{ g *settleGate }
+// awaitGate waits until the step of the gate is reached.
+type awaitGate struct {
+	g    *childGate
+	step string
+}
 
-func (a awaitHeldReport) run(t *testing.T, _ *run) {
+func (a awaitGate) run(t *testing.T, _ *run) {
+	ch := map[string]chan struct{}{"report": a.g.entered, "decided": a.g.decided}[a.step]
 	select {
-	case <-a.g.entered:
+	case <-ch:
 	case <-t.Context().Done():
-		t.Fatal("the report of the child never reached its parent")
+		t.Fatalf("the gate never reached %s", a.step)
 	}
 }
 
-// releaseAfterSend opens the gate once the send has decided: either the child
-// got its nth request, or the send waits for the held report.
+// releaseAfterSend opens the report once the send has decided: either the
+// child got its nth request, or the send waits for the held report. The wait
+// for the request ends with the model server.
 type releaseAfterSend struct {
-	g *settleGate
+	g *childGate
 	n int
 }
 
@@ -76,15 +110,18 @@ func (a releaseAfterSend) run(t *testing.T, r *run) {
 	case <-got:
 	case <-a.g.waits:
 	}
-	a.g.open()
+	a.g.openReport()
 }
 
+// openSend lets the held send go on.
+type openSend struct{ g *childGate }
+
+func (a openSend) run(*testing.T, *run) { a.g.openSend() }
+
 func TestContractChildSettleSend(t *testing.T) {
-	g := newSettleGate()
-	runScenarios(t, []scenario{{
-		name:       "send_between_the_end_of_a_child_turn_and_its_report_reports_the_second_turn",
-		concurrent: true,
-		model: []harnesstest.Step{
+	inFlight, mid := newChildGate(), newChildGate()
+	sendSteps := func() []harnesstest.Step {
+		return []harnesstest.Step{
 			taskStep("delegate", userStarts("delegate"), fixed(spawn("general-purpose", "child work"))),
 			{Name: "child", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "first child text", Block: true}},
 			{Name: "ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Block: true,
@@ -93,17 +130,41 @@ func TestContractChildSettleSend(t *testing.T) {
 				}))}},
 			{Name: "child again", Match: userStarts("second work"), Reply: harnesstest.Reply{Text: "second child text", Block: true}},
 			{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
-		},
+		}
+	}
+	runScenarios(t, []scenario{{
+		name:       "send_between_the_end_of_a_child_turn_and_its_report_reports_the_second_turn",
+		concurrent: true,
+		model:      sendSteps(),
 		actions: []action{
 			create{as: "a"},
 			submit{as: "a", text: "delegate"},
 			awaitRequests{n: 3},
 			bindChild{as: "kid", parent: "a", record: true},
-			armSettleGate{g: g, as: "kid"},
+			armGate{g: inFlight, as: "kid", holdReport: true},
 			release{step: "child"},
-			awaitHeldReport{g: g},
+			awaitGate{g: inFlight, step: "report"},
 			release{step: "ack"},
-			releaseAfterSend{g: g, n: 4},
+			releaseAfterSend{g: inFlight, n: 4},
+			release{step: "child again"},
+			awaitSettled{as: "kid", parent: "a"},
+			waitIdle{as: "a"},
+		},
+	}, {
+		name:       "send_to_a_running_child_whose_turn_ends_before_the_text_lands_reports_the_second_turn",
+		concurrent: true,
+		model:      sendSteps(),
+		actions: []action{
+			create{as: "a"},
+			submit{as: "a", text: "delegate"},
+			awaitRequests{n: 3},
+			bindChild{as: "kid", parent: "a", record: true},
+			armGate{g: mid, as: "kid", holdSend: true},
+			release{step: "ack"},
+			awaitGate{g: mid, step: "decided"},
+			release{step: "child"},
+			awaitSettled{as: "kid", parent: "a"},
+			openSend{g: mid},
 			release{step: "child again"},
 			awaitSettled{as: "kid", parent: "a"},
 			waitIdle{as: "a"},

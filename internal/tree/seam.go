@@ -10,6 +10,9 @@ type Seam struct {
 	Settling func(parent, child string)
 	// SendWaits runs when a send waits for an in-flight report of child.
 	SendWaits func(child string)
+	// Decided runs after a send has decided whether to spawn child again, and
+	// before it admits the text.
+	Decided func(child string)
 }
 
 var seam atomic.Pointer[Seam]
@@ -29,5 +32,11 @@ func seamSettling(parent, child string) {
 func seamSendWaits(child string) {
 	if s := seam.Load(); s != nil && s.SendWaits != nil {
 		s.SendWaits(child)
+	}
+}
+
+func seamDecided(child string) {
+	if s := seam.Load(); s != nil && s.Decided != nil {
+		s.Decided(child)
 	}
 }
