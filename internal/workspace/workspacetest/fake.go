@@ -18,9 +18,11 @@ import (
 const stateFile = ".fake-workspace.json"
 
 // Fake is an engine over a plain directory. Its revisions are
-// "change:<n>", never a hash. The operation counter n rises when the files
-// have changed since the last read, and a read of unchanged files adds none.
-// It has no storage other than one state file in the root.
+// "change:<n>", never a hash. It models an engine that snapshots the work
+// tree on read: the first read after an edit records an operation in the
+// state file of the engine, which is its own state and no write that a user
+// can see. A read of unchanged files records nothing. The state file in the
+// root is its only storage.
 type Fake struct{}
 
 type state struct {
@@ -112,6 +114,8 @@ func (r repo) Base(context.Context, workspace.Head) (workspace.Base, error) {
 	return workspace.Base{Rev: change(0), Ref: "root"}, nil
 }
 
+// Diff compares the files with the baseline. Both scopes get the same
+// answer, because the fake has one baseline.
 func (r repo) Diff(_ context.Context, _ workspace.Head, _ workspace.Base, _ int) ([]protocol.ChangedFile, string, bool, error) {
 	st, err := load(r.root)
 	if err != nil {
@@ -175,7 +179,7 @@ func digest(files map[string]string) string {
 func readFiles(root string) (map[string]string, error) {
 	files := map[string]string{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Name() == stateFile {
+		if err != nil || d.IsDir() {
 			return err
 		}
 		data, err := os.ReadFile(p)
@@ -183,7 +187,9 @@ func readFiles(root string) (map[string]string, error) {
 			return err
 		}
 		rel, err := filepath.Rel(root, p)
-		files[filepath.ToSlash(rel)] = string(data)
+		if rel != stateFile {
+			files[filepath.ToSlash(rel)] = string(data)
+		}
 		return err
 	})
 	return files, err

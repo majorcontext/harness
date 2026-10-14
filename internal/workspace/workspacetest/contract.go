@@ -29,14 +29,17 @@ type Fixture struct {
 	// Operations returns the number of operations that the repository of dir
 	// has recorded.
 	Operations func(t *testing.T, dir string) int
-	// Footprint returns a text that changes when the storage of the
-	// repository of dir changes, such as its index and its objects.
+	// Footprint returns a text that changes when a user could see a write
+	// to the repository of dir: its index, references, objects, and
+	// configuration. The state that an engine keeps for its own snapshots of
+	// the work tree is not a footprint.
 	Footprint func(t *testing.T, dir string) string
 	// Guard arms a trap in the repository of dir that fails any write to its
 	// shared storage, and Footprint covers it. It may be nil.
 	Guard func(t *testing.T, dir string)
 	// SnapshotsEdits is true when the first read after an edit may record an
-	// operation, because the engine snapshots the work tree on read.
+	// operation, because the engine snapshots the work tree on read. A read
+	// that finds nothing changed records none.
 	SnapshotsEdits bool
 }
 
@@ -121,9 +124,11 @@ func readsAddNoOperation(t *testing.T, fx Fixture) {
 	if fx.SnapshotsEdits && afterEdit <= before {
 		t.Errorf("operations after the first read of an edit = %d, want more than %d", afterEdit, before)
 	}
-	mustRead(t, fx, dir, protocol.ScopeBranch)
-	if got := fx.Operations(t, dir); got != afterEdit {
-		t.Errorf("operations after another read = %d, want %d", got, afterEdit)
+	for _, scope := range []string{protocol.ScopeUncommitted, protocol.ScopeBranch} {
+		mustRead(t, fx, dir, scope)
+		if got := fx.Operations(t, dir); got != afterEdit {
+			t.Errorf("operations after another %s read = %d, want %d", scope, got, afterEdit)
+		}
 	}
 }
 
@@ -176,8 +181,15 @@ func missingBase(t *testing.T, fx Fixture) {
 }
 
 func readsNeverWrite(t *testing.T, fx Fixture) {
-	dir := fx.New(t)
+	t.Run("with no lock held", func(t *testing.T) { readsNeverWriteWith(t, fx, false) })
 	if fx.Guard != nil {
+		t.Run("with the lock held", func(t *testing.T) { readsNeverWriteWith(t, fx, true) })
+	}
+}
+
+func readsNeverWriteWith(t *testing.T, fx Fixture, guard bool) {
+	dir := fx.New(t)
+	if guard {
 		fx.Guard(t, dir)
 	}
 	write(t, dir, "seed.txt", "changed\n")

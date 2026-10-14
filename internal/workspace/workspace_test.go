@@ -435,22 +435,25 @@ func contractRepo(t *testing.T, origin bool) string {
 	return dir
 }
 
-// gitFootprint lists the real index, the index lock, and every file of the
-// real object directory.
+// gitFootprint hashes the real index, the index lock, HEAD, the config, the
+// packed references, and every file of the real object directory and of refs.
 func gitFootprint(t *testing.T, dir string) string {
 	var out []string
-	for _, p := range []string{".git/index", ".git/index.lock"} {
+	for _, p := range []string{".git/index", ".git/index.lock", ".git/HEAD", ".git/config", ".git/packed-refs"} {
 		data, err := os.ReadFile(filepath.Join(dir, p))
 		out = append(out, fmt.Sprintf("%s %x %v", p, sha256.Sum256(data), err))
 	}
-	err := filepath.WalkDir(filepath.Join(dir, ".git", "objects"), func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			out = append(out, p)
+	for _, sub := range []string{"objects", "refs"} {
+		err := filepath.WalkDir(filepath.Join(dir, ".git", sub), func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				data, rerr := os.ReadFile(p)
+				out = append(out, fmt.Sprintf("%s %x %v", p, sha256.Sum256(data), rerr))
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return strings.Join(out, "\n")
 }
