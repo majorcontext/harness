@@ -5,10 +5,7 @@
 package acpauth
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,7 +17,6 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/codexauth"
-	"github.com/majorcontext/harness/internal/process"
 )
 
 // Method ids.
@@ -32,12 +28,8 @@ const (
 )
 
 const (
-	statusTTL    = 30 * time.Second
-	statusBudget = 15 * time.Second
 	// loginBudget bounds a sign-in, as the browser sign-in of codexauth bounds itself.
 	loginBudget = 10 * time.Minute
-	// killGrace is the time that a killed child gets to close its pipes.
-	killGrace = 2 * time.Second
 )
 
 // Options holds what the host injects.
@@ -180,32 +172,6 @@ func (a *Auth) chatGPTLogin(ctx context.Context, cfg *config.Config, client acp.
 	return codexauth.LoginBrowser(ctx, codexauth.LoginOptions{Store: store(cfg), Issuer: cfg.CodexIssuer, Out: a.opts.Out, Open: a.opts.Open})
 }
 
-// claudeCmd returns a command of the CLI whose whole process group ends with ctx.
-func (a *Auth) claudeCmd(ctx context.Context, bin string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator config
-	cmd.Env = a.opts.Env
-	process.KillOnCancel(cmd, killGrace)
-	return cmd
-}
-
-func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config, _ acp.LoginClient) error {
-	bin, _ := cfg.ClaudeCLI()
-	cmd := a.claudeCmd(ctx, bin, "auth", "login")
-	cmd.Stdout, cmd.Stderr = a.opts.Out, a.opts.Out
-	err := cmd.Run()
-	a.forget(bin)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if err != nil {
-		return fmt.Errorf("claude auth login: %w", err)
-	}
-	if ok, known := a.loggedIn(ctx, bin, true); known && !ok {
-		return errors.New("claude auth login ended without a login")
-	}
-	return nil
-}
-
 // Logout implements acp.Auth. It ends the ChatGPT login only. The Claude Code CLI owns its login.
 func (a *Auth) Logout(ctx context.Context) error {
 	cfg, err := a.opts.Config("")
@@ -236,37 +202,4 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 		}
 	}
 	return nil
-}
-
-func (a *Auth) forget(bin string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.status, bin)
-}
-
-// loggedIn asks the CLI bin for its login status. known is false when the CLI gave no answer, so a missing
-// binary or a changed output never blocks a turn: the turn then fails with the error of the CLI.
-func (a *Auth) loggedIn(ctx context.Context, bin string, fresh bool) (ok, known bool) {
-	a.mu.Lock()
-	cached, hit := a.status[bin]
-	a.mu.Unlock()
-	if hit && !fresh && time.Since(cached.at) < statusTTL {
-		return cached.loggedIn, true
-	}
-	ctx, cancel := context.WithTimeout(ctx, statusBudget)
-	defer cancel()
-	var out bytes.Buffer
-	cmd := a.claudeCmd(ctx, bin, "auth", "status", "--json")
-	cmd.Stdout = &out
-	_ = cmd.Run() // the CLI may exit non-zero when logged out and still print the status
-	var st struct {
-		LoggedIn *bool `json:"loggedIn"`
-	}
-	if json.Unmarshal(out.Bytes(), &st) != nil || st.LoggedIn == nil {
-		return false, false
-	}
-	a.mu.Lock()
-	a.status[bin] = claudeStatus{at: time.Now(), loggedIn: *st.LoggedIn}
-	a.mu.Unlock()
-	return *st.LoggedIn, true
 }

@@ -59,6 +59,7 @@ async function start({ module, wasmExec, options }) {
     storeDir: options.storeDir,
     defaultDir: globalThis.process.cwd(),
     proxy: options.proxy,
+    pageOrigin: options.pageOrigin,
     tools: options.tools.map((spec) => ({ ...spec, run: (input, { signal }) => bridge.callTool(spec.name, input, signal) })),
     onFrame: (frame) => port.post({ frame }),
     onLog: (line) => port.post({ log: line }),

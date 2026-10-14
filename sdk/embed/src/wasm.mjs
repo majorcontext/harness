@@ -111,6 +111,7 @@ async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, bu
       baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL),
       providerBaseURLs: proxy.providerBaseURLs && Object.fromEntries(Object.entries(proxy.providerBaseURLs).map(([name, base]) => [name, absolute(base)])),
     },
+    pageOrigin: typeof globalThis.location?.origin === "string" && globalThis.location.origin !== "null" ? globalThis.location.origin : undefined,
     storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
     persist: !isNode && Boolean(store.persist),
     tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),

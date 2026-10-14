@@ -59,6 +59,8 @@ type Env struct {
 	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
+	// IssuerTransport carries the requests of the ChatGPT login to its issuer, the refresh among them. nil: the default transport. It is not the model transport, so a gateway credential or a host rewrite of that transport never sees the refresh token.
+	IssuerTransport http.RoundTripper
 	// NoProcess says that the host starts no process, so a provider that runs a child process has no backend.
 	NoProcess bool
 	// NoLogin says that the host has no way to create the ChatGPT login, so a provider that uses the login lists its models only when the login file exists.
@@ -73,13 +75,8 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	backends := map[string]turn.Backend{}
 	cfg.Providers = cfg.ProviderEntries()
 	var login *http.Client
-	if transport != nil {
-		for _, name := range slices.Sorted(maps.Keys(cfg.Providers)) {
-			if rt := transport(name); rt != nil && cfg.Providers[name].UsesChatGPTLogin() {
-				login = codexauth.Client(rt)
-				break
-			}
-		}
+	if env.IssuerTransport != nil {
+		login = codexauth.Client(env.IssuerTransport)
 	}
 	codex := sync.OnceValue(func() *codexauth.Source {
 		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, HTTP: login, Log: env.Log})

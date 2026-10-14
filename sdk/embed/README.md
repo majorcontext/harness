@@ -23,7 +23,7 @@ await h.close();
 - `wasm_exec.js` is the file of the same Go version as the module (`$(go env GOROOT)/lib/wasm/wasm_exec.js`).
 - Node 24 can deadlock in `process.exit` when V8 compiles baseline code (Sparkplug) on worker threads at the same time. The Node host of the harness (`cmd/harness-wasm/node/host.mjs`) turns this off with `v8.setFlagsFromString("--no-concurrent-sparkplug")`. If you build your own Node host for the module, set the same flag, either that way or with `node --no-concurrent-sparkplug`. `NODE_OPTIONS` cannot carry this flag: Node refuses it there.
 - `proxy.baseURL` sends all model traffic to a same-origin proxy: the module sets `base_url` of the native `anthropic` and `openai` providers and of each `config.providers` entry that sets none. The module fills `base_url` before it validates the config, so an `openai` entry that has no `base_url` is valid. Put no key in the page: the proxy holds it.
-- `proxy.providerBaseURLs` maps a provider name to the `base_url` of its entry, also of a native provider: `{ codex: "/codex" }` sends the ChatGPT backend traffic to that path (see "Log in with ChatGPT"). It is a pass-through path and holds no credential.
+- `proxy.providerBaseURLs` maps a provider name to the `base_url` of its entry, also of a native provider: `{ codex: "/codex" }` sends the ChatGPT backend traffic to that path (see "Log in with ChatGPT"). It is a pass-through path and holds no credential. In a browser, the URL of a provider that uses the ChatGPT login must be a path or a URL of the page origin; another origin fails the first session, because the token would go there.
 
 ## Files and a shell in the browser
 

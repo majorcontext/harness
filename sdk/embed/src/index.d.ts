@@ -61,7 +61,7 @@ export interface CreateHarnessOptions {
   /**
    * A same-origin proxy: baseURL fills every provider that sets none; headers go only on requests to the origin of baseURL.
    * providerBaseURLs maps a provider name to the base_url of its entry, also of a native provider such as codex, so a page sends
-   * the ChatGPT backend traffic through a same-origin pass-through path that holds no credential.
+   * the ChatGPT backend traffic through a same-origin pass-through path that holds no credential. In a browser, the URL of a provider that uses the ChatGPT login must have the origin of the page, or the first session fails.
    */
   proxy?: { baseURL?: string | URL; headers?: Record<string, string>; providerBaseURLs?: Record<string, string | URL> };
   /** A page fetch that carries the model requests. */

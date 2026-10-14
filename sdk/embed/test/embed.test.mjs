@@ -5,6 +5,7 @@
 // HARNESS_WASM_EXEC (see support.mjs).
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
@@ -268,6 +269,49 @@ test("proxy.providerBaseURLs sends the native codex requests to the pass-through
   } finally {
     await h.close();
     model.close();
+  }
+});
+
+// withPageOrigin runs fn while globalThis.location names a page at http://127.0.0.1:8080. The module paths are file URLs, which a base URL leaves alone.
+async function withPageOrigin(fn) {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", { value: { href: "http://127.0.0.1:8080/", origin: "http://127.0.0.1:8080" }, configurable: true });
+  try {
+    return await fn();
+  } finally {
+    if (saved) Object.defineProperty(globalThis, "location", saved);
+    else delete globalThis.location;
+  }
+}
+
+function pageHarness(providerBaseURLs) {
+  const files = moduleFiles();
+  const transport = wasm({ module: pathToFileURL(files.module).href, wasmExec: pathToFileURL(files.wasmExec).href, worker: true });
+  return createHarness({ transport, config: { model: "codex/gpt-5.6-sol" }, proxy: { providerBaseURLs }, store: { persist: true, dir: tempDir() } });
+}
+
+test("proxy.providerBaseURLs of the ChatGPT provider must be on the page origin", async () => {
+  await withPageOrigin(async () => {
+    const h = await pageHarness({ codex: "http://127.0.0.1:9090/codex" });
+    try {
+      await assert.rejects(acpClient(h).session(), /page origin/);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+test("proxy.providerBaseURLs of the ChatGPT provider accepts a path and a URL of the page origin", async () => {
+  for (const base of ["/codex", "http://127.0.0.1:8080/codex"]) {
+    await withPageOrigin(async () => {
+      const h = await pageHarness({ codex: base });
+      try {
+        // The config is valid, so the session fails only because no login exists yet.
+        await assert.rejects(acpClient(h).session(), (err) => err.rpc?.data?.code === "login_required");
+      } finally {
+        await h.close();
+      }
+    });
   }
 });
 

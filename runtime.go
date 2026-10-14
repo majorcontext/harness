@@ -74,28 +74,25 @@ var (
 type Options struct {
 	// Store holds every session log. It is required.
 	Store Store
-	// Owner grants sessions. nil: NewLocalOwner(1), which owns every
-	// session. The default does not exclude another Runtime on the same
-	// Store; the fence that Open appends stops the earlier one.
+	// Owner grants sessions. nil: NewLocalOwner(1), which owns every session. The default does not
+	// exclude another Runtime on the same Store; the fence that Open appends stops the earlier one.
 	Owner Owner
-	// Sync replicates every record that this Runtime appends. nil: no
-	// replication. New reads neither Config.OwnerEpoch nor Config.Sync; the
-	// embedder passes NewLocalOwner and httpsync.New.
+	// Sync replicates every record that this Runtime appends. nil: no replication. New reads neither
+	// Config.OwnerEpoch nor Config.Sync; the embedder passes NewLocalOwner and httpsync.New.
 	Sync Sync
-	// Config configures the model providers and the MCP servers. A model
-	// ref "provider/model" selects the entry of Config.Providers named
-	// provider. Each session gets the tools of Config.MCPServers.
+	// Config configures the model providers and the MCP servers. A model ref "provider/model" selects the
+	// entry of Config.Providers named provider. Each session gets the tools of Config.MCPServers.
 	Config config.Config
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
-	// Getenv reads the variables that hold provider API keys, by the
-	// api_key_env of the provider or its default name. nil: New and the
-	// runtime read no variable, so a provider has no key unless
-	// ModelTransport supplies the credentials. A backend child process, such
-	// as the claude CLI, a plugin, an MCP stdio server, a process, or a bash
-	// call, still inherits the environment of this process.
+	// Getenv reads the variables that hold provider API keys, by the api_key_env of the provider or its
+	// default name. nil: New and the runtime read no variable, so a provider has no key unless
+	// ModelTransport supplies the credentials. A backend child process, such as the claude CLI, a plugin,
+	// an MCP stdio server, a process, or a bash call, still inherits the environment of this process.
 	Getenv func(key string) string
+	// IssuerTransport carries the ChatGPT login requests to the issuer. nil: the default transport. ModelTransport never carries them.
+	IssuerTransport http.RoundTripper
 	// Host says what the host cannot do. The zero value is a host that can do everything.
 	Host HostLimits
 	// Logger receives every log line of the runtime. nil: slog.Default().
@@ -105,15 +102,12 @@ type Options struct {
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, or start with mcp__.
 	Tools []Tool
-	// WorkDir is the directory of a coding agent. Each session reads its
-	// AGENTS.md chain and skills when it starts, gets the file, search, and
-	// bash tools, the process tool runs Config.Processes in it, and the task
-	// tool starts child sessions with the agent profiles of its .agents dir.
-	// bash and the process tool run any command, so WorkDir alone grants
-	// command execution. Empty: the system prompt is
-	// Config.AppendSystemPrompt alone, no file is read, no process runs, no
-	// built-in tool exists, and no session has the task tool.
-	// New makes a relative path absolute, and fails when it cannot.
+	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
+	// it starts, gets the file, search, and bash tools, the process tool runs Config.Processes in it, and
+	// the task tool starts child sessions with the agent profiles of its .agents dir. bash and the process
+	// tool run any command, so WorkDir alone grants command execution. Empty: the system prompt is
+	// Config.AppendSystemPrompt alone, no file is read, no process runs, no built-in tool exists, and no
+	// session has the task tool. New makes a relative path absolute, and fails when it cannot.
 	WorkDir string
 	// AskUserQuestion lets a session ask the user a question: the tool
 	// ask_user_question of a model API session, and AskUserQuestion of Claude
@@ -122,10 +116,8 @@ type Options struct {
 	// without it no turn may ask. A child session and a session with an
 	// active goal never ask.
 	AskUserQuestion bool
-	// Version is the build version that the engine banner names. Each model
-	// call of a harness-loop turn sends the banner as engine context, after
-	// the newest message of the session when its first request left. Empty:
-	// no banner.
+	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
+	// sends the banner as engine context, after the newest message of the session when its first request left. Empty: no banner.
 	Version string
 	// Plugins run in this process, after Config.Plugins. A name and a tool name
 	// must be unique. Close waits for their calls; a call that ignores its
@@ -133,6 +125,14 @@ type Options struct {
 	Plugins []*plugin.Plugin
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
+}
+
+// HostLimits says what the host of a Runtime cannot do.
+type HostLimits struct {
+	// NoProcess says that the host starts no process. A provider that runs a child process, such as the Claude Code CLI, has no backend.
+	NoProcess bool
+	// NoLogin says that the host has no way to create the ChatGPT login. A provider that uses the login then lists its models only when the login file exists.
+	NoLogin bool
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -255,7 +255,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)

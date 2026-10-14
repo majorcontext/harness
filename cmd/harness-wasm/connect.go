@@ -36,6 +36,8 @@ type options struct {
 	tools        []harness.Tool
 	proxyHeaders map[string]string
 	proxyBase    string
+	// pageOrigin is the origin of the page, or empty when the host has none (Node).
+	pageOrigin string
 	// providerBases maps a provider name to the base_url of its entry.
 	providerBases map[string]string
 	onFrame       js.Value
@@ -58,6 +60,8 @@ func readOptions(o js.Value) *options {
 	opts.storeDir, err = jshost.StringField(o, "storeDir")
 	keep(err)
 	opts.defaultDir, err = jshost.StringField(o, "defaultDir")
+	keep(err)
+	opts.pageOrigin, err = jshost.StringField(o, "pageOrigin")
 	keep(err)
 	opts.env, err = jshost.StringMap("env", o.Get("env"))
 	keep(err)
@@ -121,6 +125,9 @@ func (o *options) applyHostConfig() error {
 					return fmt.Errorf("proxy.providerBaseURLs: %q is not a provider", name)
 				}
 			}
+			if origin, ok := o.foreignOrigin(p, base); ok {
+				return fmt.Errorf("proxy.providerBaseURLs.%s is on %s, not on the page origin %s, and the provider sends the ChatGPT token there", name, origin, o.pageOrigin)
+			}
 			p.BaseURL = base
 			providers[name] = p
 		}
@@ -130,6 +137,19 @@ func (o *options) applyHostConfig() error {
 		o.user.CodexAuthFile = path.Join(o.storeDir, "auth", "codex.json")
 	}
 	return nil
+}
+
+// foreignOrigin reports the origin of base when p sends the ChatGPT login to base and the page has another origin.
+func (o *options) foreignOrigin(p config.Provider, base string) (string, bool) {
+	if !p.UsesChatGPTLogin() || o.pageOrigin == "" {
+		return "", false
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return base, true
+	}
+	origin := u.Scheme + "://" + u.Host
+	return origin, origin != o.pageOrigin
 }
 
 // proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
@@ -168,8 +188,9 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 		ModelTransport: func(string) http.RoundTripper {
 			return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}
 		},
-		Tools: o.tools,
-		Host:  harness.HostLimits{NoProcess: true, NoLogin: true},
+		Tools:           o.tools,
+		Host:            harness.HostLimits{NoProcess: true, NoLogin: true},
+		IssuerTransport: jshost.FetchRT{},
 	})
 }
 
@@ -189,7 +210,7 @@ func (o *options) login() acp.Auth {
 			return config.MergeProject(o.user, "the config of harnessConnect", cwd, o.proxyBase)
 		},
 		DeviceCode: true,
-		HTTP:       codexauth.Client(jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}),
+		HTTP:       codexauth.Client(jshost.FetchRT{}),
 		LookPath:   func(string) (string, error) { return "", exec.ErrNotFound },
 	})
 }
