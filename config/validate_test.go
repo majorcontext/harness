@@ -36,6 +36,9 @@ func TestValidate(t *testing.T) {
 		{name: "a negative max_tokens", cfg: Config{MaxTokens: -1}, want: "max_tokens"},
 		{name: "a negative request_max_retries", cfg: Config{RequestMaxRetries: new(-1)}, want: "request_max_retries"},
 		{name: "a negative stream_max_retries", cfg: Config{StreamMaxRetries: new(-1)}, want: "stream_max_retries"},
+		{name: "a models list with a namespaced id", cfg: Config{Providers: map[string]Provider{"gw": {Type: TypeOpenAICompat, BaseURL: "https://gw.test", Models: []string{"anthropic/claude-sonnet-5-5", "m"}}}}},
+		{name: "a models list with an empty id", cfg: Config{Providers: map[string]Provider{"gw": {Type: TypeOpenAICompat, BaseURL: "https://gw.test", Models: []string{"m", ""}}}}, want: "providers.gw: models[1] is empty"},
+		{name: "a models list with a duplicate id", cfg: Config{Providers: map[string]Provider{"gw": {Type: TypeOpenAICompat, BaseURL: "https://gw.test", Models: []string{"m", "n", "m"}}}}, want: `providers.gw: models holds "m" twice`},
 		{name: "an append prompt that extra_args replaces", cfg: Config{AppendSystemPrompt: []string{"fact"}, Providers: cc}, want: "conflicts with append_system_prompt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

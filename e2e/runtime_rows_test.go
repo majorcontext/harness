@@ -510,6 +510,7 @@ var runtimeRows = map[string]runtimeRow{
 	"instructions_are_read_when_the_session_starts":                           reGolden(specPromptOnce),
 	"interrupt_cuts_a_running_tool_then_queue_continues":                      reGolden(specStopped, specInterrupt),
 	"interrupt_during_retry_backoff_ends_the_turn":                            reGolden(specView, specStopped),
+	"models_lists_the_models_that_a_provider_entry_names":                     reGolden(specModelsRoute, specView),
 	"models_lists_the_configured_providers":                                   reGolden(specModelsRoute, specView),
 	"no_goal_evaluator_means_no_goal":                                         reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
 	"plugin_inventory_reports_not_spawned_then_running":                       reGolden(specView),

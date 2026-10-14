@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -256,6 +257,32 @@ var acpConfigScenarios = []acpScenario{
 				}
 				if _, deprecated := groups["openai"].values["openai/gpt-3.5-turbo"]; deprecated {
 					t.Error("the model option lists a deprecated model")
+				}
+			}),
+		},
+	},
+	{
+		name: "session_new_lists_the_models_that_a_provider_entry_names",
+		cite: "The values are in one group for each provider, in the order of `Runtime.Models`.",
+		config: map[string]any{"providers": map[string]any{
+			"gateway": map[string]any{"type": "openai-compat", "base_url": "http://127.0.0.1:1", "models": []string{"vendor/unknown-model", "anthropic/claude-sonnet-5-5", "plain-model"}},
+		}},
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				g, ok := acpGroups(t, acpNewOptions(c)[0])["gateway"]
+				if !ok {
+					t.Fatal("the model option has no gateway group")
+				}
+				want := []string{"gateway/vendor/unknown-model", "gateway/anthropic/claude-sonnet-5-5", "gateway/plain-model"}
+				if !slices.Equal(g.order, want) {
+					t.Errorf("gateway values = %v, want %v", g.order, want)
+				}
+				if v := g.values["gateway/anthropic/claude-sonnet-5-5"]; v.name != "Claude Sonnet 5.5" {
+					t.Errorf("name of the known model = %q, want the models.dev name", v.name)
+				}
+				if v := g.values["gateway/plain-model"]; v.name != "gateway/plain-model" {
+					t.Errorf("name of the unknown model = %q, want its reference", v.name)
 				}
 			}),
 		},
