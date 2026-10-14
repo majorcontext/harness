@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // nodeHostName names the Node wasm host in the subtests of the ACP table.
@@ -138,20 +139,9 @@ func startACPNodeOpts(t *testing.T, opts nodeHostOptions) (io.WriteCloser, io.Re
 	in, out, g, stderr := startACPCmd(t, cmd)
 	stallDumps.Store(t, func() string {
 		_ = syscall.Kill(g.cmd.Process.Pid, syscall.SIGUSR2)
-		tick := time.NewTicker(50 * time.Millisecond)
-		defer tick.Stop()
-		deadline := time.NewTimer(3 * time.Second)
-		defer deadline.Stop()
 		state := "the host answered the state request"
-		for !strings.Contains(stderr.String(), "active resources:") {
-			select {
-			case <-tick.C:
-			case <-deadline.C:
-				state = "the host did not answer the state request; its event loop is blocked"
-			}
-			if strings.HasPrefix(state, "the host did not") {
-				break
-			}
+		if !testpoll.UntilNoT(3*time.Second, func() bool { return strings.Contains(stderr.String(), "active resources:") }, 50*time.Millisecond) {
+			state = "the host did not answer the state request; its event loop is blocked"
 		}
 		report := state + "\nnode stderr:\n" + stderr.String()
 		g.kill()
