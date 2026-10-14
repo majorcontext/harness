@@ -26,6 +26,8 @@ type acpNew struct {
 	mcp     []map[string]any
 	weather bool
 	code    int
+	// reason is a text that data.reason of the expected error holds.
+	reason string
 }
 
 // acpPromptStart sends a prompt and keeps its request under id, which is as
@@ -95,6 +97,9 @@ func (s acpNew) run(t *testing.T, c *acpConn) {
 	f := c.response(c.request("session/new", map[string]any{"cwd": cwd, "mcpServers": servers}))
 	if s.code != 0 {
 		c.mustBeError(f, s.code)
+		if data, _ := f["error"].(map[string]any)["data"].(map[string]any); s.reason != "" && !strings.Contains(fmt.Sprint(data["reason"]), s.reason) {
+			t.Errorf("error data = %v, want a reason with %q", data, s.reason)
+		}
 		return
 	}
 	res := c.mustBeResult(f, "NewSessionResponse")

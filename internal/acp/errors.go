@@ -29,6 +29,9 @@ func rpcError(err error) error {
 			data["cause"] = cause
 		}
 	}
+	if code == protocol.CodeInvalidRequest {
+		data["reason"] = err.Error()
+	}
 	e := &rpc.Error{Code: RPCCode(code), Message: "Internal error", Data: data}
 	if ok && code != protocol.CodeInternal && code != protocol.CodeSessionUnreplayable {
 		e.Message = pe.Message

@@ -59,7 +59,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
-	for _, name := range []string{anthropic.Family, responses.Family} {
+	for _, name := range config.NativeProviders() {
 		if _, ok := cfg.Providers[name]; !ok {
 			cfg.Providers[name] = config.Provider{}
 		}
@@ -99,7 +99,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
 		key, reason := "", "the entry uses the "+p.Auth+" login"
 		if p.Auth == "" {
-			key, reason = env.key(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY"))
+			key, reason = env.key(cmp.Or(p.APIKeyEnv, config.NativeKeyEnv(name)))
 		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
@@ -109,7 +109,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
-		key, reason := env.key(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY"))
+		key, reason := env.key(cmp.Or(p.APIKeyEnv, config.NativeKeyEnv(name)))
 		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}

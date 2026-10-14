@@ -320,6 +320,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				in, out, stop := host.start(t, env)
 				c := newACPConn(t, schema, in, out)
 				c.fake, c.env = fake, env
+				c.paths[env.configPath] = "<user-config>"
 				env.login.register(c)
 				c.reconnect = func() {
 					c.t.Helper()

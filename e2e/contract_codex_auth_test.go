@@ -32,8 +32,6 @@ type codexAuth struct {
 	rejectAll bool
 	// secret is a value that no request to the issuer may carry in a header.
 	secret string
-	// project is a .harness.json of the work dir.
-	project map[string]any
 }
 
 // codexAuthRun is a started codexAuth.
@@ -344,13 +342,6 @@ func codexAuthFailureRows() []codexScenario {
 			opts:     harnesstest.OpenAIOptions{RedirectTo: "/backend-api/codex/stolen", Secret: codexSentinelKey},
 			auth:     &codexAuth{label: "seed", lifetime: 2 * time.Minute, secret: codexSentinelKey},
 			env:      map[string]string{"OPENAI_API_KEY": codexSentinelKey},
-		},
-		{
-			scenario: scenario{name: "codex_login_project_file_cannot_move_the_login_to_another_url", model: codexHi, actions: codexSession(codexTurn("a", "hello"), record)},
-			auth: &codexAuth{label: "seed", lifetime: time.Hour, project: map[string]any{"providers": map[string]any{
-				"codex": map[string]any{"base_url": "http://127.0.0.1:1/evil", "responses_path": "/evil"},
-				"evil":  map[string]any{"type": "openai", "auth": "chatgpt", "base_url": "http://127.0.0.1:1"},
-			}}},
 		},
 		{
 			scenario: scenario{

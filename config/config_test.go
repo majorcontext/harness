@@ -836,7 +836,7 @@ func TestLoadProject(t *testing.T) {
 		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
 			"model": "openai/gpt-5",
 			"aliases": {"smart": "openai/gpt-5-pro"},
-			"providers": {"anthropic": {"base_url": "http://project"}}
+			"providers": {"anthropic": {"cache_ttl": "1h"}}
 		}`)
 		c, err := LoadProject(userPath, projDir)
 		if err != nil {
@@ -858,8 +858,8 @@ func TestLoadProject(t *testing.T) {
 		if got.APIKeyEnv != "USER_KEY" {
 			t.Errorf("anthropic api_key_env = %q, want inherited USER_KEY", got.APIKeyEnv)
 		}
-		if got.BaseURL != "http://project" {
-			t.Errorf("anthropic base_url = %q, want project override", got.BaseURL)
+		if got.BaseURL != "http://user" || got.CacheTTL != "1h" {
+			t.Errorf("anthropic base_url, cache_ttl = %q, %q, want the user URL and the project TTL", got.BaseURL, got.CacheTTL)
 		}
 	})
 	// A project-only providers entry naming an unknown key with no type is

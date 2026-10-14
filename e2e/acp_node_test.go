@@ -201,7 +201,7 @@ func alignNodeGolden(t *testing.T, g acpGolden) acpGolden {
 		t.Fatal(err)
 	}
 	var out acpGolden
-	if err := json.Unmarshal([]byte(strings.ReplaceAll(string(b), "No such file or directory", "no such file or directory")), &out); err != nil {
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(strings.ReplaceAll(string(b), "No such file or directory", "no such file or directory"), "the config of harnessConnect", "\u003cuser-config\u003e")), &out); err != nil {
 		t.Fatal(err)
 	}
 	return out
