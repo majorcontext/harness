@@ -103,16 +103,23 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if h, err = a.adopt(ctx, h); err != nil {
 		return nil, err
 	}
-	if h != started {
-		release = nil
-	}
-	return setupResult{ConfigOptions: configOptions(h.models, snap), after: release}, nil
+	return setupResult{ConfigOptions: configOptions(h.models, snap), after: queueRelease(started, h, release)}, nil
 }
 
 // heldSetup answers a load or resume of a session that the connection holds.
 // A load replays the conversation of view after the pump has sent every update
 // through the head of view, with a pump state of its own, so the replay does
 // not touch what the live pump keeps. A resume sends nothing.
+// queueRelease returns release when adopted is the session whose pump queues
+// the updates. When adopt returned another session, the queue of the stopped
+// pump is dropped.
+func queueRelease(started, adopted *held, release func()) func() {
+	if adopted != started {
+		return nil
+	}
+	return release
+}
+
 func (a *agent) heldSetup(ctx context.Context, h *held, view harness.Reader, cwd string, servers, replay bool) (any, error) {
 	if h.cwd != cwd {
 		return nil, invalidParams("the session belongs to another cwd")
