@@ -10,11 +10,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/modelmeta"
 )
-
-// codexClientVersion is the client_version query of the model list. The backend hides a model whose minimal client version is higher, so it names a recent Codex CLI release.
-const codexClientVersion = "0.162.1"
 
 // maxModelList bounds the body of a model list.
 const maxModelList = 1 << 20
@@ -27,7 +25,7 @@ func ModelsURL(base string) string {
 	if base == "" {
 		base = defaultBaseURL
 	}
-	return strings.TrimRight(base, "/") + "/models?client_version=" + codexClientVersion
+	return strings.TrimRight(base, "/") + "/models?client_version=" + codexauth.ClientVersion
 }
 
 // ModelsStatusError reports that the model list answered with an HTTP status other than 200.

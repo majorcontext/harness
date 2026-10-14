@@ -99,6 +99,17 @@ func NewSource(o SourceOptions) *Source {
 
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
+// AccessToken returns the access token of the stored login, or empty when there is none. It makes no network call and no refresh.
+func (s *Source) AccessToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.current()
+	if err != nil {
+		return ""
+	}
+	return c.AccessToken
+}
+
 // Credentials returns a login whose access token is not about to end. rejected
 // is the access token that the backend refused, or empty: the Source then
 // refreshes unless the file already holds another token that is fresh.

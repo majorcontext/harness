@@ -17,8 +17,7 @@ import (
 
 const (
 	codexModelsMaxString = 300
-	// codexModelsURL is the model list of the Codex lane; its client_version matches the one the openai provider sends.
-	codexModelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=0.162.1"
+	codexModelsURL       = "https://chatgpt.com/backend-api/codex/models?client_version=" + codexauth.ClientVersion
 )
 
 // recordCodexModels records the model catalog of the ChatGPT Codex backend with the login that `harness login codex` stores.

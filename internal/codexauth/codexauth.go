@@ -23,6 +23,8 @@ const (
 	// Originator names this client to the Codex backend. The Codex CLI sends codex_cli_rs
 	// (codex-rs/login/src/auth/default_client.rs DEFAULT_ORIGINATOR).
 	Originator = "harness"
+	// ClientVersion is the client_version query of the model list request. The backend hides a model whose minimal client version is higher, so it names a recent Codex CLI release.
+	ClientVersion = "0.162.1"
 	// LoginCommand is the command that creates the login.
 	LoginCommand = "harness login codex"
 

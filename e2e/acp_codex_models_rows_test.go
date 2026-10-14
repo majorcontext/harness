@@ -66,13 +66,13 @@ var acpCodexModelsScenarios = []acpScenario{
 	},
 	{
 		name:  "session_new_lists_the_static_models_when_the_chatgpt_backend_fails",
-		cite:  "When the fetch fails, times out, or returns no model, the list is the static list of the `codex` models.",
+		cite:  "When the fetch fails, times out, or returns no model, the list is the static list of the `codex` models, and the next call after 5 minutes tries again.",
 		login: &acpLoginSpec{chatgpt: true, stored: true, modelsStatus: http.StatusInternalServerError},
 		steps: []acpStep{acpNew{as: "a"}, acpCheck(acpStaticCodexModels)},
 	},
 	{
 		name:  "session_new_lists_the_static_models_when_the_chatgpt_login_is_rejected",
-		cite:  "A login that the backend rejects with 401 or 403 gives the static list.",
+		cite:  "A login that the backend rejects with 401 or 403 gives the static list until the stored access token changes.",
 		login: &acpLoginSpec{chatgpt: true, stored: true, modelsStatus: http.StatusForbidden},
 		steps: []acpStep{acpNew{as: "a"}, acpCheck(acpStaticCodexModels)},
 	},

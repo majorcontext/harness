@@ -73,7 +73,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 			if rc, ok := c.(*responses.Client); ok && p.Auth == config.AuthChatGPT {
-				backends[name] = &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log}
+				backends[name] = &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return codex().AccessToken() }}
 			} else {
 				backends[name] = be
 			}
