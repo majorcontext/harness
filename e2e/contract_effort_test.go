@@ -60,7 +60,7 @@ func TestContractEffortLevels(t *testing.T) {
 			actions: effortTurns("anthropic/claude-sonnet-5", "off"),
 		},
 		{
-			name: "thinking_off_names_a_model_that_always_thinks",
+			name: "thinking_off_is_not_offered_by_a_model_that_always_thinks",
 			actions: []action{
 				create{as: "a", model: "anthropic/claude-opus-5-5"},
 				command{as: "a", text: "/thinking off"}, awaitCommands{as: "a"},
