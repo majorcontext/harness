@@ -62,7 +62,7 @@ func compactTurn(f *fake) bool {
 	f.emit(
 		system("init", obj{"session_id": f.sessionID}),
 		system("compact_boundary", obj{"compact_metadata": obj{"trigger": "manual", "pre_tokens": 42010, "post_tokens": 7039}, "session_id": f.sessionID}),
-		userString("This session is being continued from a previous conversation ..."),
+		userString("This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nfake CLI summary\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /fake/transcript.jsonl\nContinue the conversation from where it left off without asking the user any further questions."),
 		userString("<local-command-stdout>Compacted </local-command-stdout>"),
 		res,
 	)

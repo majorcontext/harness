@@ -20,9 +20,9 @@ var (
 )
 
 // plainSummary returns the text of a summary that the CLI wrote, without the
-// reasoning block, the summary tags, or the continuationLead framing that the CLI
-// adds for the model. It returns "" for a continuationLead prompt with a framing
-// that it does not know, so that text for the model never reaches a reader.
+// reasoning block, the summary tags, or the continuation framing that the CLI
+// adds for the model. Text that it does not know stays as it is, because the
+// model reads the summary after a switch to another backend.
 func plainSummary(raw string) string {
 	if continuationLead.MatchString(raw) {
 		return persistedSummary(raw)
@@ -35,21 +35,19 @@ func plainSummary(raw string) string {
 	return strings.TrimSpace(text)
 }
 
-// persistedSummary returns the body of a continuation prompt, or "" when its
-// opening or its closing is not one that the adapter knows.
+// persistedSummary returns the body of a continuation prompt without the
+// closing that the adapter knows. A prompt with an opening that it does not
+// know is returned whole.
 func persistedSummary(raw string) string {
 	loc := persistedLead.FindStringIndex(raw)
 	if loc == nil {
-		return ""
+		return strings.TrimSpace(raw)
 	}
-	text, known := raw[loc[1]:], false
+	text := raw[loc[1]:]
 	for _, tail := range persistedTail {
 		if loc := tail.FindStringIndex(text); loc != nil {
-			text, known = text[:loc[0]], true
+			text = text[:loc[0]]
 		}
-	}
-	if !known {
-		return ""
 	}
 	return strings.TrimSpace(text)
 }

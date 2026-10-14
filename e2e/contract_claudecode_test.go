@@ -345,6 +345,17 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 			claudeHistoryTool{as: "a"},
 		),
 	}, {
+		name:   "claudecode_compaction_then_a_harness_model_reads_the_banner_and_the_summary",
+		driver: claudeLane{mode: "compact_turn"}.newDriver,
+		model: []harnesstest.Step{
+			{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}},
+		},
+		actions: withActions(claudeOneTurn,
+			compact{as: "a"},
+			setModel{as: "a", model: "anthropic/claude-fable-5"},
+			submit{as: "a", text: "native"}, waitIdle{as: "a"},
+		),
+	}, {
 		name:   "claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request",
 		driver: claudeLane{mode: "parallel_calls", chat: true}.newDriver,
 		chat:   true,

@@ -2,63 +2,64 @@ package e2e
 
 // Reasons that the re-golden and deleted rows give.
 const (
-	specView          = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
-	specUpdate        = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
-	specMessages      = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that a reader sees, oldest first"
-	specBootstrapGone = "one-page-route"
-	specRestartOpens  = "A restart opens no session by itself: the embedder opens each session that has work to resume"
-	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
-	specReceipt       = "| New id | `201 {input_id, seq}` |"
-	specDiscard       = "the backend sends an `item.discarded` frame with the `item_id` of the dropped item before the first delta of the new one"
-	specItems         = "| `item.completed` | `protocol.ItemCompleted`: its `message` has the role `user`, `assistant`, or `tool` |"
-	specOneResult     = "Every tool call item gets exactly one result item, or an open request, before its turn ends."
-	specExternal      = "external-items-complete"
-	specTaskInputs    = "task-notice-is-input"
-	specChildReport   = "The report names the child, its agent, the outcome, and the reason, and holds the last assistant text of the child"
-	specChildReason   = "The reason is a fixed prefix by `error_class`"
-	specChildCrash    = "a crashed child turn ends `crashed` and settles `failed`"
-	specChildLong     = "A result of at most 4096 bytes, after masking, stays whole in the report."
-	specChildLost     = "a crashed turn reads `lost to restart: turn was in flight when the process last stopped`"
-	specChildBound    = "masked and cut at 500 runes with `… [truncated]`"
-	specChildStatus   = "The `status` and `log` actions of the `task` tool show this reason."
-	specChildHint     = "the recover hint is masked and cut at 120 runes"
-	specChildHandle   = "the parent retains the masked result as `tool_result.retained` in the append of `child.settled`"
-	specChildNoRead   = "the preview ends `… [truncated; full result unavailable]`"
-	specChildClaude   = "On a backend with `OwnsLoop`, the report is a `queue` input"
-	specChildNoGoal   = "a child session has none"
-	specChildAgent    = "`protocol.Session.agent` is the agent profile name that the child was spawned with"
-	specChildWording  = "child-report-segment"
-	specChildPinned   = "The segment is pinned: the model reads it at the same place in each later model call"
-	specPinSlot       = "the model reads it at the same place in each later model call"
-	specPinReaders    = "it is in no history that a reader sees"
-	specPinDrain      = "drain-two-messages"
-	specPinInTurn     = "A compaction inside a turn settles the pins there at once."
-	specPinRestart    = "Replay rebuilds a pin from the log, so a pin survives a restart."
-	specPinCompact    = "A compaction moves every pin to the end of the history that it leaves"
-	specPinCut        = "A compaction moves every pin to the end of the history that it leaves"
-	specPinPaired     = "so a pin never falls between a tool call and its result"
-	specPinKept       = "Replay rebuilds a pin from the log, so a pin survives a restart."
-	specAnswerNoSteer = "A run that answers a question takes no steer input"
-	specCrash         = "Append `turn.ended{interrupted, crashed}`; keep the partial"
-	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued"
-	specHandoffResume = "A suspended turn has no open tool call, so the next owner resumes it automatically"
-	specQueue         = "(queue: next turn; steer: next item boundary)"
-	specMCPText       = "a call to a tool that is not there reads `no such tool available`"
-	specGoalDeferred  = "no-deferred-goal"
-	specCursor        = "One per-session `seq` serves paging and SSE resume."
-	specEventsRoute   = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
-	specBoxGlobal     = "no-box-global-journal"
-	specNoProvider    = "A model that no configured provider serves fails with `model_unavailable` at create and at a settings change; an unknown window never does."
-	specUnknownWindow = "else the default of 128000 tokens with `WindowEstimated`"
-	specThreshold     = "A setting at or below 0 is the default."
-	specOverflowFails = "When no turn can fold or the summary fails, the turn fails."
-	specCompactResult = "`Compact()` returns `protocol.Compacted`"
-	specChildResend   = "later-send-not-refused"
-	specEndTree       = "stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`."
-	specClearGoal     = "Stops the turn with `goal_cleared` while the goal is active"
-	specWaiting       = "| `waiting` | A turn ended `awaiting_input`; a request is open |"
-	specWarm          = "The session calls `Warm` once on create and on wake, fire-and-forget under the session context."
-	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
+	specClaudeCompactSummary = "Compaction summary. The adapter logs the summary text of the CLI"
+	specView                 = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
+	specUpdate               = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
+	specMessages             = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that a reader sees, oldest first"
+	specBootstrapGone        = "one-page-route"
+	specRestartOpens         = "A restart opens no session by itself: the embedder opens each session that has work to resume"
+	specErrors               = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
+	specReceipt              = "| New id | `201 {input_id, seq}` |"
+	specDiscard              = "the backend sends an `item.discarded` frame with the `item_id` of the dropped item before the first delta of the new one"
+	specItems                = "| `item.completed` | `protocol.ItemCompleted`: its `message` has the role `user`, `assistant`, or `tool` |"
+	specOneResult            = "Every tool call item gets exactly one result item, or an open request, before its turn ends."
+	specExternal             = "external-items-complete"
+	specTaskInputs           = "task-notice-is-input"
+	specChildReport          = "The report names the child, its agent, the outcome, and the reason, and holds the last assistant text of the child"
+	specChildReason          = "The reason is a fixed prefix by `error_class`"
+	specChildCrash           = "a crashed child turn ends `crashed` and settles `failed`"
+	specChildLong            = "A result of at most 4096 bytes, after masking, stays whole in the report."
+	specChildLost            = "a crashed turn reads `lost to restart: turn was in flight when the process last stopped`"
+	specChildBound           = "masked and cut at 500 runes with `… [truncated]`"
+	specChildStatus          = "The `status` and `log` actions of the `task` tool show this reason."
+	specChildHint            = "the recover hint is masked and cut at 120 runes"
+	specChildHandle          = "the parent retains the masked result as `tool_result.retained` in the append of `child.settled`"
+	specChildNoRead          = "the preview ends `… [truncated; full result unavailable]`"
+	specChildClaude          = "On a backend with `OwnsLoop`, the report is a `queue` input"
+	specChildNoGoal          = "a child session has none"
+	specChildAgent           = "`protocol.Session.agent` is the agent profile name that the child was spawned with"
+	specChildWording         = "child-report-segment"
+	specChildPinned          = "The segment is pinned: the model reads it at the same place in each later model call"
+	specPinSlot              = "the model reads it at the same place in each later model call"
+	specPinReaders           = "it is in no history that a reader sees"
+	specPinDrain             = "drain-two-messages"
+	specPinInTurn            = "A compaction inside a turn settles the pins there at once."
+	specPinRestart           = "Replay rebuilds a pin from the log, so a pin survives a restart."
+	specPinCompact           = "A compaction moves every pin to the end of the history that it leaves"
+	specPinCut               = "A compaction moves every pin to the end of the history that it leaves"
+	specPinPaired            = "so a pin never falls between a tool call and its result"
+	specPinKept              = "Replay rebuilds a pin from the log, so a pin survives a restart."
+	specAnswerNoSteer        = "A run that answers a question takes no steer input"
+	specCrash                = "Append `turn.ended{interrupted, crashed}`; keep the partial"
+	specCrashQueue           = "The session then starts the next queued input, or waits for input when none is queued"
+	specHandoffResume        = "A suspended turn has no open tool call, so the next owner resumes it automatically"
+	specQueue                = "(queue: next turn; steer: next item boundary)"
+	specMCPText              = "a call to a tool that is not there reads `no such tool available`"
+	specGoalDeferred         = "no-deferred-goal"
+	specCursor               = "One per-session `seq` serves paging and SSE resume."
+	specEventsRoute          = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
+	specBoxGlobal            = "no-box-global-journal"
+	specNoProvider           = "A model that no configured provider serves fails with `model_unavailable` at create and at a settings change; an unknown window never does."
+	specUnknownWindow        = "else the default of 128000 tokens with `WindowEstimated`"
+	specThreshold            = "A setting at or below 0 is the default."
+	specOverflowFails        = "When no turn can fold or the summary fails, the turn fails."
+	specCompactResult        = "`Compact()` returns `protocol.Compacted`"
+	specChildResend          = "later-send-not-refused"
+	specEndTree              = "stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`."
+	specClearGoal            = "Stops the turn with `goal_cleared` while the goal is active"
+	specWaiting              = "| `waiting` | A turn ended `awaiting_input`; a request is open |"
+	specWarm                 = "The session calls `Warm` once on create and on wake, fire-and-forget under the session context."
+	specCompactOwned         = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
 	specClaudeGauge             = "A Claude Code turn reads its context gauge and its cost from the `result` frame."
 	specClaudeCompactPostTokens = "A `compact_boundary` with positive `post_tokens` sets the reading until a later main-thread assistant frame reports usage."
@@ -217,116 +218,117 @@ var runtimeRows = map[string]runtimeRow{
 	"retained_results_of_one_batch_keep_their_own_handles":                                                     sameAsServe(),
 	"calls_on_one_file_run_in_call_order_within_a_batch":                                                       sameAsServe(),
 	"plugin_hooks_run_for_each_call_of_a_batch":                                                                sameAsServe(),
-	"file_tools_size_cap":                                                       reGolden(specFileCap),
-	"bash_output_and_exit_status":                                               sameAsServe(),
-	"read_file_returns_an_image":                                                reGolden(specToolImages),
-	"a_tool_result_image_reaches_the_model_after_a_restart":                     sameAsServe(),
-	"a_missing_tool_result_image_leaves_the_text_for_the_model":                 sameAsServe(),
-	"write_guard_belongs_to_one_session":                                        sameAsServe(),
-	"mcp_tool_action_refusals":                                                  sameAsServe(),
-	"mcp_refused_call_hides_the_response_body":                                  reGolden(specMCPNoLeak, specMCPText),
-	"mcp_select_of_a_down_server_is_pending":                                    sameAsServe(),
-	"mcp_search_ranks_the_tools":                                                sameAsServe(),
-	"tool_result_retention_keeps_a_preview_and_reads_it_back":                   sameAsServe(),
-	"tool_result_over_the_session_budget_keeps_a_preview_with_a_notice":         sameAsServe(),
-	"read_tool_result_bounds_the_default_budget":                                reGolden(specRetainBound),
-	"tool_result_handles_continue_across_turns_and_a_restart":                   reGolden(specRetainIndex, specCompactResult),
-	"tool_result_retention_keeps_the_plugin_hooked_result":                      sameAsServe(),
-	"a_child_without_read_tool_result_retains_nothing":                          reGolden(specNoReader, specTaskInputs, specChildReport),
-	"auto_compact_on_threshold":                                                 reGolden(specView, specPinsMove),
-	"bifrost_429_then_ok":                                                       reGolden(specItems, specView),
-	"bifrost_context_overflow":                                                  reGolden(specView, specOverflowFails),
-	"bifrost_goal_met_first_turn":                                               reGolden(specItems),
-	"bifrost_goal_not_met_then_met":                                             reGolden(specItems),
-	"bifrost_prompt_attachments":                                                reGolden(specItems),
-	"bifrost_reasoning_and_effort":                                              reGolden(specItems, specUpdate),
-	"bifrost_text_reply":                                                        reGolden(specItems),
-	"bifrost_tool_error_marker":                                                 reGolden(specItems),
-	"bifrost_tool_round_trip":                                                   reGolden(specItems),
-	"bifrost_two_tool_calls_one_turn":                                           reGolden(specItems, specOneResult),
-	"bootstrap_cold_then_resident_windows":                                      reGolden(specMessages, specBootstrapGone, specErrors),
-	"bootstrap_cold_window_after_kill":                                          reGolden(specMessages, specBootstrapGone, specErrors),
-	"builtin_commands_run_and_record":                                           reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
-	"busy_deferred_goal_with_max_turns":                                         deletedBy(specGoalDeferred),
-	"child_crash_recovered":                                                     reGolden(specView, specCrash, specChildReport, specChildAgent),
-	"child_crash_reaches_a_busy_parent":                                         reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording, specChildAgent),
-	"child_usage_limit_delivered":                                               reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView, specChildAgent),
-	"child_error_delivered":                                                     reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView, specChildAgent),
-	"child_report_reaches_a_busy_parent_at_the_tool_boundary":                   reGolden(specChildReport, specChildWording),
-	"child_error_reaches_a_busy_parent_at_the_tool_boundary":                    reGolden(specChildReport, specChildReason, specChildWording),
-	"child_usage_limit_reaches_a_busy_parent":                                   reGolden(specChildReport, specChildReason, specChildWording),
-	"child_report_to_a_busy_parent_keeps_its_slot_in_the_next_turn":             reGolden(specChildReport, specChildWording, specChildPinned, specPinSlot),
-	"child_report_to_a_busy_parent_stays_through_a_compaction":                  reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinsMove),
-	"prompt_and_child_report_in_one_drain_are_two_messages":                     reGolden(specChildReport, specChildWording, specChildPinned, specPinDrain),
-	"task_log_of_a_child_shows_no_pinned_report":                                reGolden(specTaskInputs, specChildReport, specChildWording, specChildPinned, specPinReaders, specItems, specOneResult),
-	"child_report_to_a_busy_parent_after_the_cut_of_a_compaction":               reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinCut, specPinsMove),
-	"child_report_to_a_busy_parent_folded_with_a_long_kept_tail":                reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinPaired, specPinsMove),
-	"child_report_to_a_busy_parent_stays_through_an_in_turn_compaction":         reGolden(specChildReport, specChildWording, specChildPinned, specPinInTurn, specOverflowFolds, specPinsMove),
-	"child_report_to_a_busy_parent_survives_a_restart":                          reGolden(specChildReport, specChildWording, specChildPinned, specPinRestart, specPinKept),
-	"child_rate_limit_reaches_a_busy_parent":                                    reGolden(specChildReport, specChildReason, specChildWording),
-	"child_result_within_the_byte_limit_reaches_a_busy_parent":                  reGolden(specChildReport, specChildLong, specChildWording),
-	"child_usage_limit_with_a_long_hint_reaches_a_busy_parent":                  reGolden(specChildReport, specChildReason, specChildHint, specChildWording),
-	"child_long_result_handle_reads_back":                                       reGolden(specChildReport, specChildLong, specChildHandle, specChildWording),
-	"claudecode_long_child_result_has_no_readable_handle":                       sameAsServe(),
-	"child_long_error_reaches_a_busy_parent":                                    reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
-	"child_long_result_reaches_a_busy_parent":                                   reGolden(specChildReport, specChildLong, specChildWording),
-	"claudecode_compact_delegated":                                              reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specClaudeCompactPostTokens, specRestartOpens),
-	"claudecode_child_report_waits_for_the_next_turn":                           sameAsServe(),
-	"claudecode_child_reports_share_the_next_turn":                              sameAsServe(),
-	"claudecode_queued_prompt_and_child_report_share_a_turn":                    reGolden(specQueue, specChildReport, specChildClaude),
-	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                        sameAsServe(),
-	"claudecode_bridge_model_tool_offers_list_only":                             sameAsServe(),
-	"claudecode_bridge_refuses_set_on_the_model_tool":                           sameAsServe(),
-	"claudecode_configured_mcp_servers_reach_the_cli":                           sameAsServe(),
-	"claudecode_context_window_from_model_usage":                                reGolden(specView, specClaudeGauge),
-	"claudecode_compact_reads_post_tokens":                                      reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
-	"claudecode_compact_post_tokens_yields_to_assistant_usage":                  reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
-	"claudecode_compact_keeps_the_window":                                       reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
-	"claudecode_cli_exit_runs_once":                                             reGolden(specView, specClaudeOnce),
-	"claudecode_error_result_fails_turn":                                        reGolden(specView, specClaudeOnce, specClaudeGauge),
-	"claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors":      sameAsServe(),
-	"claudecode_credential_refusal_in_errors_fails_a_goal":                      sameAsServe(),
-	"claudecode_history_bridge_after_native_turn":                               reGolden(specUpdate, specClaudeGauge),
-	"claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request":          reGolden(specToolCallsAtOnce),
-	"claudecode_interrupt_mid_turn":                                             reGolden(specView),
-	"claudecode_question_dismissed_by_compact":                                  reGolden(specWaiting, specView, specCompactResult, specClaudeGauge),
-	"claudecode_question_dismissed_by_next_prompt":                              reGolden(specWaiting, specView, specClaudeGauge),
-	"claudecode_question_answer_run_takes_no_steer_input":                       reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt, specClaudeGauge),
-	"claudecode_question_parks_then_answer_resumes":                             reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
-	"claudecode_question_unknown_call_id_conflicts":                             reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
-	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":             sameAsServe(),
-	"claudecode_subagent_frame_during_a_main_stream_keeps_each_item_its_deltas": sameAsServe(),
-	"claudecode_retried_reply_starts_a_new_live_item":                           reGolden(specDiscard),
-	"claudecode_prompt_attachments":                                             sameAsServe(),
-	"claudecode_queued_prompt_injected_mid_turn":                                reGolden(specView, specClaudeGauge),
-	"claudecode_steer_held_during_text_joins_at_the_next_tool_boundary":         sameAsServe(),
-	"claudecode_cli_exit_before_answering_a_steer_fails_the_turn":               sameAsServe(),
-	"claudecode_interrupt_while_awaiting_a_steer_answer_interrupts_the_turn":    sameAsServe(),
-	"claudecode_steer_during_final_text_runs_as_the_next_turn":                  sameAsServe(),
-	"claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn":  sameAsServe(),
-	"claudecode_rate_limit_event_reaches_subscription_usage":                    reGolden(specView, specClaudeGauge),
-	"claudecode_resume_across_turns":                                            sameAsServe(),
-	"claudecode_resume_survives_restart":                                        sameAsServe(),
-	"claudecode_subagent_frames_keep_parent":                                    sameAsServe(),
-	"claudecode_thinking_block_is_reasoning":                                    reGolden(specExternal, specView, specClaudeGauge),
-	"claudecode_turn_text_and_tool":                                             reGolden(specView, specClaudeGauge),
-	"codex_http_mcp_tool_schema_is_sanitized":                                   reGolden(specItems),
-	"codex_http_reasoning_replays_on_tool_round_trip":                           reGolden(specItems),
-	"codex_http_sse_text_turn":                                                  reGolden(specItems),
-	"codex_http_sse_tool_round_trip_resends_history":                            reGolden(specItems),
-	"codex_ws_chain_miss_resends_full_history":                                  reGolden(specItems, specWarm),
-	"codex_ws_chains_two_turns":                                                 reGolden(specItems, specWarm),
-	"codex_ws_drop_mid_turn_resends_full_history":                               reGolden(specView, specItems),
-	"codex_ws_effort_sets_reasoning_effort":                                     reGolden(specView, specItems, specUpdate),
-	"codex_ws_prewarm_warms_first_turn":                                         reGolden(specItems, specWarm),
-	"codex_ws_reasoning_chains_tool_round_trip":                                 reGolden(specItems, specWarm),
-	"codex_ws_refused_falls_back_to_http":                                       reGolden(specItems, specWarm),
-	"codex_ws_tool_round_trip":                                                  reGolden(specItems, specWarm),
-	"codex_ws_uncoded_chain_miss_resends_full_history":                          reGolden(specItems, specWarm),
-	"codex_ws_usage_frame_reaches_session":                                      reGolden(specView, specItems),
-	"codex_http_usage_headers_reach_session":                                    reGolden(specView, specItems),
-	"compact_summary_cut_at_max_tokens_is_kept":                                 sameAsServe(),
-	"compact_logs_the_plain_summary_and_the_model_reads_it_with_the_banner":     sameAsServe(),
+	"file_tools_size_cap":                                                         reGolden(specFileCap),
+	"bash_output_and_exit_status":                                                 sameAsServe(),
+	"read_file_returns_an_image":                                                  reGolden(specToolImages),
+	"a_tool_result_image_reaches_the_model_after_a_restart":                       sameAsServe(),
+	"a_missing_tool_result_image_leaves_the_text_for_the_model":                   sameAsServe(),
+	"write_guard_belongs_to_one_session":                                          sameAsServe(),
+	"mcp_tool_action_refusals":                                                    sameAsServe(),
+	"mcp_refused_call_hides_the_response_body":                                    reGolden(specMCPNoLeak, specMCPText),
+	"mcp_select_of_a_down_server_is_pending":                                      sameAsServe(),
+	"mcp_search_ranks_the_tools":                                                  sameAsServe(),
+	"tool_result_retention_keeps_a_preview_and_reads_it_back":                     sameAsServe(),
+	"tool_result_over_the_session_budget_keeps_a_preview_with_a_notice":           sameAsServe(),
+	"read_tool_result_bounds_the_default_budget":                                  reGolden(specRetainBound),
+	"tool_result_handles_continue_across_turns_and_a_restart":                     reGolden(specRetainIndex, specCompactResult),
+	"tool_result_retention_keeps_the_plugin_hooked_result":                        sameAsServe(),
+	"a_child_without_read_tool_result_retains_nothing":                            reGolden(specNoReader, specTaskInputs, specChildReport),
+	"auto_compact_on_threshold":                                                   reGolden(specView, specPinsMove),
+	"bifrost_429_then_ok":                                                         reGolden(specItems, specView),
+	"bifrost_context_overflow":                                                    reGolden(specView, specOverflowFails),
+	"bifrost_goal_met_first_turn":                                                 reGolden(specItems),
+	"bifrost_goal_not_met_then_met":                                               reGolden(specItems),
+	"bifrost_prompt_attachments":                                                  reGolden(specItems),
+	"bifrost_reasoning_and_effort":                                                reGolden(specItems, specUpdate),
+	"bifrost_text_reply":                                                          reGolden(specItems),
+	"bifrost_tool_error_marker":                                                   reGolden(specItems),
+	"bifrost_tool_round_trip":                                                     reGolden(specItems),
+	"bifrost_two_tool_calls_one_turn":                                             reGolden(specItems, specOneResult),
+	"bootstrap_cold_then_resident_windows":                                        reGolden(specMessages, specBootstrapGone, specErrors),
+	"bootstrap_cold_window_after_kill":                                            reGolden(specMessages, specBootstrapGone, specErrors),
+	"builtin_commands_run_and_record":                                             reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
+	"busy_deferred_goal_with_max_turns":                                           deletedBy(specGoalDeferred),
+	"child_crash_recovered":                                                       reGolden(specView, specCrash, specChildReport, specChildAgent),
+	"child_crash_reaches_a_busy_parent":                                           reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording, specChildAgent),
+	"child_usage_limit_delivered":                                                 reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView, specChildAgent),
+	"child_error_delivered":                                                       reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView, specChildAgent),
+	"child_report_reaches_a_busy_parent_at_the_tool_boundary":                     reGolden(specChildReport, specChildWording),
+	"child_error_reaches_a_busy_parent_at_the_tool_boundary":                      reGolden(specChildReport, specChildReason, specChildWording),
+	"child_usage_limit_reaches_a_busy_parent":                                     reGolden(specChildReport, specChildReason, specChildWording),
+	"child_report_to_a_busy_parent_keeps_its_slot_in_the_next_turn":               reGolden(specChildReport, specChildWording, specChildPinned, specPinSlot),
+	"child_report_to_a_busy_parent_stays_through_a_compaction":                    reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinsMove),
+	"prompt_and_child_report_in_one_drain_are_two_messages":                       reGolden(specChildReport, specChildWording, specChildPinned, specPinDrain),
+	"task_log_of_a_child_shows_no_pinned_report":                                  reGolden(specTaskInputs, specChildReport, specChildWording, specChildPinned, specPinReaders, specItems, specOneResult),
+	"child_report_to_a_busy_parent_after_the_cut_of_a_compaction":                 reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinCut, specPinsMove),
+	"child_report_to_a_busy_parent_folded_with_a_long_kept_tail":                  reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinPaired, specPinsMove),
+	"child_report_to_a_busy_parent_stays_through_an_in_turn_compaction":           reGolden(specChildReport, specChildWording, specChildPinned, specPinInTurn, specOverflowFolds, specPinsMove),
+	"child_report_to_a_busy_parent_survives_a_restart":                            reGolden(specChildReport, specChildWording, specChildPinned, specPinRestart, specPinKept),
+	"child_rate_limit_reaches_a_busy_parent":                                      reGolden(specChildReport, specChildReason, specChildWording),
+	"child_result_within_the_byte_limit_reaches_a_busy_parent":                    reGolden(specChildReport, specChildLong, specChildWording),
+	"child_usage_limit_with_a_long_hint_reaches_a_busy_parent":                    reGolden(specChildReport, specChildReason, specChildHint, specChildWording),
+	"child_long_result_handle_reads_back":                                         reGolden(specChildReport, specChildLong, specChildHandle, specChildWording),
+	"claudecode_long_child_result_has_no_readable_handle":                         sameAsServe(),
+	"child_long_error_reaches_a_busy_parent":                                      reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
+	"child_long_result_reaches_a_busy_parent":                                     reGolden(specChildReport, specChildLong, specChildWording),
+	"claudecode_compact_delegated":                                                reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specClaudeCompactPostTokens, specRestartOpens),
+	"claudecode_child_report_waits_for_the_next_turn":                             sameAsServe(),
+	"claudecode_child_reports_share_the_next_turn":                                sameAsServe(),
+	"claudecode_queued_prompt_and_child_report_share_a_turn":                      reGolden(specQueue, specChildReport, specChildClaude),
+	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                          sameAsServe(),
+	"claudecode_bridge_model_tool_offers_list_only":                               sameAsServe(),
+	"claudecode_bridge_refuses_set_on_the_model_tool":                             sameAsServe(),
+	"claudecode_configured_mcp_servers_reach_the_cli":                             sameAsServe(),
+	"claudecode_context_window_from_model_usage":                                  reGolden(specView, specClaudeGauge),
+	"claudecode_compact_reads_post_tokens":                                        reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
+	"claudecode_compact_post_tokens_yields_to_assistant_usage":                    reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
+	"claudecode_compact_keeps_the_window":                                         reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
+	"claudecode_cli_exit_runs_once":                                               reGolden(specView, specClaudeOnce),
+	"claudecode_error_result_fails_turn":                                          reGolden(specView, specClaudeOnce, specClaudeGauge),
+	"claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors":        sameAsServe(),
+	"claudecode_credential_refusal_in_errors_fails_a_goal":                        sameAsServe(),
+	"claudecode_history_bridge_after_native_turn":                                 reGolden(specUpdate, specClaudeGauge),
+	"claudecode_compaction_then_a_harness_model_reads_the_banner_and_the_summary": reGolden(specUpdate, specClaudeCompactSummary),
+	"claudecode_parallel_calls_then_a_chat_model_gets_a_valid_request":            reGolden(specToolCallsAtOnce),
+	"claudecode_interrupt_mid_turn":                                               reGolden(specView),
+	"claudecode_question_dismissed_by_compact":                                    reGolden(specWaiting, specView, specCompactResult, specClaudeGauge),
+	"claudecode_question_dismissed_by_next_prompt":                                reGolden(specWaiting, specView, specClaudeGauge),
+	"claudecode_question_answer_run_takes_no_steer_input":                         reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt, specClaudeGauge),
+	"claudecode_question_parks_then_answer_resumes":                               reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
+	"claudecode_question_unknown_call_id_conflicts":                               reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
+	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":               sameAsServe(),
+	"claudecode_subagent_frame_during_a_main_stream_keeps_each_item_its_deltas":   sameAsServe(),
+	"claudecode_retried_reply_starts_a_new_live_item":                             reGolden(specDiscard),
+	"claudecode_prompt_attachments":                                               sameAsServe(),
+	"claudecode_queued_prompt_injected_mid_turn":                                  reGolden(specView, specClaudeGauge),
+	"claudecode_steer_held_during_text_joins_at_the_next_tool_boundary":           sameAsServe(),
+	"claudecode_cli_exit_before_answering_a_steer_fails_the_turn":                 sameAsServe(),
+	"claudecode_interrupt_while_awaiting_a_steer_answer_interrupts_the_turn":      sameAsServe(),
+	"claudecode_steer_during_final_text_runs_as_the_next_turn":                    sameAsServe(),
+	"claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn":    sameAsServe(),
+	"claudecode_rate_limit_event_reaches_subscription_usage":                      reGolden(specView, specClaudeGauge),
+	"claudecode_resume_across_turns":                                              sameAsServe(),
+	"claudecode_resume_survives_restart":                                          sameAsServe(),
+	"claudecode_subagent_frames_keep_parent":                                      sameAsServe(),
+	"claudecode_thinking_block_is_reasoning":                                      reGolden(specExternal, specView, specClaudeGauge),
+	"claudecode_turn_text_and_tool":                                               reGolden(specView, specClaudeGauge),
+	"codex_http_mcp_tool_schema_is_sanitized":                                     reGolden(specItems),
+	"codex_http_reasoning_replays_on_tool_round_trip":                             reGolden(specItems),
+	"codex_http_sse_text_turn":                                                    reGolden(specItems),
+	"codex_http_sse_tool_round_trip_resends_history":                              reGolden(specItems),
+	"codex_ws_chain_miss_resends_full_history":                                    reGolden(specItems, specWarm),
+	"codex_ws_chains_two_turns":                                                   reGolden(specItems, specWarm),
+	"codex_ws_drop_mid_turn_resends_full_history":                                 reGolden(specView, specItems),
+	"codex_ws_effort_sets_reasoning_effort":                                       reGolden(specView, specItems, specUpdate),
+	"codex_ws_prewarm_warms_first_turn":                                           reGolden(specItems, specWarm),
+	"codex_ws_reasoning_chains_tool_round_trip":                                   reGolden(specItems, specWarm),
+	"codex_ws_refused_falls_back_to_http":                                         reGolden(specItems, specWarm),
+	"codex_ws_tool_round_trip":                                                    reGolden(specItems, specWarm),
+	"codex_ws_uncoded_chain_miss_resends_full_history":                            reGolden(specItems, specWarm),
+	"codex_ws_usage_frame_reaches_session":                                        reGolden(specView, specItems),
+	"codex_http_usage_headers_reach_session":                                      reGolden(specView, specItems),
+	"compact_summary_cut_at_max_tokens_is_kept":                                   sameAsServe(),
+	"compact_logs_the_plain_summary_and_the_model_reads_it_with_the_banner":       sameAsServe(),
 	"compact_manual":                                                         reGolden(specMessages, specBootstrapGone, specErrors, specPinsMove),
 	"compact_survives_restart":                                               reGolden(specMessages, specBootstrapGone, specErrors, specRestartOpens),
 	"context_overflow":                                                       reGolden(specView, specOverflowFails),

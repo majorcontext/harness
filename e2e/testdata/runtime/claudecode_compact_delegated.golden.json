@@ -18,7 +18,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "Claude Code compacted its context (manual, 42010 tokens before)."
+            "text": "fake CLI summary"
           }
         ]
       },
@@ -38,7 +38,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "Claude Code compacted its context (manual, 42010 tokens before)."
+            "text": "fake CLI summary"
           }
         ]
       }

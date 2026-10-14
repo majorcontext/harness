@@ -1,0 +1,149 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[compacted summary of earlier conversation]\n\nfake CLI summary"
+            },
+            {
+              "kind": "text",
+              "text": "native"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "fake CLI summary"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "/compact"
+          }
+        ]
+      },
+      {
+        "id": "cmpsum#2",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "fake CLI summary"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "native"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "native reply"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "by_backend": true,
+        "folded": true
+      }
+    },
+    "set_model.a": {
+      "status": 200,
+      "body": {
+        "compaction_count": 2,
+        "context": {
+          "tokens": 7039,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 14,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

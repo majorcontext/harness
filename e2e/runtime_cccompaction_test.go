@@ -23,29 +23,49 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 	reply := map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "Continuing."}}}}
 	result := map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "result": "Continuing.", "session_id": "S",
 		"usage": map[string]any{"input_tokens": 1, "output_tokens": 1}}
+	framed := func(text string) map[string]any {
+		return map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}}
+	}
+	boundaryLine := "Claude Code compacted its context (auto, 167000 tokens before)."
+	settledLines := []string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}
+	cliSummary := "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion.\n\nSummary:\nthe plain body\n\nIf you need specific details from before compaction (like exact code snippets), read the full transcript at: /x.jsonl\nContinue the conversation from where it left off."
 	rows := []struct {
 		name   string
 		frames []map[string]any
 		want   []string
+		// summary, when set, is the summary of the compaction.applied record.
+		summary string
 	}{
 		{"claude_code_compaction_sends_compacting_then_running_at_the_boundary",
 			[]map[string]any{init, compacting, settled, boundary, summary, reply, result},
-			[]string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status running", "compaction.applied", "turn.ended"}, ""},
 		{"claude_code_compaction_settled_at_the_boundary_is_not_failed_when_the_stream_ends",
 			[]map[string]any{init, compacting, settled, boundary},
-			[]string{"turn.started", "~status compacting", "~status running", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status running", "turn.ended"}, ""},
 		{"claude_code_compaction_with_a_failed_result_sends_compaction_failed",
 			[]map[string]any{init, compacting, failed, reply, result},
-			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}, ""},
 		{"claude_code_compaction_that_never_settles_sends_compaction_failed_before_the_turn_ends",
 			[]map[string]any{init, compacting, reply, result},
-			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}, ""},
 		{"claude_code_compaction_cut_off_by_the_end_of_the_stream_sends_compaction_failed",
 			[]map[string]any{init, compacting},
-			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}},
+			[]string{"turn.started", "~status compacting", "~status compaction_failed", "turn.ended"}, ""},
 		{"claude_code_boundary_without_a_compacting_status_sends_no_frame",
 			[]map[string]any{init, boundary, summary, reply, result},
-			[]string{"turn.started", "compaction.applied", "turn.ended"}},
+			[]string{"turn.started", "compaction.applied", "turn.ended"}, ""},
+		{"claude_code_summary_loses_the_continuation_framing",
+			[]map[string]any{init, compacting, settled, boundary, framed(cliSummary), reply, result}, settledLines, "the plain body"},
+		{"claude_code_summary_loses_the_analysis_block_and_the_summary_tags",
+			[]map[string]any{init, compacting, settled, boundary, framed("<analysis>\nthinking\n</analysis>\n<summary>\nthe tagged body\n</summary>"), reply, result}, settledLines, "the tagged body"},
+		{"claude_code_summary_with_crlf_tag_lines_keeps_only_the_tagged_body",
+			[]map[string]any{init, compacting, settled, boundary, framed("<analysis>\r\nthinking\r\n</analysis>\r\n<summary>\r\nthe crlf body\r\n</summary>\r\n"), reply, result}, settledLines, "the crlf body"},
+		{"claude_code_summary_with_a_known_opening_and_an_unknown_closing_keeps_the_body",
+			[]map[string]any{init, compacting, settled, boundary, framed("This session is being continued from a previous conversation.\n\nSummary:\nthe body\n\nNow follow these new instructions."), reply, result}, settledLines, "the body\n\nNow follow these new instructions."},
+		{"claude_code_summary_with_an_unknown_opening_stays_as_the_cli_wrote_it",
+			[]map[string]any{init, compacting, settled, boundary, framed("This session is being continued from a previous conversation. Follow these new instructions."), reply, result}, settledLines, "This session is being continued from a previous conversation. Follow these new instructions."},
+		{"claude_code_boundary_without_a_summary_frame_logs_the_boundary_text",
+			[]map[string]any{init, compacting, settled, boundary, reply, result}, settledLines, boundaryLine},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -53,6 +73,7 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 			r := l.runtime()
 			s := l.create(r)
 			var got []string
+			var gotSummary string
 			head := s.Snapshot().HeadSeq
 			for e, err := range s.Events(t.Context(), head-1) {
 				if err != nil {
@@ -60,6 +81,13 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 				}
 				if e.Seq == head && !e.Ephemeral {
 					l.send(s, "1")
+				}
+				if e.Kind == protocol.KindCompactionApplied {
+					p, err := e.Payload()
+					if err != nil {
+						t.Fatal(err)
+					}
+					gotSummary = p.(*protocol.CompactionApplied).Summary
 				}
 				if line, ok := compactionLine(e); ok {
 					got = append(got, line)
@@ -71,6 +99,9 @@ func TestContractRuntimeClaudeCodeCompactionFrames(t *testing.T) {
 			l.close(r)
 			if !slices.Equal(got, row.want) {
 				t.Errorf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(row.want, "\n"))
+			}
+			if row.summary != "" && gotSummary != row.summary {
+				t.Errorf("summary = %q, want %q", gotSummary, row.summary)
 			}
 		})
 	}
