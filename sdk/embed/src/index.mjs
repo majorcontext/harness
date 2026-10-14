@@ -18,7 +18,9 @@ export { defaultBuiltinTools, subprocess, wasm };
  * persist keeps the sessions in the origin private file system below dir
  * (default /persist/sessions) under a lock that one page of the origin holds,
  * and createHarness rejects with code "store_in_use" after 2 s while another
- * page holds it. Otherwise the store is in memory. log receives each JSON log
+ * page holds it. Otherwise the store is in memory. With subprocess, dir is the
+ * session directory of the process, and without it the process uses its own
+ * default directory. log receives each JSON log
  * line of the module. A transport refuses an option it cannot honor: the
  * promise rejects and nothing starts.
  */
