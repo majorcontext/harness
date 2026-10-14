@@ -370,6 +370,11 @@ func (d *runtimeDriver) CreateModel(t *testing.T, model string) callResult {
 	return d.call(t, http.MethodPost, "/sessions", body)
 }
 
+func (d *runtimeDriver) CreateEffort(t *testing.T, effort string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/sessions", map[string]any{"effort": effort})
+}
+
 func (d *runtimeDriver) PostInput(t *testing.T, id, text string) callResult {
 	t.Helper()
 	return d.Send(t, id, text)

@@ -71,30 +71,6 @@ func TestContractServeCreateTakesNoMCPServers(t *testing.T) {
 	})
 }
 
-func TestContractCreateValidatesEffort(t *testing.T) {
-	skipShort(t)
-	onHosts(t, func(t *testing.T, h host) {
-		t.Run("an_unknown_effort_is_invalid_request_and_creates_no_session", func(t *testing.T) {
-			t.Parallel()
-			d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil, replyText("ok"))
-			res := d.call(t, http.MethodPost, "/sessions", map[string]any{"effort": "bogus"})
-			errBody, _ := bodyOf(t, res)["error"].(map[string]any)
-			msg, _ := errBody["message"].(string)
-			const want = `invalid effort "bogus" (want one of: off, minimal, low, medium, high, xhigh, max, or empty)`
-			if res.Status != http.StatusBadRequest || errorCode(t, res) != "invalid_request" || msg != want {
-				t.Errorf("response = %d %v, want 400 invalid_request with message %q", res.Status, res.Body, want)
-			}
-			var page struct {
-				Sessions []struct{ ID string } `json:"sessions"`
-			}
-			d.expect(t, http.StatusOK, http.MethodGet, "/sessions", nil, &page)
-			if len(page.Sessions) != 0 {
-				t.Errorf("GET /sessions lists %+v after a rejected create, want none", page.Sessions)
-			}
-		})
-	})
-}
-
 type syncLog struct {
 	mu     sync.Mutex
 	text   strings.Builder

@@ -4,6 +4,7 @@ package e2e
 const (
 	specClaudeCompactSummary = "Compaction summary. The adapter logs the summary text of the CLI"
 	specView                 = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
+	specCreateEffort         = "`Runtime.Create` applies the same check to the `effort` of its request, so `POST /sessions` with another value fails with `invalid_request` and creates no session."
 	specUpdate               = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
 	specMessages             = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that a reader sees, oldest first"
 	specBootstrapGone        = "one-page-route"
@@ -470,6 +471,7 @@ var runtimeRows = map[string]runtimeRow{
 	"session_info_reports_the_session":                                       reGolden(specStatusFollows),
 	"session_info_reports_what_the_session_loaded":                           reGolden(specStatusFollows),
 	"session_info_reports_the_plugin_and_its_system_segment":                 reGolden(specStatusFollows),
+	"create_with_an_unknown_effort_is_invalid_request":                       reGolden(specCreateEffort, specErrors, specView, specListOrder),
 	"session_settings_validation_and_persistence":                            reGolden(specNoProvider, specErrors, specUpdate, specView, specRestartOpens),
 	"sse_resume_after_kill":                                                  reGolden(specCursor, specBoxGlobal, specRestartOpens),
 	"sse_resume_cursor":                                                      reGolden(specCursor, specBoxGlobal),
