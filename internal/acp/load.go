@@ -77,7 +77,7 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if h, err := a.held(p.SessionID); err == nil {
 		return a.heldSetup(ctx, h, view, cwd, len(servers) > 0, replay)
 	}
-	h := a.newHeld(p.SessionID, cwd, rt)
+	h := a.newHeld(ctx, p.SessionID, cwd, rt)
 	st := newPumpState(snap)
 	if replay {
 		err = h.replay(ctx, view, st)

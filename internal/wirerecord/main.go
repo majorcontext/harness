@@ -3,7 +3,7 @@
 // HARNESS_RECORD_WIRE=1. Keys come from ANTHROPIC_API_KEY and OPENAI_API_KEY;
 // the Claude Code CLI uses its own login.
 //
-//	HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire [-only anthropic,chat,responses,claudecode,claudecode-partial]
+//	HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire [-only anthropic,chat,responses,claudecode,claudecode-partial,codexmodels]
 package main
 
 import (
@@ -54,7 +54,7 @@ func main() {
 	defer func() { _ = os.RemoveAll(work) }()
 	r := &recorder{out: *out, scrubber: wirescrub.New(work)}
 	runners := map[string]func(*recorder, string) error{
-		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode, "claudecode-partial": recordClaudeCodePartial,
+		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode, "claudecode-partial": recordClaudeCodePartial, "codexmodels": recordCodexModels,
 	}
 	for _, name := range strings.Split(*only, ",") {
 		run, ok := runners[name]

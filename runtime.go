@@ -779,7 +779,7 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
-func (r *Runtime) Models() []protocol.Model { return r.models.List() }
+func (r *Runtime) Models(ctx context.Context) []protocol.Model { return r.models.List(ctx) }
 
 func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) turn.CallParams {
 	if plug == nil {

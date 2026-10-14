@@ -46,7 +46,7 @@ Add none of these without a new design decision:
 - Before first output, read only the user and project config files.
 - Make no network call and start no subprocess before a command needs it.
 - Add no `init()` side effects. Keep production Go free of cgo.
-- Validate credentials on first use. Keep model catalogs static.
+- Validate credentials on first use. Keep model catalogs static. The one exception is the model list of a provider with `auth` `chatgpt`: it is fetched on first use, cached, and falls back to the static list.
 
 ## Code
 - Keep files at most 800 lines. Keep each function's closing brace at most 80 lines below its opening brace. `internal/gates` compares each changed file with its merge-base version, follows renames, and never blocks a change that only deletes code.

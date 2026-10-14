@@ -13,10 +13,11 @@ var recordings = map[string]struct {
 	wire  Wire
 	files []string
 }{
-	"anthropic":  {AnthropicWire, []string{"anthropic.text.sse", "anthropic.tool.sse", "anthropic.tool-result.sse", "anthropic.thinking.sse", "anthropic.error.json"}},
-	"chat":       {ChatWire, []string{"chat.text.sse", "chat.tool.sse", "chat.tool-result.sse", "chat.error.json"}},
-	"responses":  {ResponsesWire, []string{"responses.text.sse", "responses.tool.sse", "responses.tool-result.sse", "responses.incomplete.sse", "responses.error.json"}},
-	"claudecode": {ClaudeCodeWire, []string{"claudecode.tool.jsonl", "claudecode.interrupt.jsonl", "claudecode.error.jsonl", "claudecode.question.jsonl", "claudecode.question-resume.jsonl", "claudecode.partial.jsonl"}},
+	"anthropic":   {AnthropicWire, []string{"anthropic.text.sse", "anthropic.tool.sse", "anthropic.tool-result.sse", "anthropic.thinking.sse", "anthropic.error.json"}},
+	"chat":        {ChatWire, []string{"chat.text.sse", "chat.tool.sse", "chat.tool-result.sse", "chat.error.json"}},
+	"responses":   {ResponsesWire, []string{"responses.text.sse", "responses.tool.sse", "responses.tool-result.sse", "responses.incomplete.sse", "responses.error.json"}},
+	"codexmodels": {CodexModelsWire, []string{"codexmodels.catalog.json"}},
+	"claudecode":  {ClaudeCodeWire, []string{"claudecode.tool.jsonl", "claudecode.interrupt.jsonl", "claudecode.error.jsonl", "claudecode.question.jsonl", "claudecode.question-resume.jsonl", "claudecode.partial.jsonl"}},
 }
 
 func loadAllowed(t *testing.T) *Allowed {
@@ -71,10 +72,11 @@ func TestWireDoublesMatchTheRealWire(t *testing.T) {
 	})
 	t.Run("fakes emit only what the real wire sends", func(t *testing.T) {
 		fakes := map[string]Shape{
-			"anthropic":  fakeAnthropicShape(t),
-			"chat":       fakeChatShape(t),
-			"responses":  fakeResponsesShape(t),
-			"claudecode": fakeClaudeShape(t),
+			"anthropic":   fakeAnthropicShape(t),
+			"chat":        fakeChatShape(t),
+			"responses":   fakeResponsesShape(t),
+			"claudecode":  fakeClaudeShape(t),
+			"codexmodels": fakeCodexModelsShape(t),
 		}
 		for name, fake := range fakes {
 			for _, d := range FakeDifferences(name, realShape(t, name), fake, allowed) {

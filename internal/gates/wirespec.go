@@ -77,6 +77,12 @@ var ResponsesWire = Wire{
 	FreeForm: []string{"parameters", "metadata"},
 }
 
+// CodexModelsWire is the model catalog of the ChatGPT Codex backend, one JSON body.
+var CodexModelsWire = Wire{
+	Name: "codexmodels",
+	Kind: func(map[string]any) string { return "catalog" },
+}
+
 // ClaudeCodeWire is the stream-json output of the Claude Code CLI.
 var ClaudeCodeWire = Wire{
 	Name: "claudecode",
@@ -153,6 +159,11 @@ func ParserReads(fsys fs.FS) ([]ParserRead, error) {
 	if err := add(caseParserReads(fsys, "chat", "internal/provider/openaicompat", "openaicompat.go", "apiError", httpError, nil)); err != nil {
 		return nil, err
 	}
+	catalog, err := TypeReads(fsys, "internal/provider/openai", "codexCatalog")
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, readsOf("codexmodels", []string{"catalog"}, "", catalog)...)
 	chunk, err := TypeReads(fsys, "internal/provider/openaicompat", "wireChunk")
 	if err != nil {
 		return nil, err

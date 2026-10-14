@@ -47,6 +47,9 @@ type OpenAIOptions struct {
 	Secret string
 	// OnReject runs after the server rejects a bearer token, before it answers.
 	OnReject func()
+	// Models is the catalog that GET /backend-api/codex/models serves. ModelsStatus, when set, answers that request with this HTTP status instead.
+	Models       []CodexModel
+	ModelsStatus int
 }
 
 // CodexReply is what a Step reply can ask for beyond Reply.
@@ -152,15 +155,16 @@ type OpenAI struct {
 	*Server
 	opts OpenAIOptions
 
-	wmu       sync.Mutex // guards the fields below; never held with Server.mu
-	wire      []WireEvent
-	prewarms  []string // instructions of each websocket prewarm
-	conns     int
-	responses map[string]int    // by id prefix
-	callNames map[string]string // call id -> tool name, for chained requests that omit the call
-	known     map[string]bool   // "conn/response id" of every completed response
-	faults    []string
-	held      bool // a prewarm took the hold of HoldPrewarm
+	wmu           sync.Mutex // guards the fields below; never held with Server.mu
+	wire          []WireEvent
+	modelRequests int
+	prewarms      []string // instructions of each websocket prewarm
+	conns         int
+	responses     map[string]int    // by id prefix
+	callNames     map[string]string // call id -> tool name, for chained requests that omit the call
+	known         map[string]bool   // "conn/response id" of every completed response
+	faults        []string
+	held          bool // a prewarm took the hold of HoldPrewarm
 
 	secretSeen   bool
 	rejected     map[string]int // rejected bearer tokens by transport
@@ -336,7 +340,7 @@ func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 		_, accepted = o.opts.Credentials(token)
 	}
 	switch {
-	case r.URL.Path != codexPath:
+	case r.URL.Path != codexPath && r.URL.Path != codexModelsPath:
 		o.fault("request path %q, want %q", r.URL.Path, codexPath)
 		writeError(w, http.StatusNotFound, "harnesstest: unexpected path")
 	case o.opts.Credentials != nil && !accepted:
@@ -360,6 +364,8 @@ func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 	case token == "" || (o.opts.Credentials == nil && o.opts.APIKey != "" && token != o.opts.APIKey):
 		o.fault("request without the expected bearer token")
 		writeError(w, http.StatusUnauthorized, "harnesstest: bad bearer token")
+	case r.URL.Path == codexModelsPath:
+		o.serveModels(w, r)
 	case strings.EqualFold(r.Header.Get("Upgrade"), "websocket"):
 		o.serveWebSocket(w, r)
 	case r.Method == http.MethodPost:

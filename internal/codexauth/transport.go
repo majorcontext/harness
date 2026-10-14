@@ -1,37 +1,36 @@
 package codexauth
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 )
 
-// Transport adds the login to the requests that go to the endpoint it is bound
-// to, and to no other request. A request that the backend answers with 401 is
-// sent again once, with credentials that the Source refreshed.
+// Transport adds the login to the requests that go to the endpoints it is
+// bound to, and to no other request. A request that the backend answers with 401
+// is sent again once, with credentials that the Source refreshed.
 type Transport struct {
-	src    *Source
-	base   http.RoundTripper
-	scheme string
-	host   string
-	path   string
-	bad    error
+	src       *Source
+	base      http.RoundTripper
+	endpoints []endpoint
 }
 
-// NewTransport binds the login to the URL of a model endpoint: its scheme, host, and path.
-// base is the transport underneath; nil is http.DefaultTransport.
-func NewTransport(src *Source, base http.RoundTripper, endpoint string) *Transport {
+// endpoint is the scheme, host, and path of a bound URL.
+type endpoint struct{ scheme, host, path string }
+
+// NewTransport binds the login to the URLs of model endpoints: the scheme, host, and path of each. A query is not part of the binding.
+// base is the transport underneath; nil is http.DefaultTransport. A URL that is not absolute binds nothing.
+func NewTransport(src *Source, base http.RoundTripper, endpoints ...string) *Transport {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	t := &Transport{src: src, base: base}
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" {
-		t.bad = errors.New("codex login: the endpoint URL is not absolute")
-		return t
+	for _, raw := range endpoints {
+		if u, err := url.Parse(raw); err == nil && u.Host != "" {
+			t.endpoints = append(t.endpoints, endpoint{canonicalScheme(u.Scheme), u.Host, u.Path})
+		}
 	}
-	t.scheme, t.host, t.path = canonicalScheme(u.Scheme), u.Host, u.Path
 	return t
 }
 
@@ -47,7 +46,7 @@ func canonicalScheme(s string) string {
 }
 
 func (t *Transport) bound(u *url.URL) bool {
-	return t.bad == nil && canonicalScheme(u.Scheme) == t.scheme && u.Host == t.host && u.Path == t.path
+	return slices.Contains(t.endpoints, endpoint{canonicalScheme(u.Scheme), u.Host, u.Path})
 }
 
 // RoundTrip implements http.RoundTripper.

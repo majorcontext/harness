@@ -150,7 +150,7 @@ func DecodeJSONL(data []byte) ([]map[string]any, error) {
 }
 
 // RecordedShape reads the recordings of one wire from fsys and merges their
-// events into one Shape. A file named *.error.json holds an HTTP error.
+// events into one Shape. A file named *.error.json holds an HTTP error, and a file named *.catalog.json holds one body.
 func RecordedShape(fsys fs.FS, w Wire, files []string) (Shape, error) {
 	s := Shape{}
 	for _, name := range files {
@@ -167,6 +167,12 @@ func RecordedShape(fsys fs.FS, w Wire, files []string) (Shape, error) {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 			w.ObserveError(s, rec.Body)
+		case strings.HasSuffix(name, ".catalog.json"):
+			var body map[string]any
+			if err := json.Unmarshal(data, &body); err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			w.Observe(s, body)
 		case strings.HasSuffix(name, ".sse"), strings.HasSuffix(name, ".jsonl"):
 			decode := DecodeSSE
 			if strings.HasSuffix(name, ".jsonl") {

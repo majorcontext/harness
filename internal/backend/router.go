@@ -71,7 +71,12 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		if p.Type == config.TypeClaudeCodeCLI {
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
-			backends[name] = modelapi.New(c, cfg.ContextWindowTokens, env.Log)
+			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
+			if rc, ok := c.(*responses.Client); ok && p.Auth == config.AuthChatGPT {
+				backends[name] = &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log}
+			} else {
+				backends[name] = be
+			}
 		}
 	}
 	return NewRouter(backends)
@@ -88,7 +93,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		}
 	}
 	if p.Auth == config.AuthChatGPT {
-		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath))
+		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath), responses.ModelsURL(p.BaseURL))
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
@@ -111,15 +116,15 @@ func client(name string, p config.Provider, transport func(provider string) http
 	return nil
 }
 
-// codexClient wraps hc so that the Codex login reaches the Responses endpoint of the entry and no other URL.
+// codexClient wraps hc so that the Codex login reaches the endpoints of the entry and no other URL.
 // The client follows no redirect, so a 3xx answer ends the request and no header goes to its target.
-func codexClient(hc *http.Client, src *codexauth.Source, endpoint string) *http.Client {
+func codexClient(hc *http.Client, src *codexauth.Source, endpoints ...string) *http.Client {
 	out := &http.Client{}
 	if hc != nil {
 		out = &http.Client{Transport: hc.Transport, Jar: hc.Jar, Timeout: hc.Timeout}
 	}
 	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	out.Transport = codexauth.NewTransport(src, out.Transport, endpoint)
+	out.Transport = codexauth.NewTransport(src, out.Transport, endpoints...)
 	return out
 }
 
@@ -192,8 +197,9 @@ func (m *Router) Warm(ctx context.Context, req turn.Request) error {
 	return nil
 }
 
-// List returns the models that modelmeta knows for each configured provider, by provider name and then in the order of modelmeta.
-func (m *Router) List() []protocol.Model {
+// List returns the models of each configured provider, by provider name and then in the order of the provider list. A backend that
+// fetches its list is asked for it; ctx bounds that wait. The other providers list what modelmeta knows.
+func (m *Router) List(ctx context.Context) []protocol.Model {
 	names := make([]string, 0, len(m.backends))
 	for name := range m.backends {
 		names = append(names, name)
@@ -202,7 +208,13 @@ func (m *Router) List() []protocol.Model {
 	out := []protocol.Model{}
 	for _, name := range names {
 		be := m.backends[name]
-		for _, mm := range modelmeta.Models(name) {
+		models := modelmeta.Models(name)
+		if lister, ok := be.(interface {
+			Models(ctx context.Context) []modelmeta.Model
+		}); ok {
+			models = lister.Models(ctx)
+		}
+		for _, mm := range models {
 			ref := name + "/" + mm.ID
 			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: be.Capabilities(ref).ContextWindow})
 		}

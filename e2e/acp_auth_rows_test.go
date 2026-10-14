@@ -32,6 +32,9 @@ type acpLoginSpec struct {
 	claude, claudeOut bool
 	// claudeHold makes `claude auth login` start a child and wait, as a login that waits for a browser does.
 	claudeHold bool
+	// models is the catalog that the fake ChatGPT backend serves. modelsStatus, when set, makes it refuse the request with this status.
+	models       []harnesstest.CodexModel
+	modelsStatus int
 }
 
 // acpLoginRun is a started acpLoginSpec.
@@ -39,7 +42,9 @@ type acpLoginRun struct {
 	spec  acpLoginSpec
 	codex *codexAuthRun
 	fake  *harnesstest.Server
-	cfg   map[string]any
+	// openai is the fake ChatGPT backend, when spec.chatgpt is set.
+	openai *harnesstest.OpenAI
+	cfg    map[string]any
 	// sink receives the sign-in text of the host, which is what the host writes to stderr.
 	sink                               *signInSink
 	claudeState, claudeLog, claudeHold string
@@ -97,8 +102,8 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 	l.cfg = map[string]any{}
 	if spec.chatgpt {
 		l.codex = startCodexAuth(t, auth)
-		o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Credentials: l.codex.accepts, AccountID: codexAccount}, model...)
-		l.fake = o.Server
+		o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Credentials: l.codex.accepts, AccountID: codexAccount, Models: spec.models, ModelsStatus: spec.modelsStatus}, model...)
+		l.openai, l.fake = o, o.Server
 		l.cfg = codexConfig(o.URL(), false, nil)
 		l.codex.configure(l.cfg)
 	} else {
