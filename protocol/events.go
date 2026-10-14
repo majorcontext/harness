@@ -327,12 +327,13 @@ type GoalChanged struct {
 	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
-// CompactionApplied replaces the records from FromSeq to ToSeq with Summary.
-// Usage is the usage of the summary call.
+// CompactionApplied replaces the records from FromSeq to ToSeq with Summary, the plain text of the summary.
+// Index lists the retained tool results. Usage is the usage of the summary call.
 type CompactionApplied struct {
 	FromSeq   uint64 `json:"from_seq"`
 	ToSeq     uint64 `json:"to_seq"`
 	Summary   string `json:"summary"`
+	Index     string `json:"index,omitempty"`
 	ByBackend bool   `json:"by_backend"`
 	Usage     Usage  `json:"usage,omitzero"`
 }

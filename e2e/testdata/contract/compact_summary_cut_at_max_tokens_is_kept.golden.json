@@ -149,7 +149,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "[compacted summary of earlier conversation]\n\npartial gist"
+            "text": "partial gist"
           }
         ]
       },
@@ -248,7 +248,7 @@
           "parts": [
             {
               "type": "text",
-              "text": "[compacted summary of earlier conversation]\n\npartial gist"
+              "text": "partial gist"
             }
           ]
         },

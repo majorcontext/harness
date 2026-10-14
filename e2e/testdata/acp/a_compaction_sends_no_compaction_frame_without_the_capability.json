@@ -149,7 +149,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "[compacted summary of earlier conversation]\n\nsummary-marker"
+            "text": "summary-marker"
           }
         ]
       },

@@ -106,7 +106,7 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: id})
 	a.spawn(func() {
 		summary, usage, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits)
-		c.Summary, c.Usage = a.indexed(summary, metas), usage
+		c.Summary, c.Index, c.Usage = summary, a.resultIndex(metas), usage
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
 			reply(struct{}{}, nil)

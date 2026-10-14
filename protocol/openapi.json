@@ -328,6 +328,9 @@
           "summary": {
             "type": "string"
           },
+          "index": {
+            "type": "string"
+          },
           "by_backend": {
             "type": "boolean"
           },

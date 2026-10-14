@@ -149,7 +149,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "[compacted summary of earlier conversation]\n\nsummary-marker"
+            "text": "summary-marker"
           }
         ]
       },
@@ -531,7 +531,7 @@
           "update": {
             "compactionId": "\u003ccompaction:1\u003e",
             "content": {
-              "text": "[compacted summary of earlier conversation]\n\nsummary-marker",
+              "text": "summary-marker",
               "type": "text"
             },
             "sessionUpdate": "compaction_summary_chunk"

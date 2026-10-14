@@ -73,7 +73,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "This session is being continued from a previous conversation ..."
+            "text": "fake CLI summary"
           }
         ]
       }
