@@ -274,6 +274,8 @@ A host lists any of them in `builtinTools` to enable it.
 
 The value is recorded in the session, so a reload keeps it. JS tool names are fixed at `Create`: a later page that adds a tool does not reach older sessions. A scenario asserts that the first model request of a browser session lists no `bash` or `process`.
 
+A host that wants a shell supplies it as a page tool over the same files. `h.fs` gives the page the file system of the module (the file tools and `bash` of a shell must see one set of files, so the module owns the state and the shell is a consumer). `@majorcontext/harness-embed/shell` builds the tool on just-bash, an optional peer dependency: just-bash is a JavaScript interpreter, so it needs no process, and it reaches the module files through `h.fs` only, at `/work` and `/tmp`. The network commands stay off, because in a page `curl` would run with the origin and the cookies of the page. The shell runs on the page thread and stops at a time limit and a command limit. `h.fs` exists in a browser only: under Node the module runs on the disk of the host, where a shell over `fs` would reach every file of the user. A page that needs a shell there uses the `subprocess` transport.
+
 ### 5.7 Node as a subset
 
 Under Node, `wasm_exec.js` maps `globalThis.fs` to the real `fs`. The file tools and `DiskStore` therefore work on the real disk with no shim. The store directory is exclusive to one process (5.5); the `Owner` is `NewLocalOwner`. Network still needs the injected `RoundTripper`, because the default transport is off (`roundtrip_js.go:57`); there is no CORS. There is no `exec`, but a host may supply a shell as a JS tool under a name other than `bash`.

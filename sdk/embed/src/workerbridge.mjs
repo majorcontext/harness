@@ -1,4 +1,4 @@
-// The Worker end of the tool bridge and of the fetch bridge (see bridge.mjs).
+// The Worker end of the tool bridge, of the fetch bridge, and of the file bridge (see bridge.mjs).
 
 const noBody = new Set([101, 204, 205, 304]);
 
@@ -11,6 +11,54 @@ function pageError({ name, message }) {
   err.name = name;
   return err;
 }
+
+// call runs a callback style function of globalThis.fs, the file system that Go uses.
+const call = (fn, ...args) => new Promise((resolve, reject) => fn.call(globalThis.fs, ...args, (err, value) => (err ? reject(err) : resolve(value))));
+
+async function readWhole(path) {
+  const fs = globalThis.fs;
+  const fd = await call(fs.open, path, 0, 0);
+  try {
+    const size = (await call(fs.fstat, fd)).size;
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    while (offset < size) {
+      const n = await call(fs.read, fd, bytes, offset, size - offset, offset);
+      if (!n) break;
+      offset += n;
+    }
+    return bytes.slice(0, offset).buffer;
+  } finally {
+    await call(fs.close, fd);
+  }
+}
+
+async function writeWhole(path, buffer, append) {
+  const fs = globalThis.fs;
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC);
+  const fd = await call(fs.open, path, flags, 0o644);
+  try {
+    const bytes = new Uint8Array(buffer);
+    let offset = 0;
+    while (offset < bytes.length) offset += await call(fs.write, fd, bytes, offset, bytes.length - offset, null);
+  } finally {
+    await call(fs.close, fd);
+  }
+}
+
+const fileOps = {
+  async stat(path) {
+    const s = await call(globalThis.fs.stat, path);
+    return { isDirectory: s.isDirectory(), size: s.size, mtimeMs: s.mtimeMs };
+  },
+  readdir: (path) => call(globalThis.fs.readdir, path),
+  mkdir: (path) => call(globalThis.fs.mkdir, path, 0o755),
+  unlink: (path) => call(globalThis.fs.unlink, path),
+  rmdir: (path) => call(globalThis.fs.rmdir, path),
+  rename: (from, to) => call(globalThis.fs.rename, from, to),
+  readFile: readWhole,
+  writeFile: writeWhole,
+};
 
 /**
  * workerBridge returns callTool, which runs a page tool; fetch, which stands in
@@ -75,8 +123,19 @@ export function workerBridge(post) {
     });
   }
 
+  async function serveFile({ id, op, args }) {
+    try {
+      const result = await fileOps[op](...args);
+      post({ fsres: { id, result } }, result instanceof ArrayBuffer ? [result] : []);
+    } catch (err) {
+      post({ fsres: { id, error: { code: err?.code, message: String(err?.message ?? err) } } });
+    }
+  }
+
   function handle(m) {
-    if (m.toolResult) {
+    if (m.fsop) {
+      serveFile(m.fsop);
+    } else if (m.toolResult) {
       const { tid, result, error } = m.toolResult;
       const entry = tools.get(tid);
       tools.delete(tid);

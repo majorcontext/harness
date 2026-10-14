@@ -11,11 +11,34 @@ import fs from "node:fs";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
 import { chromium } from "playwright";
+import { build } from "esbuild";
 
 const { origin, rows, modulePath } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 
+// justBash bundles just-bash for the page, once, when the first row asks for it.
+// A browser cannot resolve its bare imports, and node:zlib has no browser build.
+let justBash;
+const bundleJustBash = () =>
+  (justBash ??= build({
+    entryPoints: ["just-bash/browser"],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    minify: true,
+    write: false,
+    plugins: [{ name: "no-zlib", setup: (b) => {
+      b.onResolve({ filter: /^node:zlib$/ }, () => ({ path: "zlib", namespace: "stub" }));
+      b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({ contents: "export const gunzipSync = null, gzipSync = null, constants = {}; export default {};", loader: "js" }));
+    } }],
+  }).then((r) => r.outputFiles[0].text));
+
 async function runRow(browser, row) {
   const context = await browser.newContext();
+  // A route makes the browser skip the CORS preflight of its context, so only the rows that load the bundle have one.
+  if (row.kind === "shell") {
+    await context.route("**/vendor/just-bash.js", async (route) =>
+      route.fulfill({ contentType: "text/javascript", body: await bundleJustBash() }));
+  }
   const page = await context.newPage();
   const console_ = [];
   page.on("console", (m) => console_.push(m.text()));

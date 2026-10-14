@@ -1,4 +1,4 @@
-// The page end of the tool bridge and of the fetch bridge.
+// The page end of the tool bridge, of the fetch bridge, and of the file bridge.
 //
 // Tool: the Worker posts {tool: {tid, name, args}}; the page runs the tool and
 // posts {toolResult: {tid, result | error}}. {toolAbort: {tid}} aborts the
@@ -9,6 +9,12 @@
 // {fetchChunk: {fid, chunk}} for each body chunk with the ArrayBuffer
 // transferred, and {fetchEnd: {fid}}, or {fetchError: {fid, name, message}}.
 // {fetchAbort: {fid}} aborts the fetch.
+//
+// File: the page posts {fsop: {id, op, args}}; the Worker runs op on the file
+// system of the module and posts {fsres: {id, result | error: {code, message}}}.
+// The ops are stat, readdir, mkdir, unlink, rmdir, rename, readFile, and
+// writeFile(path, bytes, append). A byte array moves as a transferred
+// ArrayBuffer in both directions.
 
 function describe(err) {
   if (err instanceof Error) return { name: err.name, message: err.message };
@@ -23,13 +29,100 @@ function toolResult(value) {
   return JSON.stringify(value);
 }
 
+const encoder = new TextEncoder();
+
+// ownBytes copies data into a new ArrayBuffer that the page can transfer.
+function ownBytes(data) {
+  if (typeof data === "string") return encoder.encode(data).buffer;
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer;
+  if (data instanceof ArrayBuffer) return data.slice(0);
+  throw new TypeError("data must be a string, an ArrayBuffer, or a typed array");
+}
+
+function opError({ code, message }) {
+  return Object.assign(new Error(message), { code });
+}
+
+// pageFs returns the file system handle of the page (h.fs) over the fsop
+// messages, the function that takes the answers, and the function that rejects
+// every call that waits.
+function pageFs(post) {
+  let next = 0;
+  const waiting = new Map();
+  const call = (op, args, transfer = []) =>
+    new Promise((resolve, reject) => {
+      const id = ++next;
+      waiting.set(id, { resolve, reject });
+      post({ fsop: { id, op, args } }, transfer);
+    });
+  const code = (err) => err?.code;
+  const stat = (path) => call("stat", [path]);
+
+  async function mkdir(path, { recursive = false } = {}) {
+    if (!recursive) return call("mkdir", [path]);
+    let current = "";
+    for (const part of path.split("/").filter(Boolean)) {
+      current += "/" + part;
+      try {
+        await call("mkdir", [current]);
+      } catch (err) {
+        if (code(err) !== "EEXIST") throw err;
+      }
+    }
+  }
+
+  async function rm(path, { recursive = false, force = false } = {}) {
+    let info;
+    try {
+      info = await stat(path);
+    } catch (err) {
+      if (force && code(err) === "ENOENT") return;
+      throw err;
+    }
+    if (!info.isDirectory) return call("unlink", [path]);
+    if (recursive) {
+      for (const name of await call("readdir", [path])) await rm(`${path.replace(/\/$/, "")}/${name}`, { recursive, force });
+    }
+    return call("rmdir", [path]);
+  }
+
+  const fs = {
+    stat,
+    readdir: (path) => call("readdir", [path]),
+    readFile: async (path) => new Uint8Array(await call("readFile", [path])),
+    writeFile(path, data, { append = false } = {}) {
+      const bytes = ownBytes(data);
+      return call("writeFile", [path, bytes, append], [bytes]);
+    },
+    mkdir,
+    rm,
+    rename: (from, to) => call("rename", [from, to]),
+  };
+  return {
+    fs,
+    handle({ id, result, error }) {
+      const entry = waiting.get(id);
+      waiting.delete(id);
+      if (error) entry?.reject(opError(error));
+      else entry?.resolve(result);
+    },
+    close() {
+      for (const entry of waiting.values()) entry.reject(new Error("the harness is closed"));
+      waiting.clear();
+    },
+  };
+}
+
 /**
- * pageBridge answers the tool and fetch messages of the Worker. post sends a
- * message to the Worker. handle takes one message; close aborts what runs.
+ * pageBridge answers the tool and fetch messages of the Worker and carries the
+ * file calls of the page. post sends a message to the Worker. With files true,
+ * fs is the file system handle of the page and a tool gets it in its options.
+ * handle takes one message; close aborts what runs.
  */
-export function pageBridge({ tools, pageFetch, post }) {
+export function pageBridge({ tools, pageFetch, post, files = false }) {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const running = new Map();
+  const pf = files ? pageFs(post) : undefined;
 
   async function runTool({ tid, name, args }) {
     const ac = new AbortController();
@@ -37,7 +130,7 @@ export function pageBridge({ tools, pageFetch, post }) {
     try {
       const tool = byName.get(name);
       if (!tool) throw new Error(`unknown tool ${name}`);
-      const result = toolResult(await tool.run(args, { signal: ac.signal }));
+      const result = toolResult(await tool.run(args, { signal: ac.signal, fs: pf?.fs }));
       post({ toolResult: { tid, result } });
     } catch (err) {
       post({ toolResult: { tid, error: describe(err) } });
@@ -72,14 +165,17 @@ export function pageBridge({ tools, pageFetch, post }) {
   }
 
   return {
+    fs: pf?.fs,
     handle(m) {
-      if (m.tool) runTool(m.tool);
+      if (m.fsres) pf?.handle(m.fsres);
+      else if (m.tool) runTool(m.tool);
       else if (m.toolAbort) running.get("tool:" + m.toolAbort.tid)?.abort();
       else if (m.fetch) runFetch(m.fetch);
       else if (m.fetchAbort) running.get("fetch:" + m.fetchAbort.fid)?.abort();
     },
     close() {
       for (const ac of running.values()) ac.abort();
+      pf?.close();
     },
   };
 }

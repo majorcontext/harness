@@ -70,11 +70,16 @@ function config(row) {
 async function start(row, log = () => {}) {
   const logs = [];
   const started = performance.now();
+  const extra = [];
+  if (row.kind === "shell") {
+    const { shellTool } = await import("/embed/shell.mjs");
+    extra.push(shellTool({ load: () => import("/vendor/just-bash.js") }));
+  }
   const h = await createHarness({
     transport: wasm({ module: "harness.wasm", wasmExec: "wasm_exec.js", worker: true }),
     config: config(row),
     proxy: row.proxy,
-    tools: row.hostBash ? [echo, big, hostBash] : [echo, big],
+    tools: [echo, big, ...(row.hostBash ? [hostBash] : []), ...extra],
     store: row.persist ? { persist: true } : {},
     log: (line) => (logs.push(line), log(line)),
   });
@@ -235,6 +240,42 @@ const rows = {
     const again = await prompt(c, second, "again");
     await h.close();
     return { stopReason: turn.result?.stopReason, error: turn.error, againStop: again.result?.stopReason };
+  },
+
+  // shell runs the h.fs operations, seeds a file, runs the shell tool in a
+  // turn, and reads the result back through h.fs.
+  async shell(row) {
+    const { h, c, sessionId } = await open(row);
+    const fs = h.fs;
+    const text = async (p) => new TextDecoder().decode(await fs.readFile(p));
+    const code = (p) => p.then(() => "", (err) => err.code);
+    const out = {};
+    await fs.mkdir("/work/d/sub/deep", { recursive: true });
+    await fs.writeFile("/work/d/a.txt", "hello");
+    out.text = await text("/work/d/a.txt");
+    await fs.writeFile("/work/d/b.bin", new Uint8Array([1, 2, 3]));
+    out.bytes = [...(await fs.readFile("/work/d/b.bin"))];
+    await fs.writeFile("/work/d/a.txt", " world", { append: true });
+    out.appended = await text("/work/d/a.txt");
+    out.file = await fs.stat("/work/d/a.txt");
+    out.dir = await fs.stat("/work/d/sub/deep");
+    await fs.rm("/work/d/b.bin");
+    out.listed = (await fs.readdir("/work/d")).sort();
+    out.notEmpty = await code(fs.rm("/work/d/sub"));
+    await fs.rename("/work/d/a.txt", "/work/d/c.txt");
+    out.renamedOld = await code(fs.stat("/work/d/a.txt"));
+    out.renamedText = await text("/work/d/c.txt");
+    await fs.rm("/work/d", { recursive: true });
+    out.removedCode = await code(fs.stat("/work/d"));
+    out.missingCode = await code(fs.readFile("/work/missing"));
+    out.forceOK = (await code(fs.rm("/work/missing", { force: true }))) === "";
+    await fs.writeFile("/tmp/x.txt", "tmp");
+    out.tmp = await text("/tmp/x.txt");
+    await fs.writeFile("/work/people.json", '{"people":[{"age":30},{"age":28}]}');
+    const turn = await prompt(c, sessionId, "go");
+    const note = await text("/work/note.txt");
+    await h.close();
+    return { stopReason: turn.result?.stopReason, error: turn.error, note, fs: out };
   },
 
   // fsprobe runs the Go probe on the file system of the Worker.
