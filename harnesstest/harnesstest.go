@@ -112,6 +112,8 @@ type Part struct {
 	ToolName  string
 	ToolInput map[string]any
 	ToolUseID string
+	// Signature is the signature of a thinking block.
+	Signature string
 	IsError   bool
 	// Images holds the data URI of each image block inside a tool_result.
 	Images []string

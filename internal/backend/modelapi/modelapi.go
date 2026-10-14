@@ -235,7 +235,7 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, AlwaysThinks: control.AlwaysThinks(), ServiceTier: req.Settings.ServiceTier,
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ThinksByDefault: control.ThinksByDefault, ServiceTier: req.Settings.ServiceTier,
 		SessionKey:  req.SessionID,
 		Temperature: req.Temperature, TopP: req.TopP}
 	if req.Instructions != "" {

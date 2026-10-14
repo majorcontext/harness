@@ -39,6 +39,7 @@ type wireBlock struct {
 	CacheControl json.RawMessage `json:"cache_control"`
 	Text         string          `json:"text"`
 	Thinking     string          `json:"thinking"`
+	Signature    string          `json:"signature"`
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Input        map[string]any  `json:"input"`
@@ -97,7 +98,7 @@ func decodeRequest(body []byte) (Request, error) {
 			case "text":
 				msg.Parts = append(msg.Parts, Part{Kind: "text", Text: b.Text})
 			case "thinking":
-				msg.Parts = append(msg.Parts, Part{Kind: "thinking", Text: b.Thinking})
+				msg.Parts = append(msg.Parts, Part{Kind: "thinking", Text: b.Thinking, Signature: b.Signature})
 			case "image", "document":
 				msg.Parts = append(msg.Parts, Part{Kind: b.Type, Text: sourceURI(b)})
 			case "tool_use":

@@ -2,7 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-opus-5-5",
+      "model": "claude-haiku-5-5",
       "tools": [
         "bash",
         "edit_file",
@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -36,7 +36,7 @@
     },
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-opus-5-5",
+      "model": "claude-haiku-5-5",
       "tools": [
         "bash",
         "edit_file",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -71,11 +71,16 @@
           "parts": [
             {
               "kind": "thinking",
-              "text": "weigh it"
+              "text": "plan the read",
+              "signature": "SIGNATURE_FIXTURE_1"
             },
             {
-              "kind": "text",
-              "text": "one"
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "/nonexistent-contract-dir/missing.txt"
+              },
+              "tool_use_id": "call#1"
             }
           ]
         },
@@ -83,8 +88,11 @@
           "role": "user",
           "parts": [
             {
-              "kind": "text",
-              "text": "second"
+              "kind": "tool_result",
+              "text": "read_file: stat /nonexistent-contract-dir/missing.txt: no such file or directory",
+              "tool_name": "read_file",
+              "tool_use_id": "call#1",
+              "is_error": true
             }
           ]
         }
@@ -99,7 +107,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "first"
+            "text": "go"
           }
         ]
       },
@@ -109,21 +117,27 @@
         "parts": [
           {
             "type": "reasoning",
-            "text": "weigh it"
+            "text": "plan the read"
           },
           {
-            "type": "text",
-            "text": "one"
+            "type": "tool_call",
+            "call_id": "call#1",
+            "name": "read_file",
+            "arguments": {
+              "path": "/nonexistent-contract-dir/missing.txt"
+            }
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "second"
+            "type": "tool_result",
+            "call_id": "call#1",
+            "is_error": true,
+            "content": "read_file: stat /nonexistent-contract-dir/missing.txt: no such file or directory"
           }
         ]
       },
@@ -133,7 +147,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "two"
+            "text": "missing"
           }
         ]
       }

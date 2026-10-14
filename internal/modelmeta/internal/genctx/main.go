@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"go/format"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"regexp"
@@ -100,6 +101,9 @@ type overrideEntry struct {
 	Note    string `json:"note"`
 }
 
+// thinkingOffTable names the overrides of the models that run with thinking off when a request omits the thinking field.
+const thinkingOffTable = "thinkingOffByDefault"
+
 type overrides map[string]map[string]overrideEntry
 
 func main() {
@@ -130,7 +134,7 @@ func run(src, ovrPath, outPath, infoPath string) error {
 	for _, n := range notes {
 		fmt.Fprintln(os.Stderr, "genctx: note:", n)
 	}
-	info, err := generateInfo(cat)
+	info, err := generateInfo(cat, ovrData)
 	if err != nil {
 		return err
 	}
@@ -172,6 +176,7 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 	for _, t := range tables {
 		known[t.varName] = true
 	}
+	known[thinkingOffTable] = true
 	for name := range ovr {
 		if !known[name] {
 			return nil, nil, fmt.Errorf("overrides name unknown table %q", name)
@@ -324,7 +329,11 @@ func noImageLiteral(input []string) string {
 // generateInfo renders the Go source of the model-fact tables for
 // catalogJSON. A model is listed when it supports tool calls and is not
 // deprecated. An entry without a name is skipped.
-func generateInfo(catalogJSON []byte) ([]byte, error) {
+func generateInfo(catalogJSON, ovrJSON []byte) ([]byte, error) {
+	var ovr overrides
+	if err := json.Unmarshal(ovrJSON, &ovr); err != nil {
+		return nil, fmt.Errorf("decode overrides: %w", err)
+	}
 	var cat catalog
 	if err := json.Unmarshal(catalogJSON, &cat); err != nil {
 		return nil, fmt.Errorf("decode catalog: %w", err)
@@ -340,6 +349,11 @@ func generateInfo(catalogJSON []byte) ([]byte, error) {
 		if prov.Name != "" {
 			fmt.Fprintf(&buf, "\t%q: %q,\n", t.provider, prov.Name)
 		}
+	}
+	buf.WriteString("}\n")
+	buf.WriteString("\n// thinkingOffByDefault holds the Anthropic models that run with thinking off when a request omits the thinking field.\nvar thinkingOffByDefault = map[string]bool{\n")
+	for _, id := range slices.Sorted(maps.Keys(ovr[thinkingOffTable])) {
+		fmt.Fprintf(&buf, "\t%q: true,\n", id)
 	}
 	buf.WriteString("}\n")
 	for _, t := range infoTables {

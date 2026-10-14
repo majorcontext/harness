@@ -2,7 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-sonnet-5",
+      "model": "claude-opus-5-5",
       "tools": [
         "bash",
         "edit_file",
@@ -36,7 +36,7 @@
     },
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-sonnet-5",
+      "model": "claude-opus-5-5",
       "tools": [
         "bash",
         "edit_file",
@@ -69,6 +69,11 @@
         {
           "role": "assistant",
           "parts": [
+            {
+              "kind": "thinking",
+              "text": "weigh it",
+              "signature": "SIGNATURE_FIXTURE_1"
+            },
             {
               "kind": "text",
               "text": "one"
@@ -134,31 +139,5 @@
         ]
       }
     ]
-  },
-  "calls": {
-    "set_thinking.a": {
-      "status": 200,
-      "body": {
-        "context": {
-          "tokens": 0,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "effort": "off",
-        "head_seq": 3,
-        "id": "ses:a",
-        "model": "anthropic/claude-sonnet-5",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        },
-        "work_dir": "\u003cworkdir\u003e"
-      }
-    }
   }
 }

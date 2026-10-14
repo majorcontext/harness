@@ -85,6 +85,10 @@ func TestContractEffortStoredThinking(t *testing.T) {
 		{Name: "first", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Reasoning: "weigh it", Text: "one"}},
 		{Name: "second", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "two"}},
 	}
+	toolSteps := []harnesstest.Step{
+		{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Reasoning: "plan the read", ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "read_file", Input: map[string]any{"path": "/nonexistent-contract-dir/missing.txt"}}}}},
+		{Name: "after", Match: harnesstest.LastToolResult("read_file"), Reply: harnesstest.Reply{Text: "missing"}},
+	}
 	turns := func(model, level string) []action {
 		actions := []action{create{as: "a", model: model}}
 		if level != "" {
@@ -94,14 +98,24 @@ func TestContractEffortStoredThinking(t *testing.T) {
 	}
 	runScenarios(t, []scenario{
 		{
-			name:    "stored_thinking_stays_in_the_history_of_a_model_that_always_thinks",
+			name:    "stored_thinking_stays_in_the_history_of_a_model_that_thinks_by_default",
 			model:   steps,
 			actions: turns("anthropic/claude-opus-5-5", ""),
 		},
 		{
-			name:    "stored_thinking_leaves_the_history_when_a_model_that_lists_off_has_thinking_off",
+			name:    "stored_thinking_stays_in_a_tool_round_of_a_model_that_thinks_by_default",
+			model:   toolSteps,
+			actions: []action{create{as: "a", model: "anthropic/claude-haiku-5-5"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}},
+		},
+		{
+			name:    "stored_thinking_leaves_the_history_of_a_model_with_thinking_off_by_default",
 			model:   steps,
-			actions: turns("anthropic/claude-sonnet-5", "off"),
+			actions: turns("anthropic/claude-opus-4-7", ""),
+		},
+		{
+			name:    "stored_thinking_leaves_the_history_when_a_budget_model_has_thinking_off",
+			model:   steps,
+			actions: turns("anthropic/claude-haiku-4-5", "off"),
 		},
 	})
 }

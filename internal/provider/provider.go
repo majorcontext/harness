@@ -38,9 +38,9 @@ type Request struct {
 	// Effort is the unified reasoning-effort level, clamped to the levels of the
 	// model. The zero value sends no reasoning control.
 	Effort modelref.Effort
-	// EffortField and BudgetTokens say that the model takes a wire effort field
-	// and a thinking budget; AlwaysThinks, that it thinks on every request. All are false for an unknown model.
-	EffortField, BudgetTokens, AlwaysThinks bool
+	// The model takes a wire effort field and a thinking budget, and thinks by
+	// default when a request omits the field. All are false for an unknown model.
+	EffortField, BudgetTokens, ThinksByDefault bool
 	// ServiceTier is an opaque, per-session speed-tier hint (e.g. Codex's
 	// "standard"/"fast"/"ultrafast"), forwarded to the provider verbatim as
 	// the wire "service_tier" field. The zero value (empty string) sends no
