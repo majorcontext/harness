@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -226,8 +227,10 @@ func TestBrowserSoak(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer out.Close()
-		_, _ = io.WriteString(out, "### Browser soak\n\n"+table)
+		_, werr := io.WriteString(out, "### Browser soak\n\n"+table)
+		if err := errors.Join(werr, out.Close()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if r.Turns.FailureCount != 0 || r.Turns.Turns != soakTurns {
