@@ -25,8 +25,8 @@ const (
 	// CodexUserCode is the user code of the device flow.
 	CodexUserCode       = "ABCD-1234"
 	codexDeviceID       = "device-1"
-	codexDeviceCd       = "device-code"
-	codexDeviceVerifier = "device-verifier"
+	codexDeviceCd       = "device-code-Q7v2Zr"
+	codexDeviceVerifier = "device-verifier-k3Pq9w"
 	authClaim           = "https://api.openai.com/auth"
 )
 
