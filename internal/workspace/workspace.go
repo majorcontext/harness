@@ -160,7 +160,7 @@ func changes(ctx context.Context, root, dir, real, ceiling, scope string, explic
 	//nolint:staticcheck // the deprecated fields keep their values for clients that read them
 	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: eng.Name(), Branch: head.Label, HeadRev: head.Rev}
 	if head.Rev.Kind == protocol.RevCommit {
-		c.Head = head.Rev.ID
+		c.Head = head.Rev.ID //nolint:staticcheck // the deprecated field keeps its value for clients that read it
 	}
 	var base Base
 	if scope == protocol.ScopeBranch {
