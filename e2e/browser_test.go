@@ -52,8 +52,17 @@ type browserFront struct {
 // header list of a preflight to the allowed list; nil allows what is asked.
 func newBrowserFront(t *testing.T, allow func(requested string) string, steps ...harnesstest.Step) *browserFront {
 	t.Helper()
-	f := &browserFront{fake: harnesstest.NewAnthropic(t, steps...)}
-	target, err := url.Parse(f.fake.URL())
+	fake := harnesstest.NewAnthropic(t, steps...)
+	f := newCORSFront(t, fake.URL(), allow)
+	f.fake = fake
+	return f
+}
+
+// newCORSFront serves the CORS wrapper in front of the server at upstream.
+func newCORSFront(t *testing.T, upstream string, allow func(requested string) string) *browserFront {
+	t.Helper()
+	f := &browserFront{}
+	target, err := url.Parse(upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +155,15 @@ func browserPage(t *testing.T, wasm, execJS string, awaits *sync.Map) *httptest.
 		})
 	}
 	file("/app/harness.wasm", wasm, "application/wasm")
-	file("/app/fsprobe.wasm", buildFsProbe(t), "application/wasm")
+	mux.HandleFunc("/app/fsprobe.wasm", func(w http.ResponseWriter, r *http.Request) {
+		path, err := fsProbePath()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/wasm")
+		http.ServeFile(w, r, path)
+	})
 	file("/app/wasm_exec.js", execJS, "text/javascript")
 	for _, name := range []string{"page.mjs", "inspect-worker.mjs", "fsprobe-worker.mjs"} {
 		file("/page/"+name, filepath.Join(root, "sdk", "embed", "test", "browser", name), "text/javascript")

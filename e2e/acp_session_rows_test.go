@@ -27,9 +27,10 @@ func acpBlockedText(text string) []harnesstest.Step {
 
 var acpSessionScenarios = []acpScenario{
 	{
-		name:  "prompt_streams_text_then_ends_the_turn",
-		cite:  "`session/prompt` runs one turn and sends the text of the model as `agent_message_chunk` updates before it answers `end_turn`.",
-		model: []harnesstest.Step{{Name: "reply", Reply: harnesstest.Reply{Text: "hello from the model"}}},
+		name:    "prompt_streams_text_then_ends_the_turn",
+		browser: true,
+		cite:    "`session/prompt` runs one turn and sends the text of the model as `agent_message_chunk` updates before it answers `end_turn`.",
+		model:   []harnesstest.Step{{Name: "reply", Reply: harnesstest.Reply{Text: "hello from the model"}}},
 		steps: []acpStep{
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "hi", stop: "end_turn"},

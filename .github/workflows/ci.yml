@@ -412,7 +412,7 @@ jobs:
         # fail the test, not skip it.
         env:
           HARNESS_E2E_BROWSER: '1'
-        run: go test -race -count=1 ./e2e/ -run '^TestBrowserRows$'
+        run: go test -race -count=1 ./e2e/ -run '^(TestBrowserRows|TestACPBrowserScenarios)$'
 
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
