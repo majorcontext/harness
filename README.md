@@ -1,12 +1,14 @@
 # Harness
 
-A fast, extensible, composable agent harness in Go.
+A fast, extensible, composable agent harness in Go. Run it as a CLI, as an HTTP
+server, as an ACP agent in your editor, or embedded in a Go or JavaScript
+program.
 
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 - **Fast** — starts in tens of milliseconds
 - **Extensible** — plugins in Go (in process or as a process) and in any language over stdio (TypeScript SDK included)
-- **Composable** — headless runtime, event streams, client/server, MCP servers
+- **Composable** — headless runtime, event streams, client/server, MCP servers, editor integration over ACP, a WebAssembly build for the browser
 
 ## Before you start
 
@@ -272,6 +274,24 @@ With no `HARNESS_RUN_TOKEN` set, the server needs no token on `localhost`.
 `harness serve -h` lists the flags, and
 [`protocol/openapi.json`](protocol/openapi.json) describes every route.
 
+### Use Harness in your editor
+
+`harness acp` serves the [Agent Client Protocol](https://agentclientprotocol.com)
+on standard input and output. In Zed, add it as a custom agent server in your
+settings:
+
+```json
+{
+  "agent_servers": {
+    "Harness": { "command": "harness", "args": ["acp"] }
+  }
+}
+```
+
+The client gets a model and effort picker, image and file attachments, and
+session list, load, and resume. When the client supports elicitation forms, it
+shows the questions of the model as a form and sends the answers back.
+
 ## Embed Harness in Go
 
 The runtime is a Go package. The CLI and the HTTP server are clients of it.
@@ -473,6 +493,14 @@ The handler has no authentication. Add your own before you expose it.
 See the [API reference](https://pkg.go.dev/github.com/majorcontext/harness) for
 everything else.
 
+## Embed Harness in JavaScript
+
+[`sdk/embed`](sdk/embed/README.md) runs Harness as a WebAssembly module in a
+browser Worker, or spawns `harness acp` under Node. Either way, you get an ACP
+stream. The browser has no `bash` or `process` tool. Keep model keys behind a
+same-origin proxy, never in the page. The
+[package README](sdk/embed/README.md) shows the options.
+
 ## Examples
 
 [examples/](examples) holds small programs that run. Clone the repository and
@@ -545,6 +573,12 @@ Keep `context_window_tokens` equal to the server's window, not the model's
 maximum. If the server's window is smaller, it drops context before Harness
 compacts. Optional fields: `family` (the wire-quirk tag, defaults to the key)
 and `extra_headers` (sent on every request).
+
+To list the models of a gateway or a local server, set `models` on the entry:
+`"models": ["llama3.1", "qwen3"]`. `Runtime.Models`, `GET /models`, and the
+model picker of an ACP client then list exactly those ids, in order. An id that
+models.dev knows keeps its name and effort levels. An empty or duplicate id
+fails config loading.
 
 ### OpenRouter
 
@@ -629,21 +663,13 @@ Then add an entry that uses the login in place of an API key:
 
 `auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
 
-To use it in Zed, add Harness as a custom agent server in your Zed settings and put the entry above in `~/.harness/config.json`. Zed shows a "Log in with ChatGPT" button when no login exists: the button opens your browser and stores the login. You can also run `harness login codex` once in a terminal. A client that supports terminal login also shows a terminal method, which runs `harness acp login codex`. If you start Harness through a wrapper script, the script must pass its arguments on (`"$@"`).
-
-```json
-{
-  "agent_servers": {
-    "Harness": { "command": "harness", "args": ["acp"] }
-  }
-}
-```
+To use it in an editor, put the entry above in `~/.harness/config.json` and add Harness as an [agent server](#use-harness-in-your-editor). Zed shows a "Log in with ChatGPT" button when no login exists: the button opens your browser and stores the login. You can also run `harness login codex` once in a terminal. A client that supports terminal login also shows a terminal method, which runs `harness acp login codex`. If you start Harness through a wrapper script, the script must pass its arguments on (`"$@"`).
 
 ### Log in with Claude Code
 
 A provider entry of type `claude-code-cli` drives the `claude` CLI, and the CLI keeps its own login. Harness never reads or stores Claude Code credentials. `harness login claude-code` runs `claude auth login` in your terminal, and passes `--console` (API billing) and `--sso` to it. `harness login claude-code --status` runs `claude auth status --text`, and `harness logout claude-code` runs `claude auth logout`. Harness runs the program of `binary_path` of the entry, else `claude` from `PATH`.
 
-In Zed, a provider entry of this type adds a "Log in with Claude Code" button. The button runs `claude auth login` as a child with no terminal, and the CLI opens your browser. A new `authenticate` cancels a sign-in that is still open. When the CLI reports that you are logged out, a new session or a prompt fails with the ACP error "Authentication required", which makes Zed show the button. Logging out from Zed removes only the Harness ChatGPT login. Harness never runs `claude auth logout` from ACP, because the CLI login is shared with every program that uses the CLI; run `harness logout claude-code` for that.
+In an [ACP client](#use-harness-in-your-editor) such as Zed, a provider entry of this type adds a "Log in with Claude Code" button. The button runs `claude auth login` as a child with no terminal, and the CLI opens your browser. A new `authenticate` cancels a sign-in that is still open. When the CLI reports that you are logged out, a new session or a prompt fails with the ACP error "Authentication required", which makes Zed show the button. Logging out from Zed removes only the Harness ChatGPT login. Harness never runs `claude auth logout` from ACP, because the CLI login is shared with every program that uses the CLI; run `harness logout claude-code` for that.
 
 ### Context windows
 
