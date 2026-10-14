@@ -82,7 +82,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
-			if rc, ok := c.(*responses.Client); ok && p.Auth == config.AuthChatGPT && len(p.Models) == 0 {
+			if rc, ok := c.(*responses.Client); ok && p.Auth == config.AuthChatGPT {
 				backends[name] = &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return codex().AccessToken() }}
 			} else {
 				backends[name] = be
@@ -229,11 +229,11 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 		models, set := m.listed[name]
 		if !set {
 			models = modelmeta.Models(name)
-		}
-		if lister, ok := be.(interface {
-			Models(ctx context.Context) []modelmeta.Model
-		}); ok {
-			models = lister.Models(ctx)
+			if lister, ok := be.(interface {
+				Models(ctx context.Context) []modelmeta.Model
+			}); ok {
+				models = lister.Models(ctx)
+			}
 		}
 		for _, mm := range models {
 			ref := name + "/" + mm.ID
