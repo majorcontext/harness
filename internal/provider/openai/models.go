@@ -92,14 +92,14 @@ func catalogModels(body codexCatalog) []modelmeta.Model {
 	shown := slices.DeleteFunc(slices.Clone(body.Models), func(e codexEntry) bool {
 		return e.Visibility != "list" || e.Slug == ""
 	})
-	slices.SortStableFunc(shown, func(a, b codexEntry) int { return a.Priority - b.Priority })
+	slices.SortStableFunc(shown, func(a, b codexEntry) int { return cmp.Compare(a.Priority, b.Priority) })
 	out := make([]modelmeta.Model, 0, len(shown))
 	for _, e := range shown {
 		m := modelmeta.Model{ID: e.Slug, Name: e.DisplayName, Description: e.Description, Efforts: harnessEfforts(e)}
 		if facts, ok := modelmeta.OpenAIModel(e.Slug); ok {
 			m.Name = cmp.Or(m.Name, facts.Name)
 			m.Description = cmp.Or(m.Description, facts.Description)
-			if len(m.Efforts) == 0 {
+			if len(e.SupportedReasoningLevels) == 0 {
 				m.Efforts = facts.Efforts
 			}
 		}

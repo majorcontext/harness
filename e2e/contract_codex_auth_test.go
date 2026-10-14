@@ -265,6 +265,11 @@ func codexAuthLoginRows() []codexScenario {
 	record := []action{recordWire{}, recordCodexAuth{as: "a"}}
 	return []codexScenario{
 		{
+			scenario: scenario{name: "codex_login_models_list_the_models_of_the_backend", actions: []action{models{}}},
+			opts:     harnesstest.OpenAIOptions{Models: chatgptCatalog},
+			auth:     &codexAuth{label: "seed", lifetime: time.Hour},
+		},
+		{
 			scenario: scenario{name: "codex_login_headers_reach_the_request", model: codexHi, actions: codexSession(codexTurn("a", "hello"), record)},
 			auth:     &codexAuth{label: "seed", lifetime: time.Hour},
 		},

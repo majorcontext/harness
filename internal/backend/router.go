@@ -200,6 +200,8 @@ func (m *Router) Warm(ctx context.Context, req turn.Request) error {
 // List returns the models of each configured provider, by provider name and then in the order of the provider list. A backend that
 // fetches its list is asked for it; ctx bounds that wait. The other providers list what modelmeta knows.
 func (m *Router) List(ctx context.Context) []protocol.Model {
+	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
+	defer cancel()
 	names := make([]string, 0, len(m.backends))
 	for name := range m.backends {
 		names = append(names, name)
