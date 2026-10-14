@@ -45,8 +45,8 @@ const historyDirective = "You are continuing a conversation that happened on ano
 const toolNames = "Your tools are the Harness tools. Where instructions name Read, Write, Edit, " +
 	"MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, " +
 	"ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. " +
-	"There is no TodoWrite or Skill tool, and no WebFetch or WebSearch tool unless the session offers " +
-	"web_fetch or web_search. To use a skill, read its SKILL.md file with read_file."
+	"There is no TodoWrite, WebFetch, WebSearch, or Skill tool. To use a skill, read its SKILL.md file " +
+	"with read_file."
 
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
