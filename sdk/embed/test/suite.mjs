@@ -63,6 +63,15 @@ export function clientSuite(start) {
     await h.close();
   });
 
+  test("the harness has no file system handle under Node", async () => {
+    const h = await start({ config: userConfig("http://127.0.0.1:1") });
+    try {
+      assert.equal(h.fs, undefined);
+    } finally {
+      await h.close();
+    }
+  });
+
   test("a write after close rejects", async () => {
     const h = await start({ config: userConfig("http://127.0.0.1:1") });
     const writer = h.stream.writable.getWriter();

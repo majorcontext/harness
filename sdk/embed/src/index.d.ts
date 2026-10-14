@@ -1,12 +1,38 @@
 /** An ACP message: a parsed JSON-RPC object. */
 export type AcpMessage = Record<string, unknown>;
 
-/** A tool of the page. run returns a string, {text, isError}, or a promise of either. */
+/** A tool of the page. run returns a string, {text, isError}, or a promise of either. fs is h.fs; it is absent where the harness has none. */
 export interface PageTool {
   name: string;
   description: string;
   schema?: object | string;
-  run(input: any, options: { signal: AbortSignal }): unknown;
+  run(input: any, options: { signal: AbortSignal; fs?: HarnessFs }): unknown;
+}
+
+/** What stat returns. */
+export interface FsStat {
+  isDirectory: boolean;
+  size: number;
+  mtimeMs: number;
+}
+
+/**
+ * The file system of the module, which the file tools and the Go store use: /work, /tmp, and /persist.
+ * Paths are absolute. A call rejects with an Error whose code is a POSIX name such as ENOENT, EEXIST, or ENOTEMPTY.
+ * The calls are not atomic: a write of the page and a write of the module to one file can interleave.
+ */
+export interface HarnessFs {
+  readFile(path: string): Promise<Uint8Array>;
+  /** data is a string (UTF-8) or bytes. It creates the file and truncates it, or appends with append. */
+  writeFile(path: string, data: string | ArrayBufferView | ArrayBuffer, options?: { append?: boolean }): Promise<void>;
+  readdir(path: string): Promise<string[]>;
+  stat(path: string): Promise<FsStat>;
+  /** recursive creates the missing parents and accepts a directory that exists. */
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  /** A directory needs recursive unless it is empty. force ignores a path that does not exist. */
+  rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+  /** The module cannot rename a directory below /persist. */
+  rename(from: string, to: string): Promise<void>;
 }
 
 /** The transport that wasm() returns. */
@@ -55,6 +81,8 @@ export interface Harness {
   stream: { readable: ReadableStream<AcpMessage>; writable: WritableStream<AcpMessage> };
   /** Ends the connection and the Worker or the process. A second call returns the same promise. */
   close(): Promise<void>;
+  /** The file system of the module. It exists only with the wasm transport in a browser; under Node, and with subprocess, it is undefined. Every pending call rejects at close(). */
+  fs?: HarnessFs;
 }
 
 /** The tool set of a session when createHarness gets no builtinTools, before the names of the page tools. */

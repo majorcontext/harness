@@ -3,6 +3,7 @@
 package harnesstest
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,6 +63,12 @@ type ToolCall struct {
 // Usage is the token usage a Reply reports.
 type Usage struct{ Input, Output int }
 
+// ToolSpec is the description and the JSON schema of one tool in a request.
+type ToolSpec struct {
+	Description string
+	InputSchema json.RawMessage
+}
+
 // Request is a decoded model request.
 type Request struct {
 	System         string
@@ -78,6 +85,8 @@ type Request struct {
 	// CacheBreakpoints holds the cache_control markers in wire order. Only the Anthropic wire fills it.
 	CacheBreakpoints []CacheBreakpoint
 	Tools            []string // sorted names
+	// ToolSpecs holds the description and the input schema of each tool by name. Only the Anthropic wire fills it.
+	ToolSpecs map[string]ToolSpec
 	// Header holds the HTTP request headers. Only NewChat fills it.
 	Header http.Header
 	// Chat-completions requests only.

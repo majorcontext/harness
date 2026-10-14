@@ -8,6 +8,13 @@
     ".": {
       "types": "./src/index.d.ts",
       "default": "./src/index.mjs"
+    },
+    "./shell": {
+      "types": "./src/shell.d.ts",
+      "default": "./src/shell.mjs"
+    },
+    "./zlib-stub": {
+      "default": "./src/zlib-stub.mjs"
     }
   },
   "files": [
@@ -20,7 +27,17 @@
     "test": "node --test test/*.test.mjs"
   },
   "license": "MIT",
+  "peerDependencies": {
+    "just-bash": ">=3.6.0 <4"
+  },
+  "peerDependenciesMeta": {
+    "just-bash": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "esbuild": "0.25.12",
+    "just-bash": "3.6.0",
     "playwright": "1.64.0"
   }
 }

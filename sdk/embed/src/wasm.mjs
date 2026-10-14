@@ -86,7 +86,7 @@ async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, bu
     },
     close: () => close(),
   });
-  const bridge = pageBridge({ tools, pageFetch, post: (m, transfer) => w.post(m, transfer) });
+  const bridge = pageBridge({ tools, pageFetch, post: (m, transfer) => w.post(m, transfer), files: !isNode });
   const ready = new Promise((resolve, reject) => {
     w.onMessage((m) => {
       if (m.ready) resolve();
@@ -129,5 +129,5 @@ async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, bu
       await cleanup();
     })());
   }
-  return { stream: { readable: stream.readable, writable: stream.writable }, close };
+  return { stream: { readable: stream.readable, writable: stream.writable }, close, fs: bridge.fs };
 }
