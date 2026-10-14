@@ -17,6 +17,7 @@ First tagged release.
 
 ### Fixed
 
+- **Project config trust model** (`docs/architecture.md`, `README.md`) — the spec states that a project `.harness.json` is code, lists the keys that start a process or connect out (`binary_path`, `extra_args`, `mcp_servers`, `plugins`, `processes`, and the endpoint keys of `providers`), and advises that a user not open an untrusted checkout and that an embedder pass its own config and isolate the process. No behavior changes.
 - **Load answer order** (`internal/acp`) — the event pump of a session that `session/load` or `session/resume` opens queues its updates until the answer is sent. A record that the log gains between the read and the open no longer reaches the client before the answer.
 - **ACP answer order** (`internal/acp`) — the answer to `session/prompt` follows every update of its turn and precedes every update of a later turn, such as a goal turn that starts at once. The event pump holds at the end of the turn until the answer is queued.
 - **Native model list** (`internal/modelmeta`) — `Runtime.Models`, `GET /models`, the `model` tool `list`, and the ACP model picker list the chat models of the `anthropic` and `openai` providers, as they list the `codex` and `claude-code` models. A dated snapshot id (for example `claude-haiku-4-5-20251001`) is not listed when its undated alias is in the table. A session can still use a dated id.

@@ -1307,6 +1307,16 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 
 One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject(userPath, dir)` merges `<dir>/.harness.json` over the file at `userPath` and runs it on the merged config. The `plugins` arrays of the two files join: project plugins first, then user plugins. A plugin name in both files fails with an error that names the plugin and both files. `Parse(name, data)` decodes one config document like `Load`, and `MergeProject(user, name, dir)` is `LoadProject` for a user config that the caller holds. `LoadProject` reads no environment variable and no home directory, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
 
+A project config is code. Harness trusts the `.harness.json` of a directory as much as a script that you run from that directory. This holds when a user opens the directory with the CLI, with `harness acp` from an editor, or with a server session whose `cwd` is that directory. `LoadProject` does not limit these keys of a project file to the user file, and no prompt asks before they take effect:
+
+- `providers.<name>.binary_path` and `providers.<name>.extra_args` choose the program and the arguments of a `claude-code-cli` entry.
+- `mcp_servers.<name>`: `command`, `env`, and `dir` start a stdio server. `url` and `headers` connect to a Streamable HTTP server.
+- `plugins[]`: `command`, `env`, `dir`, and `config` start a plugin process, and its hooks and tools then run in every session.
+- `processes.<name>`: `command`, `env`, and `dir` define a process that the `process` tool and the `/processes` routes start. `ready_http` makes a GET request to its URL.
+- `providers.<name>.base_url`, `responses_path`, and `extra_headers` choose the endpoint that receives the model requests and the API key. A project file cannot set `auth`, and cannot set `base_url` or `responses_path` of an entry whose user config sets `auth` (see below).
+
+A user must not run harness in a checkout that the user does not trust. An embedder that opens untrusted directories passes its own config and isolates the process, for example with a container or a separate user account.
+
 `cmd/harness` resolves `userPath` as `$HARNESS_CONFIG`, else `~/.harness/config.json`, and logs one line at boot that names the file it loaded and counts its processes, MCP servers, and plugins.
 
 `max_tokens` caps the output tokens of each model call of a turn. 0 is the backend default, and a negative value fails `Validate`. `HARNESS_MAX_TOKENS` sets it.
