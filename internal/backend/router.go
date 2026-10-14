@@ -32,11 +32,21 @@ var ErrUnavailable = &protocol.Error{Code: protocol.CodeModelUnavailable, Messag
 // of its model's provider.
 type Router struct {
 	backends map[string]turn.Backend
+	// listed holds the models of each provider whose entry sets models.
+	listed map[string][]modelmeta.Model
 }
 
 // NewRouter returns a Router over backends, by provider name.
 func NewRouter(backends map[string]turn.Backend) *Router {
 	return &Router{backends: backends}
+}
+
+// listModels sets the model list of a provider to models, in place of its catalog.
+func (m *Router) listModels(provider string, models []modelmeta.Model) {
+	if m.listed == nil {
+		m.listed = map[string][]modelmeta.Model{}
+	}
+	m.listed[provider] = models
 }
 
 // Env is what the backends read from their process: the variables that hold API keys, and the log.
@@ -79,7 +89,13 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			}
 		}
 	}
-	return NewRouter(backends)
+	r := NewRouter(backends)
+	for name, p := range cfg.Providers {
+		if _, ok := backends[name]; ok && len(p.Models) > 0 {
+			r.listModels(name, modelmeta.Named(p.Models, modelmeta.Models(name)))
+		}
+	}
+	return r
 }
 
 // client returns the model API client of entry name, or nil for an entry
@@ -210,11 +226,14 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 	out := []protocol.Model{}
 	for _, name := range names {
 		be := m.backends[name]
-		models := modelmeta.Models(name)
-		if lister, ok := be.(interface {
-			Models(ctx context.Context) []modelmeta.Model
-		}); ok {
-			models = lister.Models(ctx)
+		models, set := m.listed[name]
+		if !set {
+			models = modelmeta.Models(name)
+			if lister, ok := be.(interface {
+				Models(ctx context.Context) []modelmeta.Model
+			}); ok {
+				models = lister.Models(ctx)
+			}
 		}
 		for _, mm := range models {
 			ref := name + "/" + mm.ID

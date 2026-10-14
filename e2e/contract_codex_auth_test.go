@@ -283,6 +283,12 @@ func codexAuthLoginRows() []codexScenario {
 			auth:     &codexAuth{label: "seed", lifetime: time.Hour},
 		},
 		{
+			scenario:   scenario{name: "codex_login_models_list_of_the_entry_makes_no_catalog_request", actions: []action{models{}, noModelRequests{}}},
+			opts:       harnesstest.OpenAIOptions{Models: chatgptCatalog},
+			auth:       &codexAuth{label: "seed", lifetime: time.Hour},
+			listModels: []string{"gpt-5.6-sol", "my-model"},
+		},
+		{
 			scenario: scenario{name: "codex_login_headers_reach_the_request", model: codexHi, actions: codexSession(codexTurn("a", "hello"), record)},
 			auth:     &codexAuth{label: "seed", lifetime: time.Hour},
 		},

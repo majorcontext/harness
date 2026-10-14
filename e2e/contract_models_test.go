@@ -69,5 +69,18 @@ func TestContractModels(t *testing.T) {
 			},
 			actions: append([]action{models{}}, creates("codex/gpt-6-luna", "claude-code/sonnet")...),
 		},
+		{
+			name: "models_lists_the_models_that_a_provider_entry_names",
+			config: map[string]any{
+				"model":                "gateway/anthropic/claude-sonnet-5-5",
+				"goal_evaluator_model": "",
+				"providers": map[string]any{
+					"anthropic": key(map[string]any{"models": []string{"claude-opus-5"}}),
+					"gateway": key(map[string]any{"type": "openai-compat", "base_url": "https://gateway.test",
+						"models": []string{"vendor/unknown-model", "anthropic/claude-sonnet-5-5", "plain-model"}}),
+				},
+			},
+			actions: []action{models{}},
+		},
 	})
 }

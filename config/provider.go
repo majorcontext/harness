@@ -88,6 +88,8 @@ type Provider struct {
 	UseWebSocketTransport bool `json:"use_websocket_transport,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache lifetime: "5m" or "1h".
 	CacheTTL string `json:"cache_ttl,omitempty"`
+	// Models lists the model ids of the entry as its API names them, without the provider key. When it is set, it is the model list of the entry, in this order.
+	Models []string `json:"models,omitempty"`
 
 	// BinaryPath is the Claude Code CLI executable, resolved through PATH.
 	BinaryPath string `json:"binary_path,omitempty"`
@@ -213,6 +215,24 @@ func validateProviders(providers map[string]Provider) error {
 		if err := validateClaudeCodeFields(name, p); err != nil {
 			return err
 		}
+		if err := validateModels(name, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateModels rejects an empty model id and a model id that the list holds twice.
+func validateModels(name string, p Provider) error {
+	seen := map[string]bool{}
+	for i, id := range p.Models {
+		switch {
+		case id == "":
+			return fmt.Errorf("providers.%s: models[%d] is empty", name, i)
+		case seen[id]:
+			return fmt.Errorf("providers.%s: models holds %q twice", name, id)
+		}
+		seen[id] = true
 	}
 	return nil
 }

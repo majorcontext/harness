@@ -1,5 +1,7 @@
 package config
 
+import "slices"
+
 // merge returns base overlaid with the non-zero fields of over. The result aliases no map or slice of either input.
 func merge(base, over *Config) *Config {
 	out := *base
@@ -159,6 +161,7 @@ func copyProvider(v Provider) Provider {
 	if len(v.ExtraArgs) > 0 {
 		v.ExtraArgs = append([]string(nil), v.ExtraArgs...)
 	}
+	v.Models = slices.Clone(v.Models)
 	return v
 }
 
@@ -204,6 +207,9 @@ func overlayProvider(ex, v Provider) Provider {
 	}
 	if v.PermissionMode != "" {
 		ex.PermissionMode = v.PermissionMode
+	}
+	if len(v.Models) > 0 {
+		ex.Models = slices.Clone(v.Models)
 	}
 	if v.SessionMirror {
 		ex.SessionMirror = true

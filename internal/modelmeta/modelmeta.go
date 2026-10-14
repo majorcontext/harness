@@ -102,6 +102,9 @@ var claudeCodeModels = []Model{
 	{ID: "sonnet", Name: "Claude Sonnet (Claude Code)", Efforts: claudeCodeEfforts},
 }
 
+// unlistedEfforts are the levels of a model that no table holds.
+var unlistedEfforts = []string{"off", "minimal", "low", "medium", "high"}
+
 // claudeCodeEfforts are the levels of a model whose backend decides what it takes.
 var claudeCodeEfforts = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
@@ -159,6 +162,42 @@ func Models(provider string) []Model {
 		return out
 	}
 	return nil
+}
+
+// Named returns the models of ids, in the order given, for a provider whose entry lists its models. A model
+// in the catalog, the curated list of the provider, has the facts of the catalog. Any other model that the tables
+// hold has its models.dev name, description, and efforts; the id is read as ContextWindow reads it, so a
+// routing namespace such as "anthropic/" does not hide the model. Any other id has no name and no description,
+// and every effort level up to high, as a model that no list holds has.
+func Named(ids []string, catalog []Model) []Model {
+	byID := make(map[string]Model, len(catalog))
+	for _, m := range catalog {
+		byID[m.ID] = m
+	}
+	out := make([]Model, len(ids))
+	for n, id := range ids {
+		out[n] = Model{ID: id, Efforts: slices.Clone(unlistedEfforts)}
+		if m, ok := byID[id]; ok {
+			out[n] = m
+			out[n].Efforts = slices.Clone(m.Efforts)
+		} else if i, ok := factsOf(id); ok {
+			out[n] = Model{ID: id, Name: i.name, Description: i.description, Efforts: slices.Clone(i.efforts)}
+		}
+	}
+	return out
+}
+
+// factsOf finds the models.dev facts of a model id of any family, with the normalization of ContextWindow.
+func factsOf(id string) (modelInfo, bool) {
+	model := lastPathSegment(id)
+	if suffix, bedrock := stripBedrockAnthropicPrefix(model); bedrock {
+		model = suffix
+	}
+	if i, ok := anthropicInfo[stripBedrockVersionSuffix(model)]; ok {
+		return i, true
+	}
+	i, ok := openaiInfo[stripBedrockVersionSuffix(strings.TrimPrefix(model, "openai."))]
+	return i, ok
 }
 
 // CodexModels returns the static list of the models that the ChatGPT subscription backend accepts, in the order of Models.
