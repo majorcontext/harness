@@ -47,9 +47,11 @@ func TestHistory(t *testing.T) {
 			[]protocol.LogMessage{userText("one"), calling, userText(operator + "1. two\n"), answered, userText(operator + "1. three\n")}},
 		{"a withdrawn input never joins", with(base, says("a", protocol.DeliveryQueue, "one"), says("b", protocol.DeliveryQueue, "two"), withdraw("b"), start("t1", "a")), []protocol.LogMessage{userText("one")}},
 		{"a compaction summary leads the items after it", with(firstTurn, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"}),
-			[]protocol.LogMessage{userText("sum"), userText("two")}},
+			[]protocol.LogMessage{userText(SummaryBanner + "sum"), userText("two")}},
+		{"the summary message of the model ends with the index of the retained results", with(firstTurn, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum", Index: "idx"}),
+			[]protocol.LogMessage{userText(SummaryBanner + "sum\n\nidx"), userText("two")}},
 		{"the newest compaction wins", with(firstTurn, protocol.CompactionApplied{FromSeq: 1, ToSeq: 4, Summary: "old"}, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 6, Summary: "new"}),
-			[]protocol.LogMessage{userText("new"), userText("two")}},
+			[]protocol.LogMessage{userText(SummaryBanner + "new"), userText("two")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := replay(t, tc.events).History(); !reflect.DeepEqual(got, tc.want) {
@@ -77,7 +79,7 @@ func TestFold(t *testing.T) {
 		{"keep one folds every turn but the newest", three, 1, []protocol.LogMessage{userText("one"), userText("two")}, 8},
 		{"a summary alone folds nothing", with(summarized, turn("t3", "c", "three")...), 2, nil, 0},
 		{"a summary folds with the turns after it", with(summarized, turn("t3", "c", "three")...), 1,
-			[]protocol.LogMessage{userText("sum"), userText("two")}, 9},
+			[]protocol.LogMessage{userText(SummaryBanner + "sum"), userText("two")}, 9},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, to, ok := replay(t, tc.events).Fold(tc.keep)

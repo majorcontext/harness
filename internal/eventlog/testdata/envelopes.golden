@@ -11,7 +11,7 @@
 {"v":1,"seq":4,"t":"2026-10-02T12:00:00Z","k":"command.recorded","d":{"input_id":"InputID","line":"Line","name":"Name","args":{"k":"v"},"status":"Status","text":"Text","result":{"a":1},"result_truncated":true}}
 {"v":1,"seq":4,"t":"2026-10-02T12:00:00Z","k":"command.recorded","d":{"input_id":"","line":"","name":"","status":""}}
 {"v":1,"seq":5,"t":"2026-10-02T12:00:00Z","k":"compaction.applied","d":{"from_seq":0,"to_seq":0,"summary":"","by_backend":false}}
-{"v":1,"seq":5,"t":"2026-10-02T12:00:00Z","k":"compaction.applied","d":{"from_seq":7,"to_seq":7,"summary":"Summary","by_backend":true,"usage":{"input_tokens":7,"output_tokens":7,"cache_read_tokens":7,"cache_write_tokens":7}}}
+{"v":1,"seq":5,"t":"2026-10-02T12:00:00Z","k":"compaction.applied","d":{"from_seq":7,"to_seq":7,"summary":"Summary","index":"Index","by_backend":true,"usage":{"input_tokens":7,"output_tokens":7,"cache_read_tokens":7,"cache_write_tokens":7}}}
 {"v":1,"seq":5,"t":"2026-10-02T12:00:00Z","k":"compaction.applied","d":{"from_seq":0,"to_seq":0,"summary":"","by_backend":false}}
 {"v":1,"seq":6,"t":"2026-10-02T12:00:00Z","k":"context.measured","d":{"tokens":0,"window":0,"source":""}}
 {"v":1,"seq":6,"t":"2026-10-02T12:00:00Z","k":"context.measured","d":{"tokens":7,"window":7,"window_estimated":true,"source":"Source","usage":{"input_tokens":7,"output_tokens":7,"cache_read_tokens":7,"cache_write_tokens":7},"subscription_usage":{"provider":"Provider","plan":"Plan","windows":[{"key":"Key","label":"Label","used_percent":1.5,"resets_at":7}],"overage":{"in_use":true,"status":"Status","resets_at":7},"captured_at":7,"session_cost_usd":1.5},"cost_usd":1.5}}

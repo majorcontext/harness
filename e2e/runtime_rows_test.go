@@ -326,6 +326,7 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_ws_usage_frame_reaches_session":                                      reGolden(specView, specItems),
 	"codex_http_usage_headers_reach_session":                                    reGolden(specView, specItems),
 	"compact_summary_cut_at_max_tokens_is_kept":                                 sameAsServe(),
+	"compact_logs_the_plain_summary_and_the_model_reads_it_with_the_banner":     sameAsServe(),
 	"compact_manual":                                                         reGolden(specMessages, specBootstrapGone, specErrors, specPinsMove),
 	"compact_survives_restart":                                               reGolden(specMessages, specBootstrapGone, specErrors, specRestartOpens),
 	"context_overflow":                                                       reGolden(specView, specOverflowFails),

@@ -101,6 +101,7 @@ export interface CompactionApplied {
   from_seq: number;
   to_seq: number;
   summary: string;
+  index?: string;
   by_backend: boolean;
   usage?: Usage;
 }

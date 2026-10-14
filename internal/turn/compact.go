@@ -10,10 +10,6 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// SummaryBanner leads each compaction summary, so that no reader takes the
-// summary for text that the user typed.
-const SummaryBanner = "[compacted summary of earlier conversation]\n\n"
-
 const summaryPrompt = `You are summarizing a prefix of an ongoing agent conversation so it can be folded into one message, freeing context for future turns.
 
 Write a concise, information-preserving summary. Preserve:
@@ -35,8 +31,7 @@ const summaryMaxTokens = 1024
 var ErrEmptySummary = errors.New("turn: the compaction summary is empty")
 
 // Summarize makes one model call, with no tools, that summarizes
-// req.History, and returns the summary after SummaryBanner and the usage of
-// the calls. lim bounds the silence and the retries of a call, as it does for a turn.
+// req.History, and returns the plain summary and the usage of the calls. lim bounds the silence and the retries of a call, as it does for a turn.
 func Summarize(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
 	req.Instructions, req.MaxTokens = summaryPrompt, summaryMaxTokens
 	req.History = append(slices.Clone(req.History), protocol.LogMessage{Role: protocol.RoleUser,
@@ -48,7 +43,7 @@ func Summarize(ctx context.Context, b Backend, req Request, lim Limits) (string,
 	if strings.TrimSpace(text) == "" {
 		return "", usage, ErrEmptySummary
 	}
-	return SummaryBanner + text, usage, nil
+	return text, usage, nil
 }
 
 // Ask makes a model call of req with no tools, as Summarize does, and returns its text and usage.

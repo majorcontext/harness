@@ -158,7 +158,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool,
 		})
 		return nil, false, err
 	}
-	f.c.Summary, f.c.Usage = a.indexed(summary, f.metas), usage
+	f.c.Summary, f.c.Index, f.c.Usage = summary, a.resultIndex(f.metas), usage
 	h, err := call(ctx, a, func(reply func([]protocol.LogMessage, error)) {
 		if a.run != r || ctx.Err() != nil {
 			reply(nil, cmp.Or(context.Cause(ctx), error(ErrTurnMismatch)))

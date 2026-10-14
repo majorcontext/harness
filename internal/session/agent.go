@@ -144,9 +144,9 @@ func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) proto
 	return res
 }
 
-// indexed adds the index of the retained results to a compaction summary,
+// resultIndex returns the index of the retained results for a compaction,
 // so that a handle stays reachable after the preview that named it folds.
-func (a *Actor) indexed(summary string, metas []toolresult.Meta) string {
+func (a *Actor) resultIndex(metas []toolresult.Meta) string {
 	index := toolresult.Index(metas, func(m toolresult.Meta) bool {
 		rc, err := a.cfg.Store.GetBlob(a.cfg.Base, m.Key)
 		if err == nil {
@@ -154,8 +154,5 @@ func (a *Actor) indexed(summary string, metas []toolresult.Meta) string {
 		}
 		return err == nil
 	})
-	if summary == "" || index == "" {
-		return summary
-	}
-	return summary + "\n\n" + index
+	return index
 }

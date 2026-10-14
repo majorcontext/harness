@@ -388,7 +388,10 @@ func (r *run) compacted(env envelope) (isSummary bool, err error) {
 	r.compact = ""
 	var s string
 	if env.Type == "user" && json.Unmarshal(decodeMessage(env.Message).Content, &s) == nil && s != "" {
-		summary, isSummary = s, true
+		isSummary = true
+		if plain := plainSummary(s); plain != "" {
+			summary = plain
+		}
 	}
 	return isSummary, r.out.Compacted(summary)
 }

@@ -85,6 +85,16 @@ func TestContractCompaction(t *testing.T) {
 			),
 		},
 		{
+			name:   "compact_logs_the_plain_summary_and_the_model_reads_it_with_the_banner",
+			config: keepOne,
+			model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3")},
+			actions: append(append([]action{}, twoTurns...),
+				compact{as: "a"},
+				submit{as: "a", text: "three"},
+				waitIdle{as: "a"},
+			),
+		},
+		{
 			name:   "compact_survives_restart",
 			config: keepOne,
 			model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3")},

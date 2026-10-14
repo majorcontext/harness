@@ -257,7 +257,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "[compacted summary of earlier conversation]\n\ngist"
+            "text": "gist"
           }
         ]
       },
@@ -459,7 +459,7 @@
             "d": {
               "by_backend": false,
               "from_seq": 1,
-              "summary": "[compacted summary of earlier conversation]\n\ngist",
+              "summary": "gist",
               "to_seq": 13,
               "usage": {
                 "input_tokens": 5,
@@ -521,7 +521,7 @@
           "parts": [
             {
               "type": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
+              "text": "gist"
             }
           ]
         }
@@ -637,7 +637,7 @@
           "parts": [
             {
               "type": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
+              "text": "gist"
             }
           ]
         },
@@ -719,7 +719,7 @@
           "parts": [
             {
               "type": "text",
-              "text": "[compacted summary of earlier conversation]\n\ngist"
+              "text": "gist"
             }
           ]
         },

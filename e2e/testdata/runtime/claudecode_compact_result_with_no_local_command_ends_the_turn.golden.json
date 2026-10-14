@@ -18,7 +18,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "This session is being continued from a previous conversation ..."
+            "text": "Claude Code compacted its context (manual, 42010 tokens before)."
           }
         ]
       }

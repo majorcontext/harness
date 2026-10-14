@@ -142,10 +142,24 @@ func (s *State) History() []protocol.LogMessage { return s.messages(false) }
 // conversation that the model reads.
 func (s *State) ModelHistory() []protocol.LogMessage { return s.messages(true) }
 
+// SummaryBanner leads the summary that the model reads, so that the model does not take the
+// summary for text that the user typed. The record holds the plain summary.
+const SummaryBanner = "[compacted summary of earlier conversation]\n\n"
+
+// modelSummary returns the text of the summary message that the model reads:
+// the banner, the summary, and the index of the retained tool results.
+func modelSummary(c protocol.CompactionApplied) string {
+	text := SummaryBanner + c.Summary
+	if c.Index != "" {
+		text += "\n\n" + c.Index
+	}
+	return text
+}
+
 func (s *State) messages(pinned bool) []protocol.LogMessage {
 	var out []protocol.LogMessage
 	if c, ok := s.Compaction(); ok {
-		out = append(out, protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: c.Summary}}})
+		out = append(out, protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: modelSummary(c)}}})
 	}
 	for _, e := range s.history {
 		if e.pinned && !pinned {
