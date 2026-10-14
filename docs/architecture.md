@@ -163,7 +163,7 @@ func (r *Runtime) Commands(ctx context.Context) (protocol.Commands, error) // th
 // The box: health, the work directory, the logger, and the processes of the box.
 func (r *Runtime) Health() protocol.Health
 func (r *Runtime) WorkDir() string // "" without a WorkDir
-func (r *Runtime) WorkspaceChanges(ctx context.Context, dir, scope string) (protocol.WorkspaceChanges, error) // the git diff of the work tree; invalid_request without a WorkDir
+func (r *Runtime) WorkspaceChanges(ctx context.Context, dir, scope string) (protocol.WorkspaceChanges, error) // the diff of the work tree; invalid_request without a WorkDir
 func (r *Runtime) Logger() *slog.Logger
 func (r *Runtime) Processes() []protocol.ProcessInfo // none without a WorkDir
 func (r *Runtime) ProcessLogs(name string, tail int) (protocol.ProcessLogs, error) // ErrProcessNotFound for an unknown name
@@ -364,7 +364,7 @@ Free to change.
 | `internal/toolresult` | Large-result retention and `read_tool_result` |
 | `internal/admit` | Checks each part of an input and returns the `input.admitted` record with the blobs of its attachments |
 | `internal/prompt` | System-prompt segments and agent profiles, and the engine-context sentinel: `RenderEngineContext` and `NeutralizeEngineContextSentinel` |
-| `internal/workspace` | The git diff of the work tree for `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session |
+| `internal/workspace` | The diff of the work tree for `GET /workspace/changes`. It reads a work tree through an `Engine`, and git is the one implementation. It cannot reach the runtime or any session |
 | `internal/message` | The provider-wire conversation model |
 | `internal/modelref` | `ModelRef` ("provider/model") and `Effort`, with their parsers. A leaf with no harness imports |
 | `internal/backoff` | The wait between two attempts of a retried model request or model call. A leaf with no harness imports |
@@ -1294,13 +1294,16 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 
 ### workspace
 
-`GET /workspace/changes?scope=&dir=` diffs the git work tree. The route exists only with a `WorkDir`.
+`GET /workspace/changes?scope=&dir=` diffs the work tree of a directory. The route exists only with a `WorkDir`.
 
-- `scope` is `branch` (default), against the merge base with the first of `origin/HEAD`, `origin/main`, and `origin/master` that resolves, or `uncommitted`, against `HEAD`. An unborn `HEAD` diffs against the empty tree.
+- `internal/workspace` defines the interfaces that it consumes. An `Engine` has a `Name` and an `Open(ctx, dir, ceiling)` that returns a `Repo`, or reports that `dir` is in no work tree of its kind. A `Repo` has a `Root`, a `Head`, a `Base`, and a `Diff`. A `Head` is a `Rev` and an optional label. A `Base` is a `Rev` and a display name. `Repo` carries no storage path, so an engine may keep its data in any form. An engine that finds no commit gives a `Head` with the zero `Rev`.
+- `workspace.Changes` owns the scope check, the containment of the paths, and the 28 s budget. It walks one ordered list of engines and asks each to `Open` the directory. The first engine that reports a work tree answers. Each engine owns its detection marker, and the order does not assume that two engines share a marker. A directory that no engine opens is `not_a_repo`. Only `Changes` walks the list, and no code branches on the name of an engine.
+- `scope` is `branch` (default), against the base of the `Repo`, or `uncommitted`, against its head. A `Repo` with no base for the `branch` scope fails with `no_base`.
 - `dir` defaults to the `WorkDir`. Any other `dir`, relative to the `WorkDir`, and its repository must stay under the `WorkDir` after symlinks.
-- Untracked files count as added, through a private copy of the index and a private object directory. The request never writes the real index or object store, never runs a filter driver, hook, external diff, or textconv, and ignores the `GIT_*` variables that select another repository.
 - `files` is complete. An untracked file above 2 MiB is `large` with no hunk. `patch` ends at the last whole file within 1 MiB and sets `truncated`. The patch is not HTML-escaped.
-- `engine` names the version-control engine of the work tree (`git`). `branch` is the short name of the checked-out branch. `head_rev` is the `commit` revision of the head, and is absent for an unborn head. When `scope` is `branch`, `base.rev` is the `commit` revision of the merge base. `head` and `base.sha` are the commit IDs of `head_rev` and `base.rev`; both are deprecated, and a client reads `head_rev` and `base.rev`.
+- A read never changes the work tree or its repository. Untracked files count as added.
+- `engine` is the `Name` of the engine that answered. `branch` is the label of the head, and is empty when the engine has none. `head_rev` is the revision of the head, and is absent for a head with no commit. When `scope` is `branch`, `base.rev` is the revision of the base and `base.ref` is its display name. `head` and `base.sha` are the commit IDs of `head_rev` and `base.rev` when their kind is `commit`; both are deprecated, and a client reads `head_rev` and `base.rev`.
+- The `git` engine detects a work tree with `git rev-parse --show-toplevel`, below the ceiling that the containment check sets. Its `Head` is the `commit` revision of `HEAD`, and its label is the short name of the checked-out branch. Its `Base` is the merge base of `HEAD` with the first of `origin/HEAD`, `origin/main`, and `origin/master` that resolves. An unborn `HEAD` has no base, and the `uncommitted` scope diffs it against the empty tree. The `git` engine counts an untracked file through a private copy of the index and a private object directory, so the request never writes the real index or object store. It never runs a filter driver, hook, external diff, or textconv, and it ignores the `GIT_*` variables that select another repository.
 - A `Rev` is a revision or a change of a work tree. Its text form is `<kind>:<id>`, and its JSON form is that string. `kind` is `branch` (a git branch or a jj bookmark), `tag`, `commit`, `change` (a jj change), or `op` (a jj operation). `id` is not empty and may contain `:`, because the text splits at the first one. Only an engine gives an `id` meaning. `protocol.ParseRev` refuses any other text with `protocol.ErrInvalidRev`. The zero `Rev` has the empty text, and a field tagged `omitzero` leaves it out of the JSON.
 - One request has a 28 s budget. A request that passes it, or whose file list passes 32 MiB, fails with `too_many_changes`. Errors: `invalid_request`, `not_a_repo`, and `no_base`.
 
