@@ -194,8 +194,10 @@ func TestRequestIDIsFreeOnceItsAnswerIsSent(t *testing.T) {
 	}
 	<-entered
 	p.send(`{"jsonrpc":"2.0","id":1,"method":"second"}`)
-	if got := p.next(); got["error"] != nil {
-		t.Errorf("answer of a request that reuses an answered id = %v, want a result", got)
+	got := p.next()
+	res, _ := got["result"].(map[string]any)
+	if got["error"] != nil || got["id"] != float64(1) || res["method"] != "second" {
+		t.Errorf("answer of a request that reuses an answered id = %v, want the result of second", got)
 	}
 	close(release)
 	p.finish()
