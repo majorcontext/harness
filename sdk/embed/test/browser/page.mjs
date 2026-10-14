@@ -111,11 +111,13 @@ const prompt = (c, sessionId, text) => c.call("session/prompt", { sessionId, pro
 
 const rows = {
   async turn(row) {
-    const { h, c, bootMs, sessionId } = await open(row);
+    const { h, c, bootMs, logs } = await start(row);
+    const empty = await listIDs(c);
+    const sessionId = await newSession(c, logs);
     const done = await prompt(c, sessionId, "go");
     const listed = await listIDs(c);
     await h.close();
-    return { bootMs, sessionId, listed, stopReason: done.result?.stopReason, error: done.error, text: c.text.join("") };
+    return { bootMs, sessionId, empty, listed, stopReason: done.result?.stopReason, error: done.error, text: c.text.join("") };
   },
 
   async cancel(row) {
@@ -142,8 +144,8 @@ const rows = {
     await tabs.reload(t);
     const stored = await peek();
     const boot = await run("boot", { ...row, persist: true });
-    const resumed = await run("resume", { sessionId });
     const listed = await run("list");
+    const resumed = await run("resume", { sessionId });
     const second = await run("prompt", { sessionId, text: "two" });
     await run("close");
     const final = await peek();
