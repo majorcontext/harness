@@ -12,6 +12,7 @@ const (
 	compactionInProgress = "in_progress"
 	compactionCompleted  = "completed"
 	compactionFailed     = "failed"
+	compactionCancelled  = "cancelled"
 )
 
 // compactionStatus starts or fails the compaction that a status frame names.
@@ -34,6 +35,8 @@ func (h *held) compactionStatus(e protocol.Event, st *pumpState) error {
 		return h.compactionUpdate(st.compaction, compactionInProgress, nil)
 	case protocol.StatusCompactionFailed:
 		return h.endCompaction(st, compactionFailed)
+	case protocol.StatusCompactionCanceled:
+		return h.endCompaction(st, compactionCancelled)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package harness_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -145,6 +146,15 @@ func TestEventsAutoCompactionFrames(t *testing.T) {
 		head := s.Snapshot().HeadSeq
 		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "13 compaction.applied", "~13 status idle",
 			"14 turn.started", "15 item.completed i1", "16 turn.ended")
+	})
+}
+
+func TestEventsCancelledCompactionFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := compactingRuntime(t, func(turn.Sink) error { return fmt.Errorf("summary: %w", context.Canceled) })
+		head := s.Snapshot().HeadSeq
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "~12 status compaction_canceled",
+			"13 turn.started", "14 item.completed i1", "15 turn.ended")
 	})
 }
 

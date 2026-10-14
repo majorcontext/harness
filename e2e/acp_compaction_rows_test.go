@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 // acpCompactionSteps folds the first turn with /compact, then runs check. With load set it closes and loads the session before check, so the replay holds the summary.
@@ -154,6 +156,41 @@ var acpCompactionScenarios = []acpScenario{
 				}
 			}
 		}),
+	},
+	{
+		name: "a_cancelled_compaction_ends_the_entity_cancelled",
+		cite: "A `status` frame with `compaction_canceled` sends one with the status `cancelled`.",
+		model: []harnesstest.Step{
+			{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "ok"}},
+			{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "ok", Usage: harnesstest.Usage{Input: 900, Output: 1}}},
+			{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist", Block: true}},
+			{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "ok"}},
+		},
+		config: map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, compaction: true},
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "one", stop: "end_turn"},
+			acpPrompt{as: "a", text: "two", stop: "end_turn"},
+			acpPromptStart{as: "a", id: "three", text: "three"},
+			acpAwaitUpdate{kind: "compaction_update", status: "in_progress"},
+			acpPromptStart{as: "a", id: "abort", text: "/abort"},
+			acpResult{id: "abort", stop: "end_turn"},
+			acpResult{id: "three", stop: "end_turn"},
+			acpAwaitUpdate{kind: "compaction_update", status: "cancelled"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				var statuses []any
+				for _, u := range acpUpdatesOf(c, "compaction_update") {
+					statuses = append(statuses, u["status"])
+				}
+				if !slices.Equal(statuses, []any{"in_progress", "cancelled"}) {
+					t.Errorf("compaction statuses = %v, want in_progress then cancelled", statuses)
+				}
+				if got := acpUpdatesOf(c, "compaction_summary_chunk"); len(got) != 0 {
+					t.Errorf("summary chunks = %v, want none", got)
+				}
+			}),
+		},
 	},
 	{
 		name: "a_claude_code_compaction_in_a_turn_sends_the_entity_lifecycle",

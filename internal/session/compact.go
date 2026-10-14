@@ -146,6 +146,7 @@ func (a *Actor) compacted(r *running, c protocol.CompactionApplied, runErr error
 		return
 	}
 	a.run = nil
+	cause := context.Cause(r.ctx)
 	r.cancel(nil)
 	var appendErr error
 	switch {
@@ -158,7 +159,10 @@ func (a *Actor) compacted(r *running, c protocol.CompactionApplied, runErr error
 		appendErr = a.recordUsage(c.Usage)
 	}
 	status := protocol.StatusIdle
-	if runErr != nil || appendErr != nil {
+	switch {
+	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(cause, errStopTurn) || errors.Is(cause, errEndTurn)):
+		status = protocol.StatusCompactionCanceled
+	case runErr != nil || appendErr != nil:
 		status = protocol.StatusCompactionFailed
 	}
 	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: status, TurnID: r.id})

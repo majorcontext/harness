@@ -12,14 +12,15 @@ const EnvelopeVersion = 1
 // Status is the status of a session.
 type Status string
 
-// Session statuses. StatusRetrying, StatusCompacting, and StatusCompactionFailed appear only in status frames.
+// Session statuses. StatusRetrying, StatusCompacting, StatusCompactionFailed, and StatusCompactionCanceled appear only in status frames.
 const (
-	StatusIdle             Status = "idle"
-	StatusRunning          Status = "running"
-	StatusWaiting          Status = "waiting"
-	StatusRetrying         Status = "retrying"
-	StatusCompacting       Status = "compacting"
-	StatusCompactionFailed Status = "compaction_failed"
+	StatusIdle               Status = "idle"
+	StatusRunning            Status = "running"
+	StatusWaiting            Status = "waiting"
+	StatusRetrying           Status = "retrying"
+	StatusCompacting         Status = "compacting"
+	StatusCompactionFailed   Status = "compaction_failed"
+	StatusCompactionCanceled Status = "compaction_canceled"
 )
 
 // Delivery says when an admitted input joins a turn. An input with no delivery is steer.
