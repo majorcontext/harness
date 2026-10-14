@@ -337,8 +337,7 @@ type EffortControl struct {
 	// ThinksByDefault is true when a request that omits the thinking field
 	// runs adaptive thinking.
 	ThinksByDefault bool
-	// OffDisables is true when the model thinks by default and lists off, so
-	// that off needs an explicit disabled thinking field.
+	// OffDisables is true when the model thinks by default and lists off.
 	OffDisables bool
 }
 
