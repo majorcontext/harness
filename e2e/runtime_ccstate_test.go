@@ -144,7 +144,7 @@ func (l *ccLane) runtime() *harness.Runtime {
 		"providers": map[string]any{"claude-code": map[string]any{
 			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true, "extra_args": l.fakeEnv}},
 	})
-	r, err := newWired(harness.Options{Store: l.st, Config: cfg, Getenv: getenv(map[string]string{"HARNESS_E2E_KEY": "k"})})
+	r, err := newWired(l.t, harness.Options{Store: l.st, Config: cfg, Getenv: getenv(map[string]string{"HARNESS_E2E_KEY": "k"})})
 	if err != nil {
 		l.t.Fatal(err)
 	}

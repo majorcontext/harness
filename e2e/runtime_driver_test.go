@@ -114,7 +114,7 @@ func (d *runtimeDriver) start(t *testing.T) {
 		return
 	}
 	mcpsrc.HoldRetries()
-	rt, err := newWired(harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask})
+	rt, err := newWired(t, harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}

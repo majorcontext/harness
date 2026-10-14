@@ -17,8 +17,12 @@ import (
 )
 
 // newWired builds a Runtime as cmd/harness does: the Owner and the Sync come
-// from the config keys owner_epoch and sync.
-func newWired(opts harness.Options) (*harness.Runtime, error) {
+// from the config keys owner_epoch and sync. A runtime with a Sync closes at
+// cleanup, so a row that fails before its own Close leaves no sender that
+// posts to a closed receiver. Create the receiver first: cleanups run in
+// reverse order.
+func newWired(t *testing.T, opts harness.Options) (*harness.Runtime, error) {
+	t.Helper()
 	if opts.Getenv == nil {
 		opts.Getenv = os.Getenv
 	}
@@ -28,7 +32,15 @@ func newWired(opts harness.Options) (*harness.Runtime, error) {
 	if opts.Sync == nil && opts.Config.Sync != nil {
 		opts.Sync = httpsync.New(*opts.Config.Sync)
 	}
-	return harness.New(opts)
+	r, err := harness.New(opts)
+	if err == nil && opts.Sync != nil {
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), waitBound)
+			defer cancel()
+			_ = r.Close(ctx)
+		})
+	}
+	return r, err
 }
 
 // heldOwner fails Acquire of the sessions in held with ErrSessionHeld, and
@@ -190,11 +202,10 @@ func rowASyncRejectionDoesNotHideAReleaseErrorFromRelease(t *testing.T) {
 	rcv := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, protocol.Code) {
 		return http.StatusConflict, protocol.CodeSyncConflict
 	})
-	r, err := newWired(harness.Options{Store: store.NewMemStore(), Owner: heldOwner{releaseErr: boom}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
+	r, err := newWired(t, harness.Options{Store: store.NewMemStore(), Owner: heldOwner{releaseErr: boom}, Config: syncConfig(t, 1, rcv, "http://127.0.0.1:1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
 	if err != nil {
 		t.Fatal(err)
