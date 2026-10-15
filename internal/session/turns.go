@@ -57,7 +57,8 @@ func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedT
 	return r.seq, r.repeat, err
 }
 
-// admit appends before, then admits in.
+// admit appends before, then admits in. A request that before resolves is not
+// dismissed again.
 func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...protocol.Payload) (uint64, error) {
 	if in.Delivery == protocol.DeliverySteer && expectedTurn != "" && (a.run == nil || a.run.id != expectedTurn) {
 		return 0, ErrTurnMismatch
@@ -66,9 +67,12 @@ func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...
 	r := a.run
 	closes := slices.ContainsFunc(before, func(p protocol.Payload) bool { _, ok := p.(protocol.RequestResolved); return ok })
 	starts := r == nil && !a.compactDue() && (closes || !a.heldByRequest(q))
-	dismiss := a.dismissFrom(q[len(q)-1:])
-	if starts {
-		dismiss = a.dismissFrom(q)
+	var dismiss []protocol.Payload
+	if !closes {
+		dismiss = a.dismissFrom(q[len(q)-1:])
+		if starts {
+			dismiss = a.dismissFrom(q)
+		}
 	}
 	events := append(append(before, dismiss...), in)
 	seq := a.state.Head() + uint64(len(events))
