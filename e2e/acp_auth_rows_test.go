@@ -51,7 +51,7 @@ type acpLoginSpec struct {
 	injectedNoLoginURL bool
 	// claudeFrames makes the fake CLI play these frames for each turn, in place of its default reply. The spec needs claude.
 	claudeFrames []map[string]any
-	// claudeQuestion makes the fake CLI park an AskUserQuestion call on the first turn. The spec needs claude.
+	// claudeQuestion makes the fake CLI call ask_user_question on the first turn. The spec needs claude.
 	claudeQuestion bool
 }
 
@@ -172,7 +172,7 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 				"FAKE_CLAUDE_MIRROR_FIXTURE": ccStream(t, spec.claudeFrames...)})...)
 		}
 		if spec.claudeQuestion {
-			extra = append(extra, fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "question", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state")})...)
+			extra = append(extra, fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "question", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"), "FAKE_CLAUDE_SIGNAL_LOG": filepath.Join(dir, "signal")})...)
 		}
 		l.cfg["providers"].(map[string]any)["claude-code"] = map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "extra_args": extra}
 	}

@@ -84,7 +84,7 @@ var ErrToolsNotRestricted = errors.New("claudecode: the CLI did not apply the to
 // builtins are the only built-in CLI tools that a run offers. Every tool that
 // acts on the machine or the network reaches the CLI as a harness tool, so
 // the hooks of the plugins see each call.
-var builtins = []string{askTool, toolSearchTool}
+var builtins = []string{toolSearchTool}
 
 // toolSearchTool is the CLI tool that loads the schema of a deferred MCP tool.
 const toolSearchTool = "ToolSearch"
@@ -126,41 +126,15 @@ func (b *Backend) Capabilities(string) turn.Capabilities {
 	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts(), WebSearch: true}
 }
 
-// Run runs one turn of the CLI on the external session in the saved state. A
-// session that waits on a question first gets its resolution: an answer with
-// no input is this turn, and anything else is a denial in a run of its own.
+// Run runs one turn of the CLI on the external session in the saved state.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	mirror, err := loadMirror(out)
-	if err != nil || mirror.Parked == "" {
-		return b.once(ctx, req, out, mirror, nil, err)
-	}
-	res, only, err := resolve(req, out, mirror.Parked)
-	if err == nil && !only {
-		if err = b.once(ctx, req, out, mirror, res, nil); err == nil {
-			mirror, err = loadMirror(out)
-		}
-		res = nil
-	}
-	return b.once(ctx, req, out, mirror, res, err)
-}
-
-func loadMirror(out turn.Sink) (external.Mirror, error) {
-	snap, err := out.State(stateKey)
-	if err != nil {
-		return external.Mirror{}, err
-	}
-	return external.MirrorOf(snap.Head, snap.Entries)
-}
-
-// once runs the CLI once. A failed earlier step is err. With res, the run
-// sends no prompt and answers the parked call.
-func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mirror external.Mirror, res *resolution, err error) error {
 	if err != nil {
 		return err
 	}
-	questions := req.Questions || res != nil
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req, questions, res != nil), restricted: req.AllowedTools != nil,
-		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: questions}
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), restricted: req.AllowedTools != nil,
+		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID,
+		askedCh: make(chan string, 1)}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {
@@ -174,18 +148,21 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	return b.checkLogin(ctx, cmd.Env, r.finish(ctx, err))
 }
 
+func loadMirror(out turn.Sink) (external.Mirror, error) {
+	snap, err := out.State(stateKey)
+	if err != nil {
+		return external.Mirror{}, err
+	}
+	return external.MirrorOf(snap.Head, snap.Entries)
+}
+
 // restriction is the set of tools that the CLI may show: ToolSearch, which
 // only loads the schema of an MCP tool and touches nothing on the machine,
-// AskUserQuestion on a run that may ask a question, WebSearch on a run that
-// offers the search, and each harness tool of req. The init frame
-// check keeps a CLI that does not apply it from running. req.Tools holds only
-// the allowed harness tools. A run that answers a parked question keeps
-// AskUserQuestion.
-func restriction(req turn.Request, questions, answers bool) map[string]bool {
+// WebSearch on a run that offers the search, and each harness tool of req.
+// The init frame check keeps a CLI that does not apply it from running.
+// req.Tools holds only the allowed harness tools.
+func restriction(req turn.Request) map[string]bool {
 	allowed := map[string]bool{toolSearchTool: true}
-	if questions && (answers || req.AllowedTools == nil || slices.Contains(req.AllowedTools, askTool)) {
-		allowed[askTool] = true
-	}
 	if req.WebSearch {
 		allowed[searchTool] = true
 	}
@@ -204,19 +181,8 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if err != nil {
 		return nil, err
 	}
-	denied := disallowed
-	if r.questions {
-		denied += planMode
-	}
 	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--include-partial-messages", "--thinking-display", "summarized", "--disallowedTools", denied}
-	if r.questions {
-		pass := ""
-		if r.resolution != nil {
-			pass = r.resolution.callID
-		}
-		args = append(args, "--permission-prompt-tool", "stdio", "--settings", questionSettings(pass))
-	}
+		"--include-partial-messages", "--thinking-display", "summarized", "--disallowedTools", disallowed}
 	tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
 	args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
 	mcpArgs, err := r.mcpArgs(ctx, req, b.servers)
@@ -342,6 +308,9 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[stri
 func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) {
 	var err error
 	call := func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		if c.Name == turn.AskTool {
+			return r.ask(ctx, req, c)
+		}
 		res := req.Call(ctx, c)
 		if len(res.Blobs) > 0 {
 			r.keepBlobs(c.ID, res.Blobs)
@@ -430,7 +399,9 @@ func effortArg(e modelref.Effort) (string, bool) {
 // turn sends continuation: the resumed session already holds the input.
 func (r *run) prompt(req turn.Request) (input, error) {
 	m := protocol.LogMessage{Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: continuation}}}
-	if !r.continues {
+	if text, ok := answered(req); ok {
+		m.Parts = []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}
+	} else if !r.continues {
 		m.Parts = startParts(req.Input)
 	}
 	return userLine(m, r.read)

@@ -60,10 +60,10 @@
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
-          "question_tool_open": false,
           "resume": null,
           "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         }
       ]
     },

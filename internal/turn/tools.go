@@ -221,7 +221,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
 	call.Call = t.run
 	if all {
-		call.Call = t.bridged()
+		call.Call, call.Ask = t.bridged(), t.asker(to)
 	}
 	return t
 }

@@ -41,7 +41,6 @@ const (
 	specPinCut               = "A compaction moves every pin to the end of the history that it leaves"
 	specPinPaired            = "so a pin never falls between a tool call and its result"
 	specPinKept              = "Replay rebuilds a pin from the log, so a pin survives a restart."
-	specAnswerNoSteer        = "A run that answers a question takes no steer input"
 	specCrash                = "Append `turn.ended{interrupted, crashed}`; keep the partial"
 	specCrashQueue           = "The session then starts the next queued input, or waits for input when none is queued"
 	specHandoffResume        = "A suspended turn has no open tool call, so the next owner resumes it automatically"
@@ -159,7 +158,7 @@ const (
 	specGoalWithdraw   = "`SetGoal`, `ClearGoal`, each verdict, and each pause or failure withdraw the queued inputs with `source: goal`."
 	specGoalRestart    = "An `active` goal on an idle session judges the last turn when the goal has not judged it"
 	specNarrow         = "and the allowed tools of the parent narrowed by the profile"
-	specAskRule        = "Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal."
+	specAskRule        = "A session of any backend asks with the runtime tool `ask_user_question` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal (see Tools)."
 )
 
 // reasonRetryHeld is the id of the reason that the rows with a server that fails its first initialize cite.
@@ -405,7 +404,6 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_interrupt_mid_turn":                                                              reGolden(specView),
 	"claudecode_question_dismissed_by_compact":                                                   reGolden(specWaiting, specView, specCompactResult, specClaudeGauge),
 	"claudecode_question_dismissed_by_next_prompt":                                               reGolden(specWaiting, specView, specClaudeGauge),
-	"claudecode_question_answer_run_takes_no_steer_input":                                        reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt, specClaudeGauge),
 	"claudecode_question_parks_then_answer_resumes":                                              reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
 	"claudecode_question_unknown_call_id_conflicts":                                              reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
 	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":                              sameAsServe(),
@@ -689,7 +687,6 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_dismissed_by_resolve":                                         reGolden(specDismissed, specNoStart, specWaiting, specView, specClaudeGauge),
 	"claudecode_question_dismissed_by_a_model_of_another_provider":                     reGolden(specProviderSwap, specDismissed, specView, specErrors, specClaudeGauge),
 	"claudecode_question_answer_bodies_that_are_refused":                               reGolden(specAnswerMap, specRequestRoute, specErrors, specView, specAnswerReceipt, specClaudeGauge),
-	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":                    reGolden(specOneResult, specWaiting, specView, specAnswerReceipt, specClaudeGauge),
 	"model_api_question_answered_after_a_restart_keeps_the_result_next_to_its_call":    sameAsServe(),
 	"model_api_second_question_call_gets_an_error_when_the_first_is_denied":            sameAsServe(),
 	"model_api_question_with_invalid_input_gets_an_error_result":                       sameAsServe(),
@@ -707,7 +704,7 @@ var runtimeRows = map[string]runtimeRow{
 	"model_api_question_dismissed_by_resolve":                                          sameAsServe(),
 	"model_api_question_dismissed_by_next_prompt":                                      sameAsServe(),
 	"model_api_session_without_the_option_is_not_offered_the_question_tool":            sameAsServe(),
-	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks":               reGolden(specOneResult, specDismissed, specWaiting, specView, specClaudeGauge),
+	"claudecode_question_beside_a_running_call_keeps_the_call_result_and_parks":        reGolden(specOneResult, specDismissed, specWaiting, specView, specClaudeGauge),
 	"usage_survives_a_kill_mid_turn":                                                   reGolden(specView, specCrash, specCrashMarker),
 
 	"auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens":            reGolden(specPinsMove, specView),

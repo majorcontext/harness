@@ -15,8 +15,6 @@ type Mirror struct {
 	SessionID string
 	// Turn is the harness turn whose input the external session holds.
 	Turn string
-	// Parked is the tool call that the external session waits on for an answer.
-	Parked string
 	// Path is the transcript file, relative to the config directory.
 	Path    string
 	Entries []json.RawMessage
@@ -25,7 +23,6 @@ type Mirror struct {
 type mirrorHead struct {
 	SessionID string `json:"session_id,omitempty"`
 	Turn      string `json:"turn,omitempty"`
-	Parked    string `json:"parked,omitempty"`
 	Path      string `json:"path,omitempty"`
 }
 
@@ -41,12 +38,12 @@ func MirrorOf(head json.RawMessage, entries []json.RawMessage) (Mirror, error) {
 	if h.Path != "" && !filepath.IsLocal(h.Path) {
 		return Mirror{}, fmt.Errorf("external: mirror path %q is not local", h.Path)
 	}
-	return Mirror{SessionID: h.SessionID, Turn: h.Turn, Parked: h.Parked, Path: h.Path, Entries: entries}, nil
+	return Mirror{SessionID: h.SessionID, Turn: h.Turn, Path: h.Path, Entries: entries}, nil
 }
 
 // Head returns the fields of m other than its entries as a JSON object.
 func (m Mirror) Head() (json.RawMessage, error) {
-	return json.Marshal(mirrorHead{SessionID: m.SessionID, Turn: m.Turn, Parked: m.Parked, Path: m.Path})
+	return json.Marshal(mirrorHead{SessionID: m.SessionID, Turn: m.Turn, Path: m.Path})
 }
 
 // Encode returns the one-blob form of m: a head line, then one line per entry.

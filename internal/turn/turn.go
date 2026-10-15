@@ -108,8 +108,8 @@ type Request struct {
 	Steered <-chan struct{}
 	// MCPServers are the session MCP servers, for a backend that owns MCP. Never log their env or headers.
 	MCPServers map[string]MCPServer
-	// Questions reports that the backend may ask the user a question.
-	Questions     bool
+	// Ask opens the request of a call to ask_user_question; false: the result is its error.
+	Ask           func(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, bool)
 	SearchAllowed bool // the config and AllowedTools allow the web search; each call sets WebSearch from it
 	WebSearch     bool // offers the native web search of the provider
 	// Foreign reports History messages that another provider recorded.
@@ -297,7 +297,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		call.WebSearch = call.SearchAllowed && b.Capabilities(call.Model).WebSearch
 		ts := toolsetOf(step, &call, src)
-		if first && !caps.OwnsLoop {
+		if first {
 			if err := answerAsks(ctx, runner{hooks: ts.Hooks}, to, &req, record); err != nil {
 				return err
 			}

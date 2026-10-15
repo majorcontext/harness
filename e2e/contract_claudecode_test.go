@@ -409,7 +409,7 @@ func TestContractClaudeCodeSettings(t *testing.T) {
 }
 
 func TestContractClaudeCodeQuestions(t *testing.T) {
-	lane := claudeLane{mode: "question", ask: true}.newDriver
+	lane := claudeLane{mode: "question", ask: true, signals: true}.newDriver
 	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
 	answers := map[string]string{"Which database?": "SQLite"}
 	runScenarios(t, []scenario{
@@ -444,19 +444,6 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 			),
 		},
 		{
-			name:   "claudecode_question_answer_run_takes_no_steer_input",
-			driver: claudeLane{mode: "question_continues", ask: true}.newDriver,
-			actions: withActions(parked,
-				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
-				claudeAwaitText{as: "a", text: "WAITING_FOR_QUEUE"},
-				enqueue{as: "a", text: "second"},
-				claudeCloseWindow{},
-				waitIdle{as: "a"},
-				claudeSession{as: "a"},
-				claudeInputs{as: "a"},
-			),
-		},
-		{
 			name:   "claudecode_question_unknown_call_id_conflicts",
 			driver: lane,
 			actions: withActions(parked,
@@ -470,7 +457,7 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 }
 
 func TestContractClaudeCodeQuestionRefusals(t *testing.T) {
-	lane := claudeLane{mode: "question", ask: true}.newDriver
+	lane := claudeLane{mode: "question", ask: true, signals: true}.newDriver
 	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
 	answers := map[string]string{"Which database?": "SQLite"}
 	raw := func(answer string) action { return claudeRawAnswer{as: "a", callID: "toolu_q", answer: answer} }
@@ -518,18 +505,8 @@ func TestContractClaudeCodeQuestionResults(t *testing.T) {
 	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
 	runScenarios(t, []scenario{
 		{
-			name:   "claudecode_answered_call_with_no_result_gets_a_cut_off_result",
-			driver: claudeLane{mode: "question_no_result", ask: true}.newDriver,
-			actions: withActions(parked,
-				claudeAnswer{as: "a", callID: "toolu_q", answers: map[string]string{"Which database?": "SQLite"}},
-				waitIdle{as: "a"},
-				claudeSession{as: "a"},
-				claudeInvocations{as: "a"},
-			),
-		},
-		{
-			name:   "claudecode_question_sibling_call_gets_a_result_when_the_turn_parks",
-			driver: claudeLane{mode: "question_sibling", ask: true}.newDriver,
+			name:   "claudecode_question_beside_a_running_call_keeps_the_call_result_and_parks",
+			driver: claudeLane{mode: "question_sibling", ask: true, signals: true}.newDriver,
 			actions: withActions(parked,
 				submit{as: "a", text: "never mind"}, waitIdle{as: "a"},
 				claudeSession{as: "a"},

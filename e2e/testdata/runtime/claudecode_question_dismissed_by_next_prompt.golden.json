@@ -19,7 +19,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "AskUserQuestion",
+            "name": "ask_user_question",
             "arguments": {
               "questions": [
                 {
@@ -121,11 +121,6 @@
           "type": "user"
         },
         {
-          "interrupt": true,
-          "subtype": "success",
-          "type": "control_response"
-        },
-        {
           "content": "never mind",
           "role": "user",
           "type": "user"
@@ -136,38 +131,24 @@
       "status": 200,
       "body": [
         {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
-          "question_tool_open": true,
           "resume": null,
           "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         },
         {
-          "defer_hook": true,
-          "deferred_call": "toolu#1",
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
-          "question_tool_open": true,
           "resume": "fake-session-1",
           "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        },
-        {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": true,
-          "resume": "fake-session-1",
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         }
       ]
     },
@@ -175,11 +156,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 7,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -198,8 +179,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 7,
+          "output_tokens": 2
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -212,7 +193,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 20,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -233,8 +214,8 @@
         "usage": {
           "cache_read_tokens": 7,
           "cache_write_tokens": 5,
-          "input_tokens": 101,
-          "output_tokens": 42
+          "input_tokens": 108,
+          "output_tokens": 44
         },
         "work_dir": "\u003cworkdir\u003e"
       }

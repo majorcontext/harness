@@ -3,7 +3,7 @@
 // HARNESS_RECORD_WIRE=1. Keys come from ANTHROPIC_API_KEY and OPENAI_API_KEY;
 // the Claude Code CLI uses its own login.
 //
-//	HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire [-only anthropic,chat,responses,claudecode,claudecode-partial,claudecode-builtin-refused,codexmodels,anthropic-websearch,codex-websearch,claudecode-websearch,claudecode-toolsearch,claudecode-unknown-refused]
+//	HARNESS_RECORD_WIRE=1 go run ./internal/wirerecord -out testdata/wire [-only anthropic,chat,responses,claudecode,claudecode-partial,claudecode-builtin-refused,codexmodels,anthropic-websearch,codex-websearch,claudecode-websearch,claudecode-toolsearch,claudecode-unknown-refused,claudecode-question]
 package main
 
 import (
@@ -55,7 +55,7 @@ func main() {
 	r := &recorder{out: *out, scrubber: wirescrub.New(work)}
 	runners := map[string]func(*recorder, string) error{
 		"anthropic": recordAnthropic, "chat": recordChat, "responses": recordResponses, "claudecode": recordClaudeCode, "claudecode-partial": recordClaudeCodePartial, "claudecode-builtin-refused": recordClaudeCodeBuiltinRefused, "codexmodels": recordCodexModels,
-		"anthropic-websearch": recordAnthropicSearch, "anthropic-websearch-error": recordAnthropicSearchError, "anthropic-websearch-pause": recordAnthropicSearchPause, "codex-websearch": recordCodexSearch, "claudecode-websearch": recordClaudeCodeSearch, "claudecode-toolsearch": recordClaudeCodeToolSearch, "claudecode-unknown-refused": recordClaudeCodeUnknownRefused,
+		"anthropic-websearch": recordAnthropicSearch, "anthropic-websearch-error": recordAnthropicSearchError, "anthropic-websearch-pause": recordAnthropicSearchPause, "codex-websearch": recordCodexSearch, "claudecode-websearch": recordClaudeCodeSearch, "claudecode-toolsearch": recordClaudeCodeToolSearch, "claudecode-unknown-refused": recordClaudeCodeUnknownRefused, "claudecode-question": recordClaudeCodeQuestion,
 	}
 	for _, name := range strings.Split(*only, ",") {
 		run, ok := runners[name]

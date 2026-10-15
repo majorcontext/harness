@@ -12,8 +12,7 @@
 //	FAKE_CLAUDE_LOG        append the argv of each invocation as one JSON line
 //	FAKE_CLAUDE_STDIN_LOG  append every input line read
 //	FAKE_CLAUDE_SESSION_ID session id in the init frame (default fake-session-1)
-//	FAKE_CLAUDE_STATE      file path that keeps the "question" mode parked state
-//	FAKE_CLAUDE_DISMISS_DIES   makes a dismissed parked question exit at once
+//	FAKE_CLAUDE_STATE      file path whose name counts the spawns
 //	FAKE_CLAUDE_INIT_TOOLS     JSON tool list of the init frame
 //	FAKE_CLAUDE_ENV_LOG        receives the environment as a JSON array
 //	FAKE_CLAUDE_CWD_LOG        receives the working directory
@@ -240,7 +239,7 @@ func main() {
 	if f.sessionID == "" {
 		f.sessionID = "fake-session-1"
 	}
-	if mode != "fast_no_drain" && !f.questionParked() {
+	if mode != "fast_no_drain" {
 		f.first, _ = f.readLine()
 	}
 	if h, ok := preInitModes[mode]; ok && h(f) {
