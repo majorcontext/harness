@@ -466,14 +466,7 @@ func (p *printer) handle(id string, ev protocol.Event) {
 	case protocol.KindItemDiscarded:
 		if p.streamedThis {
 			_, _ = fmt.Fprintln(p.out)
-			_, _ = fmt.Fprintln(p.errW, "[re-streaming after a dropped reply]")
-			p.streamedThis = false
-		}
-	case protocol.KindStatus:
-		var f protocol.StatusFrame
-		if json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusRetrying && p.streamedThis {
-			_, _ = fmt.Fprintln(p.out)
-			_, _ = fmt.Fprintln(p.errW, "[re-streaming after a transient provider error]")
+			_, _ = fmt.Fprintln(p.errW, "[re-streaming the reply]")
 			p.streamedThis = false
 		}
 	case "item.completed":
