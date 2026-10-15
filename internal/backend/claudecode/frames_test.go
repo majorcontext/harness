@@ -65,3 +65,11 @@ func TestSearchPartPrefersTheStructuredResults(t *testing.T) {
 		t.Errorf("results = %+v, want the structured source", got.Results)
 	}
 }
+
+func TestToolResultNamesTheToolsThatToolSearchLoaded(t *testing.T) {
+	content := json.RawMessage(`[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"mcp__harness__tool_7"}]}]`)
+	parts := toolResults(wireMessage{Content: content}, map[string]string{"toolu_1": "ToolSearch"})
+	if len(parts) != 1 || parts[0].Text != "mcp__harness__tool_7" {
+		t.Errorf("parts = %+v, want one result that names mcp__harness__tool_7", parts)
+	}
+}

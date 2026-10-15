@@ -6,12 +6,13 @@ import (
 	"strings"
 )
 
-// searchModes cover the built-in WebSearch tool of the CLI. "web_search" runs
+// searchModes cover the built-in WebSearch and ToolSearch tools of the CLI. "web_search" runs
 // one search and answers from it; the init frame lists the tools of --tools,
 // as the CLI does.
 var searchModes = map[string]mode{
 	"web_search":       webSearchTurn,
 	"web_search_plain": webSearchPlain,
+	"tool_search":      toolSearchTurn,
 	"web_search_refused": func(f *fake) {
 		msg := "Error: No such tool available: WebSearch. WebSearch is disabled for this session, in subagents as well as here."
 		f.emit(
@@ -45,6 +46,18 @@ func webSearchTurn(f *fake) {
 			{"title": "Go 1.26 Release Notes", "url": "https://go.dev/doc/go1.26"}}}, "Go 1.27.2 is the current release."}}),
 		say("Go 1.27.2 is the current release (https://go.dev/doc/devel/release)."),
 		success("Go 1.27.2 is the current release (https://go.dev/doc/devel/release).", 9, 4),
+	)
+}
+
+// toolSearchTurn loads the schema of an MCP tool through ToolSearch, as the
+// CLI does when it defers the tools of its MCP servers, and then calls it.
+func toolSearchTurn(f *fake) {
+	f.emit(
+		assistant(toolUse("toolu_ts", "ToolSearch", obj{"query": "select:mcp__harness__tool_7", "max_results": 1})),
+		user(toolResult("toolu_ts", []obj{{"type": "tool_reference", "tool_name": "mcp__harness__tool_7"}}, false)).set("tool_use_result",
+			obj{"matches": []string{"mcp__harness__tool_7"}, "query": "select:mcp__harness__tool_7", "total_deferred_tools": 40}),
+		say("Loaded tool_7."),
+		success("Loaded tool_7.", 9, 4),
 	)
 }
 

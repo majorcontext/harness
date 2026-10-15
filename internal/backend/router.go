@@ -88,7 +88,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			if env.NoProcess {
 				continue
 			}
-			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
+			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers, cfg.MCPToolLoading)
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 			if rc, ok := c.(*responses.Client); ok && p.ModelsFrom == config.ModelsFromChatGPT {
