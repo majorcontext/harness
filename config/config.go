@@ -76,6 +76,9 @@ type Config struct {
 	// ModelTool false disables the `model` session tool. nil leaves it
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
+	// Web opts in to the web tools of a session with a WorkDir. Fetch is off
+	// when unset. A project Fetch overrides the user Fetch; an unset one inherits.
+	Web WebSpec `json:"web,omitzero"`
 	// Plugins lists the plugin processes to wire into every session's
 	// turn hooks. Order matters: sync hooks chain across plugins in this
 	// order, each seeing the previous plugin's mutations. A nil (omitted)
@@ -176,6 +179,13 @@ type Config struct {
 	// catalog, so a stray minus sign would silently turn "auto" into "always
 	// defer" -- and is rejected loudly, like MCPServerSpec.ConnectTimeoutS.
 	MCPToolLoadingThreshold int `json:"mcp_tool_loading_threshold,omitempty"`
+}
+
+// WebSpec holds the switches of the web tools. A nil field is off, and a
+// *bool keeps "unset" apart from "false" across the project-config merge.
+type WebSpec struct {
+	// Fetch offers the web_fetch tool.
+	Fetch *bool `json:"fetch,omitempty"`
 }
 
 // ResolveModel returns s, else Model, else DefaultModel, after one alias lookup. It does not parse.

@@ -44,9 +44,22 @@ const historyDirective = "You are continuing a conversation that happened on ano
 // instructions written for its own tools.
 const toolNames = "Your tools are the Harness tools. Where instructions name Read, Write, Edit, " +
 	"MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, " +
-	"ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. " +
-	"There is no TodoWrite, WebFetch, WebSearch, or Skill tool. To use a skill, read its SKILL.md file " +
-	"with read_file."
+	"ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. "
+
+const (
+	noWebFetch   = "There is no TodoWrite, WebFetch, WebSearch, or Skill tool."
+	mapWebFetch  = "Where they name WebFetch, use web_fetch. There is no TodoWrite, WebSearch, or Skill tool."
+	readSkillDoc = " To use a skill, read its SKILL.md file with read_file."
+)
+
+// toolNamesOf returns the tool-name segment for the tools that the turn offers:
+// WebFetch maps to web_fetch only when the turn offers that tool.
+func toolNamesOf(tools []protocol.ToolSpec) string {
+	if slices.ContainsFunc(tools, func(t protocol.ToolSpec) bool { return t.Name == turn.WebFetchTool }) {
+		return toolNames + mapWebFetch + readSkillDoc
+	}
+	return toolNames + noWebFetch + readSkillDoc
+}
 
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
@@ -227,7 +240,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 // names, the entries of append_system_prompt, the skill segment of the
 // session, and the history directive of a session that another model began.
 func (b *Backend) systemPrompt(req turn.Request) string {
-	segs := []string{toolNames, b.system, req.Skills}
+	segs := []string{toolNamesOf(req.Tools), b.system, req.Skills}
 	if req.Foreign {
 		segs = append(segs, historyDirective)
 	}

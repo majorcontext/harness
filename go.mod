@@ -7,6 +7,7 @@ require (
 	github.com/invopop/jsonschema v0.13.0
 	github.com/klauspost/compress v1.20.0
 	golang.org/x/image v0.44.0
+	golang.org/x/net v0.58.0
 	pgregory.net/rapid v1.3.0
 )
 

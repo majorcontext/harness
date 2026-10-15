@@ -12,6 +12,7 @@ func merge(base, over *Config) *Config {
 	mergeAliases(&out, base, over)
 	mergeProviders(&out, base, over)
 	mergeSpecs(&out, base, over)
+	mergeWeb(&out, base, over)
 	return &out
 }
 
@@ -274,5 +275,17 @@ func mergeSpecs(out, base, over *Config) {
 		out.Processes = m
 	} else {
 		out.Processes = nil
+	}
+}
+
+// mergeWeb sets web.fetch from over, else from base, in a new value.
+func mergeWeb(out, base, over *Config) {
+	fetch := over.Web.Fetch
+	if fetch == nil {
+		fetch = base.Web.Fetch
+	}
+	out.Web = WebSpec{}
+	if fetch != nil {
+		out.Web.Fetch = new(*fetch)
 	}
 }

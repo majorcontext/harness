@@ -165,6 +165,9 @@ const (
 // reasonRetryHeld is the id of the reason that the rows with a server that fails its first initialize cite.
 const reasonRetryHeld = "mcp-retry-held"
 
+// reasonWebLoopback is the id of the reason that the rows which fetch from a local server cite.
+const reasonWebLoopback = "web-loopback-seam"
+
 // reasonReportHeld is the id of the reason that the row with a held child report cites.
 const reasonReportHeld = "child-report-held"
 
@@ -187,6 +190,30 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
+	"web_fetch_is_not_offered_unless_web_fetch_is_true":                                                        sameAsServe(),
+	"web_fetch_is_offered_when_web_fetch_is_true":                                                              sameAsServe(),
+	"web_fetch_call_without_web_fetch_true_is_an_unknown_tool":                                                 sameAsServe(),
+	"web_fetch_refuses_private_loopback_and_link_local_addresses":                                              sameAsServe(),
+	"web_fetch_refuses_other_schemes_credentials_and_bad_input":                                                sameAsServe(),
+	"plugin_hook_denies_a_web_fetch_call_by_url":                                                               sameAsServe(),
+	"web_fetch_turns_html_into_markdown":                                                                       runtimeOnly(reasonWebLoopback),
+	"web_fetch_turns_html_into_text_or_returns_the_raw_source":                                                 runtimeOnly(reasonWebLoopback),
+	"web_fetch_passes_json_through_and_names_a_failing_status":                                                 runtimeOnly(reasonWebLoopback),
+	"web_fetch_parses_only_the_first_two_mebibytes_of_an_html_body":                                            runtimeOnly(reasonWebLoopback),
+	"claudecode_system_prompt_maps_webfetch_to_web_fetch_when_the_turn_offers_it":                              sameAsServe(),
+	"claudecode_system_prompt_keeps_webfetch_absent_when_the_turn_does_not_offer_web_fetch":                    sameAsServe(),
+	"web_fetch_bounds_the_output_for_a_deeply_nested_page":                                                     runtimeOnly(reasonWebLoopback),
+	"web_fetch_answers_a_binary_type_with_its_type_and_size":                                                   runtimeOnly(reasonWebLoopback),
+	"web_fetch_treats_bytes_of_another_image_format_than_the_declared_one_as_binary":                           runtimeOnly(reasonWebLoopback),
+	"web_fetch_returns_an_image_as_a_blob":                                                                     runtimeOnly(reasonWebLoopback),
+	"web_fetch_cuts_a_body_at_ten_mebibytes_and_the_text_at_max_bytes":                                         runtimeOnly(reasonWebLoopback),
+	"web_fetch_sends_a_get_with_the_harness_user_agent_and_no_cookie_or_credential":                            runtimeOnly(reasonWebLoopback),
+	"web_fetch_follows_redirects_and_names_the_final_url":                                                      runtimeOnly(reasonWebLoopback),
+	"web_fetch_checks_the_address_of_each_redirect":                                                            runtimeOnly(reasonWebLoopback),
+	"web_fetch_stops_after_five_redirects":                                                                     runtimeOnly(reasonWebLoopback),
+	"claudecode_bridge_offers_web_fetch_when_web_fetch_is_true":                                                sameAsServe(),
+	"claudecode_bridge_runs_web_fetch_through_the_engine":                                                      sameAsServe(),
+	"claudecode_plugin_hook_denies_a_web_fetch_call_of_the_cli":                                                sameAsServe(),
 	"codex_minimal_on_a_model_without_it_clamps_up_to_low":                                                     reGolden(specUpdate),
 	"thinking_off_on_a_model_that_lists_off_sends_thinking_disabled":                                           reGolden(specUpdate),
 	"anthropic_adaptive_thinking_raises_max_tokens_for_the_level":                                              reGolden(specUpdate),

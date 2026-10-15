@@ -184,7 +184,7 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			return rt
 		},
 		Tools:           o.tools,
-		Host:            harness.HostLimits{NoProcess: true, NoLogin: true},
+		Host:            harness.HostLimits{NoProcess: true, NoLogin: true, NoNetwork: true},
 		IssuerTransport: jshost.FetchRT{NoRedirect: true},
 	})
 }

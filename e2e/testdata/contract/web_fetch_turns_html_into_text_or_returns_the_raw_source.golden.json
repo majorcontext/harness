@@ -1,0 +1,260 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "format": "text",
+                "url": "http://127.0.0.1:\u003cport\u003e/page"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "URL: http://127.0.0.1:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\nTitle: Fixture Page\n\nFixture heading\n\nRead the guide and the absolute link, with bold and italic and inline().\n\n- first\n- second\n  - nested\n\nfmt.Println(\"hi\")\n\nName\tSize\na\t1\n\nA picture",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "format": "text",
+                "url": "http://127.0.0.1:\u003cport\u003e/page"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "URL: http://127.0.0.1:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\nTitle: Fixture Page\n\nFixture heading\n\nRead the guide and the absolute link, with bold and italic and inline().\n\n- first\n- second\n  - nested\n\nfmt.Println(\"hi\")\n\nName\tSize\na\t1\n\nA picture",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "format": "raw",
+                "url": "http://127.0.0.1:\u003cport\u003e/page"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "URL: http://127.0.0.1:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\n\n\u003c!doctype html\u003e\n\u003chtml\u003e\u003chead\u003e\u003ctitle\u003eFixture Page\u003c/title\u003e\u003cstyle\u003ebody{color:red}\u003c/style\u003e\u003cscript\u003evar secret = \"script-text\";\u003c/script\u003e\u003c/head\u003e\n\u003cbody\u003e\n\u003cnav\u003e\u003ca href=\"/menu\"\u003eMenu item\u003c/a\u003e\u003c/nav\u003e\n\u003ch1\u003eFixture heading\u003c/h1\u003e\n\u003cp\u003eRead the \u003ca href=\"/docs/guide\"\u003eguide\u003c/a\u003e and the \u003ca href=\"https://example.org/abs\"\u003eabsolute link\u003c/a\u003e, with \u003cstrong\u003ebold\u003c/strong\u003e and \u003cem\u003eitalic\u003c/em\u003e and \u003ccode\u003einline()\u003c/code\u003e.\u003c/p\u003e\n\u003cul\u003e\u003cli\u003efirst\u003c/li\u003e\u003cli\u003esecond\u003cul\u003e\u003cli\u003enested\u003c/li\u003e\u003c/ul\u003e\u003c/li\u003e\u003c/ul\u003e\n\u003cpre\u003e\u003ccode class=\"language-go\"\u003efmt.Println(\"hi\")\n\u003c/code\u003e\u003c/pre\u003e\n\u003ctable\u003e\u003ctr\u003e\u003cth\u003eName\u003c/th\u003e\u003cth\u003eSize\u003c/th\u003e\u003c/tr\u003e\u003ctr\u003e\u003ctd\u003ea\u003c/td\u003e\u003ctd\u003e1\u003c/td\u003e\u003c/tr\u003e\u003c/table\u003e\n\u003cimg src=\"/pic.png\" alt=\"A picture\"\u003e\n\u003cfooter\u003eFooter noise\u003c/footer\u003e\n\u003c/body\u003e\u003c/html\u003e",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "web_fetch",
+            "arguments": {
+              "format": "text",
+              "url": "http://127.0.0.1:\u003cport\u003e/page"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "URL: http://127.0.0.1:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\nTitle: Fixture Page\n\nFixture heading\n\nRead the guide and the absolute link, with bold and italic and inline().\n\n- first\n- second\n  - nested\n\nfmt.Println(\"hi\")\n\nName\tSize\na\t1\n\nA picture"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "web_fetch",
+            "arguments": {
+              "format": "raw",
+              "url": "http://127.0.0.1:\u003cport\u003e/page"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "URL: http://127.0.0.1:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\n\n\u003c!doctype html\u003e\n\u003chtml\u003e\u003chead\u003e\u003ctitle\u003eFixture Page\u003c/title\u003e\u003cstyle\u003ebody{color:red}\u003c/style\u003e\u003cscript\u003evar secret = \"script-text\";\u003c/script\u003e\u003c/head\u003e\n\u003cbody\u003e\n\u003cnav\u003e\u003ca href=\"/menu\"\u003eMenu item\u003c/a\u003e\u003c/nav\u003e\n\u003ch1\u003eFixture heading\u003c/h1\u003e\n\u003cp\u003eRead the \u003ca href=\"/docs/guide\"\u003eguide\u003c/a\u003e and the \u003ca href=\"https://example.org/abs\"\u003eabsolute link\u003c/a\u003e, with \u003cstrong\u003ebold\u003c/strong\u003e and \u003cem\u003eitalic\u003c/em\u003e and \u003ccode\u003einline()\u003c/code\u003e.\u003c/p\u003e\n\u003cul\u003e\u003cli\u003efirst\u003c/li\u003e\u003cli\u003esecond\u003cul\u003e\u003cli\u003enested\u003c/li\u003e\u003c/ul\u003e\u003c/li\u003e\u003c/ul\u003e\n\u003cpre\u003e\u003ccode class=\"language-go\"\u003efmt.Println(\"hi\")\n\u003c/code\u003e\u003c/pre\u003e\n\u003ctable\u003e\u003ctr\u003e\u003cth\u003eName\u003c/th\u003e\u003cth\u003eSize\u003c/th\u003e\u003c/tr\u003e\u003ctr\u003e\u003ctd\u003ea\u003c/td\u003e\u003ctd\u003e1\u003c/td\u003e\u003c/tr\u003e\u003c/table\u003e\n\u003cimg src=\"/pic.png\" alt=\"A picture\"\u003e\n\u003cfooter\u003eFooter noise\u003c/footer\u003e\n\u003c/body\u003e\u003c/html\u003e"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}
