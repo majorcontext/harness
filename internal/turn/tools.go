@@ -143,6 +143,9 @@ func (c chain) Join(ctx context.Context, call protocol.ToolCall, r protocol.Tool
 type runner struct {
 	runnable []Tool
 	hooks    Hooks
+	// joinMu, when set, makes join run one result at a time across every
+	// callback of the runner.
+	joinMu *sync.Mutex
 }
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
@@ -150,6 +153,10 @@ func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResul
 }
 
 func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	if t.joinMu != nil {
+		t.joinMu.Lock()
+		defer t.joinMu.Unlock()
+	}
 	if j, ok := t.hooks.(Joiner); ok {
 		return j.Join(ctx, c, r)
 	}
@@ -218,25 +225,23 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), hooks: ts.Hooks}
 	call.Call = t.run
 	if all {
-		call.Call = t.bridged()
+		t.joinMu = new(sync.Mutex)
+		call.Call, call.Ask = t.bridged(), t.asker(to)
 	}
 	return t
 }
 
 // bridged returns the Call of a backend that owns the loop: the calls of one
-// key run one at a time, and each result goes through the Join of the hooks, one
-// result at a time, so the retention of two results never shares a handle.
+// key run one at a time, and each result goes through the Join of the hooks,
+// one result at a time across Call and Ask, so the retention of two results
+// never shares a handle.
 func (t runner) bridged() func(context.Context, protocol.ToolCall) protocol.ToolResult {
 	run := t.keyed()
-	var mu sync.Mutex
 	return func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-		r := run(ctx, c)
-		mu.Lock()
-		defer mu.Unlock()
-		return t.join(ctx, c, r)
+		return t.join(ctx, c, run(ctx, c))
 	}
 }
 

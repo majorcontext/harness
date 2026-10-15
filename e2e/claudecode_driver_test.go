@@ -197,12 +197,11 @@ func argvFacts(argv []string) map[string]any {
 	}
 	appended, _ := value("--append-system-prompt").(string)
 	facts := map[string]any{
-		"model":              value("--model"),
-		"resume":             value("--resume"),
-		"history_directive":  strings.Contains(appended, "get_conversation_history"),
-		"mcp_config":         slices.Contains(argv, "--mcp-config"),
-		"question_tool_open": slices.Contains(argv, "--permission-prompt-tool"),
-
+		"model":             value("--model"),
+		"resume":            value("--resume"),
+		"history_directive": strings.Contains(appended, "get_conversation_history"),
+		"mcp_config":        slices.Contains(argv, "--mcp-config"),
+		"tools":             value("--tools"),
 		"thinking_display":  value("--thinking-display"),
 		"disallowed_tools":  value("--disallowedTools"),
 		"strict_mcp_config": slices.Contains(argv, "--strict-mcp-config"),
@@ -215,19 +214,8 @@ func argvFacts(argv []string) map[string]any {
 	if slices.Contains(strings.Split(tools, ","), "WebSearch") {
 		facts["web_search_offered"] = slices.Contains(strings.Split(allowed, ","), "WebSearch")
 	}
-	settings, _ := value("--settings").(string)
-	if strings.Contains(settings, "defer") {
-		facts["defer_hook"] = true
-		if call := deferredCall.FindString(settings); call != "" {
-			facts["deferred_call"] = call
-		}
-	}
 	return facts
 }
-
-// deferredCall matches the id of the tool call that a resumed run lets pass
-// its defer hook.
-var deferredCall = regexp.MustCompile(`toolu_\w+`)
 
 // claudeSystemPrompt records, for each fakeclaude spawn in order, whether the
 // system prompt that harness appended holds text.
@@ -777,4 +765,23 @@ func (a claudeCompactKeeping) run(t *testing.T, r *run) {
 func (d *runtimeDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
 	t.Helper()
 	return d.call(t, http.MethodPost, "/sessions/"+id+"/compact", map[string]any{"keep_turns": keep})
+}
+
+// requestHoldsCall checks that the newest model request holds a call to the
+// tool name and a result of that call whose text holds result.
+type requestHoldsCall struct{ name, result string }
+
+func (a requestHoldsCall) run(t *testing.T, r *run) {
+	t.Helper()
+	reqs := r.fake.Requests()
+	called, answered := false, false
+	for _, m := range reqs[len(reqs)-1].Messages {
+		for _, p := range m.Parts {
+			called = called || p.Kind == "tool_use" && p.ToolName == a.name
+			answered = answered || p.Kind == "tool_result" && p.ToolName == a.name && strings.Contains(p.Text, a.result)
+		}
+	}
+	if !called || !answered {
+		t.Fatalf("the newest request holds a %s call = %v and its result = %v, want both", a.name, called, answered)
+	}
 }

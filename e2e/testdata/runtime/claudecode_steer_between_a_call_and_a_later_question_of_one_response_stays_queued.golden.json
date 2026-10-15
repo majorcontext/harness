@@ -19,7 +19,21 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "AskUserQuestion",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "ask_user_question",
             "arguments": {
               "questions": [
                 {
@@ -39,26 +53,6 @@
                 }
               ]
             }
-          },
-          {
-            "type": "tool_call",
-            "call_id": "toolu#2",
-            "name": "bash",
-            "arguments": {
-              "command": "echo hi"
-            }
-          }
-        ]
-      },
-      {
-        "id": "msg#3",
-        "role": "tool",
-        "parts": [
-          {
-            "type": "tool_result",
-            "call_id": "toolu#2",
-            "is_error": true,
-            "content": "cut off before a result was recorded; check whether it took effect before running it again"
           }
         ]
       },
@@ -69,23 +63,34 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
             "is_error": true,
             "content": "The user dismissed this question without answering."
           }
         ]
       },
       {
-        "id": "msg#5",
+        "id": "msg#6",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "never mind"
+            "text": "second"
           }
         ]
       },
       {
-        "id": "msg#6",
+        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
@@ -95,7 +100,7 @@
         ]
       },
       {
-        "id": "msg#7",
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -109,7 +114,7 @@
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#9",
         "role": "tool",
         "parts": [
           {
@@ -120,7 +125,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {
@@ -132,42 +137,18 @@
     ]
   },
   "calls": {
-    "claude_invocations.a": {
+    "claude_inputs.a": {
       "status": 200,
       "body": [
         {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": true,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "content": "pick a db",
+          "role": "user",
+          "type": "user"
         },
         {
-          "defer_hook": true,
-          "deferred_call": "toolu#1",
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": true,
-          "resume": "fake-session-1",
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        },
-        {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": true,
-          "resume": "fake-session-1",
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "content": "second",
+          "role": "user",
+          "type": "user"
         }
       ]
     },
@@ -175,48 +156,15 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
-          "window": 0
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 11,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "awaiting_input",
-          "turn_id": "turn#1"
-        },
-        "model": "claude-code/sonnet",
-        "origin": "",
-        "status": "waiting",
-        "subscription_usage": {
-          "captured_at": "\u003ctime\u003e",
-          "plan": "",
-          "provider": "claude",
-          "session_cost_usd": 0,
-          "windows": []
-        },
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        },
-        "work_dir": "\u003cworkdir\u003e"
-      }
-    },
-    "get_session.a#2": {
-      "status": 200,
-      "body": {
-        "context": {
           "tokens": 113,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 21,
+        "head_seq": 20,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
-          "turn_id": "turn#2"
+          "turn_id": "turn#1"
         },
         "model": "claude-code/sonnet",
         "origin": "",
@@ -225,7 +173,7 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0.0123,
+          "session_cost_usd": 0.029928999999999997,
           "windows": []
         },
         "synced_seq": 0,
@@ -233,8 +181,8 @@
         "usage": {
           "cache_read_tokens": 7,
           "cache_write_tokens": 5,
-          "input_tokens": 101,
-          "output_tokens": 42
+          "input_tokens": 111,
+          "output_tokens": 319
         },
         "work_dir": "\u003cworkdir\u003e"
       }

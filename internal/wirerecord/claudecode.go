@@ -14,9 +14,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/majorcontext/harness/internal/mcp"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/internal/wirescrub"
 )
 
@@ -34,6 +36,12 @@ func cliArgs(model, tools string, extra ...string) []string {
 // runCLI sends each prompt in turn and reads frames until the result of each.
 // With interrupt set it sends SIGINT when a frame holds a tool call.
 func runCLI(dir string, prompts []string, args []string, interrupt bool) ([]byte, error) {
+	return runCLIStopped(dir, prompts, args, interrupt, nil)
+}
+
+// runCLIStopped is runCLI that also sends SIGINT once stop is closed and the
+// response that holds the call has ended, as the backend does.
+func runCLIStopped(dir string, prompts []string, args []string, interrupt bool, stop <-chan struct{}) ([]byte, error) {
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = dir
 	cmd.Env = withoutKeys(os.Environ())
@@ -50,6 +58,22 @@ func runCLI(dir string, prompts []string, args []string, interrupt bool) ([]byte
 	}
 	var raw bytes.Buffer
 	done := make(chan error, 1)
+	finished := make(chan struct{})
+	defer close(finished)
+	messageStopped := make(chan struct{})
+	var stoppedOnce sync.Once
+	if stop != nil {
+		go func() {
+			for _, wait := range []<-chan struct{}{stop, messageStopped} {
+				select {
+				case <-wait:
+				case <-finished:
+					return
+				}
+			}
+			_ = cmd.Process.Signal(os.Interrupt)
+		}()
+	}
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1<<20), 64<<20)
@@ -63,7 +87,13 @@ func runCLI(dir string, prompts []string, args []string, interrupt bool) ([]byte
 				raw.Write(sc.Bytes())
 				raw.WriteByte('\n')
 				var f struct {
-					Type string `json:"type"`
+					Type  string `json:"type"`
+					Event struct {
+						Type string `json:"type"`
+					} `json:"event"`
+				}
+				if json.Unmarshal(sc.Bytes(), &f) == nil && f.Type == "stream_event" && f.Event.Type == "message_stop" {
+					stoppedOnce.Do(func() { close(messageStopped) })
 				}
 				if json.Unmarshal(sc.Bytes(), &f) == nil && f.Type == "result" {
 					break
@@ -201,149 +231,81 @@ func recordClaudeCode(r *recorder, work string) error {
 	if err != nil {
 		return fmt.Errorf("error run: %w", err)
 	}
-	if err := r.saveJSONL("claudecode.error.jsonl", bad); err != nil {
+	return r.saveJSONL("claudecode.error.jsonl", bad)
+}
+
+// recordClaudeCodeQuestion records a question that the CLI asks through the
+// harness tool ask_user_question, and the run that the answer starts.
+func recordClaudeCodeQuestion(r *recorder, work string) error {
+	dir := filepath.Join(work, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	parked, resumed, err := runQuestion(dir)
+	asked, answered, err := recordQuestion(dir)
 	if err != nil {
 		return err
 	}
-	if err := r.saveJSONL("claudecode.question.jsonl", parked); err != nil {
+	if err := r.saveJSONL("claudecode.question.jsonl", asked); err != nil {
 		return err
 	}
-	return r.saveJSONL("claudecode.question-resume.jsonl", resumed)
+	return r.saveJSONL("claudecode.question-resume.jsonl", answered)
 }
 
 const (
-	deferHook      = `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}`
-	questionPrompt = "Use the AskUserQuestion tool once to ask which database to use, with the options PostgreSQL and SQLite. Do nothing else first."
+	questionPrompt = "Use the mcp__harness__ask_user_question tool once to ask which database to use, with the options PostgreSQL and SQLite. Do nothing else first."
+	answerPrompt   = "User has answered your questions: \"Which database would you like to use?\"=\"SQLite\". You can now continue with the user's answers in mind."
 )
 
-func questionHook(command string) string {
-	hook := obj{"matcher": "AskUserQuestion", "hooks": []obj{{"type": "command", "command": command}}}
-	data, _ := json.Marshal(obj{"hooks": obj{"PreToolUse": []obj{hook}}})
-	return string(data)
+// askServer serves ask_user_question as the harness bridge does: a call gets
+// no reply, so the CLI waits until it is interrupted. called closes when the
+// first call arrives.
+func askServer() (flags []string, called <-chan struct{}, stop func(), err error) {
+	reg := mcp.NewRegistry("harness", "1")
+	seen := make(chan struct{})
+	var once sync.Once
+	reg.RegisterTool(mcp.Tool{Name: turn.AskTool, Description: turn.NewAskTool().Spec().Description, InputSchema: turn.NewAskTool().Spec().InputSchema},
+		func(ctx context.Context, _ json.RawMessage) (mcp.CallToolResult, error) {
+			once.Do(func() { close(seen) })
+			<-ctx.Done()
+			return mcp.CallToolResult{}, ctx.Err()
+		})
+	flags, stop, err = serveRegistry(reg)
+	return flags, seen, stop, err
 }
 
-func questionArgs(settings string, extra ...string) []string {
-	return cliArgs(claudeModel, "AskUserQuestion", append([]string{"--permission-prompt-tool", "stdio", "--settings", settings}, extra...)...)
-}
-
-// runQuestion records the two runs of an AskUserQuestion flow as the backend
-// drives it: a run that the defer hook parks, and a resume that answers the
-// parked call over the control channel.
-func runQuestion(dir string) (parked, resumed []byte, err error) {
-	parked, err = runCLI(dir, []string{questionPrompt}, questionArgs(questionHook("cat >/dev/null; printf '%s' '"+deferHook+"'")), false)
+// recordQuestion records the two runs of a question as the backend drives
+// them: a run that the backend interrupts once the CLI called the question
+// tool, and a resume whose prompt is the answer.
+func recordQuestion(dir string) (asked, answered []byte, err error) {
+	flags, called, stop, err := askServer()
 	if err != nil {
-		return nil, nil, fmt.Errorf("park run: %w", err)
-	}
-	var sessionID, callID string
-	var input json.RawMessage
-	for _, line := range bytes.Split(parked, []byte("\n")) {
-		var f struct {
-			SessionID string `json:"session_id"`
-			Message   struct {
-				Content []struct {
-					Type  string          `json:"type"`
-					ID    string          `json:"id"`
-					Name  string          `json:"name"`
-					Input json.RawMessage `json:"input"`
-				} `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(line, &f) != nil {
-			continue
-		}
-		if f.SessionID != "" {
-			sessionID = f.SessionID
-		}
-		for _, c := range f.Message.Content {
-			if c.Type == "tool_use" && c.Name == "AskUserQuestion" {
-				callID, input = c.ID, c.Input
-			}
-		}
-	}
-	if sessionID == "" || callID == "" {
-		return nil, nil, fmt.Errorf("park run: no session or AskUserQuestion call in the output")
-	}
-	var updated map[string]any
-	if err := json.Unmarshal(input, &updated); err != nil {
 		return nil, nil, err
 	}
-	var asked struct {
-		Questions []struct {
-			Question string `json:"question"`
-			Options  []struct {
-				Label string `json:"label"`
-			} `json:"options"`
-		} `json:"questions"`
+	defer stop()
+	if err := os.Setenv("ENABLE_TOOL_SEARCH", "auto"); err != nil {
+		return nil, nil, err
 	}
-	if err := json.Unmarshal(input, &asked); err != nil || len(asked.Questions) == 0 || len(asked.Questions[0].Options) == 0 {
-		return nil, nil, fmt.Errorf("park run: the AskUserQuestion call holds no question with options")
-	}
-	updated["answers"] = obj{asked.Questions[0].Question: asked.Questions[0].Options[0].Label}
-	pass := `input=$(cat); case "$input" in *'"` + callID + `"'*) ;; *) printf '%s' '` + deferHook + `';; esac`
-	resumed, err = runResume(dir, questionArgs(questionHook(pass), "--resume", sessionID), obj{"behavior": "allow", "updatedInput": updated})
+	asked, err = runCLIStopped(dir, []string{questionPrompt}, cliArgs(claudeModel, "ToolSearch", append([]string{"--include-partial-messages"}, flags...)...), false, called)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resume run: %w", err)
+		return nil, nil, fmt.Errorf("question run: %w", err)
 	}
-	return parked, resumed, nil
-}
-
-// runResume answers the first can_use_tool request with decision and reads
-// frames until the result.
-func runResume(dir string, args []string, decision obj) ([]byte, error) {
-	cmd := exec.Command("claude", args...)
-	cmd.Dir = dir
-	cmd.Env = withoutKeys(os.Environ())
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	var raw bytes.Buffer
-	done := make(chan error, 1)
-	go func() {
-		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 1<<20), 64<<20)
-		for sc.Scan() {
-			raw.Write(sc.Bytes())
-			raw.WriteByte('\n')
-			var f struct {
-				Type      string `json:"type"`
-				RequestID string `json:"request_id"`
-			}
-			if json.Unmarshal(sc.Bytes(), &f) != nil {
-				continue
-			}
-			if f.Type == "control_request" {
-				reply, _ := json.Marshal(obj{"type": "control_response", "response": obj{"subtype": "success", "request_id": f.RequestID, "response": decision}})
-				if _, err := stdin.Write(append(reply, '\n')); err != nil {
-					done <- err
-					return
-				}
-			}
-			if f.Type == "result" {
-				break
-			}
+	sessionID := ""
+	for _, line := range bytes.Split(asked, []byte("\n")) {
+		var f struct {
+			SessionID string `json:"session_id"`
 		}
-		done <- sc.Err()
-	}()
-	select {
-	case err := <-done:
-		_ = stdin.Close()
-		_ = cmd.Wait()
-		return raw.Bytes(), err
-	case <-time.After(5 * time.Minute):
-		_ = cmd.Process.Kill()
-		return nil, fmt.Errorf("claude did not finish")
+		if json.Unmarshal(line, &f) == nil && f.SessionID != "" {
+			sessionID = f.SessionID
+		}
 	}
+	if sessionID == "" || len(callsOf(asked, "mcp__harness__ask_user_question")) == 0 {
+		return nil, nil, fmt.Errorf("question run: no session or ask_user_question call in the output")
+	}
+	answered, err = runCLI(dir, []string{answerPrompt}, cliArgs(claudeModel, "ToolSearch", append([]string{"--include-partial-messages", "--resume", sessionID}, flags...)...), false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("answer run: %w", err)
+	}
+	return asked, answered, nil
 }
 
 // recordClaudeCodePartial records a turn with thinking and text that the CLI

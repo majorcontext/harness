@@ -38,12 +38,14 @@ type run struct {
 	unlisted map[string]string
 	// searches holds the query of each WebSearch call that waits for its result. The result records the search as one item.
 	searches map[string]string
-	// questions reports a run with the question channel; resolution answers
-	// the parked call, and question is the call that the main thread asked.
-	questions  bool
-	denied     bool
-	resolution *resolution
-	question   *question
+	// askedCh receives the ID of a question call whose request opened, and
+	// asked holds it once the run ends for the answer. recorded tells the
+	// bridge when the run recorded a call.
+	askedCh  chan string
+	asked    string
+	recorded recorded
+	// askMsg maps each question call that waits for its response to end to the ID of the response.
+	askMsg map[string]string
 	// read returns the bytes of an attachment of the turn.
 	read func(key string) ([]byte, error)
 	// continues reports a run of a turn whose input the CLI already took;
@@ -96,9 +98,6 @@ type run struct {
 	compacting bool
 }
 
-// dismissing reports a run that only denies the parked call.
-func (r *run) dismissing() bool { return r.resolution != nil && r.resolution.dismiss }
-
 func (r *run) cleanup() {
 	if r.tools != nil {
 		r.tools.Close()
@@ -114,19 +113,17 @@ func (r *run) cleanup() {
 // stdout, or the end of ctx.
 func (r *run) drive(ctx context.Context, req turn.Request) error {
 	r.read = func(key string) ([]byte, error) { return req.Blob(ctx, key) }
-	if r.resolution == nil {
-		line, err := r.prompt(req)
-		if err != nil {
-			return err
-		}
-		r.sendErr = r.proc.Send(line)
+	line, err := r.prompt(req)
+	if err != nil {
+		return err
 	}
+	r.sendErr = r.proc.Send(line)
 	steered := req.Steered
-	if r.resolution != nil {
-		steered = nil
-	}
 	for {
 		select {
+		case id := <-r.askedCh:
+			r.asked = id
+			return errAsked
 		case line, ok := <-r.proc.Lines():
 			if !ok {
 				if r.waiting {
@@ -142,7 +139,7 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}
-		if r.steer && len(r.calls) > 0 && r.question == nil {
+		if r.steer && r.steerable() {
 			if err := r.steered(); err != nil {
 				return err
 			}
@@ -150,11 +147,31 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 	}
 }
 
+// steerable reports that a steer input may reach the CLI: a tool call of the
+// main thread waits for its result and no question call does, and the response
+// that holds the calls ended. A question call ends the run once its response
+// ends, and the CLI would not answer an input that this run promoted. A call
+// of a response that still streams may be followed by a question call of the
+// same response.
+func (r *run) steerable() bool {
+	if lm := r.live[""]; lm != nil && !lm.stopped {
+		return false
+	}
+	running := false
+	for id := range r.calls {
+		if r.names[id] == turn.AskTool {
+			return false
+		}
+		running = true
+	}
+	return running
+}
+
 // awaitSecond reports that the CLI owes a second result. A steer input that
 // no tool result took waits in the queue of the CLI, which runs it as the next
-// turn after this result, so the run holds no result until the second one. A run with a parked question owes none.
+// turn after this result, so the run holds no result until the second one.
 func (r *run) awaitSecond() bool {
-	if !r.owed || r.question != nil || r.result.IsError {
+	if !r.owed || r.result.IsError {
 		return false
 	}
 	r.owed, r.waiting, r.result = false, true, nil
@@ -170,7 +187,10 @@ var errExited = errors.New("claudecode: the CLI exited before its result")
 // keeps every item that the CLI wrote, and completes on a success result.
 func (r *run) finish(ctx context.Context, err error) error {
 	r.stopped = ctx.Err() != nil
-	if err == nil {
+	if r.asked != "" {
+		err = nil
+	}
+	if err == nil && r.asked == "" {
 		r.proc.CloseInput()
 	} else if !r.stopped {
 		r.proc.Interrupt()
@@ -181,12 +201,6 @@ func (r *run) finish(ctx context.Context, err error) error {
 		err = stopError(err, context.Cause(ctx), r.result)
 	}
 	err = r.outcome(errors.Join(err, r.tailErr, r.flush()), exit)
-	if r.dismissing() && (r.result != nil || r.denied) && !r.stopped {
-		err = nil
-	}
-	if r.resolution != nil && err == nil && r.mirror.Parked == r.resolution.callID {
-		r.mirror.Parked = ""
-	}
 	if r.taken && err != nil && errors.Is(context.Cause(ctx), turn.ErrHandoff) {
 		r.mirror.Turn = r.turnID
 	}
@@ -223,6 +237,8 @@ func (r *run) outcome(err, exit error) error {
 		return err
 	case err != nil:
 		return err
+	case r.asked != "":
+		return nil
 	}
 	if res := r.result; res.IsError {
 		failure := res.failure()
@@ -260,7 +276,7 @@ func (r *run) tail(line []byte) {
 		}
 		r.result = &env
 		err = r.settle(env)
-	case r.stopped && env.Type != "stream_event" || env.Type == "transcript_mirror":
+	case (r.stopped || r.asked != "") && env.Type != "stream_event" || env.Type == "transcript_mirror":
 		err = r.handle(env)
 	}
 	if r.tailErr == nil {
@@ -277,16 +293,13 @@ func (r *run) frame(line []byte) error {
 }
 
 func (r *run) handle(env envelope) error {
-	if r.resolution == nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result" && !env.IsError) {
+	if !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result" && !env.IsError) {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
 	if r.compact != "" && env.Type != "transcript_mirror" && env.Type != "stream_event" {
 		if summary, err := r.compacted(env); err != nil || summary {
 			return err
 		}
-	}
-	if r.dismissing() && (env.Type == "assistant" || env.Type == "user" || env.Type == "stream_event") {
-		return nil
 	}
 	switch env.Type {
 	case "system":
@@ -297,17 +310,12 @@ func (r *run) handle(env envelope) error {
 		return r.toolResults(env)
 	case "stream_event":
 		return r.streamEvent(env)
-	case "control_request":
-		return r.control(env)
 	case "result":
 		if r.placeholder(env) {
 			return nil
 		}
 		r.result, r.waiting = &env, false
 		clear(r.calls)
-		if r.dismissing() {
-			return nil
-		}
 		return r.settle(env)
 	case "transcript_mirror":
 		return r.addMirror(env)
@@ -378,8 +386,8 @@ func (r *run) system(env envelope) error {
 }
 
 // mayCall reports whether the CLI may call the tool name. A restricted run
-// calls only its allowed tools. Any run calls MCP tools, and AskUserQuestion
-// when it may ask. A call to any other tool waits for its result; see checkRan.
+// calls only its allowed tools. Any run calls MCP tools. A call to any other
+// tool waits for its result; see checkRan.
 func (r *run) mayCall(name string) bool {
 	if r.restricted {
 		return r.allowed[name]
@@ -488,23 +496,30 @@ func (r *run) assistant(env envelope) error {
 				parts[i].Name = name
 			}
 			r.names[p.CallID] = parts[i].Name
-			switch {
-			case p.Name == askTool && env.ParentToolUseID == "":
-				r.question = &question{callID: p.CallID, input: p.Arguments}
-			case env.ParentToolUseID == "":
+			if env.ParentToolUseID == "" {
 				r.calls[p.CallID] = true
 			}
 		}
 	}
 	r.pending.Parts = append(r.pending.Parts, parts...)
 	if m.ID == "" || slices.ContainsFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartToolCall }) {
-		return r.flush()
+		err := r.flush()
+		for _, p := range parts {
+			if p.Type == protocol.LogPartToolCall && p.Name == turn.AskTool && env.ParentToolUseID == "" {
+				r.askMsg[p.CallID] = m.ID
+			}
+		}
+		r.releaseAsks()
+		return err
 	}
 	return nil
 }
 
 func (r *run) toolResults(env envelope) error {
 	parts := toolResults(decodeMessage(env.Message), r.names)
+	if r.asked != "" {
+		parts = slices.DeleteFunc(parts, func(p protocol.LogPart) bool { return p.CallID == r.asked })
+	}
 	if len(parts) == 0 {
 		return nil
 	}
@@ -586,7 +601,7 @@ func (r *run) settle(env envelope) error {
 		return err
 	}
 	r.telemetry(env)
-	return r.ask()
+	return nil
 }
 
 func (r *run) telemetry(env envelope) {

@@ -55,7 +55,7 @@ func TestCreateStartsThePlugins(t *testing.T) {
 		{name: "a missing executable fails", plugins: []config.PluginSpec{{Name: "gone", Command: []string{"/nonexistent/plugin"}}}, want: "plugin gone"},
 		{name: "a manifest of another name fails", plugins: []config.PluginSpec{{Name: "other", Command: fixture[0].Command}}, want: `manifest name "fixture"`},
 		{name: "a tool name that an embedder tool has fails", plugins: fixture, tools: []harness.Tool{newProbe("fixture_echo", false)}, want: `tool name "fixture_echo"`},
-		{name: "a plugin tool with the name of a built-in tool fails", plugins: []config.PluginSpec{{Name: "fixture", Command: fixture[0].Command, Config: []byte(`{"extra_tool":"AskUserQuestion"}`)}},
+		{name: "a plugin tool with the name of a built-in tool fails", plugins: []config.PluginSpec{{Name: "fixture", Command: fixture[0].Command, Config: []byte(`{"extra_tool":"ToolSearch"}`)}},
 			model: "claude-code/opus", want: `built-in tool`},
 		{name: "a backend that owns the loop allows a plugin tool", plugins: fixture, model: "claude-code/opus", allowed: []string{"fixture_echo"}},
 	} {

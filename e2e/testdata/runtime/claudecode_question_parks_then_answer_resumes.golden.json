@@ -19,7 +19,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "AskUserQuestion",
+            "name": "ask_user_question",
             "arguments": {
               "questions": [
                 {
@@ -49,7 +49,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"response\":{\"request_id\":\"req-1\",\"response\":{\"behavior\":\"allow\",\"updatedInput\":{\"answers\":{\"Which database?\":\"SQLite\"},\"questions\":[{\"header\":\"DB\",\"multiSelect\":false,\"options\":[{\"description\":\"a\",\"label\":\"PostgreSQL\"},{\"description\":\"b\",\"label\":\"SQLite\"}],\"question\":\"Which database?\"}]}},\"subtype\":\"success\"},\"type\":\"control_response\"}"
+            "content": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind."
           }
         ]
       },
@@ -69,7 +69,7 @@
     "answer_question.a": {
       "status": 202,
       "body": {
-        "seq": 11,
+        "seq": 10,
         "status": "started"
       }
     },
@@ -82,9 +82,9 @@
           "type": "user"
         },
         {
-          "interrupt": false,
-          "subtype": "success",
-          "type": "control_response"
+          "content": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind.",
+          "role": "user",
+          "type": "user"
         }
       ]
     },
@@ -92,27 +92,24 @@
       "status": 200,
       "body": [
         {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
-          "question_tool_open": true,
           "resume": null,
           "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         },
         {
-          "defer_hook": true,
-          "deferred_call": "toolu#1",
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
-          "question_tool_open": true,
           "resume": "fake-session-1",
           "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         }
       ]
     },
@@ -120,11 +117,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -137,14 +134,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -153,11 +150,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 1,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 17,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -170,14 +167,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 11,
+          "output_tokens": 278
         },
         "work_dir": "\u003cworkdir\u003e"
       }

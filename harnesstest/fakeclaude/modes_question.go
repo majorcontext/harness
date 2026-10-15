@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
-	"slices"
 	"strings"
 )
 
@@ -15,10 +13,6 @@ var preInitModes = map[string]func(f *fake) bool{
 	"compact_after_tokens": compactAfterTokens,
 	"compact_after_window": compactAfterTokens,
 	"queued_empty_result":  queuedEmptyResult,
-	"question":             question,
-	"question_continues":   question,
-	"question_no_result":   question,
-	"question_sibling":     question,
 	"mirror":               replayMirror,
 	"no_init":              noInit,
 	"mcp":                  mcpTurn,
@@ -97,99 +91,89 @@ var askQuestionInput = obj{"questions": []obj{{
 	"options": []obj{{"label": "PostgreSQL", "description": "a"}, {"label": "SQLite", "description": "b"}},
 }}}
 
-func (f *fake) questionState() string { return os.Getenv("FAKE_CLAUDE_STATE") }
+// answeredPrefix starts the text that harness sends as the answer to a question.
+const answeredPrefix = "User has answered your questions:"
 
-func (f *fake) questionParked() bool {
-	if !strings.HasPrefix(f.mode, "question") {
-		return false
+const questionMsg = "msg_011FAKEQUESTION"
+
+// questionStopped is the file that marks the end of the streamed response
+// that holds the question call.
+func questionStopped() string { return os.Getenv("FAKE_CLAUDE_STATE") + ".stopped" }
+
+// questionInterrupt is what the CLI prints for a SIGINT in "question" modes: a
+// SIGINT during the response aborts the run before the CLI accounts the call
+// (no cost), and a SIGINT after the response ends accounts it.
+func questionInterrupt() []obj {
+	if _, err := os.Stat(questionStopped()); err != nil {
+		return []obj{user(toolResult("toolu_q", rejected, true)), user(textBlock("[Request interrupted by user]")),
+			failed(0, 0, interrupted).set("terminal_reason", "aborted_streaming").set("total_cost_usd", 0).set("modelUsage", obj{})}
 	}
-	_, err := os.Stat(f.questionState())
-	return err == nil
+	return []obj{user(toolResult("toolu_q", rejected, true)), user(textBlock("[Request interrupted by user for tool use]")),
+		failed(10, 277, interrupted).set("terminal_reason", "aborted_tools").set("total_cost_usd", 0.017629).
+			set("modelUsage", obj{"claude-haiku-4-5": obj{"costUSD": 0.017629, "inputTokens": 10, "outputTokens": 277}})}
 }
 
-// question parks an AskUserQuestion call on the first turn, as a defer hook
-// does. A later resume answers it over the control channel before it reads
-// any prompt text, and later turns print the normal turn.
-func question(f *fake) bool {
-	state := f.questionState()
-	if f.questionParked() {
-		resumeParkedQuestion(f, state)
-		return true
+// rejected is the result that the CLI prints for the call that a SIGINT cut off.
+const rejected = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+
+// question calls ask_user_question on the harness MCP server while its
+// response still streams, and waits for the reply, which never comes: harness
+// opens the request and interrupts the CLI once the response ends. With
+// FAKE_CLAUDE_QUESTION_GATE set, the response ends when the window gate opens.
+// A turn that starts with the answer text prints a reply, and so does every
+// turn after the first question. A server that does not list the tool gets the
+// normal turn: a real CLI cannot call a tool that it was not given. The mode
+// question_sibling calls bash beside the question. The mode
+// question_late_sibling streams the bash call in its own frame and, with the
+// gate set, holds the response until the gate opens before the question frame.
+func question(f *fake) {
+	if strings.Contains(f.first, answeredPrefix) {
+		f.emit(say("Noted."), success("Noted.", 1, 1))
+		return
 	}
-	if _, err := os.Stat(state + ".asked"); err == nil {
-		return false
+	asked := os.Getenv("FAKE_CLAUDE_STATE") + ".asked"
+	if _, err := os.Stat(asked); err == nil {
+		normalTurn(f)
+		return
 	}
-	if !slices.Contains(os.Args, "--permission-prompt-tool") {
-		return false
+	if _, ok := hostedServer(); ok && !hostedOffers("ask_user_question") {
+		normalTurn(f)
+		return
 	}
-	_ = os.WriteFile(state+".asked", nil, 0o644)
-	_ = os.WriteFile(state, nil, 0o644)
-	calls := []obj{toolUse("toolu_q", "AskUserQuestion", askQuestionInput)}
+	_ = os.WriteFile(asked, nil, 0o644)
+	late := f.mode == "question_late_sibling"
+	if late {
+		bash := toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"})
+		partialEmit(f, messageStart(questionMsg), blockStart(0, bash))
+		f.emit(assistant(bash).inMessage("id", questionMsg))
+		if _, ok := hostedServer(); ok && os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" {
+			awaitGate()
+		}
+	} else {
+		partialEmit(f, messageStart(questionMsg), blockStart(0, toolUse("toolu_q", "mcp__harness__ask_user_question", obj{})))
+	}
+	calls := []obj{toolUse("toolu_q", "mcp__harness__ask_user_question", askQuestionInput)}
 	if f.mode == "question_sibling" {
 		calls = append(calls, toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"}))
 	}
-	f.emit(initFrame(f), assistant(calls...))
-	questionMirrorFrame(f, "parked")
-	f.emit(obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
-	return true
-}
-
-func resumeParkedQuestion(f *fake, state string) {
-	f.emit(obj{"type": "control_request", "request_id": "req-1", "request": obj{
-		"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "toolu_q", "input": askQuestionInput}})
-	line, _ := f.readLine()
-	_ = os.Remove(state)
-	var reply struct {
-		Response struct {
-			Response struct {
-				Message   string `json:"message"`
-				Interrupt bool   `json:"interrupt"`
-			} `json:"response"`
-		} `json:"response"`
-	}
-	_ = json.Unmarshal([]byte(line), &reply)
-	if d := reply.Response.Response; d.Interrupt {
-		f.emit(user(toolResult("toolu_q", d.Message, true)))
-		if os.Getenv("FAKE_CLAUDE_DISMISS_DIES") != "" {
-			os.Exit(1)
-		}
-		f.emit(
-			user(textBlock("[Request interrupted by user]")),
-			obj{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 2, "stop_reason": nil, "errors": []string{interrupted}},
-		)
-		questionMirrorFrame(f, "dismissal-tail")
-		os.Exit(1)
-	}
-	if f.mode == "question_continues" {
-		continueInTool(f, line)
+	f.emit(assistant(calls...).inMessage("id", questionMsg))
+	if _, ok := hostedServer(); !ok {
+		hang(f)
 		return
 	}
-	if f.mode != "question_no_result" {
-		f.emit(user(toolResult("toolu_q", line, false)))
+	if f.mode == "question_sibling" || late {
+		sibling := hostedCall("bash", obj{"command": "echo hi"}, "toolu_s")
+		f.emit(user(toolResult("toolu_s", sibling.text(), sibling.Result.IsError)))
 	}
-	f.emit(
-		initFrame(f),
-		say("Noted."),
-		obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "end_turn", "result": "Noted."},
-	)
-}
-
-// continueInTool continues the answered question with a tool call and waits
-// for a queued message while the tool runs. A driver that writes none before
-// the test opens the window gate ends the run with the "no second message"
-// result.
-func continueInTool(f *fake, answer string) {
-	f.emit(
-		user(toolResult("toolu_q", answer, false)),
-		initFrame(f),
-		assistant(textBlock(waitingMarker)).inMessage("id", "msg_marker"),
-		assistant(toolUse("toolu_c", "mcp__harness__bash", obj{"command": "sleep 1"})).inMessage("id", "msg_continue"),
-	)
-	text := "no second message received"
-	if content, ok := awaitQueued(f); ok {
-		text = "received queued: " + content
+	done := make(chan hostedText, 1)
+	go func() { done <- hostedCall("ask_user_question", askQuestionInput, "toolu_q") }()
+	if os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" && !late {
+		awaitGate()
 	}
-	f.emit(user(toolResult("toolu_c", "slept", false)), say(text), success(text, 5, 5))
+	_ = os.WriteFile(questionStopped(), nil, 0o644)
+	partialEmit(f, blockStop(0), messageStop("tool_use"), streamEvent(obj{"type": "message_stop"}))
+	res := <-done
+	f.emit(user(toolResult("toolu_q", res.text(), res.Result.IsError)), say("Noted."), success("Noted.", 1, 1))
 }
 
 // initFrame is the init frame of a CLI whose only tool is the bash tool of the harness MCP server.

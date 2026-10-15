@@ -19,7 +19,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "AskUserQuestion",
+            "name": "ask_user_question",
             "arguments": {
               "questions": [
                 {
@@ -71,15 +71,14 @@
       "status": 200,
       "body": [
         {
-          "defer_hook": true,
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
-          "question_tool_open": true,
           "resume": null,
           "strict_mcp_config": true,
-          "thinking_display": "summarized"
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         }
       ]
     },
@@ -87,11 +86,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -104,14 +103,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -120,11 +119,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 11,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -137,14 +136,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -153,11 +152,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 10,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 12,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -170,14 +169,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -186,11 +185,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 11,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -203,14 +202,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -219,11 +218,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 10,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 12,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -236,14 +235,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }

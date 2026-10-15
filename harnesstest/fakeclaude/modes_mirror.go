@@ -98,17 +98,6 @@ func appendEntries(path string, entries []json.RawMessage) {
 	appendFile(path, sb.String())
 }
 
-// questionMirrorFrame emits one transcript_mirror frame in "question" mode
-// when FAKE_CLAUDE_QUESTION_MIRROR is set.
-func questionMirrorFrame(f *fake, tag string) {
-	if os.Getenv("FAKE_CLAUDE_QUESTION_MIRROR") == "" {
-		return
-	}
-	f.emit(obj{"type": "transcript_mirror",
-		"filePath": filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "p", "sess.jsonl"),
-		"entries":  []obj{{"tag": tag}}})
-}
-
 // initExtras adds the tools of FAKE_CLAUDE_INIT_TOOLS to the init frame.
 func initExtras(init obj) {
 	if raw, ok := os.LookupEnv("FAKE_CLAUDE_INIT_TOOLS"); ok {
@@ -138,6 +127,9 @@ func logInterrupt(mode string) {
 		<-ch
 		appendFile(path, "interrupt\n")
 		out, ok := onInterrupt[mode]
+		if strings.HasPrefix(mode, "question") {
+			out, ok = questionInterrupt(), true
+		}
 		if !ok || (len(out) > 0 && out[len(out)-1]["type"] != "result") {
 			out = append(out, failed(7, 2, interrupted))
 		}

@@ -149,8 +149,8 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 }
 
 func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
-	for _, allowed := range [][]string{nil, {"AskUserQuestion"}} {
-		r := claudeRuntime(t, store.NewMemStore(), newProbe("AskUserQuestion", false))
+	for _, allowed := range [][]string{nil, {"ToolSearch"}} {
+		r := claudeRuntime(t, store.NewMemStore(), newProbe("ToolSearch", false))
 		defer closeRuntime(t, r)
 		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
 		if !errors.Is(err, harness.ErrInvalidRequest) {

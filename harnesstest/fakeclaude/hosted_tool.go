@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -122,6 +123,18 @@ type hostedText struct {
 		Content []struct{ Text string }
 		IsError bool
 	}
+}
+
+// hostedOffers reports whether the tools/list of the harness MCP server holds
+// the tool name.
+func hostedOffers(name string) bool {
+	var list struct {
+		Result struct{ Tools []struct{ Name string } }
+	}
+	if json.Unmarshal([]byte(hostedRPC("tools/list", obj{})), &list) != nil {
+		return false
+	}
+	return slices.ContainsFunc(list.Result.Tools, func(t struct{ Name string }) bool { return t.Name == name })
 }
 
 // hostedCall calls a tool as the CLI does. A result that breaks the MCP

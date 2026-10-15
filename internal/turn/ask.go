@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/majorcontext/harness/protocol"
@@ -153,6 +154,31 @@ func answerText(args, answer json.RawMessage) string {
 	return "User has answered your questions: " + strings.Join(pairs, ", ") + ". You can now continue with the user's answers in mind."
 }
 
+const onlyOneQuestion = "Only one question is open at a time. Ask this question again after the user answers."
+
+// asker returns the Ask of a backend that owns the loop. It handles a call as
+// openAsk handles the first call of a model call, and gives every later call
+// of the turn the error result of a second question.
+func (t runner) asker(to Sink) func(context.Context, protocol.ToolCall) (protocol.ToolResult, bool) {
+	var mu sync.Mutex
+	opened := false
+	return func(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		var res protocol.ToolResult
+		if opened {
+			return t.join(ctx, c, protocol.ToolResult{Text: onlyOneQuestion, IsError: true}), false
+		}
+		record := func(_ protocol.ToolCall, r protocol.ToolResult) error { res = r; return nil }
+		ok, err := openAsk(ctx, ctx, t, to, []protocol.ToolCall{c}, record)
+		if err != nil {
+			return protocol.ToolResult{Text: err.Error(), IsError: true}, false
+		}
+		opened = ok
+		return res, ok
+	}
+}
+
 // splitAsks separates the calls to the question tool from the rest, when t offers the tool.
 func splitAsks(t runner, calls []protocol.ToolCall) (asks, rest []protocol.ToolCall) {
 	if t.find(AskTool) == nil {
@@ -179,7 +205,7 @@ func openAsk(ctx, step context.Context, t runner, to Sink, asks []protocol.ToolC
 	}
 	opened := false
 	for i, c := range asks {
-		deny, args := "Only one question is open at a time. Ask this question again after the user answers.", c.Arguments
+		deny, args := onlyOneQuestion, c.Arguments
 		if i == 0 {
 			deny = ""
 			if t.hooks != nil {

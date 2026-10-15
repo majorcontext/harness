@@ -1,114 +1,95 @@
 package claudecode
 
 import (
-	"encoding/json"
-	"fmt"
-	"strings"
-
-	"github.com/majorcontext/harness/protocol"
+	"context"
+	"errors"
+	"sync"
 
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/protocol"
 )
 
-const (
-	askTool  = "AskUserQuestion"
-	askKind  = protocol.RequestQuestion
-	planMode = ",EnterPlanMode,ExitPlanMode"
-	// deferHook parks an AskUserQuestion call: the turn ends with stop_reason
-	// tool_deferred, and the CLI runs the call again on the next --resume.
-	deferHook  = `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}`
-	noApprover = "Permission denied: this session has no interactive approver."
-)
+// errAsked ends a drive after a question call opened its request.
+var errAsked = errors.New("claudecode: the turn waits for the answer to a question")
 
-// resolution answers the call that the CLI session parked, over the control
-// channel. A dismissal interrupts the CLI right after the denial, so it
-// costs no model call.
-type resolution struct {
-	callID   string
-	decision map[string]any
-	dismiss  bool
+// recorded tells the bridge goroutine of a call when the run recorded the call
+// as an item, which Sink.Ask needs.
+type recorded struct {
+	mu    sync.Mutex
+	calls map[string]*recordedCall
 }
 
-var denyAll = map[string]any{"behavior": "deny", "message": noApprover}
+type recordedCall struct {
+	once sync.Once
+	done chan struct{}
+}
 
-// questionSettings is the --settings value that defers every AskUserQuestion
-// call except pass, which a resolution answers over the control channel. pass
-// reaches a shell command, so an ID outside the tool use alphabet is never passed.
-func questionSettings(pass string) string {
-	cmd := "cat >/dev/null; printf '%s' '" + deferHook + "'"
-	if pass != "" && strings.Trim(pass, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == "" {
-		cmd = `input=$(cat); case "$input" in *'"` + pass + `"'*) ;; *) printf '%s' '` + deferHook + `';; esac`
+func (r *recorded) of(id string) *recordedCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.calls == nil {
+		r.calls = map[string]*recordedCall{}
 	}
-	hook := map[string]any{"matcher": askTool, "hooks": []any{map[string]any{"type": "command", "command": cmd}}}
-	data, _ := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": []any{hook}}})
-	return string(data)
-}
-
-func controlResponse(requestID string, decision map[string]any) map[string]any {
-	return map[string]any{"type": "control_response",
-		"response": map[string]any{"subtype": "success", "request_id": requestID, "response": decision}}
-}
-
-// resolve returns the resolution of the call that the CLI session parked, and
-// whether this run only carries it. An answer with no input is the turn that
-// Resolve starts; anything else dismisses the call before the run goes on.
-func resolve(req turn.Request, out turn.Sink, callID string) (*resolution, bool, error) {
-	res, ok := out.Resolution(callID)
-	if !ok || res.Resolution != protocol.ResolutionAnswered || len(req.Input) > 0 {
-		return &resolution{callID: callID, dismiss: true,
-			decision: map[string]any{"behavior": "deny", "message": protocol.DismissedQuestionText, "interrupt": true}}, false, nil
+	c, ok := r.calls[id]
+	if !ok {
+		c = &recordedCall{done: make(chan struct{})}
+		r.calls[id] = c
 	}
-	input, err := answeredInput(req.History, callID, res.Answer)
-	if err != nil {
-		return nil, false, err
-	}
-	return &resolution{callID: callID, decision: map[string]any{"behavior": "allow", "updatedInput": input}}, true, nil
+	return c
 }
 
-// answeredInput rebuilds the input of the parked call with the answers added,
-// the shape that the AskUserQuestion tool of the CLI reads its result from.
-func answeredInput(history []protocol.LogMessage, callID string, answers json.RawMessage) (map[string]any, error) {
-	for i := len(history) - 1; i >= 0; i-- {
-		for _, p := range history[i].Parts {
-			if p.Type != protocol.LogPartToolCall || p.CallID != callID {
-				continue
-			}
-			input := map[string]any{}
-			if err := json.Unmarshal(p.Arguments, &input); err != nil {
-				return nil, fmt.Errorf("claudecode: decode question %s: %w", callID, err)
-			}
-			input["answers"] = answers
-			return input, nil
+func (r *recorded) mark(id string) {
+	c := r.of(id)
+	c.once.Do(func() { close(c.done) })
+}
+
+// releaseAsks lets the bridge open the request of each question call that the
+// run recorded and whose response ended. The CLI starts the tool call while the
+// response still streams, and an interrupt before the response ends makes the
+// CLI drop the usage and the cost of the turn.
+func (r *run) releaseAsks() {
+	lm := r.live[""]
+	for id, msg := range r.askMsg {
+		if lm == nil || lm.id != msg || lm.stopped {
+			r.recorded.mark(id)
+			delete(r.askMsg, id)
 		}
 	}
-	return nil, fmt.Errorf("claudecode: no tool call %s in the history", callID)
 }
 
-// ask opens the request of the question that the CLI parked, and remembers
-// the call, so the next run resolves it.
-func (r *run) ask() error {
-	if r.question == nil || !r.questions || r.result.StopReason != "tool_deferred" {
-		return nil
+// ask opens the request of a call to the question tool once the run recorded
+// the call. It never replies to an opened call: the run interrupts the CLI,
+// which records the call as cut off, and the turn that the answer starts sends
+// the answer.
+func (r *run) ask(ctx context.Context, req turn.Request, c protocol.ToolCall) protocol.ToolResult {
+	select {
+	case <-r.recorded.of(c.ID).done:
+	case <-ctx.Done():
+		return protocol.ToolResult{Text: context.Cause(ctx).Error(), IsError: true}
 	}
-	r.mirror.Parked = r.question.callID
-	return r.out.Ask(r.question.callID, askKind, r.question.input)
+	res, opened := req.Ask(ctx, c)
+	if !opened {
+		return res
+	}
+	r.askedCh <- c.ID
+	<-ctx.Done()
+	return protocol.ToolResult{Text: context.Cause(ctx).Error(), IsError: true}
 }
 
-// question is the AskUserQuestion call of the main thread.
-type question struct {
-	callID string
-	input  json.RawMessage
-}
-
-// control answers a permission request of the CLI: the parked call by its
-// resolution, any other call by a denial.
-func (r *run) control(env envelope) error {
-	if env.Request == nil || env.Request.Subtype != "can_use_tool" {
-		return nil
+// answered returns the text of the answer that this turn delivers: a turn with
+// no input whose history ends with the result of a question call.
+func answered(req turn.Request) (string, bool) {
+	if len(req.Input) > 0 || len(req.History) == 0 {
+		return "", false
 	}
-	decision := denyAll
-	if r.resolution != nil && env.Request.ToolUseID == r.resolution.callID {
-		decision, r.denied = r.resolution.decision, r.dismissing()
+	last := req.History[len(req.History)-1]
+	if last.Role != protocol.RoleTool {
+		return "", false
 	}
-	return r.proc.Send(controlResponse(env.RequestID, decision))
+	for _, p := range last.Parts {
+		if p.Type == protocol.LogPartToolResult && p.Name == turn.AskTool && !p.IsError {
+			return p.Text, true
+		}
+	}
+	return "", false
 }

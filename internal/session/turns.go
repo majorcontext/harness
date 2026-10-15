@@ -122,7 +122,6 @@ func (a *Actor) start(id string, inputIDs []string) {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
 	}
-	req.Questions = a.questions()
 	req.SearchAllowed = a.cfg.WebSearch && (req.AllowedTools == nil || slices.Contains(req.AllowedTools, turn.WebSearchTool))
 	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
 	for _, in := range inputIDs {

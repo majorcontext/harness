@@ -19,7 +19,7 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "AskUserQuestion",
+            "name": "ask_user_question",
             "arguments": {
               "questions": [
                 {
@@ -49,57 +49,13 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"response\":{\"request_id\":\"req-1\",\"response\":{\"behavior\":\"allow\",\"updatedInput\":{\"answers\":{\"Which database?\":\"SQLite\"},\"questions\":[{\"header\":\"DB\",\"multiSelect\":false,\"options\":[{\"description\":\"a\",\"label\":\"PostgreSQL\"},{\"description\":\"b\",\"label\":\"SQLite\"}],\"question\":\"Which database?\"}]}},\"subtype\":\"success\"},\"type\":\"control_response\"}"
+            "is_error": true,
+            "content": "The user dismissed this question without answering."
           }
         ]
       },
       {
         "id": "msg#4",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "WAITING_FOR_QUEUE"
-          }
-        ]
-      },
-      {
-        "id": "msg#5",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "tool_call",
-            "call_id": "toolu#2",
-            "name": "bash",
-            "arguments": {
-              "command": "sleep 1"
-            }
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
-        "role": "tool",
-        "parts": [
-          {
-            "type": "tool_result",
-            "call_id": "toolu#2",
-            "content": "slept"
-          }
-        ]
-      },
-      {
-        "id": "msg#7",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "no second message received"
-          }
-        ]
-      },
-      {
-        "id": "msg#8",
         "role": "user",
         "parts": [
           {
@@ -109,7 +65,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#5",
         "role": "assistant",
         "parts": [
           {
@@ -119,12 +75,12 @@
         ]
       },
       {
-        "id": "msg#10",
+        "id": "msg#6",
         "role": "assistant",
         "parts": [
           {
             "type": "tool_call",
-            "call_id": "toolu#3",
+            "call_id": "toolu#2",
             "name": "bash",
             "arguments": {
               "command": "echo hi"
@@ -133,18 +89,18 @@
         ]
       },
       {
-        "id": "msg#11",
+        "id": "msg#7",
         "role": "tool",
         "parts": [
           {
             "type": "tool_result",
-            "call_id": "toolu#3",
+            "call_id": "toolu#2",
             "content": "hi\n"
           }
         ]
       },
       {
-        "id": "msg#12",
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -156,13 +112,6 @@
     ]
   },
   "calls": {
-    "answer_question.a": {
-      "status": 202,
-      "body": {
-        "seq": 11,
-        "status": "started"
-      }
-    },
     "claude_inputs.a": {
       "status": 200,
       "body": [
@@ -170,11 +119,6 @@
           "content": "pick a db",
           "role": "user",
           "type": "user"
-        },
-        {
-          "interrupt": false,
-          "subtype": "success",
-          "type": "control_response"
         },
         {
           "content": "second",
@@ -187,48 +131,15 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
-          "window": 0
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "awaiting_input",
-          "turn_id": "turn#1"
-        },
-        "model": "claude-code/sonnet",
-        "origin": "",
-        "status": "waiting",
-        "subscription_usage": {
-          "captured_at": "\u003ctime\u003e",
-          "plan": "",
-          "provider": "claude",
-          "session_cost_usd": 0,
-          "windows": []
-        },
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        },
-        "work_dir": "\u003cworkdir\u003e"
-      }
-    },
-    "get_session.a#2": {
-      "status": 200,
-      "body": {
-        "context": {
           "tokens": 113,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 28,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
-          "turn_id": "turn#2"
+          "turn_id": "turn#1"
         },
         "model": "claude-code/sonnet",
         "origin": "",
@@ -237,7 +148,7 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0.0123,
+          "session_cost_usd": 0.029928999999999997,
           "windows": []
         },
         "synced_seq": 0,
@@ -245,8 +156,8 @@
         "usage": {
           "cache_read_tokens": 7,
           "cache_write_tokens": 5,
-          "input_tokens": 106,
-          "output_tokens": 47
+          "input_tokens": 111,
+          "output_tokens": 319
         },
         "work_dir": "\u003cworkdir\u003e"
       }

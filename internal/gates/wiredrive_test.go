@@ -202,11 +202,9 @@ func fakeClaudeModes(t *testing.T, bin string) []string {
 }
 
 const (
-	claudeUserLine    = `{"type":"user","message":{"role":"user","content":"hi"}}`
-	claudeAnswerLine  = `{"type":"control_response","response":{"subtype":"success","request_id":"req-1","response":{"behavior":"allow"}}}`
-	claudeDismissLine = `{"type":"control_response","response":{"subtype":"success","request_id":"req-1","response":{"behavior":"deny","message":"dismissed","interrupt":true}}}`
-	claudeMirrorDir   = "../../harnesstest/fakeclaude/testdata/"
-	claudeRunBound    = 30 * time.Second
+	claudeUserLine  = `{"type":"user","message":{"role":"user","content":"hi"}}`
+	claudeMirrorDir = "../../harnesstest/fakeclaude/testdata/"
+	claudeRunBound  = 30 * time.Second
 )
 
 // fakeClaudeHangs holds the modes that print and then wait for a signal. The
@@ -216,7 +214,7 @@ var fakeClaudeHangs = map[string]bool{
 	"hang_after_text": true, "hang_after_listing": true, "hang_in_tool": true,
 	"tool_on_interrupt": true, "tool_result_on_interrupt": true, "success_on_interrupt": true,
 	"placeholder_on_interrupt": true, "exit_on_interrupt": true,
-	"steer_hang": true,
+	"steer_hang": true, "question": true, "question_sibling": true, "question_late_sibling": true,
 }
 
 // fakeClaudeExitsByDesign holds the modes that end with an error or print no
@@ -240,8 +238,7 @@ type claudeRun struct {
 }
 
 // claudeRuns lists the runs that show every frame a mode can print: one
-// spawn for most modes, a park and a resume for each question mode, a
-// dismissed question, two spawns for the mirror, a queued line for the modes
+// spawn for most modes, two spawns for the mirror, a queued line for the modes
 // that read one, and an interrupt for the modes that hang.
 func claudeRuns(modes []string) []claudeRun {
 	queued := []string{claudeUserLine, claudeUserLine}
@@ -251,15 +248,6 @@ func claudeRuns(modes []string) []claudeRun {
 		switch {
 		case fakeClaudeHangs[mode]:
 			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}, signal: true, nonzero: true}}
-		case strings.HasPrefix(mode, "question"):
-			resume := claudeSpawn{stdin: []string{claudeAnswerLine}}
-			if mode == "question_continues" {
-				resume.stdin = []string{claudeAnswerLine, claudeUserLine}
-			}
-			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}}, resume}
-			if mode == "question" {
-				runs = append(runs, claudeRun{mode: mode, spawns: []claudeSpawn{{stdin: []string{claudeUserLine}}, {stdin: []string{claudeDismissLine}, nonzero: true}}})
-			}
 		case mode == "mirror":
 			one.env = []string{"FAKE_CLAUDE_MIRROR_FIXTURE=" + claudeMirrorDir + "run1.stdout.jsonl," + claudeMirrorDir + "run2.stdout.jsonl"}
 			one.spawns = []claudeSpawn{{stdin: []string{claudeUserLine}}, {stdin: []string{claudeUserLine}}}
