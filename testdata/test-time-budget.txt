@@ -14,7 +14,7 @@
 # imageclamp            8.3 s      13 s
 # gates                 24 s       36 s (cold build of the fake CLI)
 # server                7.5 s      12 s
-# plugin                         40 s (a node probe may take up to its 30 s deadline)
+# plugin                1.4 s      75 s (two sequential node probes with a 30 s deadline each)
 # . (root)             10.1 s      16 s (usually 3.5 s; 7-10 s on a slow runner)
 # any other              <6 s      10 s
 leaf 10
@@ -25,7 +25,7 @@ package internal/backend/claudecode 21
 package internal/imageclamp 13
 package internal/gates 36
 package internal/server 12
-package internal/plugin 40
+package internal/plugin 75
 package . 16
 
 # The node probes of the TypeScript SDK tests have a 30 s deadline, as a configured plugin
