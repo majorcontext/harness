@@ -44,8 +44,6 @@ type Message struct {
 	Parts []MessagePart `json:"parts"`
 	// CreatedAt is the envelope time of the record that completed the message.
 	CreatedAt time.Time `json:"created_at,omitzero"`
-	// ParentCallID names the call that started the subagent of the message.
-	ParentCallID string `json:"parent_call_id,omitempty"`
 	// Source, SourceID, and SourceLabel are the provenance of the input that started a turn with this user message.
 	Source      string `json:"source,omitempty"`
 	SourceID    string `json:"source_id,omitempty"`

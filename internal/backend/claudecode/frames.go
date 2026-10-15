@@ -26,7 +26,6 @@ type envelope struct {
 	TotalCostUSD    float64               `json:"total_cost_usd,omitempty"`
 	DurationMillis  int64                 `json:"duration_ms,omitempty"`
 	TTFTMillis      int64                 `json:"ttft_ms,omitempty"`
-	ParentToolUseID string                `json:"parent_tool_use_id,omitempty"`
 	CompactMetadata *compactMetadata      `json:"compact_metadata,omitempty"`
 	Status          string                `json:"status,omitempty"`
 	CompactResult   string                `json:"compact_result,omitempty"`

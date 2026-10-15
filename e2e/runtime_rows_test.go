@@ -63,7 +63,7 @@ const (
 	specCompactOwned         = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
 	specClaudeGauge             = "A Claude Code turn reads its context gauge and its cost from the `result` frame."
-	specClaudeCompactPostTokens = "A `compact_boundary` with positive `post_tokens` sets the reading until a later main-thread assistant frame reports usage."
+	specClaudeCompactPostTokens = "A `compact_boundary` with positive `post_tokens` sets the reading until a later assistant frame reports usage."
 	specToolCallsAtOnce         = "The backend records the assistant item that holds a tool call when the `tool_use` frame arrives"
 	specClaudeOnce              = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
 	specHistoryBridge           = "When another provider recorded a message after the newest message that this backend saw"
@@ -407,6 +407,8 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_parks_then_answer_resumes":                                              reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
 	"claudecode_question_unknown_call_id_conflicts":                                              reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
 	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":                              sameAsServe(),
+	"claudecode_retried_reply_with_a_tool_call_alone_completes_under_a_new_item":                 reGolden(specDiscard),
+	"claudecode_tool_result_between_the_deltas_and_the_frame_of_a_block_keeps_the_live_item":     sameAsServe(),
 	"claudecode_retried_reply_starts_a_new_live_item":                                            reGolden(specDiscard),
 	"claudecode_prompt_attachments":                                                              sameAsServe(),
 	"claudecode_queued_prompt_injected_mid_turn":                                                 reGolden(specView, specClaudeGauge),

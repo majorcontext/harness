@@ -48,7 +48,7 @@ func (r *recorded) mark(id string) {
 // response still streams, and an interrupt before the response ends makes the
 // CLI drop the usage and the cost of the turn.
 func (r *run) releaseAsks() {
-	lm := r.live[""]
+	lm := r.live
 	for id, msg := range r.askMsg {
 		if lm == nil || lm.id != msg || lm.stopped {
 			r.recorded.mark(id)

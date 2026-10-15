@@ -35,32 +35,28 @@ func (r *run) streamEvent(env envelope) error {
 	if ev == nil {
 		return nil
 	}
-	parent := env.ParentToolUseID
 	switch ev.Type {
 	case "message_start":
 		if ev.Message == nil || ev.Message.ID == "" {
-			delete(r.live, parent)
+			r.live = nil
 			return nil
 		}
-		if r.pending != nil && r.pendingID != ev.Message.ID && r.pending.ParentCallID == parent {
+		if r.pending != nil && r.pendingID != ev.Message.ID {
 			if err := r.flush(); err != nil {
 				return err
 			}
 		}
-		if old := r.live[parent]; old != nil && old.streamed() {
-			r.thread(parent).Drop()
+		if r.live != nil && r.live.streamed() {
+			r.thread().Drop()
 		}
-		if r.live == nil {
-			r.live = map[string]*liveMessage{}
-		}
-		r.live[parent] = &liveMessage{id: ev.Message.ID, byIndex: map[int]*liveBlock{}}
+		r.live = &liveMessage{id: ev.Message.ID, byIndex: map[int]*liveBlock{}}
 	case "message_stop":
-		if lm := r.live[parent]; lm != nil {
+		if lm := r.live; lm != nil {
 			lm.stopped = true
 		}
 		r.releaseAsks()
 	case "content_block_start":
-		lm := r.live[parent]
+		lm := r.live
 		if lm == nil || ev.ContentBlock == nil {
 			return nil
 		}
@@ -77,7 +73,7 @@ func (r *run) streamEvent(env envelope) error {
 		lm.blocks = append(lm.blocks, b)
 		lm.byIndex[ev.Index] = b
 	case "content_block_delta":
-		lm := r.live[parent]
+		lm := r.live
 		if lm == nil || ev.Delta == nil {
 			return nil
 		}
@@ -96,7 +92,7 @@ func (r *run) streamEvent(env envelope) error {
 			return nil
 		}
 		b.text.WriteString(text)
-		r.thread(parent).Delta(lm.id, turn.Delta{Type: b.typ, Text: text})
+		r.thread().Delta(lm.id, turn.Delta{Type: b.typ, Text: text})
 	}
 	return nil
 }
@@ -105,8 +101,8 @@ func (r *run) streamEvent(env envelope) error {
 // send, which is all of it when the CLI runs without partial messages. The
 // assistant frame of a block follows its deltas, so a block that streamed
 // completely sends nothing again.
-func (r *run) unstreamed(parent, id string, p protocol.LogPart) string {
-	lm := r.live[parent]
+func (r *run) unstreamed(id string, p protocol.LogPart) string {
+	lm := r.live
 	if lm == nil || lm.id != id {
 		return p.Text
 	}
@@ -130,18 +126,18 @@ func (m *liveMessage) streamed() bool {
 	return slices.ContainsFunc(m.blocks, func(b *liveBlock) bool { return !b.recorded && b.text.Len() > 0 })
 }
 
-// replay sends the text that the thread has streamed for a block that no
+// replay sends the text that the stream has streamed for a block that no
 // assistant frame recorded yet, as the first delta of a new live item. The
 // item that just completed ends without that text, and the block joins the
 // item that its assistant frame starts.
-func (r *run) replay(parent string) {
-	lm := r.live[parent]
+func (r *run) replay() {
+	lm := r.live
 	if lm == nil || r.stopped {
 		return
 	}
 	for _, b := range lm.blocks {
 		if !b.recorded && b.text.Len() > 0 {
-			r.thread(parent).Delta(lm.id, turn.Delta{Type: b.typ, Text: b.text.String()})
+			r.thread().Delta(lm.id, turn.Delta{Type: b.typ, Text: b.text.String()})
 		}
 	}
 }
@@ -151,11 +147,10 @@ type flatThread struct{ turn.Sink }
 
 func (flatThread) Drop() {}
 
-// thread returns the live item of the thread that parent names, "" being the
-// main thread.
-func (r *run) thread(parent string) turn.Thread {
+// thread returns the live item of the CLI output.
+func (r *run) thread() turn.Thread {
 	if t, ok := r.out.(turn.Threaded); ok {
-		return t.Thread(parent)
+		return t.Thread("")
 	}
 	return flatThread{r.out}
 }

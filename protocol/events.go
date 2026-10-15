@@ -210,11 +210,10 @@ const (
 	RoleTool      = "tool"
 )
 
-// LogMessage is one completed conversation item. ParentCallID names its subagent call.
+// LogMessage is one completed conversation item.
 type LogMessage struct {
-	Role         string    `json:"role"`
-	Parts        []LogPart `json:"parts"`
-	ParentCallID string    `json:"parent_call_id,omitempty"`
+	Role  string    `json:"role"`
+	Parts []LogPart `json:"parts"`
 }
 
 // SessionCreated is the first record of every session.

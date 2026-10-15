@@ -165,11 +165,11 @@ func (s *State) messages(pinned bool) []protocol.LogMessage {
 		if e.pinned && !pinned {
 			continue
 		}
-		out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
+		out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
 	}
 	if pinned {
 		for _, e := range s.stranded {
-			out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
+			out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
 		}
 	}
 	return out

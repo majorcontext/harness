@@ -897,9 +897,6 @@
               "$ref": "#/components/schemas/LogPart"
             },
             "type": "array"
-          },
-          "parent_call_id": {
-            "type": "string"
           }
         },
         "type": "object",
@@ -983,9 +980,6 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
-          },
-          "parent_call_id": {
-            "type": "string"
           },
           "source": {
             "type": "string"
