@@ -49,3 +49,38 @@ func TestProviderKeyEnvIsTheEntryVariableElseTheNativeOne(t *testing.T) {
 		t.Errorf("unknown provider = %q", got)
 	}
 }
+
+func TestSetModelRefusesAWriteThatChangesAnotherKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"keys of another case": `{"model":"","max_tokens":1,"MAX_TOKENS":2}`,
+		"repeated object":      `{"model":"","aliases":{"a":"openai/x"},"aliases":{"b":"openai/y"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if set, err := SetModel(path, SubscriptionCodexModel); err == nil || set {
+				t.Fatalf("SetModel = %v, %v, want an error", set, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != body {
+				t.Errorf("file = %q, want it untouched", got)
+			}
+		})
+	}
+}
+
+func TestNoEnvironmentVariableSetsTheSubscriptionDefault(t *testing.T) {
+	var c Config
+	if err := c.ApplyEnv(func(name string) string {
+		if name == "HARNESS_-" || name == "HARNESS_SUBSCRIPTIONDEFAULT" || name == "HARNESS_SUBSCRIPTION_DEFAULT" {
+			return "true"
+		}
+		return ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if c.SubscriptionDefault {
+		t.Error("an environment variable set SubscriptionDefault")
+	}
+}

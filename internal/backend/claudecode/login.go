@@ -12,7 +12,7 @@ func (b *Backend) checkLogin(ctx context.Context, env []string, err error) error
 	if err == nil || ctx.Err() != nil {
 		return err
 	}
-	if ok, known := claudeauth.LoggedIn(ctx, b.p.CLIBinary(), env); known && !ok {
+	if ok, known := claudeauth.LoggedIn(ctx, b.p.CLIBinary(), env, b.workDir); known && !ok {
 		return &claudeauth.LoginRequiredError{}
 	}
 	return err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -85,8 +86,15 @@ func withModel(path string, data, raw []byte) (string, error) {
 		}
 		out = string(b) + "\n"
 	}
-	if back, err := Parse(path, []byte(out)); err != nil || back.Model != want {
-		return "", fmt.Errorf("config: cannot set model in %s without changing its other keys", path)
+	back, err := Parse(path, []byte(out))
+	if err == nil {
+		cfg.Model = want
+		if !reflect.DeepEqual(cfg, back) {
+			err = errors.New("the other keys would change")
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("config: cannot set model in %s without changing its other keys: %w", path, err)
 	}
 	return out, nil
 }

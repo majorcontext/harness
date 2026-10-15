@@ -119,7 +119,7 @@ func claudeLoggedIn(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	ok, known := claudeauth.LoggedIn(ctx, bin, nil)
+	ok, known := claudeauth.LoggedIn(ctx, bin, nil, "")
 	return ok && known
 }
 

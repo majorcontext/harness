@@ -181,7 +181,7 @@ type Config struct {
 	MCPToolLoadingThreshold int `json:"mcp_tool_loading_threshold,omitempty"`
 	// SubscriptionDefault lets an unset model resolve to the subscription of the user (see defaultModel). Only the
 	// composition root of a command that a person runs sets it. No file, variable, or flag does.
-	SubscriptionDefault bool `json:"-"`
+	SubscriptionDefault bool `json:"-" env:"-"`
 }
 
 // WebSpec holds the switches of the web tools. A nil field is off, and a

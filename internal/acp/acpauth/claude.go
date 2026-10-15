@@ -62,7 +62,7 @@ func (a *Auth) loggedIn(ctx context.Context, bin string, fresh bool) (ok, known 
 	if hit && !fresh && time.Since(cached.at) < statusTTL {
 		return cached.loggedIn, true
 	}
-	ok, known = claudeauth.LoggedIn(ctx, bin, a.opts.Env)
+	ok, known = claudeauth.LoggedIn(ctx, bin, a.opts.Env, "")
 	if !known {
 		return false, false
 	}
