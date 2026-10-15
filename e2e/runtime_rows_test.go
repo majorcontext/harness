@@ -161,17 +161,16 @@ const (
 	specAskRule        = "A session of any backend asks with the runtime tool `ask_user_question` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal (see Tools)."
 )
 
-// reasonRetryHeld is the id of the reason that the rows with a server that fails its first initialize cite.
-const reasonRetryHeld = "mcp-retry-held"
-
-// reasonWebLoopback is the id of the reason that the rows which fetch from a local server cite.
-const reasonWebLoopback = "web-loopback-seam"
-
-// reasonWebProxy is the id of the reason that the rows which fetch through a proxy cite.
-const reasonWebProxy = "web-proxy-seam"
-
-// reasonReportHeld is the id of the reason that the row with a held child report cites.
-const reasonReportHeld = "child-report-held"
+const (
+	// reasonRetryHeld is the id of the reason that the rows with a server that fails its first initialize cite.
+	reasonRetryHeld = "mcp-retry-held"
+	// reasonWebLoopback is the id of the reason that the rows which fetch from a local server cite.
+	reasonWebLoopback = "web-loopback-seam"
+	// reasonWebProxy is the id of the reason that the rows which fetch through a proxy cite.
+	reasonWebProxy = "web-proxy-seam"
+	// reasonReportHeld is the id of the reason that the row with a held child report cites.
+	reasonReportHeld = "child-report-held"
+)
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
 
