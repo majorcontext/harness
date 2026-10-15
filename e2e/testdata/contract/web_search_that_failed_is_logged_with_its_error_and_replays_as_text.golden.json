@@ -1,0 +1,177 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "find the release"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "find the release"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[web search: current Go release]\n(search failed: unavailable)"
+            },
+            {
+              "kind": "text",
+              "text": "I could not search."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "which source"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "find the release"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "current Go release",
+            "call_id": "srvtoolu_1",
+            "is_error": true,
+            "content": "error: unavailable\n"
+          },
+          {
+            "type": "text",
+            "text": "I could not search."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "which source"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 6,
+          "web_search_requests": 1
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

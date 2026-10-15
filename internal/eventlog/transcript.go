@@ -55,6 +55,7 @@ func cloneReaderMessage(m protocol.Message) protocol.Message {
 	m.Parts = slices.Clone(m.Parts)
 	for i := range m.Parts {
 		m.Parts[i].Arguments = slices.Clone(m.Parts[i].Arguments)
+		m.Parts[i].Results, m.Parts[i].Citations = slices.Clone(m.Parts[i].Results), slices.Clone(m.Parts[i].Citations)
 	}
 	m.OperatorBatch = slices.Clone(m.OperatorBatch)
 	return m
@@ -78,7 +79,7 @@ func messageParts(parts []protocol.LogPart) []protocol.MessagePart {
 	out := make([]protocol.MessagePart, 0, len(parts))
 	for _, p := range parts {
 		mp := protocol.MessagePart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, Arguments: slices.Clone(p.Arguments),
-			IsError: p.IsError, MediaType: p.MediaType, Bytes: p.Bytes}
+			IsError: p.IsError, MediaType: p.MediaType, Bytes: p.Bytes, Citations: slices.Clone(p.Citations), Query: p.Query, Results: slices.Clone(p.Results)}
 		if p.Type == protocol.LogPartBlob {
 			mp.Key = p.BlobKey
 		}

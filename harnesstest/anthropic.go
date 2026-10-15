@@ -28,6 +28,7 @@ type wireRequest struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
 	Tools []struct {
+		Type        string          `json:"type"`
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		InputSchema json.RawMessage `json:"input_schema"`
@@ -101,6 +102,8 @@ func decodeRequest(body []byte) (Request, error) {
 				msg.Parts = append(msg.Parts, Part{Kind: "thinking", Text: b.Thinking, Signature: b.Signature})
 			case "image", "document":
 				msg.Parts = append(msg.Parts, Part{Kind: b.Type, Text: sourceURI(b)})
+			case "server_tool_use", "web_search_tool_result":
+				msg.Parts = append(msg.Parts, searchPart(b))
 			case "tool_use":
 				toolNames[b.ID] = b.Name
 				msg.Parts = append(msg.Parts, Part{Kind: "tool_use", ToolName: b.Name, ToolInput: b.Input, ToolUseID: b.ID})
@@ -249,8 +252,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
 	}
+	if rep.WebSearch != nil {
+		idx = searchBlocks(e, idx, rep.WebSearch)
+	}
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
-		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "text", "text": ""}})
+		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": textBlockStart(rep.WebSearch)})
+		citeSources(e, idx, rep.WebSearch)
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Text}})
 		if rep.Block && !s.block(r, name) {
 			return
@@ -275,6 +282,91 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
 	}
-	e.event("message_delta", obj{"type": "message_delta", "delta": obj{"stop_reason": stop}, "usage": obj{"output_tokens": usage.Output}})
+	e.event("message_delta", obj{"type": "message_delta", "delta": obj{"stop_reason": stop}, "usage": usageDelta(usage, rep.WebSearch)})
 	e.event("message_stop", obj{"type": "message_stop"})
+}
+
+// searchBlocks streams the server_tool_use block of a search and the block of
+// its results, and returns the index of the next block.
+func searchBlocks(e sseWriter, idx int, ws *WebSearch) int {
+	id := ws.ID
+	if id == "" {
+		id = "srvtoolu_1"
+	}
+	input, _ := json.Marshal(obj{"query": ws.Query})
+	e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "server_tool_use", "id": id, "name": "web_search", "input": obj{}}})
+	e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "input_json_delta", "partial_json": string(input)}})
+	e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
+	if ws.Pending {
+		return idx + 1
+	}
+	var results any = ws.resultBlocks()
+	if ws.Error != "" {
+		results = obj{"type": "web_search_tool_result_error", "error_code": ws.Error}
+	}
+	e.event("content_block_start", obj{"type": "content_block_start", "index": idx + 1, "content_block": obj{"type": "web_search_tool_result", "tool_use_id": id, "content": results}})
+	e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx + 1})
+	return idx + 2
+}
+
+// resultURLs lists the url of each web_search_result in the content of a web_search_tool_result block.
+func resultURLs(raw json.RawMessage) []string {
+	var list []struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal(raw, &list)
+	urls := make([]string, len(list))
+	for i, r := range list {
+		urls[i] = r.URL
+	}
+	return urls
+}
+
+// textBlockStart is the text block of a reply. A reply with a search carries the citations of the block.
+func textBlockStart(ws *WebSearch) obj {
+	start := obj{"type": "text", "text": ""}
+	if ws != nil {
+		start["citations"] = []obj{}
+	}
+	return start
+}
+
+// citeSources streams one citation of the text block idx for each source of a search.
+func citeSources(e sseWriter, idx int, ws *WebSearch) {
+	if ws == nil {
+		return
+	}
+	for _, src := range ws.Sources {
+		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "citations_delta", "citation": obj{
+			"type": "web_search_result_location", "cited_text": src.Title, "url": src.URL, "title": src.Title, "encrypted_index": "ENCRYPTED_INDEX_FIXTURE_1"}}})
+	}
+}
+
+// usageDelta is the usage of the message_delta event. A search adds its count.
+func usageDelta(u Usage, ws *WebSearch) obj {
+	usage := obj{"output_tokens": u.Output}
+	if ws != nil {
+		if ws.StepInput > 0 {
+			usage["input_tokens"] = u.Input + ws.StepInput
+		}
+		usage["server_tool_use"] = obj{"web_search_requests": 1, "web_fetch_requests": 0}
+	}
+	return usage
+}
+
+// searchPart is the part of a server_tool_use block of a search, or of the block of its results.
+func searchPart(b wireBlock) Part {
+	if b.Type == "server_tool_use" {
+		query, _ := b.Input["query"].(string)
+		return Part{Kind: "web_search", Text: query, ToolName: b.Name, ToolUseID: b.ID}
+	}
+	return Part{Kind: "web_search_result", Text: strings.Join(resultURLs(b.Content), "\n"), ToolUseID: b.ToolUseID}
+}
+
+func (ws *WebSearch) resultBlocks() []obj {
+	results := make([]obj, len(ws.Sources))
+	for i, src := range ws.Sources {
+		results[i] = obj{"type": "web_search_result", "title": src.Title, "url": src.URL, "encrypted_content": fmt.Sprintf("ENCRYPTED_CONTENT_FIXTURE_%d", i+1), "page_age": "1 day ago"}
+	}
+	return results
 }

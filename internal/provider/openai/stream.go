@@ -26,7 +26,11 @@ type assembledItem struct {
 	callID string
 	name   string
 	args   json.RawMessage
-	raw    json.RawMessage // reasoning: the entire item JSON, replayed verbatim
+	raw    json.RawMessage // reasoning, web_search_call: the entire item JSON, replayed verbatim
+	// query, id and cites are the search of a web_search_call item and the sources a message cites.
+	query, id string
+	failed    bool
+	cites     []message.Citation
 }
 
 // stream implements provider.Stream over the Responses API SSE protocol. It
@@ -421,30 +425,7 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad response.reasoning_summary_text.delta: %w", err)
 		}
-		it, err := s.itemAt(ev.OutputIndex)
-		if err != nil {
-			return err
-		}
-		if it.kind == "" {
-			it.kind = "reasoning"
-		}
-		newItem := s.reasoningStreamed && ev.OutputIndex != s.reasoningItem
-		newSummary := s.reasoningStreamed && !newItem && ev.SummaryIndex != s.reasoningSummary
-		// A new item becomes its own part, so its break belongs in the stream
-		// only. A new summary part shares one part and needs the stored break.
-		if newSummary {
-			it.text.WriteString(reasoningBreak)
-		}
-		it.text.WriteString(ev.Delta)
-		delta := ev.Delta
-		if newItem || newSummary {
-			delta = reasoningBreak + delta
-		}
-		s.reasoningItem = ev.OutputIndex
-		s.reasoningSummary = ev.SummaryIndex
-		s.reasoningStreamed = true
-		s.visibleOutput = true
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta, ID: s.respID, CreatedAt: s.respCreatedAt})
+		return s.reasoningDelta(ev.OutputIndex, ev.SummaryIndex, ev.Delta)
 
 	case "response.output_item.done":
 		var ev struct {
@@ -456,9 +437,21 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		var head struct {
 			Type      string `json:"type"`
+			ID        string `json:"id"`
 			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
+			Status    string `json:"status"`
+			Action    struct {
+				Query string `json:"query"`
+			} `json:"action"`
+			Content []struct {
+				Annotations []struct {
+					Type  string `json:"type"`
+					URL   string `json:"url"`
+					Title string `json:"title"`
+				} `json:"annotations"`
+			} `json:"content"`
 		}
 		if err := json.Unmarshal(ev.Item, &head); err != nil {
 			return fmt.Errorf("openai: bad output item: %w", err)
@@ -479,16 +472,25 @@ func (s *stream) handle(name string, data []byte) error {
 		case "reasoning":
 			it.kind = "reasoning"
 			it.raw = append(json.RawMessage(nil), ev.Item...)
+		case "web_search_call":
+			it.kind, it.id, it.query, it.failed = "web_search_call", head.ID, head.Action.Query, head.Status == "failed"
+			it.raw = append(json.RawMessage(nil), ev.Item...)
+			s.visibleOutput = true
 		case "message":
 			if it.kind == "" {
 				it.kind = "message"
 			}
+			for _, c := range head.Content {
+				for _, a := range c.Annotations {
+					if a.Type == "url_citation" {
+						it.cites = append(it.cites, message.Citation{URL: a.URL, Title: a.Title})
+					}
+				}
+			}
 		}
 
 	case codexRateLimitsEventType:
-		// Usage reporting is cosmetic: an unparseable frame is treated as
-		// absent, never a turn failure. An error here would also bypass
-		// recoverChainMiss, which runs only for previousResponseNotFound.
+		// An unparseable frame is absent, never a turn failure.
 		if familyOrDefault(s.family) == CodexFamily {
 			if usage, err := codexSubscriptionUsageFromRateLimitsEvent(data); err == nil && usage != nil {
 				s.subUsage = usage
@@ -516,10 +518,7 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad %s: %w", name, err)
 		}
-		// The Responses API reports input_tokens INCLUSIVE of the cached
-		// portion (input_tokens_details.cached_tokens is a subset). The
-		// provider.Usage contract wants disjoint components, so report the
-		// uncached remainder; the sum reconstructs the wire total.
+		// input_tokens includes the cached portion; Usage wants disjoint parts.
 		cached := ev.Response.Usage.InputTokensDetails.CachedTokens
 		uncached := ev.Response.Usage.InputTokens - cached
 		if uncached < 0 {
@@ -601,6 +600,34 @@ func (s *stream) handle(name string, data []byte) error {
 	return nil
 }
 
+// reasoningDelta adds a reasoning summary delta to its item and queues it.
+func (s *stream) reasoningDelta(outputIndex, summaryIndex int, delta string) error {
+	it, err := s.itemAt(outputIndex)
+	if err != nil {
+		return err
+	}
+	if it.kind == "" {
+		it.kind = "reasoning"
+	}
+	newItem := s.reasoningStreamed && outputIndex != s.reasoningItem
+	newSummary := s.reasoningStreamed && !newItem && summaryIndex != s.reasoningSummary
+	// A new item becomes its own part, so its break belongs in the stream
+	// only. A new summary part shares one part and needs the stored break.
+	if newSummary {
+		it.text.WriteString(reasoningBreak)
+	}
+	it.text.WriteString(delta)
+	if newItem || newSummary {
+		delta = reasoningBreak + delta
+	}
+	s.reasoningItem = outputIndex
+	s.reasoningSummary = summaryIndex
+	s.reasoningStreamed = true
+	s.visibleOutput = true
+	s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta, ID: s.respID, CreatedAt: s.respCreatedAt})
+	return nil
+}
+
 // mapIncompleteReason maps response.incomplete_details.reason to a canonical
 // stop reason.
 func mapIncompleteReason(reason string) provider.StopReason {
@@ -653,8 +680,16 @@ func (s *stream) assemble() *message.Message {
 		switch it.kind {
 		case "message":
 			if it.text.Len() > 0 {
-				msg.Parts = append(msg.Parts, &message.Text{Text: it.text.String()})
+				msg.Parts = append(msg.Parts, &message.Text{Text: it.text.String(), Citations: it.cites})
 			}
+		case "web_search_call":
+			w := &message.WebSearch{ID: it.id, Query: it.query}
+			if it.failed {
+				w.Error = "failed"
+			} else {
+				w.ProviderData.Set(familyOrDefault(s.family), it.raw)
+			}
+			msg.Parts = append(msg.Parts, w)
 		case "reasoning":
 			if len(it.raw) == 0 {
 				continue

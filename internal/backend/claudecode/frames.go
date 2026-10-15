@@ -40,6 +40,7 @@ type envelope struct {
 	RequestID       string                `json:"request_id,omitempty"`
 	Request         *controlRequest       `json:"request,omitempty"`
 	Event           *streamEvent          `json:"event,omitempty"`
+	ToolUseResult   json.RawMessage       `json:"tool_use_result,omitempty"`
 }
 
 // streamEvent is the API stream event of a stream_event frame, which the CLI

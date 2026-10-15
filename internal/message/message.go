@@ -151,6 +151,12 @@ func (m *Message) Normalize() {
 					delete(v.ProviderData, family)
 				}
 			}
+		case *WebSearch:
+			for family, raw := range v.ProviderData {
+				if len(raw) == 0 || !json.Valid(raw) {
+					delete(v.ProviderData, family)
+				}
+			}
 		case *ToolCall:
 			if len(v.Arguments) > 0 && !json.Valid(v.Arguments) {
 				v.Arguments = nil
@@ -172,6 +178,7 @@ const (
 	PartToolCall   PartType = "tool_call"
 	PartToolResult PartType = "tool_result"
 	PartReasoning  PartType = "reasoning"
+	PartWebSearch  PartType = "web_search"
 )
 
 // Part is one content block within a Message. Concrete part types are always
@@ -183,6 +190,17 @@ type Part interface {
 // Text is a plain text block.
 type Text struct {
 	Text string `json:"text"`
+	// Citations are the sources that the provider cited for this text. They
+	// are a record for readers: a provider request carries the text alone.
+	Citations []Citation `json:"citations,omitempty"`
+}
+
+// Citation is a source that a provider cited for a Text part. Quote is the
+// cited passage, when the wire gives one.
+type Citation struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+	Quote string `json:"quote,omitempty"`
 }
 
 func (*Text) partType() PartType { return PartText }
@@ -196,6 +214,51 @@ type Blob struct {
 }
 
 func (*Blob) partType() PartType { return PartBlob }
+
+// WebSearch is a search that the provider ran inside a model call. It is not a
+// ToolCall: no Harness tool, hook, or result is involved, and the part holds
+// the query and the sources that the provider reports.
+//
+// ProviderData holds what the wire of the same provider family needs to
+// receive the search again, such as the encrypted result blocks of Anthropic.
+// It follows the rule of Reasoning.ProviderData: only the matching family
+// replays it, and any other family sends the search as text (see Summary).
+type WebSearch struct {
+	// ID is the call ID that the wire gave the search.
+	ID    string `json:"id,omitempty"`
+	Query string `json:"query"`
+	// Results are the sources found, when the wire reports them.
+	Results []SearchResult `json:"results,omitempty"`
+	// Error is the error code of a search that failed. Empty: it ran.
+	Error        string       `json:"error,omitempty"`
+	ProviderData ProviderData `json:"provider_data,omitempty"`
+}
+
+// SearchResult is one source that a search found.
+type SearchResult struct {
+	Title string `json:"title,omitempty"`
+	URL   string `json:"url"`
+}
+
+func (*WebSearch) partType() PartType { return PartWebSearch }
+
+// Summary renders the search as text for a provider that cannot take it back
+// as a search: the query, then the sources.
+func (w *WebSearch) Summary() string {
+	var b strings.Builder
+	b.WriteString("[web search: " + w.Query + "]")
+	if w.Error != "" {
+		b.WriteString("\n(search failed: " + w.Error + ")")
+	}
+	for _, r := range w.Results {
+		b.WriteString("\n- ")
+		if r.Title != "" {
+			b.WriteString(r.Title + " ")
+		}
+		b.WriteString("<" + r.URL + ">")
+	}
+	return b.String()
+}
 
 // ToolCall is a model-issued request to run a tool.
 type ToolCall struct {
@@ -470,6 +533,18 @@ func (pd ProviderData) Get(family string) (json.RawMessage, bool) {
 	return raw, true
 }
 
+// Set stores raw under family. It stores nothing for an entry that is empty,
+// is not valid JSON, or is over maxProviderDataEntry, which Get would refuse.
+func (pd *ProviderData) Set(family string, raw json.RawMessage) {
+	if len(raw) == 0 || len(raw) > maxProviderDataEntry || !json.Valid(raw) {
+		return
+	}
+	if *pd == nil {
+		*pd = ProviderData{}
+	}
+	(*pd)[family] = raw
+}
+
 // MarshalJSON implements json.Marshaler so any direct encoding of a
 // ProviderData value — e.g. a Reasoning part marshaled as-is by
 // marshalPart's embedded-struct case below, in the session log, the server
@@ -598,6 +673,11 @@ func marshalPart(p Part) ([]byte, error) {
 			Type PartType `json:"type"`
 			*Reasoning
 		}{PartReasoning, v})
+	case *WebSearch:
+		return json.Marshal(struct {
+			Type PartType `json:"type"`
+			*WebSearch
+		}{PartWebSearch, v})
 	case *EngineContext:
 		return json.Marshal(struct {
 			Type PartType `json:"type"`
@@ -618,6 +698,7 @@ var partVariants = []struct {
 	{PartToolCall, func() Part { return new(ToolCall) }},
 	{PartToolResult, func() Part { return new(ToolResult) }},
 	{PartReasoning, func() Part { return new(Reasoning) }},
+	{PartWebSearch, func() Part { return new(WebSearch) }},
 	{PartEngineContext, func() Part { return new(EngineContext) }},
 }
 

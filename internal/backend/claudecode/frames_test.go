@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/majorcontext/harness/protocol"
@@ -19,5 +20,48 @@ func TestUserLineSendsAnEngineContextPartAsRawText(t *testing.T) {
 	want := `{"type":"user","message":{"role":"user","content":"OPERATOR MESSAGES (address these, then continue the task):\n1. go on\n\n\n[tasks:\n- kid (agent=explore) done: found it (usage: 1 in / 2 out)\n]"}}`
 	if got, _ := json.Marshal(line); string(got) != want {
 		t.Errorf("line = %s, want %s", got, want)
+	}
+}
+
+func TestSearchPartReadsTheLinksOfAWebSearchResult(t *testing.T) {
+	text := "Web search results for query: \"go\"\n\nLinks: [{\"title\":\"Go\",\"url\":\"https://go.dev\"}]\n\nGo is current."
+	for name, tc := range map[string]struct {
+		res  protocol.LogPart
+		want protocol.LogPart
+	}{
+		"links":    {protocol.LogPart{Text: text}, protocol.LogPart{Results: []protocol.SearchResult{{Title: "Go", URL: "https://go.dev"}}}},
+		"cut list": {protocol.LogPart{Text: "Links: [{\"title\":\"Go\",\"ur..."}, protocol.LogPart{}},
+		"no list":  {protocol.LogPart{Text: "nothing"}, protocol.LogPart{}},
+		"an error": {protocol.LogPart{Text: "boom", IsError: true}, protocol.LogPart{Text: "boom", IsError: true}},
+	} {
+		tc.want.Type, tc.want.CallID, tc.want.Query = protocol.LogPartWebSearch, "toolu_1", "go"
+		if got := searchPart("toolu_1", "go", tc.res, nil); !slices.Equal(got.Results, tc.want.Results) || got.Text != tc.want.Text || got.IsError != tc.want.IsError || got.Query != "go" || got.Type != tc.want.Type {
+			t.Errorf("%s: part = %+v, want %+v", name, got, tc.want)
+		}
+	}
+}
+
+func TestAllowSearchAddsWebSearchToTheApprovedTools(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args   []string
+		search bool
+		want   []string
+	}{
+		"off":            {[]string{"--mcp-config", "c"}, false, []string{"--mcp-config", "c"}},
+		"no flag":        {nil, true, []string{"--allowedTools", "WebSearch"}},
+		"beside the MCP": {[]string{"--mcp-config", "c", "--allowedTools", "mcp__harness"}, true, []string{"--mcp-config", "c", "--allowedTools", "mcp__harness,WebSearch"}},
+	} {
+		if got := allowSearch(tc.args, tc.search); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: args = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestSearchPartPrefersTheStructuredResults(t *testing.T) {
+	raw := json.RawMessage(`{"query":"go","results":[{"content":[{"title":"A","url":"https://a.example"}]},"a note"]}`)
+	structured := structuredResults(raw)
+	got := searchPart("toolu_1", "go", protocol.LogPart{Text: "Links: [{\"title\":\"B\",\"url\":\"https://b.example\"}]"}, structured)
+	if len(got.Results) != 1 || got.Results[0].URL != "https://a.example" {
+		t.Errorf("results = %+v, want the structured source", got.Results)
 	}
 }

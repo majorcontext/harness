@@ -43,6 +43,11 @@ func (c *Config) WebFetchEnabled() bool {
 	return c != nil && c.Web.Fetch != nil && *c.Web.Fetch
 }
 
+// WebSearchEnabled returns web.search, which is off when unset.
+func (c *Config) WebSearchEnabled() bool {
+	return c != nil && c.Web.Search != nil && *c.Web.Search
+}
+
 func valueOr[T any](c *Config, field func(*Config) *T) T {
 	if c != nil && field(c) != nil {
 		return *field(c)

@@ -46,19 +46,33 @@ const toolNames = "Your tools are the Harness tools. Where instructions name Rea
 	"MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, " +
 	"ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. "
 
-const (
-	noWebFetch   = "There is no TodoWrite, WebFetch, WebSearch, or Skill tool."
-	mapWebFetch  = "Where they name WebFetch, use web_fetch. There is no TodoWrite, WebSearch, or Skill tool."
-	readSkillDoc = " To use a skill, read its SKILL.md file with read_file."
-)
+const readSkillDoc = " To use a skill, read its SKILL.md file with read_file."
 
 // toolNamesOf returns the tool-name segment for the tools that the turn offers:
-// WebFetch maps to web_fetch only when the turn offers that tool.
-func toolNamesOf(tools []protocol.ToolSpec) string {
-	if slices.ContainsFunc(tools, func(t protocol.ToolSpec) bool { return t.Name == turn.WebFetchTool }) {
-		return toolNames + mapWebFetch + readSkillDoc
+// WebFetch maps to web_fetch only when the turn offers that tool, and WebSearch
+// is among the absent tools unless the turn offers the search.
+func toolNamesOf(tools []protocol.ToolSpec, search bool) string {
+	fetch := slices.ContainsFunc(tools, func(t protocol.ToolSpec) bool { return t.Name == turn.WebFetchTool })
+	absent := []string{"TodoWrite"}
+	seg := toolNames
+	if fetch {
+		seg += "Where they name WebFetch, use web_fetch. "
+	} else {
+		absent = append(absent, "WebFetch")
 	}
-	return toolNames + noWebFetch + readSkillDoc
+	if !search {
+		absent = append(absent, "WebSearch")
+	}
+	absent = append(absent, "Skill")
+	return seg + "There is no " + orList(absent) + " tool." + readSkillDoc
+}
+
+// orList joins names as "a, b, or c", or "a or b" for two.
+func orList(names []string) string {
+	if len(names) == 2 {
+		return names[0] + " or " + names[1]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
 }
 
 // grace bounds the wait for the CLI to exit after its result or a signal.
@@ -103,7 +117,7 @@ func New(p config.Provider, system []string, workDir string, servers map[string]
 // owns its context and the MCP servers, and takes steer input. It reports
 // the context window itself.
 func (b *Backend) Capabilities(string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts()}
+	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts(), WebSearch: true}
 }
 
 // Run runs one turn of the CLI on the external session in the saved state. A
@@ -155,7 +169,8 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 }
 
 // restriction is the set of tools that the CLI may show: AskUserQuestion on a
-// run that may ask a question, and each harness tool of req. The init frame
+// run that may ask a question, WebSearch on a run that offers the search, and
+// each harness tool of req. The init frame
 // check keeps a CLI that does not apply it from running. req.Tools holds only
 // the allowed harness tools. A run that answers a parked question keeps
 // AskUserQuestion.
@@ -163,6 +178,9 @@ func restriction(req turn.Request, questions, answers bool) map[string]bool {
 	allowed := map[string]bool{}
 	if questions && (answers || req.AllowedTools == nil || slices.Contains(req.AllowedTools, askTool)) {
 		allowed[askTool] = true
+	}
+	if req.WebSearch {
+		allowed[searchTool] = true
 	}
 	for _, t := range req.Tools {
 		allowed[mcpPrefix+t.Name] = true
@@ -198,7 +216,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, mcpArgs...)
+	args = append(args, allowSearch(mcpArgs, r.allowed[searchTool])...)
 	if ref.Model != "" {
 		args = append(args, "--model", ref.Model)
 	}
@@ -240,7 +258,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 // names, the entries of append_system_prompt, the skill segment of the
 // session, and the history directive of a session that another model began.
 func (b *Backend) systemPrompt(req turn.Request) string {
-	segs := []string{toolNamesOf(req.Tools), b.system, req.Skills}
+	segs := []string{toolNamesOf(req.Tools, req.WebSearch), b.system, req.Skills}
 	if req.Foreign {
 		segs = append(segs, historyDirective)
 	}

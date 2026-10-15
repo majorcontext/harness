@@ -28,6 +28,9 @@ const maxTokens = 8192
 // errIncomplete is a response that the output cap cut off. The turn treats it as a stream that ended before its terminal event.
 var errIncomplete = errors.New("incomplete response returned, reason: max_tokens")
 
+// errPaused ends a call that still paused after its last resume. It is not retryable: a new call runs the searches again, and bills them.
+var errPaused = fmt.Errorf("incomplete response returned, reason: %s", "pause_turn")
+
 // errFiltered is a response that the provider refused or filtered. The turn retries it, as the Codex CLI retries a content filter.
 var errFiltered = errors.New("response refused or filtered by the provider")
 
@@ -61,17 +64,24 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 		return turn.Capabilities{}
 	}
 	control, _ := b.effortControl(ref)
+	search := b.nativeSearch()
 	if b.window > 0 {
-		return turn.Capabilities{ContextWindow: b.window, Efforts: control.Levels}
+		return turn.Capabilities{ContextWindow: b.window, Efforts: control.Levels, WebSearch: search}
 	}
 	window, ok := modelmeta.ContextWindow(ref)
 	if ok {
-		return turn.Capabilities{ContextWindow: window, Efforts: control.Levels}
+		return turn.Capabilities{ContextWindow: window, Efforts: control.Levels, WebSearch: search}
 	}
 	if _, seen := warned.LoadOrStore(model, true); !seen {
 		b.log.Warn("harness: the model has no known context window, so it runs on the default", "model", model, "window", defaultContextWindow)
 	}
-	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true, Efforts: control.Levels}
+	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true, Efforts: control.Levels, WebSearch: search}
+}
+
+// nativeSearch reports whether the client offers the web search of its API.
+func (b *Backend) nativeSearch() bool {
+	w, ok := b.client.(provider.WebSearcher)
+	return ok && w.NativeWebSearch()
 }
 
 // effortSource is a provider client that knows the effort control of its models.
@@ -120,18 +130,20 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartReasoning, Text: ev.Text})
 		case provider.EventDone:
-			tel := b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage)
+			tel := b.telemetry(req.Model, ev.Usage, ev.Prompt, ev.SubscriptionUsage)
 			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
 			out.Telemetry(tel)
 			if err := incomplete(ev, req.AcceptCut); err != nil {
 				return classify(err)
 			}
 			m := fromMessage(ev.Message)
-			if len(m.Parts) == 0 {
-				continue
+			if len(m.Parts) > 0 {
+				if err := out.Item(m); err != nil {
+					return err
+				}
 			}
-			if err := out.Item(m); err != nil {
-				return err
+			if ev.StopReason == provider.StopPaused {
+				return errPaused
 			}
 		default:
 			out.Alive()
@@ -175,11 +187,12 @@ func callMetrics(sentAt, firstAt, doneAt time.Time, md *provider.RequestMetadata
 
 // telemetry reports u, and the prompt of the call as the context reading.
 // A call with no prompt tokens reports no reading, so the earlier reading stays.
-func (b *Backend) telemetry(model string, u provider.Usage, sub *message.SubscriptionUsage) turn.Telemetry {
+func (b *Backend) telemetry(model string, u provider.Usage, prompt int, sub *message.SubscriptionUsage) turn.Telemetry {
 	usage := protocol.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
-		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
+		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens), WebSearchRequests: int64(u.WebSearchRequests)}
 	t := turn.Telemetry{Usage: usage, SubscriptionUsage: subscription(sub)}
-	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
+	tokens := cmp.Or(int64(prompt), usage.InputTokens+usage.CacheReadTokens+usage.CacheWriteTokens)
+	if tokens > 0 {
 		caps := b.Capabilities(model)
 		t.Context = protocol.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(caps.ContextWindow), WindowEstimated: caps.WindowEstimated}
 	}
@@ -236,7 +249,7 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
 	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ThinksByDefault: control.ThinksByDefault, OffThinking: control.OffThinking, ServiceTier: req.Settings.ServiceTier,
-		SessionKey:  req.SessionID,
+		SessionKey: req.SessionID, WebSearch: req.WebSearch && b.nativeSearch(),
 		Temperature: req.Temperature, TopP: req.TopP}
 	if req.Instructions != "" {
 		preq.System = []string{req.Instructions}

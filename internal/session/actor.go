@@ -128,6 +128,8 @@ type Config struct {
 	// AskUserQuestion lets a session ask the user a question; the embedder
 	// answers with Resolve.
 	AskUserQuestion bool
+	// WebSearch offers the native web search of the provider to a turn whose model has one and whose session allows web_search.
+	WebSearch bool
 	// Banner is the engine status that each model call of a turn sends as
 	// engine context. Empty: none.
 	Banner string

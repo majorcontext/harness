@@ -336,6 +336,8 @@ func transcript(h []protocol.LogMessage, budget int) string {
 		for _, p := range m.Parts {
 			s := p.Text
 			switch {
+			case p.Type == protocol.LogPartWebSearch:
+				s = "[web search] " + p.Query
 			case p.Type == protocol.LogPartToolCall:
 				s = "[tool call " + p.Name + "] " + string(p.Arguments)
 			case p.Type == protocol.LogPartToolResult && p.IsError:

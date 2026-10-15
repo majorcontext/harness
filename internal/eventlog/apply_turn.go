@@ -72,7 +72,7 @@ func (s *State) applyItem(e protocol.ItemCompleted) error {
 				return illegal("tool result %s has a blob %d that is not a blob part with a blob_key", p.CallID, j)
 			}
 			calls = slices.Delete(calls, i, i+1)
-		case p.Type != protocol.LogPartText && p.Type != protocol.LogPartReasoning:
+		case p.Type != protocol.LogPartText && p.Type != protocol.LogPartReasoning && p.Type != protocol.LogPartWebSearch:
 			return illegal("item %s has part type %q", e.ItemID, p.Type)
 		}
 	}

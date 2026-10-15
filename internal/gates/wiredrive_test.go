@@ -70,6 +70,8 @@ func observeRun(t *testing.T, w Wire, s Shape, run fakeRun) {
 
 var toolCall = harnesstest.ToolCall{ID: "toolu_1", Name: "list_files", Input: map[string]any{"dir": "."}}
 
+var search = &harnesstest.WebSearch{Query: "q", Sources: []harnesstest.Source{{Title: "t", URL: "https://example.com"}}}
+
 const anthropicRequest = `{"model":"m","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
 
 func fakeAnthropicShape(t *testing.T) Shape {
@@ -79,6 +81,9 @@ func fakeAnthropicShape(t *testing.T) Shape {
 		{Text: "calling", ToolCalls: []harnesstest.ToolCall{toolCall}},
 		{ToolCalls: []harnesstest.ToolCall{toolCall}},
 		{Text: "cut", StopReason: "max_tokens", Usage: harnesstest.Usage{Input: 9, Output: 4}},
+		{Text: "found", WebSearch: search},
+		{Text: "paused", StopReason: "pause_turn", WebSearch: search},
+		{Text: "failed", WebSearch: &harnesstest.WebSearch{Query: "q", Error: "max_uses_exceeded"}},
 		{HTTPStatus: http.StatusNotFound, ErrorMessage: "model: m"},
 		{HTTPStatus: http.StatusTooManyRequests},
 	}
@@ -124,6 +129,7 @@ func fakeResponsesShape(t *testing.T) Shape {
 		{reply: harnesstest.Reply{Text: "calling", ToolCalls: []harnesstest.ToolCall{toolCall}}},
 		{reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{toolCall}}},
 		{reply: harnesstest.Reply{Text: "ok"}, extra: harnesstest.CodexReply{Reasoning: []string{"think"}}},
+		{reply: harnesstest.Reply{Text: "found", WebSearch: search}},
 	}
 	s := Shape{}
 	for _, c := range cases {

@@ -305,6 +305,7 @@ func cloneParts(parts []protocol.LogPart) []protocol.LogPart {
 	parts = slices.Clone(parts)
 	for i := range parts {
 		parts[i].Arguments = slices.Clone(parts[i].Arguments)
+		parts[i].Results, parts[i].Citations = slices.Clone(parts[i].Results), slices.Clone(parts[i].Citations)
 	}
 	return parts
 }

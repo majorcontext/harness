@@ -170,7 +170,7 @@ func (h *held) seedDiffs(ctx context.Context, r harness.Reader, st *pumpState) e
 func logMessage(m protocol.Message) protocol.LogMessage {
 	lm := protocol.LogMessage{Role: m.Role, ParentCallID: m.ParentCallID, Parts: make([]protocol.LogPart, 0, len(m.Parts))}
 	for _, p := range m.Parts {
-		lp := protocol.LogPart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, Arguments: slices.Clone(p.Arguments), IsError: p.IsError}
+		lp := protocol.LogPart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, Arguments: slices.Clone(p.Arguments), IsError: p.IsError, Query: p.Query, Results: p.Results}
 		if p.Type == protocol.MessagePartToolResult && p.Content != noToolOutput {
 			lp.Text = p.Content
 		}

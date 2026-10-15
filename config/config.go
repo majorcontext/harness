@@ -76,8 +76,8 @@ type Config struct {
 	// ModelTool false disables the `model` session tool. nil leaves it
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
-	// Web opts in to the web tools of a session with a WorkDir. Fetch is off
-	// when unset. A project Fetch overrides the user Fetch; an unset one inherits.
+	// Web opts in to the web tools. Each field is off when unset. A project
+	// field overrides the user field; an unset one inherits. Fetch needs a WorkDir.
 	Web WebSpec `json:"web,omitzero"`
 	// Plugins lists the plugin processes to wire into every session's
 	// turn hooks. Order matters: sync hooks chain across plugins in this
@@ -186,6 +186,8 @@ type Config struct {
 type WebSpec struct {
 	// Fetch offers the web_fetch tool.
 	Fetch *bool `json:"fetch,omitempty"`
+	// Search offers the native web search of the provider of the model, where the provider has one.
+	Search *bool `json:"search,omitempty"`
 }
 
 // ResolveModel returns s, else Model, else DefaultModel, after one alias lookup. It does not parse.

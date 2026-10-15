@@ -34,6 +34,8 @@ type run struct {
 	blobMu sync.Mutex
 	blobs  map[string][]protocol.Blob
 	names  map[string]string
+	// searches holds the query of each WebSearch call that waits for its result. The result records the search as one item.
+	searches map[string]string
 	// questions reports a run with the question channel; resolution answers
 	// the parked call, and question is the call that the main thread asked.
 	questions  bool
@@ -437,6 +439,9 @@ func (r *run) assistant(env envelope) error {
 			return fmt.Errorf("%w: tool call %s", ErrToolsNotRestricted, p.Name)
 		}
 	}
+	if parts = r.holdSearches(parts, env.ParentToolUseID); len(parts) == 0 {
+		return r.flush()
+	}
 	if r.pending == nil || m.ID == "" || m.ID != r.pendingID || r.pending.ParentCallID != env.ParentToolUseID {
 		if err := r.flush(); err != nil {
 			return err
@@ -483,11 +488,14 @@ func (r *run) toolResults(env envelope) error {
 			delete(r.calls, p.CallID)
 		}
 	}
-	msg := protocol.LogMessage{Role: protocol.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID}
 	if err := r.flush(); err != nil {
 		return err
 	}
-	return r.out.Item(msg)
+	parts, err := r.recordSearches(parts, env.ParentToolUseID, env.ToolUseResult)
+	if err != nil || len(parts) == 0 {
+		return err
+	}
+	return r.out.Item(protocol.LogMessage{Role: protocol.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID})
 }
 
 // flush records the pending assistant item.

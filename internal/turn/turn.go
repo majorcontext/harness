@@ -62,8 +62,12 @@ type Capabilities struct {
 	Efforts []string
 	// Tools names the built-in tools of a backend that owns the loop. A
 	// session of that backend may allow only these and the embedder tools.
-	Tools []string
+	Tools     []string
+	WebSearch bool // the backend offers the native web search of the provider
 }
+
+// WebSearchTool is the name of the native web search in AllowedTools.
+const WebSearchTool = "web_search"
 
 // Tool is an embedder tool. The loop runs it, or Request.Call for a backend
 // that owns the loop.
@@ -105,7 +109,9 @@ type Request struct {
 	// MCPServers are the session MCP servers, for a backend that owns MCP. Never log their env or headers.
 	MCPServers map[string]MCPServer
 	// Questions reports that the backend may ask the user a question.
-	Questions bool
+	Questions     bool
+	SearchAllowed bool // the config and AllowedTools allow the web search; each call sets WebSearch from it
+	WebSearch     bool // offers the native web search of the provider
 	// Foreign reports History messages that another provider recorded.
 	Foreign bool
 	// Banner is the engine status that the first model call of a session
@@ -287,6 +293,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := applyParams(step, b, caps, req, &call); err != nil {
 			return err
 		}
+		call.WebSearch = call.SearchAllowed && b.Capabilities(call.Model).WebSearch
 		ts := toolsetOf(step, &call, src)
 		if first && !caps.OwnsLoop {
 			if err := answerAsks(ctx, runner{hooks: ts.Hooks}, to, &req, record); err != nil {

@@ -110,6 +110,8 @@ func flatten(b *strings.Builder, m protocol.LogMessage, names map[string]string)
 				fmt.Fprintf(b, "Assistant: %s\n", p.Text)
 			case p.Type == protocol.LogPartReasoning:
 				b.WriteString("Assistant: [thinking]\n")
+			case p.Type == protocol.LogPartWebSearch:
+				fmt.Fprintf(b, "Assistant searched the web: %s\n", clip(p.Query))
 			case p.Type == protocol.LogPartToolCall:
 				fmt.Fprintf(b, "Assistant called tool %s(%s)\n", p.Name, clip(string(p.Arguments)))
 			}

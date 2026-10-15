@@ -27,7 +27,7 @@ func mergeModes(ms ...map[string]mode) map[string]mode {
 	return out
 }
 
-var modes = mergeModes(basicModes, threadModes, stdinModes, childModes, partialModes)
+var modes = mergeModes(basicModes, threadModes, stdinModes, childModes, partialModes, searchModes)
 
 func normalTurn(f *fake) {
 	f.emit(

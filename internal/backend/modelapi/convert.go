@@ -20,7 +20,16 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.L
 	for _, p := range m.Parts {
 		switch p.Type {
 		case protocol.LogPartText:
-			out.Parts = append(out.Parts, &message.Text{Text: p.Text})
+			out.Parts = append(out.Parts, &message.Text{Text: p.Text, Citations: citations(p.Citations)})
+		case protocol.LogPartWebSearch:
+			w := &message.WebSearch{ID: p.CallID, Query: p.Query, ProviderData: p.ProviderData}
+			if p.IsError {
+				w.Error = p.Text
+			}
+			for _, r := range p.Results {
+				w.Results = append(w.Results, message.SearchResult(r))
+			}
+			out.Parts = append(out.Parts, w)
 		case protocol.LogPartEngineContext:
 			out.Parts = append(out.Parts, &message.EngineContext{Text: p.Text})
 		case protocol.LogPartReasoning:
@@ -67,7 +76,17 @@ func fromMessage(m *message.Message) protocol.LogMessage {
 	for _, p := range m.Parts {
 		switch p := p.(type) {
 		case *message.Text:
-			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartText, Text: p.Text})
+			part := protocol.LogPart{Type: protocol.LogPartText, Text: p.Text}
+			for _, c := range p.Citations {
+				part.Citations = append(part.Citations, protocol.Citation(c))
+			}
+			out.Parts = append(out.Parts, part)
+		case *message.WebSearch:
+			part := protocol.LogPart{Type: protocol.LogPartWebSearch, CallID: p.ID, Query: p.Query, IsError: p.Error != "", Text: p.Error, ProviderData: p.ProviderData}
+			for _, r := range p.Results {
+				part.Results = append(part.Results, protocol.SearchResult(r))
+			}
+			out.Parts = append(out.Parts, part)
 		case *message.Reasoning:
 			if p.Text != "" || len(p.ProviderData) > 0 {
 				out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartReasoning, Text: p.Text, ProviderData: p.ProviderData})
@@ -80,6 +99,14 @@ func fromMessage(m *message.Message) protocol.LogMessage {
 			}
 			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args})
 		}
+	}
+	return out
+}
+
+func citations(cs []protocol.Citation) []message.Citation {
+	var out []message.Citation
+	for _, c := range cs {
+		out = append(out, message.Citation(c))
 	}
 	return out
 }

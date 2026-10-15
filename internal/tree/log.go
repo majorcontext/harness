@@ -62,6 +62,8 @@ func renderEntry(m protocol.LogMessage) logEntry {
 			lines = append(lines, capped(p.Text, logEntryCap))
 		case p.Type == protocol.LogPartReasoning && p.Text != "":
 			lines = append(lines, "[reasoning] "+capped(p.Text, logEntryCap))
+		case p.Type == protocol.LogPartWebSearch:
+			lines = append(lines, "[web_search] "+capped(p.Query, logArgsCap))
 		case p.Type == protocol.LogPartToolCall:
 			lines = append(lines, "[tool_call] "+p.Name+"("+capped(string(p.Arguments), logArgsCap)+")")
 		case p.Type == protocol.LogPartToolResult && p.IsError:

@@ -1,0 +1,193 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "find the release"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "find the release"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "current Go release",
+            "call_id": "srvtoolu_1",
+            "content": "Release History \u003chttps://go.dev/doc/devel/release\u003e\nGo 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          },
+          {
+            "type": "text",
+            "text": "Go 1.27.2 is current.",
+            "content": "cites Release History \u003chttps://go.dev/doc/devel/release\u003e\ncites Go 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "back"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "history_tool.a": {
+      "status": 200,
+      "body": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "The following is PRIOR conversation history for this session that already happened. It is context for you to read, not a new message to respond to.\n\nShowing messages 1-7 of 7 total (oldest first).\n\nUser: find the release\nAssistant searched the web: current Go release\nAssistant: Go 1.27.2 is current.\nUser: back\nAssistant: Let me check that.\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nAssistant: Done — it printed hi.\n",
+              "type": "text"
+            }
+          ]
+        }
+      }
+    },
+    "set_model.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 3,
+        "id": "ses:a",
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "set_model.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 2229,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 9,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10750,
+          "output_tokens": 110,
+          "web_search_requests": 1
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

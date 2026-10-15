@@ -1,0 +1,162 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "switch now"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "anthropic/claude-fable-5"
+              },
+              "tool_use_id": "call#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"bifrost\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "call#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "switch now"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "call#1",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "anthropic/claude-fable-5"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "call#1",
+            "content": "{\"model\":\"anthropic/claude-fable-5\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"bifrost\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "chat_requests": {
+      "status": 200,
+      "body": [
+        {
+          "messages": [
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "switch now"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "prompt_cache_key": "ses#1",
+          "system_has_goal_evaluator": false,
+          "tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "goal",
+            "grep",
+            "ls",
+            "model",
+            "process",
+            "read_file",
+            "read_tool_result",
+            "session_info",
+            "task",
+            "write_file"
+          ],
+          "user": "ses#1"
+        }
+      ]
+    }
+  }
+}

@@ -145,6 +145,9 @@ type apiBlock struct {
 
 	Data string `json:"data,omitempty"` // redacted_thinking
 
+	// ResultContent is the content of a web_search_tool_result block, which the API issued and a request sends back unchanged.
+	ResultContent json.RawMessage `json:"-"`
+
 	CacheControl *apiCacheControl `json:"cache_control,omitempty"`
 }
 
@@ -156,9 +159,13 @@ type apiSource struct {
 }
 
 type apiToolDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	// Type, MaxUses, and AllowedCallers describe a server tool, which the API runs. A function tool sends none.
+	Type           string          `json:"type,omitempty"`
+	MaxUses        int             `json:"max_uses,omitempty"`
+	AllowedCallers []string        `json:"allowed_callers,omitempty"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description,omitempty"`
+	InputSchema    json.RawMessage `json:"input_schema,omitempty"`
 }
 
 // apiCacheControl marks a prompt-cache breakpoint. TTL is the cache lifetime:
@@ -313,6 +320,9 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, apiToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 	}
+	if req.WebSearch {
+		out.Tools = append(out.Tools, webSearchTool())
+	}
 
 	// Defense-in-depth against a poisoned history: a ToolCall with no
 	// matching ToolResult in the immediately-following wire turn would
@@ -421,6 +431,9 @@ func transcodeParts(parts message.Parts, thinkingEnabled, topLevel bool) ([]apiB
 				return nil, err
 			}
 			blocks = append(blocks, b)
+
+		case *message.WebSearch:
+			blocks = append(blocks, searchBlocks(v)...)
 
 		case *message.ToolCall:
 			input := v.Arguments

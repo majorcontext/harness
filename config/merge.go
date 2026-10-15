@@ -278,14 +278,16 @@ func mergeSpecs(out, base, over *Config) {
 	}
 }
 
-// mergeWeb sets web.fetch from over, else from base, in a new value.
+// mergeWeb sets each web field from over, else from base, in a new value.
 func mergeWeb(out, base, over *Config) {
-	fetch := over.Web.Fetch
-	if fetch == nil {
-		fetch = base.Web.Fetch
+	pick := func(o, b *bool) *bool {
+		if o == nil {
+			o = b
+		}
+		if o == nil {
+			return nil
+		}
+		return new(*o)
 	}
-	out.Web = WebSpec{}
-	if fetch != nil {
-		out.Web.Fetch = new(*fetch)
-	}
+	out.Web = WebSpec{Fetch: pick(over.Web.Fetch, base.Web.Fetch), Search: pick(over.Web.Search, base.Web.Search)}
 }

@@ -56,6 +56,20 @@ func transcriptOfPage(t *testing.T, msgs []protocol.Message) []transcriptMessage
 		tm := transcriptMessage{ID: m.ID, Role: m.Role, Parts: make([]transcriptPart, 0, len(m.Parts))}
 		for _, p := range m.Parts {
 			tp := transcriptPart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, IsError: p.IsError, Content: p.Content}
+			switch {
+			case p.Type == protocol.MessagePartWebSearch:
+				tp.Text = p.Query
+				if p.IsError {
+					tp.Content = "error: " + p.Text + "\n"
+				}
+				for _, r := range p.Results {
+					tp.Content += r.Title + " <" + r.URL + ">\n"
+				}
+			case len(p.Citations) > 0:
+				for _, c := range p.Citations {
+					tp.Content += "cites " + c.Title + " <" + c.URL + ">\n"
+				}
+			}
 			if len(p.Arguments) > 0 {
 				if err := json.Unmarshal(p.Arguments, &tp.Arguments); err != nil {
 					t.Fatalf("decode arguments of %s: %v", m.ID, err)

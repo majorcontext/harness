@@ -171,6 +171,8 @@ type Runtime struct {
 	banner string
 	// questions lets a backend ask the user a question.
 	questions bool
+	// webSearch is Config.Web.Search: models whose backend has a native web search get it.
+	webSearch bool
 	// commandDirs are the prompt-command dirs, and agentDirs the agent profile
 	// dirs; both are nil without a WorkDir.
 	commandDirs []string
@@ -277,7 +279,7 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
-	r.banner, r.questions = banner(opts.Version, time.Now()), opts.AskUserQuestion
+	r.banner, r.questions, r.webSearch = banner(opts.Version, time.Now()), opts.AskUserQuestion, opts.Config.WebSearchEnabled()
 	return r, nil
 }
 
@@ -388,6 +390,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Backend:         r.models,
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
+		WebSearch:       r.webSearch,
 		Evaluator:       r.evaluator,
 		MCPServers:      l.mcp,
 		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),

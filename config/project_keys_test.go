@@ -44,3 +44,14 @@ func TestProjectFileProviderKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestWebSearchConfig(t *testing.T) {
+	user, _ := Parse("user.json", []byte(`{"web":{"search":true}}`))
+	off := &Config{Web: WebSpec{Search: new(bool)}}
+	for name, got := range map[string]bool{"nil": (*Config)(nil).WebSearchEnabled(), "loaded": user.WebSearchEnabled(),
+		"project false": merge(user, off).WebSearchEnabled(), "project unset": merge(user, &Config{}).WebSearchEnabled()} {
+		if want := name == "loaded" || name == "project unset"; got != want {
+			t.Errorf("%s: WebSearchEnabled() = %v, want %v", name, got, want)
+		}
+	}
+}

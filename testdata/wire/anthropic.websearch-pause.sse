@@ -1,0 +1,1128 @@
+event: message_start
+data: {"type":"message_start","message":{"model":"claude-haiku-4-5-20251001","id":"msg_FIXTURE1","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":2273,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":3,"service_tier":"standard","inference_geo":"not_available"},"diagnostics":null}          }
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}      }
+
+event: ping
+data: {"type": "ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll help"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" you do"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" this"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" chain of 14"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" searches"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":". Let me start"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" with the first search"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"."}              }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0              }
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE1","name":"web_search","input":{}}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"query"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\": \"Go "}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"release"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"}"}     }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1    }
+
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE1","content":[{"type":"web_search_result","title":"Go 1.24 Release Notes - The Go Programming Language","url":"https://tip.golang.org/doc/go1.24","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_1","page_age":"815 days ago"},{"type":"web_search_result","title":"Go 1.25 Release Notes - The Go Programming Language","url":"https://go.dev/doc/go1.25","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_2","page_age":null},{"type":"web_search_result","title":"Release History - The Go Programming Language","url":"https://go.dev/doc/devel/release","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_3","page_age":"429 days ago"},{"type":"web_search_result","title":"Android Go","url":"https://en.wikipedia.org/wiki/Android_Go","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_4","page_age":null},{"type":"web_search_result","title":"Release History - The Go Programming Language","url":"https://tip.golang.org/doc/devel/release","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_5","page_age":null},{"type":"web_search_result","title":"Releases · microsoft/go · GitHub","url":"https://github.com/microsoft/go/releases","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_6","page_age":"41 days ago"},{"type":"web_search_result","title":"Go (programming language)","url":"https://en.wikipedia.org/wiki/Go_(programming_language)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_7","page_age":null},{"type":"web_search_result","title":"Go Go Go! (Lethal Bizzle song)","url":"https://en.wikipedia.org/wiki/Go_Go_Go!_(Lethal_Bizzle_song)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_8","page_age":null},{"type":"web_search_result","title":"Go (Kreva album)","url":"https://en.wikipedia.org/wiki/Go_(Kreva_album)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_9","page_age":null},{"type":"web_search_result","title":"Go features by version","url":"https://antonz.org/which-go/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_10","page_age":"815 days ago"}],"caller":{"type":"direct"}}   }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2            }
+
+event: content_block_start
+data: {"type":"content_block_start","index":3,"content_block":{"type":"text","text":""}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"Search"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" "}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"1"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" complete"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"."}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" The"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" top"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" result"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" title"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" is \"Go "} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"1"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":".24"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" Release"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" Notes"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" -"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" The"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" Go"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" Programming"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" Language\"."}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" I"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"'ll"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" use"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" \""}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"1"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":".24\" from"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" this"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" title for"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" the"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" next"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":" search."}      }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":3          }
+
+event: content_block_start
+data: {"type":"content_block_start","index":4,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE2","name":"web_search","input":{}}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":4,"delta":{"type":"input_json_delta","partial_json":""}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":4,"delta":{"type":"input_json_delta","partial_json":"{\"query"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":4,"delta":{"type":"input_json_delta","partial_json":"\": \"1.2"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":4,"delta":{"type":"input_json_delta","partial_json":"4\"}"}         }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":4        }
+
+event: content_block_start
+data: {"type":"content_block_start","index":5,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE2","content":[{"type":"web_search_result","title":"1:24 scale","url":"https://en.wikipedia.org/wiki/1:24_scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_11","page_age":"313 days ago"},{"type":"web_search_result","title":"Minecraft 1.24: The Update that Completely Changed the World","url":"https://minecraftfanon.fandom.com/wiki/Minecraft_1.24:_The_Update_that_Completely_Changed_the_World","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_12","page_age":"442 days ago"},{"type":"web_search_result","title":"Go 1.24 Release Notes - The Go Programming Language","url":"https://go.dev/doc/go1.24","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_13","page_age":null},{"type":"web_search_result","title":"Go 1.24 interactive tour","url":"https://antonz.org/go-1-24/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_14","page_age":"640 days ago"},{"type":"web_search_result","title":"1:24 Mercedes Benz V260L alloy sound light business vehicle car model kids","url":"https://www.ebay.com/itm/137279374929","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_15","page_age":"64 days ago"},{"type":"web_search_result","title":"24","url":"https://en.wikipedia.org/wiki/24","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_16","page_age":null},{"type":"web_search_result","title":"1:24 RC Cars, Trucks & Crawlers","url":"https://www.fmshobby.com/collections/1-24-rc-car","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_17","page_age":null},{"type":"web_search_result","title":"24 (number)","url":"https://en.wikipedia.org/wiki/24_(number)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_18","page_age":null},{"type":"web_search_result","title":"Diecast 1 24 Scale","url":"https://www.amazon.com/diecast-1-24-scale/s?k=diecast+1+24+scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_19","page_age":null}],"caller":{"type":"direct"}}     }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":5   }
+
+event: content_block_start
+data: {"type":"content_block_start","index":6,"content_block":{"type":"text","text":""}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"Search"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" "}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"2"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" complete"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"."}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" The"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" top"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" result"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" title"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" is \"1"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":":24 scale"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"\"."}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" I"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"'ll use"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" \""}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"scale"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":"\" from"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" this"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" title for"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" the"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" next"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":6,"delta":{"type":"text_delta","text":" search."}            }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":6             }
+
+event: content_block_start
+data: {"type":"content_block_start","index":7,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE3","name":"web_search","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":7,"delta":{"type":"input_json_delta","partial_json":""}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":7,"delta":{"type":"input_json_delta","partial_json":"{\"query"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":7,"delta":{"type":"input_json_delta","partial_json":"\": \"sca"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":7,"delta":{"type":"input_json_delta","partial_json":"le\"}"}             }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":7     }
+
+event: content_block_start
+data: {"type":"content_block_start","index":8,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE3","content":[{"type":"web_search_result","title":"Scale (music)","url":"https://en.wikipedia.org/wiki/Scale_(music)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_20","page_age":null},{"type":"web_search_result","title":"SCALE Definition & Meaning - Merriam-Webster","url":"https://www.merriam-webster.com/dictionary/scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_21","page_age":"20 days ago"},{"type":"web_search_result","title":"Scale (geography)","url":"https://en.wikipedia.org/wiki/Scale_(geography)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_22","page_age":null},{"type":"web_search_result","title":"SCALE About","url":"https://www.ornl.gov/scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_23","page_age":"2424 days ago"},{"type":"web_search_result","title":"Weighing scale","url":"https://en.wikipedia.org/wiki/Weighing_scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_24","page_age":null},{"type":"web_search_result","title":"Scaling","url":"https://en.wikipedia.org/wiki/Scaling","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_25","page_age":null},{"type":"web_search_result","title":"Scale","url":"https://en.wikipedia.org/wiki/Scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_26","page_age":null},{"type":"web_search_result","title":"SCALE 24x","url":"https://www.socallinuxexpo.org/scale/24x","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_27","page_age":null},{"type":"web_search_result","title":"Scale (analytical tool)","url":"https://en.wikipedia.org/wiki/Scale_(analytical_tool)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_28","page_age":null},{"type":"web_search_result","title":"SCALE","url":"https://dictionary.cambridge.org/us/dictionary/english/scale","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_29","page_age":"17 days ago"}],"caller":{"type":"direct"}}  }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":8 }
+
+event: content_block_start
+data: {"type":"content_block_start","index":9,"content_block":{"type":"text","text":""}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"Search"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" "}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"3 complete"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":". The"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" top"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" result"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" title"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" is"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" \""}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"Scale"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" (music"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":")"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"\". I"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"'ll"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" use"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" \""}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"music"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":"\" from"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" this"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" title"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" for"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" the"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" next"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":9,"delta":{"type":"text_delta","text":" search."}      }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":9     }
+
+event: content_block_start
+data: {"type":"content_block_start","index":10,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE4","name":"web_search","input":{}}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":10,"delta":{"type":"input_json_delta","partial_json":""} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":10,"delta":{"type":"input_json_delta","partial_json":"{\"query"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":10,"delta":{"type":"input_json_delta","partial_json":"\": \"mus"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":10,"delta":{"type":"input_json_delta","partial_json":"ic\"}"}            }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":10             }
+
+event: content_block_start
+data: {"type":"content_block_start","index":11,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE4","content":[{"type":"web_search_result","title":"The Music (disambiguation)","url":"https://en.wikipedia.org/wiki/The_Music_(disambiguation)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_30","page_age":null},{"type":"web_search_result","title":"Definition of music","url":"https://en.wikipedia.org/wiki/Definition_of_music","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_31","page_age":null},{"type":"web_search_result","title":"Stream and listen to music online for free with SoundCloud","url":"https://soundcloud.com/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_32","page_age":"6589 days ago"},{"type":"web_search_result","title":"Amazon Music","url":"https://music.amazon.com/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_33","page_age":"0 days ago"},{"type":"web_search_result","title":"YouTube Music","url":"https://music.youtube.com/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_34","page_age":"471 days ago"},{"type":"web_search_result","title":"Apple Music - Web Player","url":"https://music.apple.com/us/new","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_35","page_age":"0 days ago"},{"type":"web_search_result","title":"Chrome Music Lab","url":"https://musiclab.chromeexperiments.com/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_36","page_age":"3873 days ago"},{"type":"web_search_result","title":"All Songs Considered : NPR","url":"https://www.npr.org/sections/allsongs/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_37","page_age":"100 days ago"},{"type":"web_search_result","title":"Royalty Free Music Download - Pixabay","url":"https://pixabay.com/music/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_38","page_age":"50 days ago"}],"caller":{"type":"direct"}}           }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":11     }
+
+event: content_block_start
+data: {"type":"content_block_start","index":12,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"Search"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" "}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"4"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" complete"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"."}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" The"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" top"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" result"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" title"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" is \""} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"The"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" Music"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" ("}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"disambiguation"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":")"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"\". I"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"'ll"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" use"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" \""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"disambiguation"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":"\" from"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" this"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" title"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" for"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" the"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" next"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":12,"delta":{"type":"text_delta","text":" search."}      }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":12    }
+
+event: content_block_start
+data: {"type":"content_block_start","index":13,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE5","name":"web_search","input":{}}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":13,"delta":{"type":"input_json_delta","partial_json":""}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":13,"delta":{"type":"input_json_delta","partial_json":"{\"query"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":13,"delta":{"type":"input_json_delta","partial_json":"\": \"dis"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":13,"delta":{"type":"input_json_delta","partial_json":"ambigua"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":13,"delta":{"type":"input_json_delta","partial_json":"tion\"}"}             }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":13   }
+
+event: content_block_start
+data: {"type":"content_block_start","index":14,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE5","content":[{"type":"web_search_result","title":"Disambiguation - an overview","url":"https://www.sciencedirect.com/topics/psychology/disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_39","page_age":null},{"type":"web_search_result","title":"DISAMBIGUATION Definition & Meaning","url":"https://www.dictionary.com/browse/disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_40","page_age":"314 days ago"},{"type":"web_search_result","title":"DISAMBIGUATION definition","url":"https://dictionary.cambridge.org/us/dictionary/english/disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_41","page_age":"29 days ago"},{"type":"web_search_result","title":"Disambiguation - Definition, Meaning & Synonyms","url":"https://www.vocabulary.com/dictionary/disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_42","page_age":null},{"type":"web_search_result","title":"Disambiguation (disambiguation)","url":"https://en.wikipedia.org/wiki/Disambiguation_(disambiguation)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_43","page_age":null},{"type":"web_search_result","title":"Word-sense disambiguation","url":"https://en.wikipedia.org/wiki/Word-sense_disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_44","page_age":null},{"type":"web_search_result","title":"Wikipedia:Disambiguation","url":"https://en.wikipedia.org/wiki/Wikipedia:Disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_45","page_age":null},{"type":"web_search_result","title":"disambiguation - Wiktionary, the free dictionary","url":"https://en.wiktionary.org/wiki/disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_46","page_age":"96 days ago"},{"type":"web_search_result","title":"Author name disambiguation","url":"https://en.wikipedia.org/wiki/Author_name_disambiguation","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_47","page_age":null}],"caller":{"type":"direct"}}  }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":14         }
+
+event: content_block_start
+data: {"type":"content_block_start","index":15,"content_block":{"type":"text","text":""}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":"Search"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" "}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":"5"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" complete"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":". The"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" top"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" result"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" title"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" is \""}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":"Disambiguation -"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" an"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" overview\"."}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" I"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":"'ll"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" use"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" \""}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":"overview"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":"\" from"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" this"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" title"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" for"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" the next"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":15,"delta":{"type":"text_delta","text":" search."} }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":15       }
+
+event: content_block_start
+data: {"type":"content_block_start","index":16,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE6","name":"web_search","input":{}}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":16,"delta":{"type":"input_json_delta","partial_json":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":16,"delta":{"type":"input_json_delta","partial_json":"{\"query"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":16,"delta":{"type":"input_json_delta","partial_json":"\": \"ove"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":16,"delta":{"type":"input_json_delta","partial_json":"rview\"}"}   }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":16     }
+
+event: content_block_start
+data: {"type":"content_block_start","index":17,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE6","content":[{"type":"web_search_result","title":"Overview - Definition, Meaning & Synonyms","url":"https://www.vocabulary.com/dictionary/overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_48","page_age":null},{"type":"web_search_result","title":"OVERVIEW Definition & Meaning","url":"https://www.dictionary.com/browse/overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_49","page_age":"313 days ago"},{"type":"web_search_result","title":"OVERVIEW","url":"https://dictionary.cambridge.org/dictionary/english/overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_50","page_age":"3 days ago"},{"type":"web_search_result","title":"Overview","url":"https://en.wikipedia.org/wiki/Overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_51","page_age":null},{"type":"web_search_result","title":"OVERVIEW","url":"https://dictionary.cambridge.org/us/dictionary/english/overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_52","page_age":"3 days ago"},{"type":"web_search_result","title":"Overview - Definition & Meaning","url":"https://www.gymglish.com/en/gymglish/english-translation/overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_53","page_age":null},{"type":"web_search_result","title":"Overview","url":"https://www.pbs.org/show/overview/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_54","page_age":"1892 days ago"},{"type":"web_search_result","title":"OVERVIEW Definition & Meaning - Merriam-Webster","url":"https://www.merriam-webster.com/dictionary/overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_55","page_age":"9 days ago"},{"type":"web_search_result","title":"What is another word for overview?","url":"https://www.wordhippo.com/what-is/another-word-for/overview.html","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_56","page_age":null},{"type":"web_search_result","title":"What is the brief definition for overview and please provide an example for overview? - Quora","url":"https://www.quora.com/What-is-the-brief-definition-for-overview-and-please-provide-an-example-for-overview","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_57","page_age":"3539 days ago"}],"caller":{"type":"direct"}}        }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":17 }
+
+event: content_block_start
+data: {"type":"content_block_start","index":18,"content_block":{"type":"text","text":""}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":"Search"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" "}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":"6"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" complete"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":"."}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" The"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" top"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" result"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" title"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" is \"Overview -"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" Definition"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":","}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" Meaning"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" &"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" Synonyms\"."}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" I"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":"'ll"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" use"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" \""}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":"Definition"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":"\""}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" from"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" this title"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" for"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" the"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" next"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":18,"delta":{"type":"text_delta","text":" search."}  }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":18}
+
+event: content_block_start
+data: {"type":"content_block_start","index":19,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE7","name":"web_search","input":{}}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":19,"delta":{"type":"input_json_delta","partial_json":""}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":19,"delta":{"type":"input_json_delta","partial_json":"{\"query"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":19,"delta":{"type":"input_json_delta","partial_json":"\": \"Def"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":19,"delta":{"type":"input_json_delta","partial_json":"inition"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":19,"delta":{"type":"input_json_delta","partial_json":"\"}"}           }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":19          }
+
+event: content_block_start
+data: {"type":"content_block_start","index":20,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE7","content":[{"type":"web_search_result","title":"Reaching definition","url":"https://en.wikipedia.org/wiki/Reaching_definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_58","page_age":null},{"type":"web_search_result","title":"Circular definition","url":"https://en.wikipedia.org/wiki/Circular_definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_59","page_age":null},{"type":"web_search_result","title":"DEFINITION Definition & Meaning","url":"https://www.dictionary.com/browse/definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_60","page_age":"322 days ago"},{"type":"web_search_result","title":"Deficit","url":"https://en.wikipedia.org/wiki/Deficit","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_61","page_age":null},{"type":"web_search_result","title":"Theoretical definition","url":"https://en.wikipedia.org/wiki/Theoretical_definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_62","page_age":null},{"type":"web_search_result","title":"DEFINITION Definition & Meaning - Merriam-Webster","url":"https://www.merriam-webster.com/dictionary/definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_63","page_age":"7 days ago"},{"type":"web_search_result","title":"DEFINITION definition","url":"https://dictionary.cambridge.org/us/dictionary/learner-english/definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_64","page_age":null},{"type":"web_search_result","title":"Definition - Definition, Meaning & Synonyms","url":"https://www.vocabulary.com/dictionary/definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_65","page_age":"136 days ago"},{"type":"web_search_result","title":"Genus%E2%80%93differentia definition","url":"https://en.wikipedia.org/wiki/Genus%E2%80%93differentia_definition","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_66","page_age":null}],"caller":{"type":"direct"}}      }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":20              }
+
+event: content_block_start
+data: {"type":"content_block_start","index":21,"content_block":{"type":"text","text":""}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":"Search"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" "}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":"7"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" complete"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":". The"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" top"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" result"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" title"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" is \""}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":"Reaching"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" definition"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":"\"."}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" I"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":"'ll"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" use"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" \""}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":"Reaching\""}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" from"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" this"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" title"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" for"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" the"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" next"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":21,"delta":{"type":"text_delta","text":" search."}        }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":21 }
+
+event: content_block_start
+data: {"type":"content_block_start","index":22,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE8","name":"web_search","input":{}}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":22,"delta":{"type":"input_json_delta","partial_json":""}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":22,"delta":{"type":"input_json_delta","partial_json":"{\"query"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":22,"delta":{"type":"input_json_delta","partial_json":"\": \"Rea"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":22,"delta":{"type":"input_json_delta","partial_json":"ching\"}"}    }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":22           }
+
+event: content_block_start
+data: {"type":"content_block_start","index":23,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE8","content":[{"type":"web_search_result","title":"REACHING definition in American English","url":"https://www.collinsdictionary.com/us/dictionary/english/reaching","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_67","page_age":null},{"type":"web_search_result","title":"Reaching","url":"https://en.wikipedia.org/wiki/Reaching","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_68","page_age":null},{"type":"web_search_result","title":"REACHING","url":"https://dictionary.cambridge.org/dictionary/english/reaching","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_69","page_age":"1240 days ago"},{"type":"web_search_result","title":"REACH Definition & Meaning","url":"https://www.dictionary.com/browse/reach","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_70","page_age":"43 days ago"},{"type":"web_search_result","title":"reaching, reach, reachings- WordWeb dictionary definition","url":"https://www.wordwebonline.com/en/REACHING","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_71","page_age":null},{"type":"web_search_result","title":"Reach (geography)","url":"https://en.wikipedia.org/wiki/Reach_(geography)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_72","page_age":null},{"type":"web_search_result","title":"REACHING","url":"https://dictionary.cambridge.org/us/dictionary/english/reaching","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_73","page_age":"1316 days ago"},{"type":"web_search_result","title":"Reaching - Definition, Meaning & Synonyms","url":"https://www.vocabulary.com/dictionary/reaching","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_74","page_age":"455 days ago"},{"type":"web_search_result","title":"REACHING Synonyms: 113 Similar and Opposite Words","url":"https://www.merriam-webster.com/thesaurus/reaching","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_75","page_age":"6 days ago"}],"caller":{"type":"direct"}}      }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":23             }
+
+event: content_block_start
+data: {"type":"content_block_start","index":24,"content_block":{"type":"text","text":""}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":"Search"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" "}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":"8 complete"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":". The"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" top"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" result"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" title"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" is"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" \""}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":"REACHING definition"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" in"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" American"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" English\"."}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" I"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":"'ll"}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" use"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" \""} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":"American"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":"\""}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" from"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" this"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" title for"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" the next"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":24,"delta":{"type":"text_delta","text":" search."}         }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":24           }
+
+event: content_block_start
+data: {"type":"content_block_start","index":25,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE9","name":"web_search","input":{}} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":25,"delta":{"type":"input_json_delta","partial_json":""}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":25,"delta":{"type":"input_json_delta","partial_json":"{\"query"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":25,"delta":{"type":"input_json_delta","partial_json":"\": \"Ame"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":25,"delta":{"type":"input_json_delta","partial_json":"rican\"}"}  }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":25        }
+
+event: content_block_start
+data: {"type":"content_block_start","index":26,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE9","content":[{"type":"web_search_result","title":"The American","url":"https://en.wikipedia.org/wiki/The_American","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_76","page_age":null},{"type":"web_search_result","title":"American (word)","url":"https://en.wikipedia.org/wiki/American_(word)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_77","page_age":null},{"type":"web_search_result","title":"I Am an American (film)","url":"https://en.wikipedia.org/wiki/I_Am_an_American_(film)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_78","page_age":null},{"type":"web_search_result","title":"America (disambiguation)","url":"https://en.wikipedia.org/wiki/America_(disambiguation)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_79","page_age":null},{"type":"web_search_result","title":"American University (disambiguation)","url":"https://en.wikipedia.org/wiki/American_University_(disambiguation)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_80","page_age":null},{"type":"web_search_result","title":"American University, Washington, D.C.","url":"https://www.american.edu/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_81","page_age":"2008 days ago"},{"type":"web_search_result","title":"American Airlines - Apps on Google Play","url":"https://play.google.com/store/apps/details/American_Airlines?id=com.aa.android&hl=en_US","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_82","page_age":null},{"type":"web_search_result","title":"American Express Credit Cards, Rewards & Banking","url":"https://www.americanexpress.com/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_83","page_age":"6452 days ago"},{"type":"web_search_result","title":"United States","url":"https://en.wikipedia.org/wiki/United_States","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_84","page_age":"1 days ago"}],"caller":{"type":"direct"}}  }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":26          }
+
+event: content_block_start
+data: {"type":"content_block_start","index":27,"content_block":{"type":"text","text":""}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"Search"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" "}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"9"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" complete"}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":". The"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" top"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" result"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" title"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" is \"The"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" American"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"\"."}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" I"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"'ll"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" use"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" \""}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"film"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"\" from"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" \""} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"The American ("}    }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"1927"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" "}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":"film)\" mentioned"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" in the first"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" result"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" for"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" the"}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" next"}               }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":27,"delta":{"type":"text_delta","text":" search."}   }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":27            }
+
+event: content_block_start
+data: {"type":"content_block_start","index":28,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE10","name":"web_search","input":{}}             }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":28,"delta":{"type":"input_json_delta","partial_json":""}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":28,"delta":{"type":"input_json_delta","partial_json":"{\"query"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":28,"delta":{"type":"input_json_delta","partial_json":"\": \"fil"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":28,"delta":{"type":"input_json_delta","partial_json":"m\"}"}         }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":28        }
+
+event: content_block_start
+data: {"type":"content_block_start","index":29,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_FIXTURE10","content":[{"type":"web_search_result","title":"Film","url":"https://www.britannica.com/art/film","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_85","page_age":"5 days ago"},{"type":"web_search_result","title":"FILM","url":"https://dictionary.cambridge.org/us/dictionary/english/film","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_86","page_age":"2 days ago"},{"type":"web_search_result","title":"Film (disambiguation)","url":"https://en.wikipedia.org/wiki/Film_(disambiguation)","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_87","page_age":null},{"type":"web_search_result","title":"FILM definition","url":"https://dictionary.cambridge.org/us/dictionary/essential-american-english/film","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_88","page_age":"589 days ago"},{"type":"web_search_result","title":"Outline of film","url":"https://en.wikipedia.org/wiki/Outline_of_film","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_89","page_age":null},{"type":"web_search_result","title":"FILM Definition & Meaning - Merriam-Webster","url":"https://www.merriam-webster.com/dictionary/film","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_90","page_age":"9 days ago"},{"type":"web_search_result","title":"Movies","url":"https://www.netflix.com/browse/genre/34399","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_91","page_age":"1161 days ago"},{"type":"web_search_result","title":"Rotten Tomatoes: Movies","url":"https://www.rottentomatoes.com/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_92","page_age":"0 days ago"},{"type":"web_search_result","title":"IMDb Top 250 movies","url":"https://www.imdb.com/chart/top/","encrypted_content":"ENCRYPTED_CONTENT_FIXTURE_93","page_age":"7519 days ago"}],"caller":{"type":"direct"}}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":29           }
+
+event: content_block_start
+data: {"type":"content_block_start","index":30,"content_block":{"type":"text","text":""}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"Search"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" "}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"10"}            }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" complete"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"."}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" The"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" top"}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" result"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" title"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" is \"Film"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"\"."} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" I"}              }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"'ll"}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" use"} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" \""}       }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"motion"}          }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"\" from"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" \""}        }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":"motion picture\" in"}  }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" this"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" title"}   }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" for"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" the next"}     }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":30,"delta":{"type":"text_delta","text":" search."}    }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":30    }
+
+event: content_block_start
+data: {"type":"content_block_start","index":31,"content_block":{"type":"server_tool_use","id":"srvtoolu_FIXTURE11","name":"web_search","input":{}}         }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":31,"delta":{"type":"input_json_delta","partial_json":""} }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":31,"delta":{"type":"input_json_delta","partial_json":"{\"query"}      }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":31,"delta":{"type":"input_json_delta","partial_json":"\": \"mot"}           }
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":31,"delta":{"type":"input_json_delta","partial_json":"ion\"}"}             }
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":31         }
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"pause_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":333606,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":963,"server_tool_use":{"web_search_requests":10,"web_fetch_requests":0}}              }
+
+event: message_stop
+data: {"type":"message_stop"        }
+

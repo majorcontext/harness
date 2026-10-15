@@ -52,6 +52,9 @@ type Request struct {
 	// and a tier the target model or plan rejects surfaces as a provider
 	// error.
 	ServiceTier string
+	// WebSearch offers the native search of the provider to the model. It is
+	// set only for a client that reports NativeWebSearch.
+	WebSearch bool
 	// SessionKey is a stable, opaque identifier for the session this
 	// request belongs to. An adapter MAY forward it to the provider as a
 	// routing or cache-affinity hint. It is not a secret and is not
@@ -70,7 +73,9 @@ const (
 	// StopIncomplete marks a Responses response.incomplete whose reason is neither
 	// "interrupted", "max_output_tokens", nor "content_filter". Event.IncompleteReason holds the reason.
 	StopIncomplete StopReason = "incomplete"
-	StopOther      StopReason = "other"
+	// StopPaused marks a call that still paused after its last resume. The message holds the finished parts of every leg.
+	StopPaused StopReason = "paused"
+	StopOther  StopReason = "other"
 )
 
 // Usage is token accounting for one request.
@@ -88,6 +93,14 @@ type Usage struct {
 	OutputTokens     int `json:"output_tokens"`
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// WebSearchRequests counts the searches that the provider ran in the call, when its wire reports it.
+	WebSearchRequests int `json:"web_search_requests,omitempty"`
+}
+
+// WebSearcher is an optional capability of a Provider: NativeWebSearch reports
+// that the API of the client runs a web search inside a model call.
+type WebSearcher interface {
+	NativeWebSearch() bool
 }
 
 // EventType discriminates streaming events.
@@ -218,6 +231,8 @@ type Event struct {
 	// IncompleteReason is the raw reason of a StopIncomplete event, or "unknown" when the wire gave none.
 	IncompleteReason string
 	Usage            Usage
+	// Prompt is the size in tokens of the prompt that the call read, which the context gauge shows. Zero: the input counts of Usage.
+	Prompt int
 	// RequestMetadata is set only on EventDone when an adapter reports how
 	// it projected the complete logical request onto its transport.
 	RequestMetadata *RequestMetadata

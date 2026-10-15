@@ -35,6 +35,7 @@ type openAIBody struct {
 		Summary string `json:"summary"`
 	} `json:"reasoning"`
 	Tools []struct {
+		Type       string          `json:"type"`
 		Name       string          `json:"name"`
 		Parameters json.RawMessage `json:"parameters"`
 	} `json:"tools"`
@@ -144,7 +145,11 @@ func decodeBodyEncoding(raw []byte, encoding string) ([]byte, error) {
 }
 
 type wireItem struct {
-	Type      string `json:"type"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Action struct {
+		Query string `json:"query"`
+	} `json:"action"`
 	Role      string `json:"role"`
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
@@ -160,7 +165,7 @@ type wireItem struct {
 func (o *OpenAI) request(b openAIBody) Request {
 	req := Request{System: b.Instructions, Model: b.Model, MaxTokens: b.MaxOutputTokens, ServiceTier: b.ServiceTier}
 	for _, t := range b.Tools {
-		req.Tools = append(req.Tools, t.Name)
+		req.Tools = append(req.Tools, cmpOr(t.Name, t.Type))
 	}
 	sort.Strings(req.Tools)
 	add := func(role string, p ...Part) {
@@ -185,6 +190,8 @@ func (o *OpenAI) request(b openAIBody) Request {
 				parts = append(parts, Part{Kind: "text", Text: c.Text})
 			}
 			add(it.Role, parts...)
+		case "web_search_call":
+			add("assistant", Part{Kind: "web_search", Text: it.Action.Query, ToolUseID: it.ID})
 		case "function_call":
 			var input map[string]any
 			_ = json.Unmarshal([]byte(it.Arguments), &input)
@@ -271,8 +278,16 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 		frames = append(frames, reasoningFrames(idx, id, parts)...)
 		idx++
 	}
+	if ws := rep.WebSearch; ws != nil {
+		frames = append(frames, searchFrames(idx, ws)...)
+		idx++
+	}
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
-		msg := obj{"type": "message", "role": "assistant", "content": []obj{{"type": "output_text", "text": rep.Text}}}
+		content := obj{"type": "output_text", "text": rep.Text}
+		if rep.WebSearch != nil {
+			content["annotations"] = annotations(rep.WebSearch)
+		}
+		msg := obj{"type": "message", "role": "assistant", "content": []obj{content}}
 		frames = append(frames,
 			newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"type": "message", "role": "assistant", "content": []obj{}}}),
 			newFrame(frameTextDelta, obj{"output_index": idx, "delta": rep.Text}),
@@ -360,4 +375,33 @@ func (rl *RateLimits) setHeaders(h http.Header) {
 		h.Set("x-codex-"+w.prefix+"-window-minutes", strconv.FormatInt(w.window.WindowMinutes, 10))
 		h.Set("x-codex-"+w.prefix+"-reset-at", strconv.FormatInt(w.window.ResetAt, 10))
 	}
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// searchFrames builds the web_search_call output item of a search, with the progress events that precede its end.
+func searchFrames(idx int, ws *WebSearch) []frame {
+	id := cmpOr(ws.ID, "ws_1")
+	done := obj{"id": id, "type": "web_search_call", "status": "completed", "action": obj{"type": "search", "queries": []string{ws.Query}, "query": ws.Query}}
+	return []frame{
+		newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"id": id, "type": "web_search_call", "status": "in_progress"}}),
+		newFrame("response.web_search_call.in_progress", obj{"item_id": id, "output_index": idx}),
+		newFrame("response.web_search_call.searching", obj{"item_id": id, "output_index": idx}),
+		newFrame("response.web_search_call.completed", obj{"item_id": id, "output_index": idx}),
+		newFrame("response.output_item.done", obj{"output_index": idx, "item": done}),
+	}
+}
+
+// annotations cites each source of a search.
+func annotations(ws *WebSearch) []obj {
+	out := make([]obj, len(ws.Sources))
+	for i, s := range ws.Sources {
+		out[i] = obj{"type": "url_citation", "title": s.Title, "url": s.URL, "start_index": 0, "end_index": 0}
+	}
+	return out
 }

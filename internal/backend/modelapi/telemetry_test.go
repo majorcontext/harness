@@ -11,7 +11,7 @@ import (
 
 func TestTelemetryOfACallWithNoPromptTokensHasNoReading(t *testing.T) {
 	b := New(&responses.Client{Family: "codex"}, 0, nil)
-	if got := b.telemetry("codex/gpt-5", provider.Usage{OutputTokens: 3}, nil).Context; got != (protocol.ContextMeasured{}) {
+	if got := b.telemetry("codex/gpt-5", provider.Usage{OutputTokens: 3}, 0, nil).Context; got != (protocol.ContextMeasured{}) {
 		t.Errorf("context reading = %+v, want none", got)
 	}
 }
