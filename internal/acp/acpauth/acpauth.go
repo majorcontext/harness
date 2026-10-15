@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
+	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/codexauth"
 )
 
@@ -200,7 +201,7 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 		}
 	case p.UsesClaudeCLI() && a.userTargets(acp.ClientAuth{}).claude != "":
 		if ok, known := a.loggedIn(ctx, p.CLIBinary(), fresh); known && !ok {
-			return &acp.AuthRequiredError{Message: "not logged in to Claude Code; run `harness login claude-code`"}
+			return &acp.AuthRequiredError{Message: (&claudeauth.LoginRequiredError{}).Error()}
 		}
 	}
 	return nil

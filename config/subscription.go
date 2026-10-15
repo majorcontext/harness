@@ -10,10 +10,10 @@ const SubscriptionCodexModel = "codex/gpt-6.1-sol"
 // SubscriptionClaudeModel is the default model once the Claude Code program is installed and signed in.
 const SubscriptionClaudeModel = "claude-code/sonnet"
 
-// defaultModel is the model of a config that sets no model: the subscription of the user when one is in use, else DefaultModel.
+// defaultModel is the model of a config that sets no model: the subscription of the user when SubscriptionDefault is set and one is in use, else DefaultModel.
 // It makes one stat of the Codex login file and one PATH lookup. It reads no file content, makes no network call, and starts no process.
 func (c *Config) defaultModel() string {
-	if c == nil {
+	if c == nil || !c.SubscriptionDefault {
 		return DefaultModel
 	}
 	entries := c.ProviderEntries()

@@ -165,7 +165,7 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	}
 	defer context.AfterFunc(ctx, r.proc.Interrupt)()
 	err = r.drive(ctx, req)
-	return r.finish(ctx, err)
+	return b.checkLogin(ctx, r.finish(ctx, err))
 }
 
 // restriction is the set of tools that the CLI may show: AskUserQuestion on a

@@ -3,9 +3,7 @@
 package acpauth
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -13,12 +11,12 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
+	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/process"
 )
 
 const (
-	statusTTL    = 30 * time.Second
-	statusBudget = 15 * time.Second
+	statusTTL = 30 * time.Second
 	// killGrace is the time that a killed child gets to close its pipes.
 	killGrace = 2 * time.Second
 )
@@ -64,20 +62,12 @@ func (a *Auth) loggedIn(ctx context.Context, bin string, fresh bool) (ok, known 
 	if hit && !fresh && time.Since(cached.at) < statusTTL {
 		return cached.loggedIn, true
 	}
-	ctx, cancel := context.WithTimeout(ctx, statusBudget)
-	defer cancel()
-	var out bytes.Buffer
-	cmd := a.claudeCmd(ctx, bin, "auth", "status", "--json")
-	cmd.Stdout = &out
-	_ = cmd.Run() // the CLI may exit non-zero when logged out and still print the status
-	var st struct {
-		LoggedIn *bool `json:"loggedIn"`
-	}
-	if json.Unmarshal(out.Bytes(), &st) != nil || st.LoggedIn == nil {
+	ok, known = claudeauth.LoggedIn(ctx, bin, a.opts.Env)
+	if !known {
 		return false, false
 	}
 	a.mu.Lock()
-	a.status[bin] = claudeStatus{at: time.Now(), loggedIn: *st.LoggedIn}
+	a.status[bin] = claudeStatus{at: time.Now(), loggedIn: ok}
 	a.mu.Unlock()
-	return *st.LoggedIn, true
+	return ok, true
 }

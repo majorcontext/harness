@@ -36,21 +36,25 @@ func TestDefaultModelFollowsTheSubscriptionInUse(t *testing.T) {
 		claude bool
 		login  string
 		want   string
+		off    bool
 	}{
-		{"codex login file", Config{}, true, `{"a":1}`, SubscriptionCodexModel},
-		{"empty codex login file", Config{}, false, "", DefaultModel},
-		{"empty codex login file with claude", Config{}, true, "", SubscriptionClaudeModel},
-		{"claude on PATH", Config{}, true, "-", SubscriptionClaudeModel},
-		{"neither", Config{}, false, "-", DefaultModel},
-		{"user or project model", Config{Model: "openai/gpt-5.5"}, true, `{"a":1}`, "openai/gpt-5.5"},
-		{"codex entry replaced by an API key entry", Config{Providers: map[string]Provider{"codex": {Type: TypeOpenAI, APIKeyEnv: "K"}}}, false, `{"a":1}`, DefaultModel},
-		{"claude-code entry replaced by a non-CLI entry", Config{Providers: map[string]Provider{"claude-code": {Type: TypeOpenAI, APIKeyEnv: "K"}}}, true, "-", DefaultModel},
-		{"claude-code entry names a program that is missing", Config{Providers: map[string]Provider{"claude-code": {Type: TypeClaudeCodeCLI, BinaryPath: "/nonexistent/claude"}}}, true, "-", DefaultModel},
+		{"codex login file and claude, subscription default off", Config{}, true, `{"a":1}`, DefaultModel, true},
+		{"claude only, subscription default off", Config{}, true, "-", DefaultModel, true},
+		{"codex login file", Config{}, true, `{"a":1}`, SubscriptionCodexModel, false},
+		{"empty codex login file", Config{}, false, "", DefaultModel, false},
+		{"empty codex login file with claude", Config{}, true, "", SubscriptionClaudeModel, false},
+		{"claude on PATH", Config{}, true, "-", SubscriptionClaudeModel, false},
+		{"neither", Config{}, false, "-", DefaultModel, false},
+		{"user or project model", Config{Model: "openai/gpt-5.5"}, true, `{"a":1}`, "openai/gpt-5.5", false},
+		{"codex entry replaced by an API key entry", Config{Providers: map[string]Provider{"codex": {Type: TypeOpenAI, APIKeyEnv: "K"}}}, false, `{"a":1}`, DefaultModel, false},
+		{"claude-code entry replaced by a non-CLI entry", Config{Providers: map[string]Provider{"claude-code": {Type: TypeOpenAI, APIKeyEnv: "K"}}}, true, "-", DefaultModel, false},
+		{"claude-code entry names a program that is missing", Config{Providers: map[string]Provider{"claude-code": {Type: TypeClaudeCodeCLI, BinaryPath: "/nonexistent/claude"}}}, true, "-", DefaultModel, false},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			pathWith(t, r.claude)
 			cfg := r.cfg
+			cfg.SubscriptionDefault = !r.off
 			switch r.login {
 			case "-":
 				cfg.CodexAuthFile = missing
@@ -76,7 +80,7 @@ func TestDefaultModelNeedsNoLoginFileKey(t *testing.T) {
 
 func TestExplicitModelBeatsTheSubscriptionDefault(t *testing.T) {
 	pathWith(t, true)
-	cfg := Config{CodexAuthFile: loginFile(t, `{"a":1}`), Aliases: map[string]string{"fast": "openai/gpt-5.5"}}
+	cfg := Config{SubscriptionDefault: true, CodexAuthFile: loginFile(t, `{"a":1}`), Aliases: map[string]string{"fast": "openai/gpt-5.5"}}
 	if got := cfg.ResolveModel("anthropic/claude-sonnet-5-5"); got != "anthropic/claude-sonnet-5-5" {
 		t.Errorf("flag model = %q", got)
 	}
@@ -98,7 +102,7 @@ func TestExplicitModelBeatsTheSubscriptionDefault(t *testing.T) {
 
 func TestDefaultModelDoesNotChangeTheConfig(t *testing.T) {
 	pathWith(t, true)
-	cfg := Config{CodexAuthFile: loginFile(t, `{"a":1}`)}
+	cfg := Config{SubscriptionDefault: true, CodexAuthFile: loginFile(t, `{"a":1}`)}
 	_ = cfg.ResolveModel("")
 	if cfg.Model != "" {
 		t.Errorf("Model = %q, want it unset", cfg.Model)

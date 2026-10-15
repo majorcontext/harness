@@ -101,6 +101,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	cfg.SubscriptionDefault = true
 	if err := applyOverrides(cfg, opts.noInstructions, opts.skillsDirs, opts.agentDefsDirs); err != nil {
 		return err
 	}
