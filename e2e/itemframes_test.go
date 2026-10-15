@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -155,4 +156,44 @@ func (a itemFrames) run(t *testing.T, r *run) {
 		name += "_late"
 	}
 	r.record(t, "item_frames", name, callResult{Status: http.StatusOK, Body: map[string]any{"frames": feed.steps}})
+}
+
+// TestContractLateSubscriber covers a subscriber that starts while an item streams.
+func TestContractLateSubscriber(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "a_late_subscriber_receives_the_frames_of_the_streaming_item",
+			model: []harnesstest.Step{
+				{Name: "slow", Reply: harnesstest.Reply{Text: "partial answer", Block: true}},
+			},
+			actions: []action{
+				create{as: "a"},
+				watchItems{as: "a"},
+				submit{as: "a", text: "go"},
+				watchItems{as: "a", late: true},
+				release{step: "slow"},
+				waitIdle{as: "a"},
+				itemFrames{as: "a"},
+				itemFrames{as: "a", late: true},
+			},
+		},
+		{
+			name: "a_subscriber_that_resumes_past_the_item_start_receives_no_frame_of_the_item",
+			model: []harnesstest.Step{
+				{Name: "slow", Reply: harnesstest.Reply{Text: "partial answer", Block: true}},
+				{Name: "next", Reply: harnesstest.Reply{Text: "next answer"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				watchItems{as: "a"},
+				submit{as: "a", text: "go"},
+				watchItems{as: "a", late: true},
+				enqueue{as: "a", text: "more"},
+				watchItems{as: "a", past: true},
+				release{step: "slow"},
+				waitIdle{as: "a"},
+				itemFrames{as: "a", past: true},
+			},
+		},
+	})
 }
