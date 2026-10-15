@@ -20,6 +20,7 @@
     <span id="status" role="status">loading</span>
     <span class="keys">
       <span id="who"></span>
+      <button class="link" id="new" type="button">new session</button>
       <a href="/settings/codex" target="_blank" rel="noopener">chatgpt login</a>
       <a href="/login" id="login">sign in</a>
       <form method="post" action="/logout"><button class="link" id="logout">sign out</button></form>
@@ -63,7 +64,9 @@ window.addEventListener("focus", refreshWho);
 // to /model-proxy/, and answers 401 until the user signs in at /settings/codex.
 const model = "codex/gpt-6.1-sol";
 $("model").textContent = model;
-const h = await createHarness({
+// The sessions live in the origin private file system, so a reload keeps
+// them. One tab holds the store at a time; another tab runs on a memory store.
+const options = {
   transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
   config: {
     model,
@@ -78,7 +81,16 @@ const h = await createHarness({
   proxy: { providers: { codex: { baseURL: "/model-proxy/relay/codex", loginURL: "/settings/codex" } } },
   tools: [],
   builtinTools: [],
-});
+};
+let h;
+let persisted = true;
+try {
+  h = await createHarness({ ...options, store: { persist: true } });
+} catch (err) {
+  if (err?.code !== "store_in_use") throw err;
+  persisted = false;
+  h = await createHarness(options);
+}
 
 // A minimal ACP client: JSON-RPC over h.stream.
 const writer = h.stream.writable.getWriter();
@@ -87,6 +99,7 @@ const pending = new Map();
 let nextId = 1;
 let onUpdate = () => {};
 let usage = "";
+let contextUsed = 0;
 (async () => {
   for (;;) {
     const { value: m, done } = await reader.read();
@@ -98,6 +111,7 @@ let usage = "";
       const u = m.params.update;
       if (u.sessionUpdate === "usage_update" && u.size) {
         usage = `${Math.round((100 * u.used) / u.size)}% context`;
+        contextUsed = u.used;
       }
       onUpdate(u);
     }
@@ -113,30 +127,96 @@ const call = (method, params) =>
 await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
 
 // A session needs the ChatGPT login of the user. Until the server holds one,
-// session/new fails; the page tries again when the tab gets the focus back.
+// session/new and session/load fail; the page tries again when the tab gets
+// the focus back. The id of the session stays in localStorage, and
+// session/load replays its conversation into the scrollback.
+const saved = {
+  get: () => { try { return localStorage.getItem("harness.session"); } catch { return null; } },
+  set: (id) => { try { id ? localStorage.setItem("harness.session", id) : localStorage.removeItem("harness.session"); } catch {} },
+};
 let sessionId = null;
 let notice = null;
+let running = false;
+let last = "";
+
+// replay renders the updates of session/load: a user_message_chunk starts a
+// turn, the agent chunks fill it.
+const replay = () => {
+  let turn = null, reply = null, thought = null, lastUser = null;
+  return (u) => {
+    const t = u.content?.type === "text" ? u.content.text : null;
+    if (t === null) return;
+    if (u.sessionUpdate === "user_message_chunk") {
+      if (lastUser && u.messageId && u.messageId === lastUser.id) {
+        lastUser.el.textContent += t;
+        return;
+      }
+      turn = el("section", "turn");
+      lastUser = { id: u.messageId, el: el("div", "line you", t) };
+      reply = el("div", "line reply");
+      thought = null;
+      turn.append(lastUser.el, reply);
+      log.append(turn);
+    } else if (turn && u.sessionUpdate === "agent_message_chunk") {
+      reply.textContent += t;
+    } else if (turn && u.sessionUpdate === "agent_thought_chunk") {
+      thought ??= turn.insertBefore(el("div", "line thought"), reply);
+      thought.textContent += t;
+    }
+  };
+};
+
+const fail = (err) => {
+  notice = el("section", "turn");
+  notice.append(el("div", "line warn", err?.message ?? "no session"));
+  if (err?.data?.code === "login_required") notice.append(el("div", "line meta", "Sign in with ChatGPT, then come back to this tab."));
+  follow(() => log.append(notice));
+  status(err?.data?.code === "login_required" ? "no chatgpt login" : "error", "warn");
+};
+
 const open = async () => {
   if (sessionId) return;
-  status("starting session");
-  const created = await call("session/new", { cwd: "/work", mcpServers: [] });
-  sessionId = created.result?.sessionId ?? null;
   notice?.remove();
-  if (!sessionId) {
-    notice = el("section", "turn");
-    notice.append(
-      el("div", "line warn", created.error?.message ?? "no session"),
-      el("div", "line meta", "Sign in with ChatGPT, then come back to this tab."),
-    );
-    follow(() => log.append(notice));
-    status("no chatgpt login", "warn");
-    return;
-  }
   notice = null;
-  status("enter: send · shift+enter: new line");
+  const id = saved.get();
+  if (id) {
+    status("loading session");
+    const mark = log.childElementCount;
+    onUpdate = replay();
+    const loaded = await call("session/load", { sessionId: id, cwd: "/work", mcpServers: [] });
+    onUpdate = () => {};
+    if (loaded.result) {
+      sessionId = id;
+    } else {
+      while (log.childElementCount > mark) log.lastElementChild.remove();
+      if (loaded.error?.data?.code === "login_required") return fail(loaded.error);
+      saved.set(null);
+    }
+  }
+  if (!sessionId) {
+    status("starting session");
+    const created = await call("session/new", { cwd: "/work", mcpServers: [] });
+    if (!created.result) return fail(created.error);
+    sessionId = created.result.sessionId;
+    saved.set(sessionId);
+  }
+  log.scrollTop = log.scrollHeight;
+  status(persisted ? "enter: send · shift+enter: new line" : "another tab holds the store · this tab keeps no history", persisted ? "" : "warn");
   input.disabled = false;
   input.focus();
 };
+
+$("new").addEventListener("click", async () => {
+  if (running) return;
+  saved.set(null);
+  sessionId = null;
+  usage = "";
+  contextUsed = 0;
+  log.replaceChildren();
+  input.disabled = true;
+  await open();
+});
+
 await open();
 window.addEventListener("focus", open);
 
@@ -146,8 +226,6 @@ const grow = () => {
 };
 input.addEventListener("input", grow);
 
-let running = false;
-let last = "";
 const send = async () => {
   const text = input.value.trim();
   if (!text || running || !sessionId) return;
@@ -159,32 +237,54 @@ const send = async () => {
 
   const turn = el("section", "turn");
   const reply = el("div", "line reply");
+  const live = el("div", "line meta");
   let thought = null;
+  let streamed = 0;
   follow(() => {
-    turn.append(el("div", "line you", text), reply);
+    turn.append(el("div", "line you", text), reply, live);
     log.append(turn);
   });
+
+  // ACP reports the context size, not the tokens of a turn: up is the context
+  // that the newest model call sent, down is estimated from the streamed text.
+  const startUsed = contextUsed;
+  const t0 = performance.now();
+  const kfmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const counts = () => {
+    const secs = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+    const up = contextUsed > startUsed ? `↑ ${kfmt(contextUsed)}` : "↑ –";
+    return [secs, up, `↓ ~${kfmt(Math.round(streamed / 4))}`];
+  };
+  const tick = () => {
+    const phase = reply.textContent ? "responding" : "thinking";
+    live.textContent = [phase, ...counts()].join(" · ");
+  };
+  tick();
+  const timer = setInterval(tick, 100);
+
   onUpdate = (u) =>
     follow(() => {
       if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {
         reply.textContent += u.content.text;
+        streamed += u.content.text.length;
       } else if (u.sessionUpdate === "agent_thought_chunk" && u.content?.type === "text") {
         thought ??= turn.insertBefore(el("div", "line thought"), reply);
         thought.textContent += u.content.text;
+        streamed += u.content.text.length;
       }
     });
   status("running · esc: interrupt");
-  const t0 = performance.now();
 
   const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
 
+  clearInterval(timer);
   if (!reply.textContent) reply.remove();
-  const secs = ((performance.now() - t0) / 1000).toFixed(1);
   follow(() => {
     if (done.error) {
-      turn.append(el("div", "line meta err", done.error.message));
+      live.textContent = done.error.message;
+      live.classList.add("err");
     } else {
-      turn.append(el("div", "line meta", [done.result.stopReason, `${secs}s`, usage].filter(Boolean).join(" · ")));
+      live.textContent = [done.result.stopReason, ...counts(), usage].filter(Boolean).join(" · ");
     }
   });
   status(done.error ? "error" : "enter: send · shift+enter: new line", done.error ? "err" : "");

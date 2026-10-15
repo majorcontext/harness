@@ -82,6 +82,10 @@ type tokenStore struct {
 
 	mu sync.Mutex
 	m  map[string]*userTokens
+
+	// file, when set, keeps the logins on disk so that a restart keeps them.
+	file   string
+	saveMu sync.Mutex
 }
 
 type userTokens struct {
@@ -136,15 +140,17 @@ func (s *tokenStore) entry(user string) *userTokens {
 // Set stores the login of user.
 func (s *tokenStore) Set(user string, t tokens) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.m[user] = &userTokens{t: t, refreshed: s.now()}
+	s.mu.Unlock()
+	s.save()
 }
 
 // Delete forgets the login of user.
 func (s *tokenStore) Delete(user string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.m, user)
+	s.mu.Unlock()
+	s.save()
 }
 
 // Has reports whether the store holds a login for user.
@@ -216,6 +222,8 @@ func (s *tokenStore) refreshFlight(user string, e *userTokens, f *refreshFlight,
 	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
 	defer cancel()
 	next, rejected, err := s.refresh(ctx, t)
+	// save runs after e.mu is released: it takes s.mu and then each e.mu.
+	defer s.save()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	defer close(f.done)

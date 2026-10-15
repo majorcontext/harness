@@ -28,6 +28,9 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 a, button.link { color: inherit; text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; }
 a:hover, button.link:hover { text-decoration-color: currentColor; }
