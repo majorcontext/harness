@@ -18,14 +18,14 @@ import (
 
 // run is one CLI run: it maps the frames of the CLI to items of the turn.
 type run struct {
-	out       turn.Sink
-	turnID    string
-	proc      *external.Process
-	tools     *external.Tools
-	mcpConfig string
-	dir       string
-	mirror    external.Mirror
-	allowed   map[string]bool
+	out     turn.Sink
+	turnID  string
+	proc    *external.Process
+	tools   *external.Tools
+	temps   []string
+	dir     string
+	mirror  external.Mirror
+	allowed map[string]bool
 	// restricted is a run whose session lists its allowed tools: the CLI gets
 	// no configured MCP server.
 	restricted bool
@@ -99,7 +99,7 @@ func (r *run) cleanup() {
 	if r.tools != nil {
 		r.tools.Close()
 	}
-	for _, p := range []string{r.dir, r.mcpConfig} {
+	for _, p := range append([]string{r.dir}, r.temps...) {
 		if p != "" {
 			_ = os.RemoveAll(p)
 		}

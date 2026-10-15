@@ -199,7 +199,11 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		args = append(args, "--effort", e)
 	}
 	system := b.systemPrompt(req)
-	args = append(args, "--append-system-prompt", system)
+	file, err := r.writeTemp("harness-claude-system-*.txt", []byte(system))
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, "--append-system-prompt-file", file)
 	if req.Sent != nil {
 		req.Sent(system)
 	}
@@ -339,13 +343,20 @@ func (r *run) writeMCPConfig(servers map[string]mcpServer) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp("", "harness-claude-mcp-*.json")
+	return r.writeTemp("harness-claude-mcp-*.json", data)
+}
+
+// writeTemp writes data to a new private file, which cleanup removes, and
+// returns its path. A file keeps a long value out of the argv, where Linux
+// caps one argument at 128 KiB.
+func (r *run) writeTemp(pattern string, data []byte) (string, error) {
+	f, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", err
 	}
-	r.mcpConfig = f.Name()
+	r.temps = append(r.temps, f.Name())
 	_, err = f.Write(data)
-	return r.mcpConfig, errors.Join(err, f.Close())
+	return f.Name(), errors.Join(err, f.Close())
 }
 
 func effortArg(e modelref.Effort) (string, bool) {

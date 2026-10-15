@@ -185,8 +185,38 @@ func applyFakeEnv() {
 	os.Args = args
 }
 
+// maxArg is the Linux limit of one argument, MAX_ARG_STRLEN.
+const maxArg = 128 << 10
+
+// refuseLongArgs ends the process the way exec ends a spawn with an argument
+// over maxArg.
+func refuseLongArgs() {
+	for _, a := range os.Args[1:] {
+		if len(a) > maxArg {
+			fmt.Fprintln(os.Stderr, "fakeclaude: argument list too long")
+			os.Exit(126)
+		}
+	}
+}
+
+// inlineSystemFile replaces --append-system-prompt-file and its path in the
+// argv with --append-system-prompt and the content of the file, as the CLI
+// reads it.
+func inlineSystemFile() {
+	for i, a := range os.Args {
+		if a != "--append-system-prompt-file" || i+1 >= len(os.Args) {
+			continue
+		}
+		data, _ := os.ReadFile(os.Args[i+1])
+		os.Args = append(append(slices.Clone(os.Args[:i]), "--append-system-prompt", string(data)), os.Args[i+2:]...)
+		return
+	}
+}
+
 func main() {
 	applyFakeEnv()
+	refuseLongArgs()
+	inlineSystemFile()
 	if len(os.Args) == 2 && os.Args[1] == "--list-modes" {
 		listModes()
 		return

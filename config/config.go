@@ -40,7 +40,7 @@ type Config struct {
 	// environment is, and what the platform running it guarantees.
 	// The system prompt places entries after the base prompt and before
 	// the AGENTS.md chain. Claude Code receives one blank-line-joined
-	// --append-system-prompt value.
+	// --append-system-prompt-file value.
 	//
 	// Every segment must be BYTE-STABLE for the life of a session. These
 	// entries sit at the front of the prompt-cache prefix, so a value that

@@ -314,6 +314,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_system_prompt_names_the_harness_tools_and_lists_the_skills":                    sameAsServe(),
 	"claudecode_skills_dirs_config_changes_the_skill_list":                                     sameAsServe(),
 	"claudecode_session_info_system_leaves_out_the_mcp_segment_that_the_cli_never_got":         sameAsServe(),
+	"claudecode_append_system_prompt_over_the_argument_limit_reaches_the_cli":                  sameAsServe(),
 	"claudecode_session_info_lists_the_skills":                                                 sameAsServe(),
 	"claudecode_bridge_image_result_reaches_the_log_and_a_model_api_replay":                    sameAsServe(),
 	"claudecode_built_in_tool_call_fails_the_turn":                                             sameAsServe(),
