@@ -160,7 +160,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpDeviceScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios, acpSearchScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpInjectedScenarios, acpDeviceScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios, acpSearchScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{

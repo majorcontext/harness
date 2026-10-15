@@ -39,6 +39,8 @@ var ErrDeclined = errors.New("the sign-in was declined")
 
 // URLElicitation is an elicitation in URL mode that the client has not completed.
 type URLElicitation interface {
+	// Accepted closes when the client accepts the elicitation, which says that the user opens the URL.
+	Accepted() <-chan struct{}
 	// Refused delivers one error when the client declines the elicitation (ErrDeclined), cancels it (context.Canceled), or fails it.
 	Refused() <-chan error
 	// Complete tells the client that the login ended.
@@ -56,9 +58,23 @@ type Auth interface {
 	// Logout ends the logins of the methods with Logout set.
 	Logout(ctx context.Context) error
 	// Check fails with an *AuthRequiredError when a session of the work directory cwd needs a login that does not exist.
-	// An empty model is the default model of cwd. fresh asks for a check that no cache answers.
-	Check(ctx context.Context, cwd, model string, fresh bool) error
+	// An empty model is the default model of cwd. mode says which checks may run.
+	Check(ctx context.Context, cwd, model string, mode CheckMode) error
 }
+
+// CheckMode says which checks Auth.Check may run.
+type CheckMode int
+
+const (
+	// CheckCached is the check of a prompt: it reads only what earlier checks cached, and sends no probe.
+	CheckCached CheckMode = iota
+	// CheckNew is the check of a new session: every check runs, and a cache answers.
+	CheckNew
+	// CheckOpen is the check of a session that load or resume opens: a login that a probe tests is checked, and the other logins are not.
+	CheckOpen
+	// CheckFresh is the check after a failed turn: no cache answers.
+	CheckFresh
+)
 
 // AuthRequiredError says that a login is missing. Message tells the user what to do and holds no token.
 type AuthRequiredError struct{ Message string }
@@ -157,11 +173,11 @@ func (a *agent) logout(ctx context.Context) (any, error) {
 }
 
 // requireLogin fails with the auth-required error when the model needs a login that does not exist.
-func (a *agent) requireLogin(ctx context.Context, cwd, model string, fresh bool) error {
+func (a *agent) requireLogin(ctx context.Context, cwd, model string, mode CheckMode) error {
 	if a.cfg.Auth == nil {
 		return nil
 	}
-	if ae, ok := errors.AsType[*AuthRequiredError](a.cfg.Auth.Check(ctx, cwd, model, fresh)); ok {
+	if ae, ok := errors.AsType[*AuthRequiredError](a.cfg.Auth.Check(ctx, cwd, model, mode)); ok {
 		return authRequired(ae.Message)
 	}
 	return nil
@@ -184,7 +200,7 @@ type loginClient struct {
 }
 
 func (l loginClient) ElicitURL(_ context.Context, url, message string) (URLElicitation, error) {
-	e := &urlElicitation{conn: l.conn, id: "elicit_" + newULID(), refused: make(chan error, 1)}
+	e := &urlElicitation{conn: l.conn, id: "elicit_" + newULID(), refused: make(chan error, 1), accepted: make(chan struct{})}
 	pending, err := l.conn.Start("elicitation/create", map[string]any{"mode": "url", "requestId": l.request, "elicitationId": e.id, "url": url, "message": message})
 	if err != nil {
 		return nil, err
@@ -195,10 +211,11 @@ func (l loginClient) ElicitURL(_ context.Context, url, message string) (URLElici
 }
 
 type urlElicitation struct {
-	conn    *rpc.Conn
-	id      string
-	pending *rpc.Pending
-	refused chan error
+	conn     *rpc.Conn
+	id       string
+	pending  *rpc.Pending
+	refused  chan error
+	accepted chan struct{}
 }
 
 // wait reads the answer of the client. An accept says that the user opens the URL, and the login goes on.
@@ -215,8 +232,12 @@ func (e *urlElicitation) wait() {
 		e.refused <- ErrDeclined
 	case res.Action == "cancel":
 		e.refused <- context.Canceled
+	default:
+		close(e.accepted)
 	}
 }
+
+func (e *urlElicitation) Accepted() <-chan struct{} { return e.accepted }
 
 func (e *urlElicitation) Refused() <-chan error { return e.refused }
 

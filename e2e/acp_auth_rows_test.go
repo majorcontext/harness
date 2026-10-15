@@ -40,6 +40,9 @@ type acpLoginSpec struct {
 	// models is the catalog that the fake ChatGPT backend serves. modelsStatus, when set, makes it refuse the request with this status.
 	models       []harnesstest.CodexModel
 	modelsStatus int
+	// injected adds the provider entry "codex" with auth injected, served by the fake backend in this mode. injectedNoLoginURL leaves out its login_url.
+	injected           *harnesstest.InjectedOptions
+	injectedNoLoginURL bool
 	// claudeFrames makes the fake CLI play these frames for each turn, in place of its default reply. The spec needs claude.
 	claudeFrames []map[string]any
 	// claudeQuestion makes the fake CLI park an AskUserQuestion call on the first turn. The spec needs claude.
@@ -119,6 +122,16 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 			l.nativeBase = l.cfg["providers"].(map[string]any)["codex"].(map[string]any)["base_url"].(string)
 			delete(l.cfg["providers"].(map[string]any), "codex")
 		}
+	} else if spec.injected != nil {
+		o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Injected: spec.injected, Models: spec.models}, model...)
+		l.openai, l.fake = o, o.Server
+		l.cfg = codexConfig(o.URL(), false, nil)
+		entry := l.cfg["providers"].(map[string]any)["codex"].(map[string]any)
+		delete(entry, "api_key_env")
+		entry["auth"], entry["models_from"] = "injected", "chatgpt"
+		if !spec.injectedNoLoginURL {
+			entry["login_url"] = "https://console.example/settings/codex"
+		}
 	} else {
 		l.fake = harnesstest.NewAnthropic(t)
 		l.cfg["providers"] = map[string]any{}
@@ -164,6 +177,9 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 func (l *acpLoginRun) register(c *acpConn) {
 	if l == nil {
 		return
+	}
+	if l.codex == nil && l.spec.injected != nil {
+		c.paths[l.cfg["providers"].(map[string]any)["codex"].(map[string]any)["base_url"].(string)] = "<model-server>/backend-api/codex"
 	}
 	if l.codex != nil {
 		c.paths[l.codex.path] = "<codex-auth-file>"
