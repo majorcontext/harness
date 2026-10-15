@@ -51,6 +51,7 @@ linters:
           files:
             - "**/internal/acp/**"
             - "!**/internal/acp/acpauth/**"
+            - "!**/internal/acp/cwdruntimes/**"
           list-mode: strict
           allow:
             - $gostd

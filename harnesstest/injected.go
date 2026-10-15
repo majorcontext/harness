@@ -58,7 +58,7 @@ func (s *Server) injectedServe(w http.ResponseWriter, r *http.Request) bool {
 	probe := r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v1/models")
 	st.mu.Lock()
 	st.seen = append(st.seen, rec)
-	denied := !st.signedIn && !(probe && st.opts.WeakProbe)
+	denied := !st.signedIn && (!probe || !st.opts.WeakProbe)
 	st.mu.Unlock()
 	switch {
 	case probe && st.opts.ProbeStatus != 0:
