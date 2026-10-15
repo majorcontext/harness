@@ -110,7 +110,8 @@ let contextUsed = 0;
     } else if (m.method === "session/update") {
       const u = m.params.update;
       if (u.sessionUpdate === "usage_update" && u.size) {
-        usage = `${Math.round((100 * u.used) / u.size)}% context`;
+        const pct = (100 * u.used) / u.size;
+        usage = `${pct > 0 && pct < 1 ? "<1" : Math.round(pct)}% context`;
         contextUsed = u.used;
       }
       onUpdate(u);
