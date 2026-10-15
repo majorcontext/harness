@@ -46,3 +46,37 @@ func recordClaudeCodeToolSearch(r *recorder, work string) error {
 	}
 	return r.saveJSONL("claudecode.toolsearch.jsonl", raw)
 }
+
+// recordClaudeCodeUnknownRefused records a run whose harness tools are
+// deferred and whose model calls the bare name bash before ToolSearch loads
+// mcp__harness__bash. The CLI refuses the unknown name with no "." after it.
+func recordClaudeCodeUnknownRefused(r *recorder, work string) error {
+	dir := filepath.Join(work, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	reg := mcp.NewRegistry("harness", "1")
+	reg.RegisterTool(mcp.Tool{Name: "bash", Description: "Run a shell command.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`)},
+		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
+			return mcp.CallToolResult{Content: []mcp.Content{{Type: "text", Text: "README.md"}}}, nil
+		})
+	flags, stop, err := serveRegistry(reg)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	if err := os.Setenv("ENABLE_TOOL_SEARCH", "true"); err != nil {
+		return err
+	}
+	defer func() { _ = os.Unsetenv("ENABLE_TOOL_SEARCH") }()
+	raw, err := runCLI(dir, []string{"Call the tool named exactly `bash`, with no prefix, with the command ls. Do not use ToolSearch first. If that fails, load the tool and run ls, then name the files in one short sentence."},
+		cliArgs(claudeModel, "ToolSearch", append([]string{"--effort", "low"}, flags...)...), false)
+	if err != nil {
+		return fmt.Errorf("unknown-refused run: %w", err)
+	}
+	if !refusedCall(raw, "bash") {
+		return fmt.Errorf("the CLI did not refuse a bash call")
+	}
+	return r.saveJSONL("claudecode.unknown-refused.jsonl", raw)
+}
