@@ -122,6 +122,9 @@ func (a *Actor) frame(kind string, data any) {
 	}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
+	if a.live.stopped {
+		return
+	}
 	e := protocol.Event{Seq: a.View().Session.HeadSeq, Time: time.Now(), Kind: kind, Data: d, Ephemeral: true}
 	if f, ok := data.(protocol.ItemFrame); ok {
 		a.live.remember(e, f)

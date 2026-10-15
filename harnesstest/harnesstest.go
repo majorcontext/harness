@@ -42,9 +42,9 @@ type Reply struct {
 	// Hangup closes the connection with no response. It sets no status. The websocket transport of the Responses server ignores it.
 	Hangup bool
 	// Tail is text that the Anthropic server streams as a second text delta
-	// after Text, once Release ends the Block of the step. With TailBlock the
-	// reply then waits again, for Release of the step name plus ":tail".
-	Tail      string
+	// after Text, and after Release when Block is set.
+	Tail string
+	// TailBlock makes the reply wait after Tail for Release of the step name plus ":tail".
 	TailBlock bool
 	Block     bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
 	// Reasoning is streamed before Text: as reasoning_content deltas by the
