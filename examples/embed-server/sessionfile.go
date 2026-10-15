@@ -32,6 +32,10 @@ func (s *sessions) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, v := range saved {
+		// A session with no CSRF token would pass the form check with an empty token.
+		if id == "" || v.User == "" || v.CSRF == "" {
+			continue
+		}
 		s.m[id] = &session{user: v.User, csrf: v.CSRF}
 	}
 	return nil

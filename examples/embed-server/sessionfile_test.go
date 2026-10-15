@@ -8,6 +8,29 @@ import (
 	"testing"
 )
 
+func TestNoSessionFileSetsASessionCookie(t *testing.T) {
+	w := httptest.NewRecorder()
+	newSessions(false).login(w, httptest.NewRequest("POST", "/login", nil), "ann")
+	if c := w.Result().Cookies()[0]; c.MaxAge != 0 {
+		t.Errorf("cookie MaxAge %d, want 0 without a session file", c.MaxAge)
+	}
+}
+
+func TestSessionFileSkipsASessionWithNoCSRFToken(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "sessions.json")
+	if err := os.WriteFile(file, []byte(`{"abc":{"user":"ann","csrf":""}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newSessions(false)
+	s.file = file
+	if err := s.load(); err != nil {
+		t.Fatal(err)
+	}
+	if s.alive("abc") {
+		t.Error("a session with no CSRF token was loaded")
+	}
+}
+
 func TestSessionFileKeepsSessionsAcrossRestarts(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "sessions.json")
 	a := newSessions(false)

@@ -68,7 +68,7 @@ func (s *tokenStore) save() {
 }
 
 func writePrivate(path string, b []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tokens-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".private-*")
 	if err != nil {
 		return err
 	}
