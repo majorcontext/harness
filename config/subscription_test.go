@@ -47,6 +47,8 @@ func TestDefaultModelFollowsTheSubscriptionInUse(t *testing.T) {
 		{"claude on PATH", Config{}, true, "-", SubscriptionClaudeModel, false},
 		{"neither", Config{}, false, "-", DefaultModel, false},
 		{"user or project model", Config{Model: "openai/gpt-5.5"}, true, `{"a":1}`, "openai/gpt-5.5", false},
+		{"anthropic entry whose credential a server injects", Config{Providers: map[string]Provider{"anthropic": {Auth: AuthInjected, BaseURL: "https://gw.example"}}}, true, `{"a":1}`, DefaultModel, false},
+		{"codex entry whose credential a server injects is not picked", Config{Providers: map[string]Provider{"codex": {Type: TypeOpenAI, Auth: AuthInjected, BaseURL: "https://gw.example"}}}, false, `{"a":1}`, DefaultModel, false},
 		{"codex entry replaced by an API key entry", Config{Providers: map[string]Provider{"codex": {Type: TypeOpenAI, APIKeyEnv: "K"}}}, false, `{"a":1}`, DefaultModel, false},
 		{"claude-code entry replaced by a non-CLI entry", Config{Providers: map[string]Provider{"claude-code": {Type: TypeOpenAI, APIKeyEnv: "K"}}}, true, "-", DefaultModel, false},
 		{"claude-code entry names a program that is missing", Config{Providers: map[string]Provider{"claude-code": {Type: TypeClaudeCodeCLI, BinaryPath: "/nonexistent/claude"}}}, true, "-", DefaultModel, false},

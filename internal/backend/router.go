@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/majorcontext/harness/config"
@@ -62,6 +63,8 @@ type Env struct {
 	Log *slog.Logger
 	// IssuerTransport carries the requests of the ChatGPT login to its issuer, the refresh among them. nil: the default transport. It is not the model transport, so a gateway credential or a host rewrite of that transport never sees the refresh token.
 	IssuerTransport http.RoundTripper
+	// Logins owns the login state of the injected provider entries, and is shared with the ACP logins of the connection. nil: the backend makes one over its own model transport.
+	Logins *injectedauth.Logins
 	// NoProcess says that the host starts no process, so a provider that runs a child process has no backend.
 	NoProcess bool
 	// NoLogin says that the host has no way to create the ChatGPT login, so a provider that uses the login lists its models only when the login file exists.
@@ -75,6 +78,9 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	env.Log = cmp.Or(env.Log, slog.Default())
 	backends := map[string]turn.Backend{}
 	cfg.Providers = cfg.ProviderEntries()
+	if env.Logins == nil {
+		env.Logins = injectedauth.New(injectedauth.Options{Transport: transport, Probe: ProbeOf})
+	}
 	var login *http.Client
 	if env.IssuerTransport != nil {
 		login = codexauth.Client(env.IssuerTransport)
@@ -93,11 +99,11 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 			if rc, ok := c.(*responses.Client); ok && p.ModelsFrom == config.ModelsFromChatGPT {
 				cb := &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return "" }}
-				switch e := injectedauth.Of(name, p); {
+				switch e := env.Logins.Of(name, p); {
 				case p.Auth == config.AuthChatGPT:
 					cb.credential = func() string { return codex().AccessToken() }
 				case e != nil:
-					cb.credential, cb.refusedRetry = e.Generation, catalogRetry
+					cb.credential, cb.refusedRetry = func() string { return strconv.FormatUint(e.Generation(), 10) }, catalogRetry
 				}
 				backends[name] = cb
 				if env.NoLogin && p.Auth == config.AuthChatGPT {
@@ -133,7 +139,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 	}
 	if p.Auth == config.AuthChatGPT {
 		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath), responses.ModelsURL(p.BaseURL))
-	} else if e := injectedauth.Of(name, p); e != nil {
+	} else if e := env.Logins.Of(name, p); e != nil {
 		hc = e.Client(hc)
 	}
 	switch {

@@ -41,7 +41,11 @@ type acpLoginSpec struct {
 	models       []harnesstest.CodexModel
 	modelsStatus int
 	// injected adds the provider entry "codex" with auth injected, served by the fake backend in this mode. injectedNoLoginURL leaves out its login_url.
-	injected           *harnesstest.InjectedOptions
+	injected *harnesstest.InjectedOptions
+	// anthropic serves the injected entry as the native anthropic provider, over the Anthropic fake, in place of codex.
+	anthropic bool
+	// clock makes the row run on the in-process host only, with a clock that the steps move.
+	clock              bool
 	injectedNoLoginURL bool
 	// claudeFrames makes the fake CLI play these frames for each turn, in place of its default reply. The spec needs claude.
 	claudeFrames []map[string]any
@@ -122,6 +126,15 @@ func startACPLogin(t *testing.T, spec acpLoginSpec, model []harnesstest.Step) *a
 			l.nativeBase = l.cfg["providers"].(map[string]any)["codex"].(map[string]any)["base_url"].(string)
 			delete(l.cfg["providers"].(map[string]any), "codex")
 		}
+	} else if spec.injected != nil && spec.anthropic {
+		a := harnesstest.NewAnthropic(t, model...)
+		a.Inject(*spec.injected)
+		l.fake = a
+		entry := map[string]any{"auth": "injected", "base_url": a.URL()}
+		if !spec.injectedNoLoginURL {
+			entry["login_url"] = "https://console.example/settings/anthropic"
+		}
+		l.cfg = map[string]any{"model": "anthropic/claude-fable-5", "providers": map[string]any{"anthropic": entry}}
 	} else if spec.injected != nil {
 		o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Injected: spec.injected, Models: spec.models}, model...)
 		l.openai, l.fake = o, o.Server
@@ -178,7 +191,7 @@ func (l *acpLoginRun) register(c *acpConn) {
 	if l == nil {
 		return
 	}
-	if l.codex == nil && l.spec.injected != nil {
+	if l.codex == nil && l.spec.injected != nil && !l.spec.anthropic {
 		c.paths[l.cfg["providers"].(map[string]any)["codex"].(map[string]any)["base_url"].(string)] = "<model-server>/backend-api/codex"
 	}
 	if l.codex != nil {
@@ -213,6 +226,7 @@ func (l *acpLoginRun) auth(env acpEnv) acp.Auth {
 		sink, opened = l.sink, l.opened
 	}
 	return acpauth.New(acpauth.Options{
+		Logins:   env.logins,
 		LookPath: l.lookPath,
 		Config: func(cwd string) (*config.Config, error) {
 			if cwd == "" {

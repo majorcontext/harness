@@ -1,11 +1,10 @@
-// Package injectedauth owns the state of the login of a provider entry with auth "injected": a server in front of the
-// endpoint holds the credential and adds it, and Harness sends none. It sends the status probe, keeps its answer, and
-// turns a 401 of a model call into the error of the turn.
+// Package injectedauth owns the login state of the provider entries with auth "injected": a server in front of the
+// endpoint holds the credential and adds it, and Harness sends none. A Logins value, made by the composition root of
+// a connection, sends the status probe, keeps its answer, and turns a 401 of a model call into the error of the turn.
 package injectedauth
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -13,8 +12,6 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/provider/anthropic"
-	"github.com/majorcontext/harness/internal/provider/openai"
 )
 
 const (
@@ -32,20 +29,79 @@ type State int
 
 // The states of a probe.
 const (
+	// Unknown is an answer that says nothing: a failure, a timeout, or a status other than 200, 401, 404, and 405.
 	Unknown State = iota
 	SignedIn
 	SignedOut
+	// NoProbe is a 404 or 405: the server has no status probe, so only the 401 of a model call says that the user is signed out.
+	NoProbe
 )
 
-// Entry is the login state of one provider entry. One Entry serves every runtime and every login of the process
-// that names the same entry and probe URL.
+// Probe is the status probe of an entry: the model list request and the headers its wire needs besides the extra headers of the entry.
+type Probe struct {
+	URL     string
+	Headers map[string]string
+}
+
+// Options is what the composition root gives a Logins.
+type Options struct {
+	// Transport returns the transport of the model calls of a provider. The probe uses it, so a probe reaches the server as a
+	// model call does. nil, or a nil result: the default transport.
+	Transport func(provider string) http.RoundTripper
+	// Probe returns the status probe of a provider entry. It is the one place that knows the wire of the entry.
+	Probe func(name string, p config.Provider) (Probe, bool)
+	// Now returns the time. nil: time.Now.
+	Now func() time.Time
+}
+
+// Logins owns the login state of the injected entries of one connection. The backend and the ACP logins of the connection
+// share it.
+type Logins struct {
+	opts Options
+
+	mu      sync.Mutex
+	entries map[string]*Entry
+}
+
+// New returns a Logins over opts.
+func New(opts Options) *Logins {
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return &Logins{opts: opts, entries: map[string]*Entry{}}
+}
+
+// Now returns the time of the owner.
+func (l *Logins) Now() time.Time { return l.opts.Now() }
+
+// Of returns the Entry of the providers entry name, and nil for an entry that does not use injected auth.
+func (l *Logins) Of(name string, p config.Provider) *Entry {
+	if l == nil || !p.UsesInjectedAuth() || l.opts.Probe == nil {
+		return nil
+	}
+	probe, ok := l.opts.Probe(name, p)
+	if !ok {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := name + "\x00" + probe.URL
+	e := l.entries[key]
+	if e == nil {
+		e = &Entry{logins: l, provider: name, loginURL: p.LoginURL, probe: probe}
+		l.entries[key] = e
+	}
+	return e
+}
+
+// Entry is the login state of one provider entry.
 type Entry struct {
-	provider, probeURL string
-	// probeHeaders are the headers that the wire of the entry needs on the probe, besides the extra headers of the entry.
-	probeHeaders map[string]string
+	logins   *Logins
+	provider string
+	loginURL string
+	probe    Probe
 
 	mu            sync.Mutex
-	loginURL      string
 	state         State
 	at            time.Time
 	okAt          time.Time
@@ -53,56 +109,23 @@ type Entry struct {
 	generation    uint64
 }
 
-var (
-	registryMu sync.Mutex
-	registry   = map[string]*Entry{}
-)
-
-// Of returns the Entry of the providers entry name, and nil for an entry that does not use injected auth.
-func Of(name string, p config.Provider) *Entry {
-	wire := config.WireOf(name, p)
-	if !p.UsesInjectedAuth() || wire == config.WireNone {
-		return nil
-	}
-	probe, headers := anthropic.ModelsURL(p.BaseURL), map[string]string{"Anthropic-Version": anthropic.Version}
-	if wire == config.WireResponses {
-		probe, headers = openai.ListURL(p.BaseURL, p.ResponsesPath, p.ModelsFrom == config.ModelsFromChatGPT), nil
-	}
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	key := name + "\x00" + probe
-	e := registry[key]
-	if e == nil {
-		e = &Entry{provider: name, probeURL: probe, probeHeaders: headers}
-		registry[key] = e
-	}
-	e.mu.Lock()
-	e.loginURL = p.LoginURL
-	e.mu.Unlock()
-	return e
-}
-
 // LoginURL is the sign-in page of the entry, or empty.
-func (e *Entry) LoginURL() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.loginURL
-}
+func (e *Entry) LoginURL() string { return e.loginURL }
 
 // Message is the text of a login-required error. It holds the sign-in URL and no header value.
 func (e *Entry) Message() string {
 	msg := "not logged in to " + e.provider
-	if u := e.LoginURL(); u != "" {
-		msg += "; sign in at " + u
+	if e.loginURL != "" {
+		msg += "; sign in at " + e.loginURL
 	}
 	return msg
 }
 
 // Generation changes each time the entry becomes signed in.
-func (e *Entry) Generation() string {
+func (e *Entry) Generation() uint64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return fmt.Sprint(e.generation)
+	return e.generation
 }
 
 // Reset forgets the cached answer. A new sign-in starts with it.
@@ -120,7 +143,7 @@ func (e *Entry) Cached() (State, bool) {
 	switch {
 	case e.modelRejected:
 		return SignedIn, true
-	case e.state != Unknown && time.Since(e.at) < cacheTTL:
+	case e.state != Unknown && e.logins.Now().Sub(e.at) < cacheTTL:
 		return e.state, true
 	}
 	return Unknown, false
@@ -129,37 +152,42 @@ func (e *Entry) Cached() (State, bool) {
 func (e *Entry) record(status int) State {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	now := e.logins.Now()
 	switch status {
 	case http.StatusOK:
 		if e.state != SignedIn {
 			e.generation++
 		}
-		now := time.Now()
 		e.state, e.at, e.okAt = SignedIn, now, now
 	case http.StatusUnauthorized:
-		e.state, e.at, e.okAt = SignedOut, time.Now(), time.Time{}
+		e.state, e.at, e.okAt = SignedOut, now, time.Time{}
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		e.state, e.at, e.okAt = NoProbe, now, time.Time{}
 	default:
 		return Unknown
 	}
 	return e.state
 }
 
-// Probe sends the status probe through rt with the extra headers of the entry and no credential, and records the answer.
-// It follows no redirect. An answer other than 200 and 401, a failure, and a wait of more than three seconds are Unknown.
-func (e *Entry) Probe(ctx context.Context, rt http.RoundTripper, extra map[string]string) State {
-	if rt == nil {
-		rt = http.DefaultTransport
+// Probe sends the status probe through the transport of the entry with the extra headers of the entry and no credential,
+// and records the answer. It follows no redirect. A failure and a wait of more than three seconds are Unknown.
+func (e *Entry) Probe(ctx context.Context, extra map[string]string) State {
+	rt := http.DefaultTransport
+	if f := e.logins.opts.Transport; f != nil {
+		if t := f(e.provider); t != nil {
+			rt = t
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.probeURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.probe.URL, nil)
 	if err != nil {
 		return Unknown
 	}
 	for k, v := range extra {
 		req.Header.Set(k, v)
 	}
-	for k, v := range e.probeHeaders {
+	for k, v := range e.probe.Headers {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Accept", "application/json")
@@ -200,7 +228,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if req.Method == http.MethodGet && req.URL.String() == t.entry.probeURL {
+	if req.Method == http.MethodGet && req.URL.String() == t.entry.probe.URL {
 		t.entry.record(resp.StatusCode)
 		return resp, nil
 	}
@@ -215,17 +243,17 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 // rejection is the error of a model call that the server answered with 401.
 func (e *Entry) rejection() error {
 	e.mu.Lock()
-	if !e.okAt.IsZero() && time.Since(e.okAt) < recentOK {
+	defer e.mu.Unlock()
+	now := e.logins.Now()
+	if !e.okAt.IsZero() && now.Sub(e.okAt) < recentOK {
 		e.modelRejected = true
-		e.mu.Unlock()
 		msg := "the server accepted the sign-in check but rejected the model call; "
-		if u := e.LoginURL(); u != "" {
-			msg += "sign in again at " + u + ", or "
+		if e.loginURL != "" {
+			msg += "sign in again at " + e.loginURL + ", or "
 		}
 		return &ServerError{msg + "check how the server authorizes model calls"}
 	}
-	e.state, e.at = SignedOut, time.Now()
-	e.mu.Unlock()
+	e.state, e.at, e.okAt = SignedOut, now, time.Time{}
 	return &LoginRequiredError{Text: e.Message()}
 }
 

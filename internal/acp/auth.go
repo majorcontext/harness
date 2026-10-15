@@ -66,14 +66,14 @@ type Auth interface {
 type CheckMode int
 
 const (
-	// CheckCached is the check of a prompt: it reads only what earlier checks cached, and sends no probe.
-	CheckCached CheckMode = iota
-	// CheckNew is the check of a new session: every check runs, and a cache answers.
-	CheckNew
-	// CheckOpen is the check of a session that load or resume opens: a login that a probe tests is checked, and the other logins are not.
-	CheckOpen
-	// CheckFresh is the check after a failed turn: no cache answers.
-	CheckFresh
+	// CheckCacheOnly reads only what earlier checks cached, and sends no probe. A prompt uses it.
+	CheckCacheOnly CheckMode = iota
+	// CheckAll runs every check, and a cache answers. A new session uses it.
+	CheckAll
+	// CheckProbed runs only the checks that send a probe, and a cache answers. The load and the resume of a session use it.
+	CheckProbed
+	// CheckReprobe runs every check and lets no cache answer. A failed turn uses it.
+	CheckReprobe
 )
 
 // AuthRequiredError says that a login is missing. Message tells the user what to do and holds no token.

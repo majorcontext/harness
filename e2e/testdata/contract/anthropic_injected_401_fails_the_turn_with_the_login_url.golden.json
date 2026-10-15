@@ -1,0 +1,26 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "last_turn.a": {
+      "status": 200,
+      "body": {
+        "error": "[permanent] not logged in to anthropic; sign in at https://console.example/settings/anthropic",
+        "stop_reason": "failed"
+      }
+    }
+  }
+}

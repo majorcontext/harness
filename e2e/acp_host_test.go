@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/store"
 )
 
@@ -29,6 +30,9 @@ type acpEnv struct {
 	login *acpLoginRun
 	// device is the scripted issuer of the device code login. Nil: none.
 	device *deviceRun
+	// logins and clock are the injected login state of the in-process host, and its clock. The binary host has its own.
+	logins *injectedauth.Logins
+	clock  *fakeClock
 	// injectedElicitations maps a step name to the elicitationId of the URL elicitation of an injected sign-in.
 	injectedElicitations map[string]string
 	// jsTool gives the wasm hosts the page tool js_echo.
@@ -54,6 +58,7 @@ func acpRuntimes(env acpEnv) *cwdruntimes.Runtimes {
 		Version:    "in-process",
 		Getenv:     acpGetenv,
 		DefaultDir: env.defaultDir,
+		Logins:     env.logins,
 	})
 }
 

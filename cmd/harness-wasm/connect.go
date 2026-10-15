@@ -20,13 +20,17 @@ import (
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/acpauth"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/codexauth"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/internal/jshost"
 	"github.com/majorcontext/harness/store"
 )
 
 // options is what a host passes to harnessConnect.
 type options struct {
+	// logins owns the login state of the injected provider entries, for the runtimes and the login of the connection.
+	logins       *injectedauth.Logins
 	user         *config.Config
 	err          error
 	storeDir     string
@@ -142,6 +146,24 @@ func (o *options) applyHostConfig() error {
 	return nil
 }
 
+// modelTransport is the transport of the model calls of a provider. The status probe of an injected entry uses it too.
+func (o *options) modelTransport(name string) http.RoundTripper {
+	rt := jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin(), Fetch: o.modelFetch}
+	if o.user.ProviderEntries()[name].UsesChatGPTLogin() {
+		// The login must reach the page origin only, and a redirect must not carry it on.
+		rt.OnlyOrigin, rt.NoRedirect = o.pageOrigin, true
+	}
+	return rt
+}
+
+// loginState returns the owner of the injected logins of the connection.
+func (o *options) loginState() *injectedauth.Logins {
+	if o.logins == nil {
+		o.logins = injectedauth.New(injectedauth.Options{Transport: o.modelTransport, Probe: backend.ProbeOf})
+	}
+	return o.logins
+}
+
 // proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
 func (o *options) proxyOrigin() string {
 	u, err := url.Parse(o.proxyBase)
@@ -155,6 +177,7 @@ func (o *options) proxyOrigin() string {
 // directory over one store and one local owner.
 func (o *options) runtimes() *cwdruntimes.Runtimes {
 	return cwdruntimes.New(cwdruntimes.Options{
+		Logins: o.loginState(),
 		Config: func(cwd string) (*config.Config, error) {
 			if o.err != nil {
 				return nil, o.err
@@ -171,18 +194,11 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			}
 			return store.NewDiskStore(o.storeDir), harness.NewLocalOwner(1), nil
 		},
-		DefaultDir: o.defaultDir,
-		Version:    "wasm",
-		Getenv:     func(k string) string { return o.env[k] },
-		Logger:     o.logger,
-		ModelTransport: func(name string) http.RoundTripper {
-			rt := jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin(), Fetch: o.modelFetch}
-			if o.user.ProviderEntries()[name].UsesChatGPTLogin() {
-				// The login must reach the page origin only, and a redirect must not carry it on.
-				rt.OnlyOrigin, rt.NoRedirect = o.pageOrigin, true
-			}
-			return rt
-		},
+		DefaultDir:      o.defaultDir,
+		Version:         "wasm",
+		Getenv:          func(k string) string { return o.env[k] },
+		Logger:          o.logger,
+		ModelTransport:  o.modelTransport,
 		Tools:           o.tools,
 		Host:            harness.HostLimits{NoProcess: true, NoLogin: true, NoNetwork: true},
 		IssuerTransport: jshost.FetchRT{NoRedirect: true},
@@ -192,6 +208,7 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 // login is the ChatGPT login of the connection: the device code flow, shown to a client that takes an elicitation in URL mode.
 func (o *options) login() acp.Auth {
 	return acpauth.New(acpauth.Options{
+		Logins: o.loginState(),
 		Config: func(cwd string) (*config.Config, error) {
 			if cwd == "" {
 				cwd = o.defaultDir

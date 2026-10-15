@@ -18,13 +18,27 @@ func scenarioFake(t *testing.T, sc scenario) (*harnesstest.Server, map[string]an
 	t.Helper()
 	if !sc.chat {
 		fake := harnesstest.NewAnthropic(t, sc.model...)
+		if sc.inject != nil {
+			fake.Inject(*sc.inject)
+		}
 		extra, ok := sc.config["providers"].(map[string]any)
-		if !ok {
+		if !ok && sc.entry == nil {
 			return fake, sc.config
 		}
-		providers := map[string]any{"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": fake.URL()}}
+		entry := map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": fake.URL()}
+		for k, v := range sc.entry {
+			if v == nil {
+				delete(entry, k)
+			} else {
+				entry[k] = v
+			}
+		}
+		providers := map[string]any{"anthropic": entry}
 		maps.Copy(providers, extra)
 		config := maps.Clone(sc.config)
+		if config == nil {
+			config = map[string]any{}
+		}
 		config["providers"] = providers
 		return fake, config
 	}

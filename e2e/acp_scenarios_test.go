@@ -11,6 +11,8 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/backend"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -303,6 +305,9 @@ func (sc acpScenario) runsOn(host string) bool {
 	if sc.afterRead != nil {
 		return host == "in-process"
 	}
+	if sc.login != nil && sc.login.clock {
+		return host == "in-process"
+	}
 	switch host {
 	case "binary":
 		return len(sc.allowed) == 0 && !sc.jsTool && !sc.wasmOnly
@@ -340,6 +345,10 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				env := acpEnv{sessDir: t.TempDir(), allowed: sc.allowed, defaultDir: t.TempDir(), jsTool: sc.jsTool, memoryStore: host.name == browserHostName, wasm: host.name == nodeHostName || host.name == browserHostName}
 				if sc.login != nil {
 					env.login = startACPLogin(t, *sc.login, sc.model)
+					if sc.login.injected != nil {
+						env.clock = newFakeClock()
+						env.logins = injectedauth.New(injectedauth.Options{Probe: backend.ProbeOf, Now: env.clock.Now})
+					}
 					fake = env.login.fake
 					env.configPath = writeGoalConfigWith(t, "", env.login.config())
 				} else if sc.device != nil {
@@ -380,7 +389,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 					step.run(t, c)
 				}
 				c.finish(stop)
-				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process" || (sc.jsTool || sc.wasmOnly) && host.name == nodeHostName)
+				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil || sc.login != nil && sc.login.clock) && host.name == "in-process" || (sc.jsTool || sc.wasmOnly) && host.name == nodeHostName)
 				got := acpGoldenOf(t, c, sc.wireOnly)
 				if (host.name == nodeHostName || host.name == browserHostName) && !sc.wasmOnly {
 					got = alignNodeGolden(t, got)

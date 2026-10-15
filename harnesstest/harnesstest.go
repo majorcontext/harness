@@ -192,6 +192,7 @@ type Server struct {
 	codec   *codec // nil speaks the Anthropic wire
 	srv     *httptest.Server
 	closing chan struct{}
+	inj     *injectedState // non-nil: the server is a credential-injecting server
 
 	selMu     sync.Mutex // serializes step selection; held while Match runs, never with mu
 	mu        sync.Mutex
@@ -424,6 +425,9 @@ func (s *Server) selectStep(req Request) int {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	if s.inj != nil && s.injectedServe(w, r) {
+		return
+	}
 	if suffix := s.wire().pathSuffix; suffix != "" && !strings.HasSuffix(r.URL.Path, suffix) {
 		s.mu.Lock()
 		s.undecoded = append(s.undecoded, fmt.Sprintf("request path %q does not end in %q", r.URL.Path, suffix))

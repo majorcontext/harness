@@ -69,6 +69,7 @@ linters:
             - github.com/majorcontext/harness/config
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/cwdruntimes
+            - github.com/majorcontext/harness/internal/injectedauth
         acp-acpauth:
           files:
             - "**/internal/acp/acpauth/**"
@@ -117,7 +118,6 @@ linters:
           files:
             - $all
             - "!**/internal/backend/**"
-            - "!**/internal/injectedauth/**"
             - "!**/provider/**"
             - "!**/e2e/**"
             - "!**/examples/**"

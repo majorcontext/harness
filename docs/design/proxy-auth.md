@@ -95,7 +95,7 @@ Checked against `e2e/testdata/acp/schema/schema.json`. ACP has `authenticate`, `
    1. The agent sends the probe. A 200 answers `{}` at once.
    2. The agent sends `elicitation/create`: `mode` `url`, no `sessionId`, `requestId` the id of the `authenticate` request, a fresh `elicitationId`, `url` the `login_url`, and `message` "Sign in on the page that opens, then return here."
    3. `accept` means that the user opens the URL. `decline` ends with `-32603`, "The sign-in was declined". `cancel` ends with `-32800`.
-   4. After `accept`, the agent sends the probe every 2 s (4 s after 30 s, 8 s after 2 minutes) for at most 10 minutes. A 200 ends the loop. The agent sends `elicitation/complete` with the `elicitationId` and answers `{}`.
+   4. After `accept`, the agent sends the probe at once, then every 2 s (4 s after 30 s, 8 s after 2 minutes) for at most 10 minutes. The 10 minutes start at the accept. A 200 ends the loop. The agent sends `elicitation/complete` with the `elicitationId` and answers `{}`. A probe that answers 404 or 405 means that the server has no status probe: the agent then answers `{}` (after `elicitation/complete`) as soon as the user accepts, because the accept is the only signal of the user.
    5. A timeout is `-32603`. `$/cancel_request` and a new `authenticate` end the flow as for the other methods, and the agent sends `$/cancel_request` for an elicitation that has no answer.
 4. The page behind `login_url` runs the device or OAuth flow on the server. It stores the token on the server. It never returns a token to Harness. After it finishes, the server stops answering 401 for this caller.
 
@@ -108,7 +108,9 @@ A probe is the model list request of the entry, sent with no credential:
 - `openai`: `GET <base_url>/models`, where the path is `responses_path` with its last segment replaced by `models`. With `models_from: "chatgpt"` it is the catalog request, so one request serves both purposes.
 - `anthropic`: `GET <base_url>/v1/models`.
 
-A 200 is signed in. A 401 is signed out. Anything else is unknown. The probe makes no model call and spends no quota. Section 3 sets how the server authorizes it.
+A 200 is signed in. A 401 is signed out. A 404 or 405 means that the server has no status probe: `login_required` then comes only from the 401 of a turn, never from the probe. Anything else is unknown. The probe makes no model call and spends no quota. Section 3 sets how the server authorizes it. The probe uses the transport of the model calls of the connection (a `proxy.headers` option in wasm and `HTTPS_PROXY` natively reach it too).
+
+The composition root of a connection (`cmd/harness acp`, `cmd/harness-wasm`) makes one `injectedauth.Logins` owner. It holds the model transport, the clock, and the function that returns the probe of an entry. The backend and the ACP logins of the connection share it, so the probe cache and the 2-minute rule have one owner and no package-level state.
 
 `Runtime.Models` fetches the live list of an entry with `models_from: "chatgpt"` and no `models`: first call, 3 s wait, cache for the life of the process, retry after 5 minutes, and the static `codex` list on failure. A missing file login, and a 401 or 403 answer, give the static list and no log line. The next call tries again after the next successful `authenticate` or after 5 minutes. An `injected` entry is listed in wasm, because it needs no file.
 

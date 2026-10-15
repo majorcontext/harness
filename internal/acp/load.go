@@ -74,7 +74,7 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if snap.WorkDir != "" && filepath.Clean(snap.WorkDir) != cwd {
 		return nil, invalidParams("the session belongs to another cwd")
 	}
-	if err := a.requireLogin(ctx, cwd, snap.Model, CheckOpen); err != nil {
+	if err := a.requireLogin(ctx, cwd, snap.Model, CheckProbed); err != nil {
 		return nil, err
 	}
 	if h, err := a.held(p.SessionID); err == nil {

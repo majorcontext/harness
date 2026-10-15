@@ -19,6 +19,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/listing"
 	"github.com/majorcontext/harness/internal/process"
@@ -77,14 +78,11 @@ type Options struct {
 	// Owner grants sessions. nil: NewLocalOwner(1), which owns every session. The default does not
 	// exclude another Runtime on the same Store; the fence that Open appends stops the earlier one.
 	Owner Owner
-	// Sync replicates every record that this Runtime appends. nil: no replication. New reads neither
-	// Config.OwnerEpoch nor Config.Sync; the embedder passes NewLocalOwner and httpsync.New.
+	// Sync replicates every record that this Runtime appends. nil: no replication. New reads neither Config.OwnerEpoch nor Config.Sync; the embedder passes NewLocalOwner and httpsync.New.
 	Sync Sync
-	// Config configures the model providers and the MCP servers. A model ref "provider/model" selects the
-	// entry of Config.Providers named provider. Each session gets the tools of Config.MCPServers.
+	// Config configures the model providers and the MCP servers. A model ref "provider/model" selects the entry of Config.Providers named provider. Each session gets the tools of Config.MCPServers.
 	Config config.Config
-	// ModelTransport returns the HTTP transport for a model provider.
-	// nil, or a nil result: the default transport.
+	// ModelTransport returns the HTTP transport for a model provider. nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Getenv reads the variables that hold provider API keys, by the api_key_env of the provider or its
 	// default name. nil: New and the runtime read no variable, so a provider has no key unless
@@ -93,6 +91,8 @@ type Options struct {
 	Getenv func(key string) string
 	// IssuerTransport carries the ChatGPT login requests to the issuer. nil: the default transport. ModelTransport never carries them.
 	IssuerTransport http.RoundTripper
+	// Logins owns the login state of the provider entries with auth injected. A host with a login that probes such an entry shares it with that login. nil: the runtime makes its own.
+	Logins *injectedauth.Logins
 	// Host says what the host cannot do. The zero value is a host that can do everything.
 	Host HostLimits
 	// Logger receives every log line of the runtime. nil: slog.Default().
@@ -262,7 +262,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, Logins: opts.Logins, NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)

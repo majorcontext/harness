@@ -1,11 +1,40 @@
 package e2e
 
 import (
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
+
+// fakeClock is the clock of the injected logins of the in-process host. A step moves it.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newFakeClock() *fakeClock { return &fakeClock{t: time.Now()} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// acpInjectedAdvance moves the clock of the injected logins.
+func acpInjectedAdvance(d time.Duration) acpCheck {
+	return func(t *testing.T, c *acpConn) { c.env.clock.Advance(d) }
+}
 
 const injectedLoginURL = "https://console.example/settings/codex"
 
@@ -52,7 +81,13 @@ func (s acpInjectedComplete) run(t *testing.T, c *acpConn) {
 }
 
 // acpInjectedSignIn makes the fake server accept requests, as the login page does for the user.
-func acpInjectedSignIn(t *testing.T, c *acpConn) { c.env.login.openai.SignIn() }
+func acpInjectedSignIn(t *testing.T, c *acpConn) {
+	if l := c.env.login; l.openai != nil {
+		l.openai.SignIn()
+		return
+	}
+	c.env.login.fake.SignIn()
+}
 
 // acpInjectedDenials checks how many requests the fake server denied.
 func acpInjectedDenials(want int) acpCheck {
@@ -84,6 +119,10 @@ const (
 	injectedPermCite   = "A 401 of a model call within 2 minutes after a probe of the same entry answered 200 ends the turn `permanent`, with the message `the server accepted the sign-in check but rejected the model call; sign in again at <login_url>, or check how the server authorizes model calls`"
 	injected401Cite    = "A 401 of an entry with `auth` `injected` fails the turn with the error class `login_required`."
 	injected403Cite    = "A 403 is not `login_required`."
+	injectedLateCite   = "A 401 of a model call 2 minutes or more after the last probe that answered 200 fails the turn with the error class `login_required`."
+	injectedTimeout    = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes."
+	injectedNoProbe    = "A probe that answers 404 or 405 means that the server has no status probe: `authenticate` then answers `{}` when the user accepts the elicitation, and only the 401 of a turn is `login_required`."
+	injectedProbeCite  = "The status probe of the Anthropic adapter is `GET <base_url>/v1/models` with the header `Anthropic-Version`."
 )
 
 var acpInjectedScenarios = []acpScenario{
@@ -306,6 +345,89 @@ var acpInjectedScenarios = []acpScenario{
 			acpAuthDone{id: "auth"},
 			acpNew{as: "a"},
 			acpPrompt{as: "a", text: "hello", stop: "end_turn"},
+		},
+	},
+	{
+		name:  "prompt_401_two_minutes_after_a_200_probe_is_auth_required",
+		cite:  injectedLateCite,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true, WeakProbe: true}, clock: true},
+		model: []harnesstest.Step{{Name: "reply", Repeat: true, Reply: codexText("hi")}},
+		steps: []acpStep{
+			injectedInit,
+			acpNew{as: "a"},
+			acpCheck(acpInjectedAdvance(2 * time.Minute)),
+			acpPrompt{as: "a", text: "one", code: acpAuthRequired, dataCode: "login_required"},
+		},
+	},
+	{
+		name:  "authenticate_injected_ends_after_10_minutes_without_a_sign_in",
+		cite:  injectedTimeout,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true}, clock: true},
+		steps: []acpStep{
+			injectedInit,
+			acpAuthStart{id: "auth", method: "injected-codex"},
+			acpInjectedElicit{as: "login", auth: "auth"},
+			acpAnswerElicitation{as: "login", action: "accept"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				testpoll.Until(t, waitBound, "the first poll after the accept did not come", func() bool { return c.env.login.openai.Denials() >= 2 })
+				c.env.clock.Advance(10 * time.Minute)
+			}),
+			acpAuthDone{id: "auth", code: acpInternal},
+		},
+	},
+	{
+		name:  "authenticate_injected_with_no_status_probe_answers_after_accept",
+		cite:  injectedNoProbe,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true, ProbeStatus: 404}},
+		steps: []acpStep{
+			injectedInit,
+			acpNew{as: "a"},
+			acpAuthStart{id: "auth", method: "injected-codex"},
+			acpInjectedElicit{as: "login", auth: "auth"},
+			acpAnswerElicitation{as: "login", action: "accept"},
+			acpAuthDone{id: "auth"},
+			acpInjectedComplete{as: "login"},
+		},
+	},
+	{
+		name:  "prompt_401_with_no_status_probe_is_auth_required",
+		cite:  injectedNoProbe,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true, ProbeStatus: 405}},
+		model: []harnesstest.Step{{Name: "reply", Repeat: true, Reply: codexText("hi")}},
+		steps: []acpStep{
+			injectedInit,
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "one", code: acpAuthRequired, dataCode: "login_required"},
+		},
+	},
+	{
+		name:  "initialize_offers_the_injected_method_of_the_anthropic_entry_and_the_probe_sends_the_version",
+		cite:  injectedProbeCite,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{}, anthropic: true},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, elicitationURL: true, methods: []string{"chatgpt", "injected-anthropic"}},
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				got := c.env.login.fake.InjectedRequests()
+				i := slices.IndexFunc(got, func(r harnesstest.InjectedRequest) bool { return r.Method == "GET" && r.Path == "/v1/models" })
+				switch {
+				case i < 0:
+					t.Fatalf("requests = %v, want the probe GET /v1/models", got)
+				case got[i].Version != "2023-06-01", len(got[i].CredentialHeaders) != 0:
+					t.Errorf("probe = %+v, want the version and no credential header", got[i])
+				}
+			}),
+		},
+	},
+	{
+		name:  "anthropic_injected_prompt_401_is_auth_required",
+		cite:  injected401Cite,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true, ProbeStatus: 503}, anthropic: true},
+		model: []harnesstest.Step{{Name: "reply", Repeat: true, Reply: harnesstest.Reply{Text: "hi"}}},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, elicitationURL: true, methods: []string{"chatgpt", "injected-anthropic"}},
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "one", code: acpAuthRequired, dataCode: "login_required"},
 		},
 	},
 }

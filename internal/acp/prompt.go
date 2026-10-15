@@ -139,7 +139,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if h.cancelled(pr) {
 		return map[string]string{"stopReason": "cancelled"}, nil
 	}
-	if err := a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, CheckCached); err != nil {
+	if err := a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, CheckCacheOnly); err != nil {
 		return nil, err
 	}
 	in := protocol.Input{ID: newULID(), Parts: parts, Delivery: protocol.DeliveryQueue}
@@ -186,7 +186,7 @@ func (a *agent) failedLogin(ctx context.Context, h *held, res harness.TurnResult
 	if res.ErrorClass == protocol.ErrorLoginRequired {
 		return authRequired(res.Error)
 	}
-	return a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, CheckFresh)
+	return a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, CheckReprobe)
 }
 
 // isTyped says that a prompt is a typed line: exactly one text block whose text
