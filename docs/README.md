@@ -3,6 +3,15 @@
 Use this index to find technical documentation. The current source and tests
 are authoritative.
 
+## Guides
+
+| Document | Subject |
+|---|---|
+| [cli.md](cli.md) | Sessions, MCP tools, goals, `harness serve`, and the editor |
+| [configuration.md](configuration.md) | Subscription logins, the default model, endpoints, context windows, and `web` |
+| [embedding.md](embedding.md) | Embedding the runtime in Go and in JavaScript, and the examples |
+| [plugins.md](plugins.md) | Write a plugin as a process and in the process |
+
 ## Runtime behavior
 
 | Document | Subject |
