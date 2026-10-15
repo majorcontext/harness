@@ -2,27 +2,71 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Harness embed</title>
-<style>body{font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem}textarea{width:100%}pre{white-space:pre-wrap;background:#f4f4f4;padding:.75rem}</style>
-<h1>Harness embed</h1>
-<p id="who">Loading...</p>
-<p><a href="/login">Sign in to the app</a> <form method="post" action="/logout" style="display:inline"><button>Sign out</button></form> | <a href="/settings/codex" target="_blank" rel="noopener">ChatGPT login</a></p>
-<p><label for="prompt">Prompt</label></p>
-<textarea id="prompt" rows="3">Say hello in five words.</textarea>
-<p><button id="send" disabled>Send</button> <span id="status" role="status"></span></p>
-<pre id="out"></pre>
+<link rel="stylesheet" href="/style.css">
+<div class="term">
+  <header class="bar">
+    <span>harness</span>
+    <span id="model"></span>
+  </header>
+
+  <main class="log" id="log" aria-live="polite"></main>
+
+  <form class="input" id="form">
+    <label for="prompt">&gt;</label>
+    <textarea id="prompt" rows="1" disabled autocomplete="off" spellcheck="false" aria-label="Prompt"></textarea>
+  </form>
+
+  <footer class="status">
+    <span id="status" role="status">loading</span>
+    <span class="keys">
+      <span id="who"></span>
+      <a href="/settings/codex" target="_blank" rel="noopener">chatgpt login</a>
+      <a href="/login" id="login">sign in</a>
+      <form method="post" action="/logout"><button class="link" id="logout">sign out</button></form>
+    </span>
+  </footer>
+</div>
 <script type="module">
 import { createHarness, wasm } from "/embed/index.mjs";
 
 const $ = (id) => document.getElementById(id);
-const who = await (await fetch("/whoami")).json();
-$("who").textContent = who.user ? `Signed in as ${who.user}. ChatGPT login: ${who.codex ? "yes" : "no"}` : "Not signed in to the app.";
+const log = $("log");
+const input = $("prompt");
+
+const status = (text, cls = "") => {
+  $("status").textContent = text;
+  $("status").className = cls;
+};
+const el = (tag, cls, text = "") => {
+  const e = document.createElement(tag);
+  e.className = cls;
+  e.textContent = text;
+  return e;
+};
+const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+const follow = (fn) => {
+  const stick = atBottom();
+  fn();
+  if (stick) log.scrollTop = log.scrollHeight;
+};
+
+const refreshWho = async () => {
+  const who = await (await fetch("/whoami")).json();
+  $("who").textContent = who.user ?? "not signed in";
+  $("login").hidden = !!who.user;
+  $("logout").hidden = !who.user;
+};
+await refreshWho();
+window.addEventListener("focus", refreshWho);
 
 // The module holds no credential. The server adds it to the requests that go
 // to /model-proxy/, and answers 401 until the user signs in at /settings/codex.
+const model = "codex/gpt-6.1-sol";
+$("model").textContent = model;
 const h = await createHarness({
   transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
   config: {
-    model: "codex/gpt-6.1-sol",
+    model,
     providers: {
       codex: {
         type: "openai", auth: "injected", responses_path: "/responses", models_from: "chatgpt",
@@ -41,7 +85,8 @@ const writer = h.stream.writable.getWriter();
 const reader = h.stream.readable.getReader();
 const pending = new Map();
 let nextId = 1;
-let onText = () => {};
+let onUpdate = () => {};
+let usage = "";
 (async () => {
   for (;;) {
     const { value: m, done } = await reader.read();
@@ -49,8 +94,12 @@ let onText = () => {};
     if (m.id !== undefined && pending.has(m.id)) {
       pending.get(m.id)(m);
       pending.delete(m.id);
-    } else if (m.method === "session/update" && m.params.update.sessionUpdate === "agent_message_chunk") {
-      onText(m.params.update.content.text);
+    } else if (m.method === "session/update") {
+      const u = m.params.update;
+      if (u.sessionUpdate === "usage_update" && u.size) {
+        usage = `${Math.round((100 * u.used) / u.size)}% context`;
+      }
+      onUpdate(u);
     }
   }
 })();
@@ -62,17 +111,107 @@ const call = (method, params) =>
   });
 
 await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
-const created = await call("session/new", { cwd: "/work", mcpServers: [] });
-if (created.error) $("status").textContent = created.error.message;
-const sessionId = created.result?.sessionId;
-$("send").disabled = !sessionId;
 
-$("send").onclick = async () => {
-  $("out").textContent = "";
-  $("status").textContent = "Running...";
-  onText = (t) => ($("out").textContent += t);
-  const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text: $("prompt").value }] });
-  $("status").textContent = done.error ? `Error: ${done.error.message}` : `Done (${done.result.stopReason})`;
+// A session needs the ChatGPT login of the user. Until the server holds one,
+// session/new fails; the page tries again when the tab gets the focus back.
+let sessionId = null;
+let notice = null;
+const open = async () => {
+  if (sessionId) return;
+  status("starting session");
+  const created = await call("session/new", { cwd: "/work", mcpServers: [] });
+  sessionId = created.result?.sessionId ?? null;
+  notice?.remove();
+  if (!sessionId) {
+    notice = el("section", "turn");
+    notice.append(
+      el("div", "line warn", created.error?.message ?? "no session"),
+      el("div", "line meta", "Sign in with ChatGPT, then come back to this tab."),
+    );
+    follow(() => log.append(notice));
+    status("no chatgpt login", "warn");
+    return;
+  }
+  notice = null;
+  status("enter: send · shift+enter: new line");
+  input.disabled = false;
+  input.focus();
+};
+await open();
+window.addEventListener("focus", open);
+
+const grow = () => {
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+};
+input.addEventListener("input", grow);
+
+let running = false;
+let last = "";
+const send = async () => {
+  const text = input.value.trim();
+  if (!text || running || !sessionId) return;
+  running = true;
+  last = text;
+  input.value = "";
+  grow();
+  input.disabled = true;
+
+  const turn = el("section", "turn");
+  const reply = el("div", "line reply");
+  let thought = null;
+  follow(() => {
+    turn.append(el("div", "line you", text), reply);
+    log.append(turn);
+  });
+  onUpdate = (u) =>
+    follow(() => {
+      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {
+        reply.textContent += u.content.text;
+      } else if (u.sessionUpdate === "agent_thought_chunk" && u.content?.type === "text") {
+        thought ??= turn.insertBefore(el("div", "line thought"), reply);
+        thought.textContent += u.content.text;
+      }
+    });
+  status("running · esc: interrupt");
+  const t0 = performance.now();
+
+  const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+
+  if (!reply.textContent) reply.remove();
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  follow(() => {
+    if (done.error) {
+      turn.append(el("div", "line meta err", done.error.message));
+    } else {
+      turn.append(el("div", "line meta", [done.result.stopReason, `${secs}s`, usage].filter(Boolean).join(" · ")));
+    }
+  });
+  status(done.error ? "error" : "enter: send · shift+enter: new line", done.error ? "err" : "");
+  running = false;
+  input.disabled = false;
+  input.focus();
   window.__done = true;
 };
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  send();
+});
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    send();
+  } else if (e.key === "ArrowUp" && !input.value && last) {
+    e.preventDefault();
+    input.value = last;
+    grow();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && running) {
+    writer.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+    status("interrupting", "warn");
+  }
+});
 </script>

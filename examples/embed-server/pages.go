@@ -12,27 +12,35 @@ import (
 //go:embed web/index.html
 var indexHTML []byte
 
-var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html><meta charset="utf-8"><title>Demo sign-in</title>
-<h1>Demo sign-in</h1>
-<p>This is a stand-in for the sign-in of your application. It trusts any user name.</p>
-<form method="post" action="/login"><label for="user">User name</label> <input id="user" name="user" value="demo" required autocomplete="username"> <button>Sign in</button></form>`))
+//go:embed web/style.css
+var styleCSS []byte
 
-var settingsTmpl = template.Must(template.New("settings").Parse(`<!doctype html><meta charset="utf-8"><title>Codex login</title>
+var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demo sign-in</title><link rel="stylesheet" href="/style.css">
+<main class="page">
+<h1>Sign in</h1>
+<p class="dim">A stand-in for the sign-in of your application. It trusts any user name.</p>
+<form method="post" action="/login"><p><label for="user">user</label> <input id="user" name="user" value="demo" required autocomplete="username" autofocus></p><button>Sign in</button></form>
+</main>`))
+
+var settingsTmpl = template.Must(template.New("settings").Parse(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ChatGPT login</title><link rel="stylesheet" href="/style.css">
 {{if .Pending}}<meta http-equiv="refresh" content="3">{{end}}
+<main class="page">
 <h1>ChatGPT login for {{.User}}</h1>
 {{if .Connected}}
 <p>Signed in. The server holds the token; this page and the model module never see it.</p>
 <form method="post" action="/settings/codex/disconnect"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Disconnect</button></form>
-<p><a href="/">Back to the app</a></p>
 {{else if .Pending}}
 <p>1. Open <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.URL}}</a> and sign in.</p>
 <p>2. Enter this one-time code (it expires in 15 minutes):</p>
-<p><code style="font-size:2em">{{.Code}}</code></p>
-<p>Continue only if you started this sign-in. This page checks every 3 seconds.</p>
+<p class="code">{{.Code}}</p>
+<p class="warn">Continue only if you started this sign-in.</p>
+<p class="dim">This page checks every 3 seconds.</p>
 {{else}}
-{{if .Err}}<p>The last sign-in failed: {{.Err}}</p>{{end}}
+{{if .Err}}<p class="err">The last sign-in failed: {{.Err}}</p>{{end}}
 <form method="post" action="/settings/codex/start"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Sign in with ChatGPT</button></form>
-{{end}}`))
+{{end}}
+<p class="dim"><a href="/">Back to the app</a></p>
+</main>`))
 
 func (s *server) loginPage(w http.ResponseWriter, r *http.Request) {
 	_ = loginTmpl.Execute(w, nil)
@@ -91,7 +99,7 @@ func (s *server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	fl := s.flows.take(id)
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'")
 	data := map[string]any{"User": sess.user, "CSRF": sess.csrf, "Connected": s.store.Has(sess.user), "Err": fl.err}
 	if fl.code != nil && !fl.done {
 		data["Pending"], data["URL"], data["Code"] = true, fl.code.URL, fl.code.UserCode

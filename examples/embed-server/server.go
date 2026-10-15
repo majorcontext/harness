@@ -86,6 +86,10 @@ func (s *server) handler() http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(indexHTML)
 	})
+	mux.HandleFunc("GET /style.css", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		_, _ = w.Write(styleCSS)
+	})
 	mux.HandleFunc("GET /harness.wasm", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.WasmPath) })
 	mux.HandleFunc("GET /wasm_exec.js", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.WasmExecPath) })
 	mux.Handle("GET /embed/", http.StripPrefix("/embed/", http.FileServer(http.Dir(s.cfg.EmbedDir))))
