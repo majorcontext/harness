@@ -232,6 +232,8 @@ type Actor struct {
 	retryAt    time.Time
 	// pins holds the engine context that the model reads inside the history.
 	pins turn.Pins
+	// pinned is true once a model call of this process has pinned.
+	pinned bool
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
