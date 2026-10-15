@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -422,5 +423,161 @@ func TestSessionCookieIsSecureWhenConfigured(t *testing.T) {
 	s.login(w, httptest.NewRequest("POST", "/login", nil), "ann")
 	if c := w.Result().Cookies()[0]; !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
 		t.Errorf("cookie %+v", c)
+	}
+}
+
+func newClockedStore(issuer string) (*tokenStore, *time.Time) {
+	now := time.Now()
+	st := newTokenStore(issuer, http.DefaultClient)
+	st.now = func() time.Time { return now }
+	return st, &now
+}
+
+func TestTransientRefreshFailureBacksOffWhileTheTokenIsValid(t *testing.T) {
+	var hits atomic.Int32
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+	st, now := newClockedStore(down.URL)
+	soon := jwt(t, now.Add(2*time.Minute), "a")
+	st.Set("ann", tokens{Access: soon, Refresh: "r", Account: "a"})
+	for range 5 {
+		tok, err := st.Fresh(t.Context(), "ann")
+		if err != nil || tok.Access != soon {
+			t.Fatalf("a valid token must keep working during the backoff: %v", err)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("issuer hits %d during the backoff, want 1", hits.Load())
+	}
+	*now = now.Add(refreshBackoff + time.Second)
+	if _, err := st.Fresh(t.Context(), "ann"); err != nil || hits.Load() != 2 {
+		t.Errorf("after the backoff: err %v, hits %d, want one more attempt", err, hits.Load())
+	}
+
+	// The backoff never authorizes an expired token.
+	*now = now.Add(time.Hour)
+	for range 3 {
+		if _, err := st.Fresh(t.Context(), "ann"); !errors.Is(err, errRefresh) {
+			t.Fatalf("expired token: err %v, want errRefresh", err)
+		}
+	}
+	if hits.Load() != 3 {
+		t.Errorf("issuer hits %d, want 3 (one attempt, then the backoff)", hits.Load())
+	}
+	if !st.Has("ann") {
+		t.Error("the login was dropped")
+	}
+}
+
+func TestRefreshFinishesAndStoresTheNewTokenWhenTheCallerLeaves(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var hits atomic.Int32
+	fresh := jwt(t, time.Now().Add(time.Hour), "a")
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		close(entered)
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": fresh, "refresh_token": "rotated"})
+	}))
+	defer issuer.Close()
+	st := newTokenStore(issuer.URL, http.DefaultClient)
+	st.Set("ann", tokens{Access: jwt(t, time.Now().Add(time.Minute), "a"), Refresh: "old", Account: "a"})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	left := make(chan error, 1)
+	go func() { _, err := st.Fresh(ctx, "ann"); left <- err }()
+	<-entered
+	cancel()
+	if err := <-left; err == nil {
+		t.Error("a caller that left got a token")
+	}
+	close(release)
+	tok, err := st.Fresh(t.Context(), "ann")
+	if err != nil || tok.Access != fresh || tok.Refresh != "rotated" || hits.Load() != 1 {
+		t.Errorf("the rotated login was lost: err %v, hits %d", err, hits.Load())
+	}
+}
+
+func TestStartDuringTeardownLeavesNoFlow(t *testing.T) {
+	r := newRig(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var polls atomic.Int32
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		switch q.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			close(entered)
+			select {
+			case <-release:
+			case <-q.Context().Done():
+				return
+			}
+			_, _ = io.WriteString(w, `{"device_auth_id":"id","user_code":"AAAA-0000","interval":1}`)
+		default:
+			polls.Add(1)
+		}
+	}))
+	defer issuer.Close()
+	r.srv.store.issuer = issuer.URL
+	cookie := r.signIn("ann")
+	_, sess := r.srv.sessions.sessionOf(requestWith(cookie))
+
+	done := make(chan int, 1)
+	go func() {
+		done <- r.postForm("/settings/codex/start", cookie, "same-origin", url.Values{"csrf": {sess.csrf}}).StatusCode
+	}()
+	<-entered
+	r.postForm("/logout", cookie, "same-origin", nil)
+	<-done
+	close(release)
+	r.srv.flows.mu.Lock()
+	n := len(r.srv.flows.m)
+	r.srv.flows.mu.Unlock()
+	if n != 0 || polls.Load() != 0 {
+		t.Errorf("flows %d, polls %d; a flow outlived its session", n, polls.Load())
+	}
+}
+
+func TestFailedDeviceCodeRequestIsShownOnce(t *testing.T) {
+	r := newRig(t)
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "", http.StatusInternalServerError) }))
+	defer bad.Close()
+	r.srv.store.issuer = bad.URL
+	cookie := r.signIn("ann")
+	_, sess := r.srv.sessions.sessionOf(requestWith(cookie))
+	r.postForm("/settings/codex/start", cookie, "same-origin", url.Values{"csrf": {sess.csrf}})
+	page := func() string {
+		req, _ := http.NewRequest("GET", r.front.URL+"/settings/codex", nil)
+		req.AddCookie(cookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close() //nolint:errcheck
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	if !strings.Contains(page(), "failed") {
+		t.Error("the first view does not show the error")
+	}
+	if strings.Contains(page(), "failed") {
+		t.Error("the error repeats on reload")
+	}
+}
+
+func TestPagesLabelTheirFields(t *testing.T) {
+	r := newRig(t)
+	for path, want := range map[string]string{"/login": `<label for="user">`, "/": `<label for="prompt">`} {
+		resp, err := http.Get(r.front.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s has no %s", path, want)
+		}
 	}
 }

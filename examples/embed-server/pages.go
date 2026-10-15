@@ -15,7 +15,7 @@ var indexHTML []byte
 var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html><meta charset="utf-8"><title>Demo sign-in</title>
 <h1>Demo sign-in</h1>
 <p>This is a stand-in for the sign-in of your application. It trusts any user name.</p>
-<form method="post" action="/login"><input name="user" value="demo" required> <button>Sign in</button></form>`))
+<form method="post" action="/login"><label for="user">User name</label> <input id="user" name="user" value="demo" required autocomplete="username"> <button>Sign in</button></form>`))
 
 var settingsTmpl = template.Must(template.New("settings").Parse(`<!doctype html><meta charset="utf-8"><title>Codex login</title>
 {{if .Pending}}<meta http-equiv="refresh" content="3">{{end}}
@@ -54,8 +54,8 @@ func (s *server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 
 // endSession ends the session and the sign-in flow that it started.
 func (s *server) endSession(w http.ResponseWriter, r *http.Request, id string) {
-	s.flows.drop(id)
 	s.sessions.end(w, r, id)
+	s.flows.drop(id)
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -107,20 +107,41 @@ func (s *server) settingsStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	code, err := s.store.startDevice(r.Context())
+	// Reserve the flow before the issuer I/O, so that logout, rotation, and
+	// disconnect can cancel it. The reservation owns the context of the flow.
+	ctx, cancel := context.WithCancel(context.Background())
+	fl := &flow{cancel: cancel}
 	s.flows.mu.Lock()
 	if old := s.flows.m[id]; old != nil && old.cancel != nil {
 		old.cancel()
 	}
-	if err != nil {
-		s.flows.m[id] = &flow{err: err.Error()}
+	s.flows.m[id] = fl
+	s.flows.mu.Unlock()
+	// A session that ended before the reservation: end sessions first and flows
+	// second (endSession), so one of the two sides always sees the other.
+	if !s.sessions.alive(id) {
+		s.flows.drop(id)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	code, err := s.store.startDevice(ctx)
+
+	s.flows.mu.Lock()
+	if s.flows.m[id] != fl { // torn down or replaced during the issuer I/O
 		s.flows.mu.Unlock()
+		cancel()
 		http.Redirect(w, r, "/settings/codex", http.StatusSeeOther)
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	fl := &flow{code: code, cancel: cancel}
-	s.flows.m[id] = fl
+	if err != nil {
+		fl.done, fl.err = true, err.Error()
+		s.flows.mu.Unlock()
+		cancel()
+		http.Redirect(w, r, "/settings/codex", http.StatusSeeOther)
+		return
+	}
+	fl.code = code
 	s.flows.mu.Unlock()
 	go func() {
 		defer cancel()

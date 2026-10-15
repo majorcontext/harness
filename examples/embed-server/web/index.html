@@ -6,8 +6,9 @@
 <h1>Harness embed</h1>
 <p id="who">Loading...</p>
 <p><a href="/login">Sign in to the app</a> <form method="post" action="/logout" style="display:inline"><button>Sign out</button></form> | <a href="/settings/codex" target="_blank" rel="noopener">ChatGPT login</a></p>
+<p><label for="prompt">Prompt</label></p>
 <textarea id="prompt" rows="3">Say hello in five words.</textarea>
-<p><button id="send" disabled>Send</button> <span id="status"></span></p>
+<p><button id="send" disabled>Send</button> <span id="status" role="status"></span></p>
 <pre id="out"></pre>
 <script type="module">
 import { createHarness, wasm } from "/embed/index.mjs";

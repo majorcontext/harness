@@ -26,8 +26,12 @@ const (
 	refreshSkew   = 5 * time.Minute
 	// staleCooldown limits how often a 401 from the backend forces a refresh.
 	staleCooldown = time.Minute
-	deviceTimeout = 15 * time.Minute
-	slowDownStep  = 5 * time.Second
+	// refreshBackoff is the wait after a transient refresh failure.
+	refreshBackoff = 30 * time.Second
+	// refreshTimeout bounds a refresh, which runs even when its caller leaves.
+	refreshTimeout = 30 * time.Second
+	deviceTimeout  = 15 * time.Minute
+	slowDownStep   = 5 * time.Second
 )
 
 // tokens is the login of one user. It never leaves the process: nothing logs
@@ -81,10 +85,19 @@ type tokenStore struct {
 }
 
 type userTokens struct {
-	mu        sync.Mutex // held during a refresh, so one refresh serves every request
+	mu        sync.Mutex
 	t         tokens
-	stale     bool
-	refreshed time.Time
+	stale     bool      // the backend rejected t
+	refreshed time.Time // the last good refresh or sign-in
+	retryAt   time.Time // no new refresh before this time, after a transient failure
+	flight    *refreshFlight
+}
+
+// refreshFlight is the one refresh in progress for a user. It serves every
+// request that needs it, and it ends even when all of them leave.
+type refreshFlight struct {
+	done     chan struct{}
+	rejected bool // the issuer refused the refresh token; the login is gone
 }
 
 func newTokenStore(issuer string, hc *http.Client) *tokenStore {
@@ -156,38 +169,70 @@ func (s *tokenStore) MarkStale(user string) {
 // or when the backend rejected it. It returns errNoLogin when there is no
 // login, or when the issuer rejected the refresh token (the login is then
 // dropped). A transient refresh failure returns errRefresh and keeps the
-// login; a token that is still valid is used as it is.
+// login; for refreshBackoff the old token stays in use while it is still valid,
+// and an expired token is never used.
+//
+// The refresh runs on its own bounded context: the issuer may have rotated the
+// refresh token, so the answer must be saved even if the caller leaves.
 func (s *tokenStore) Fresh(ctx context.Context, user string) (tokens, error) {
 	e := s.entry(user)
 	if e == nil {
 		return tokens{}, errNoLogin
 	}
+	for {
+		e.mu.Lock()
+		now := s.now()
+		exp, known := e.t.expiry()
+		if !e.stale && !(known && !exp.After(now.Add(refreshSkew))) {
+			defer e.mu.Unlock()
+			return e.t, nil
+		}
+		usable := !known || exp.After(now) // an unknown expiry is the backend's to judge
+		if e.flight == nil {
+			if now.Before(e.retryAt) {
+				defer e.mu.Unlock()
+				if usable {
+					return e.t, nil
+				}
+				return tokens{}, errRefresh
+			}
+			e.flight = &refreshFlight{done: make(chan struct{})}
+			go s.refreshFlight(user, e, e.flight, e.t)
+		}
+		f := e.flight
+		e.mu.Unlock()
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return tokens{}, ctx.Err()
+		}
+		if f.rejected {
+			return tokens{}, errNoLogin
+		}
+	}
+}
+
+func (s *tokenStore) refreshFlight(user string, e *userTokens, f *refreshFlight, t tokens) {
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	defer cancel()
+	next, rejected, err := s.refresh(ctx, t)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	exp, known := e.t.expiry()
-	soon := known && !exp.After(s.now().Add(refreshSkew))
-	if !e.stale && !soon {
-		return e.t, nil
-	}
-	next, rejected, err := s.refresh(ctx, e.t)
+	defer close(f.done)
+	e.flight = nil
 	switch {
 	case err == nil:
-		e.t, e.stale, e.refreshed = next, false, s.now()
-		return e.t, nil
+		e.t, e.stale, e.refreshed, e.retryAt = next, false, s.now(), time.Time{}
 	case rejected:
+		f.rejected = true
 		s.mu.Lock()
 		if s.m[user] == e {
 			delete(s.m, user)
 		}
 		s.mu.Unlock()
-		return tokens{}, errNoLogin
-	case known && exp.After(s.now()):
-		// Still valid, or only suspect: let the backend decide. Back off, so
-		// a stale mark does not retry the refresh on every request.
-		e.stale, e.refreshed = false, s.now()
-		return e.t, nil
+	default:
+		e.stale, e.retryAt = false, s.now().Add(refreshBackoff)
 	}
-	return tokens{}, errRefresh
 }
 
 // refresh trades the refresh token for a new access token. rejected is true

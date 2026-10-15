@@ -67,3 +67,10 @@ func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) {
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
 }
+
+// alive reports whether the session id is still valid.
+func (s *sessions) alive(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[id] != nil
+}
