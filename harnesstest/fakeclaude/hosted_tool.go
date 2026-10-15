@@ -157,11 +157,14 @@ func checkCallResult(raw json.RawMessage) error {
 	if res.IsError != nil && string(res.IsError) != "true" && string(res.IsError) != "false" {
 		return fmt.Errorf("path [\"isError\"]: expected boolean, received %s", res.IsError)
 	}
+	if res.Content == nil {
+		return fmt.Errorf("path [\"content\"]: expected array, received undefined")
+	}
 	required := map[string][]string{"text": {"text"}, "image": {"data", "mimeType"}, "audio": {"data", "mimeType"},
 		"resource_link": {"uri", "name"}}
 	isString := func(m map[string]json.RawMessage, k string) bool {
 		var s string
-		return json.Unmarshal(m[k], &s) == nil && m[k] != nil
+		return m[k] != nil && string(m[k]) != "null" && json.Unmarshal(m[k], &s) == nil
 	}
 	for i, item := range res.Content {
 		var typ string
