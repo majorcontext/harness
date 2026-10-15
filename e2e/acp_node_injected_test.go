@@ -128,7 +128,7 @@ func TestNodeWasmListsNoChatGPTModels(t *testing.T) {
 
 // TestNodeWasmRefusesASessionOnAChatGPTEntry pins the WebAssembly section: a request on an entry with auth chatgpt
 // makes session/new fail with login_required before any request is sent, and reads no login file.
-func TestNodeWasmFailsAChatGPTRequestBeforeSendingIt(t *testing.T) {
+func TestNodeWasmRefusesASessionOnAChatGPTEntry(t *testing.T) {
 	skipShort(t)
 	nodePath(t)
 	t.Parallel()
