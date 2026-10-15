@@ -26,6 +26,9 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged) error {
 				events = a.dismissRequests()
 			}
 			err = a.append(append(events, ch)...)
+			if err == nil && len(events) > 0 && a.run == nil {
+				err = a.next(true)
+			}
 			if err == nil && ch.Model != nil && a.cfg.Backend.Capabilities(*ch.Model).ContextWindow != a.cfg.Backend.Capabilities(prev).ContextWindow {
 				a.latched = false
 			}
