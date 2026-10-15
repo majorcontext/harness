@@ -137,20 +137,21 @@ func acpInjectedNoElicitation(t *testing.T, c *acpConn) {
 }
 
 const (
-	injectedMethodCite = "`initialize` offers the method `injected-<provider>`, \"Log in to <provider>\", of type `agent`, for each provider entry of the user config with `auth` `injected` and a `login_url`, and only to a client that advertises `elicitation.url`."
-	injectedAuthCite   = "`authenticate` with the method `injected-<provider>` sends the status probe first and answers `{}` at once when it answers 200."
-	injectedElicitCite = "Otherwise it sends `elicitation/create` with `mode` `url`, no `sessionId`, `requestId` the id of the `authenticate` request, a fresh `elicitationId`, `url` the `login_url`, and `message` \"Sign in on the page that opens, then return here.\""
-	injectedPollCite   = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes. When the probe answers 200, the agent sends `elicitation/complete` with the `elicitationId` and answers `{}`."
-	injectedCheckCite  = "For an entry with `auth` `injected`, `session/new`, `session/load`, and `session/resume` send the status probe and fail with `-32000`, `data.code` `login_required`, when it answers 401."
-	injectedCacheCite  = "`session/prompt` sends no probe and reads the cached answer only. The answer is cached for 30 s, and `authenticate` probes again. A failed turn reads the cache only, so a probe never replaces the error of a turn."
-	injectedPermCite   = "A 401 of a model call within 2 minutes after a probe of the same entry answered 200 ends the turn `permanent`, with the message `the server accepted the sign-in check but rejected the model call; sign in again at <login_url>, or check how the server authorizes model calls`"
-	injected401Cite    = "A 401 of an entry with `auth` `injected` fails the turn with the error class `login_required`."
-	injected403Cite    = "A 403 is not `login_required`."
-	injectedLateCite   = "A 401 of a model call 2 minutes or more after the last probe that answered 200 fails the turn with the error class `login_required`."
-	injectedTimeout    = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes."
-	injectedBound      = "so a client that never answers the elicitation cannot hold the request open."
-	injectedNoProbe    = "A probe that answers 404 or 405 means that the server has no status probe: `authenticate` then answers `{}` when the user accepts the elicitation, and only the 401 of a turn is `login_required`."
-	injectedProbeCite  = "The status probe of the Anthropic adapter is `GET <base_url>/v1/models` with the header `Anthropic-Version`."
+	injectedMethodCite  = "`initialize` offers the method `injected-<provider>`, \"Log in to <provider>\", of type `agent`, for each provider entry of the user config with `auth` `injected` and a `login_url`, and only to a client that advertises `elicitation.url`."
+	injectedAuthCite    = "`authenticate` with the method `injected-<provider>` sends the status probe first and answers `{}` at once when it answers 200."
+	injectedElicitCite  = "Otherwise it sends `elicitation/create` with `mode` `url`, no `sessionId`, `requestId` the id of the `authenticate` request, a fresh `elicitationId`, `url` the `login_url`, and `message` \"Sign in on the page that opens, then return here.\""
+	injectedPollCite    = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes. When the probe answers 200, the agent sends `elicitation/complete` with the `elicitationId` and answers `{}`."
+	injectedCheckCite   = "For an entry with `auth` `injected`, `session/new`, `session/load`, and `session/resume` send the status probe and fail with `-32000`, `data.code` `login_required`, when it answers 401."
+	injectedCacheCite   = "`session/prompt` sends no probe and reads the cached answer only. The answer is cached for 30 s, and `authenticate` probes again. A failed turn reads the cache only, so a probe never replaces the error of a turn."
+	injectedPermCite    = "A 401 of a model call within 2 minutes after a probe of the same entry answered 200 ends the turn `permanent`, with the message `the server accepted the sign-in check but rejected the model call; sign in again at <login_url>, or check how the server authorizes model calls`"
+	injected401Cite     = "A 401 of an entry with `auth` `injected` fails the turn with the error class `login_required`."
+	injected403Cite     = "A 403 is not `login_required`."
+	injectedLateCite    = "A 401 of a model call 2 minutes or more after the last probe that answered 200 fails the turn with the error class `login_required`."
+	injectedTimeout     = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes."
+	injectedBound       = "so a client that never answers the elicitation cannot hold the request open."
+	injectedNoProbe     = "A probe that answers 404 or 405 means that the server has no status probe: `authenticate` then answers `{}` when the user accepts the elicitation, and only the 401 of a turn is `login_required`."
+	injectedCatalogCite = "With `models_from` `chatgpt`, a probe that answers 200 serves the next fetch of the catalog within 30 s, so a session that opens sends one model list request."
+	injectedProbeCite   = "The status probe of the Anthropic adapter is `GET <base_url>/v1/models` with the header `Anthropic-Version`."
 )
 
 var acpInjectedScenarios = []acpScenario{
@@ -312,9 +313,22 @@ var acpInjectedScenarios = []acpScenario{
 			acpNew{as: "a"},
 			acpNew{as: "b"},
 			acpCheck(func(t *testing.T, c *acpConn) {
-				// One probe, and one fetch of the model list that Runtime.Models makes.
-				if n := c.env.login.openai.ModelRequests(); n != 2 {
-					t.Errorf("model list requests = %d, want 2", n)
+				if n := c.env.login.openai.ModelRequests(); n != 1 {
+					t.Errorf("model list requests = %d, want 1", n)
+				}
+			}),
+		},
+	},
+	{
+		name:  "new_session_on_a_catalog_entry_sends_one_model_list_request",
+		cite:  injectedCatalogCite,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{}},
+		steps: []acpStep{
+			injectedInit,
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				if n := c.env.login.openai.ModelRequests(); n != 1 {
+					t.Errorf("model list requests = %d, want 1", n)
 				}
 			}),
 		},

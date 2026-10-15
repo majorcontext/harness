@@ -12,7 +12,8 @@ import (
 func ProbeOf(name string, p config.Provider) (injectedauth.Probe, bool) {
 	switch config.WireOf(name, p) {
 	case config.WireResponses:
-		return injectedauth.Probe{URL: responses.ListURL(p.BaseURL, p.ResponsesPath, p.ModelsFrom == config.ModelsFromChatGPT)}, true
+		catalog := p.ModelsFrom == config.ModelsFromChatGPT
+		return injectedauth.Probe{URL: responses.ListURL(p.BaseURL, p.ResponsesPath, catalog), Catalog: catalog}, true
 	case config.WireAnthropic:
 		return injectedauth.Probe{URL: anthropic.ModelsURL(p.BaseURL), Headers: map[string]string{"Anthropic-Version": anthropic.Version}}, true
 	}

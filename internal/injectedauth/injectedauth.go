@@ -4,6 +4,7 @@
 package injectedauth
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -22,6 +23,8 @@ const (
 	// probeTimeout bounds one probe. A probe that takes longer is unknown.
 	probeTimeout = 3 * time.Second
 	maxBody      = 1 << 16
+	// maxCatalog bounds the body that a probe keeps for the catalog fetch.
+	maxCatalog = 1 << 20
 )
 
 // State is the answer of the status probe.
@@ -41,6 +44,9 @@ const (
 type Probe struct {
 	URL     string
 	Headers map[string]string
+	// Catalog says that the probe is also the request of the model catalog of the entry. The body of a probe that answers 200
+	// then stays for cacheTTL, and the next request for the URL takes it once.
+	Catalog bool
 }
 
 // Options is what the composition root gives a Logins.
@@ -107,6 +113,8 @@ type Entry struct {
 	okAt          time.Time
 	modelRejected bool
 	generation    uint64
+	body          []byte
+	bodyAt        time.Time
 }
 
 // LoginURL is the sign-in page of the entry, or empty.
@@ -132,7 +140,7 @@ func (e *Entry) Generation() uint64 {
 func (e *Entry) Reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.state, e.at, e.okAt, e.modelRejected = Unknown, time.Time{}, time.Time{}, false
+	e.state, e.at, e.okAt, e.modelRejected, e.body = Unknown, time.Time{}, time.Time{}, false, nil
 }
 
 // Cached returns the answer of the last probe while it stands. An entry whose model calls the server rejected after a
@@ -153,6 +161,9 @@ func (e *Entry) record(status int) State {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.logins.Now()
+	if status != http.StatusOK {
+		e.body = nil
+	}
 	switch status {
 	case http.StatusOK:
 		if e.state != SignedIn {
@@ -196,9 +207,35 @@ func (e *Entry) Probe(ctx context.Context, extra map[string]string) State {
 	if err != nil {
 		return Unknown
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	var body []byte
+	if e.probe.Catalog && resp.StatusCode == http.StatusOK {
+		body, _ = io.ReadAll(io.LimitReader(resp.Body, maxCatalog+1))
+		if len(body) > maxCatalog {
+			body = nil
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	}
 	_ = resp.Body.Close()
-	return e.record(resp.StatusCode)
+	state := e.record(resp.StatusCode)
+	if body != nil {
+		e.mu.Lock()
+		e.body, e.bodyAt = body, e.logins.Now()
+		e.mu.Unlock()
+	}
+	return state
+}
+
+// takeBody returns the body that a probe kept while it stands, and forgets it.
+func (e *Entry) takeBody() []byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	body := e.body
+	e.body = nil
+	if e.logins.Now().Sub(e.bodyAt) >= cacheTTL {
+		return nil
+	}
+	return body
 }
 
 // Client returns a client over hc, or over the default transport when hc is nil, that treats a 401 of a model call as the
@@ -222,8 +259,20 @@ type transport struct {
 	base  http.RoundTripper
 }
 
-// RoundTrip implements http.RoundTripper. A request for the model list is a probe: its answer is recorded and returned.
+// RoundTrip implements http.RoundTripper. A request for the model list is a probe: its answer is recorded and returned. A
+// catalog entry answers it from the body of a fresh probe.
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodGet && t.entry.probe.Catalog && req.URL.String() == t.entry.probe.URL {
+		if body := t.entry.takeBody(); body != nil {
+			return &http.Response{
+				Status: "200 OK", StatusCode: http.StatusOK, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+				Header:        http.Header{"Content-Type": {"application/json"}},
+				Body:          io.NopCloser(bytes.NewReader(body)),
+				ContentLength: int64(len(body)),
+				Request:       req,
+			}, nil
+		}
+	}
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err
