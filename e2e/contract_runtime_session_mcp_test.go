@@ -46,6 +46,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_server_may_not_share_a_name_with_an_embedder_tool", rowASessionServerMayNotShareANameWithAnEmbedderTool},
 		{"a_session_server_may_not_share_a_name_with_a_plugin_tool", rowASessionServerMayNotShareANameWithAPluginTool},
 		{"a_model_change_keeps_a_session_tool_allowed", rowAModelChangeKeepsASessionToolAllowed},
+		{"an_embedder_tool_may_not_take_the_name_of_the_cli_tool_search", rowAnEmbedderToolMayNotTakeTheNameOfTheCLIToolSearch},
 		{"a_backend_that_owns_the_loop_allows_a_session_tool_by_name", rowABackendThatOwnsTheLoopAllowsASessionToolByName},
 		{"a_session_server_may_not_take_the_name_of_a_runtime_server", rowASessionServerMayNotTakeTheNameOfARuntimeServer},
 	}
@@ -492,5 +493,18 @@ func rowAModelChangeKeepsASessionToolAllowed(t *testing.T) {
 	opus := "claude-code/opus"
 	if _, err := s.Update(t.Context(), protocol.SettingsPatch{Model: &opus}); err != nil {
 		t.Errorf("Update to another model = %v, want nil", err)
+	}
+}
+
+func rowAnEmbedderToolMayNotTakeTheNameOfTheCLIToolSearch(t *testing.T) {
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{namedTool("ToolSearch")}, Config: config.Config{
+		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: fakeClaudePath()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	_, err = r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "claude-code/sonnet"})
+	if !errors.Is(err, harness.ErrInvalidRequest) || !strings.Contains(err.Error(), "has the name of a built-in tool") {
+		t.Errorf("Create = %v, want ErrInvalidRequest: has the name of a built-in tool", err)
 	}
 }

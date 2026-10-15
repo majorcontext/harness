@@ -84,7 +84,7 @@ var ErrToolsNotRestricted = errors.New("claudecode: the CLI did not apply the to
 // builtins are the only built-in CLI tools that a run offers. Every tool that
 // acts on the machine or the network reaches the CLI as a harness tool, so
 // the hooks of the plugins see each call.
-var builtins = []string{askTool}
+var builtins = []string{askTool, toolSearchTool}
 
 // toolSearchTool is the CLI tool that loads the schema of a deferred MCP tool.
 const toolSearchTool = "ToolSearch"
