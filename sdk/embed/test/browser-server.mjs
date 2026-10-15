@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 
 let server;
 try {
-  server = await chromium.launchServer({ args: ["--enable-features=WebMCPTesting"] });
+  server = await chromium.launchServer({ args: ["--enable-features=CDPScreenshotNewSurface,WebMCPTesting"] });
 } catch (err) {
   console.error(String(err.message));
   process.exit(/Executable doesn't exist/.test(err.message) ? 3 : 1);

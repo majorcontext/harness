@@ -71,7 +71,7 @@ export async function webmcpTools({ prefix = "webmcp__", fromOrigins, log } = {}
       warn("webmcp: getTools failed", { error: errorText(err) });
       return [];
     }
-    const pageOrigin = globalThis.document.location?.origin ?? globalThis.location?.origin;
+    const pageOrigin = globalThis.origin ?? globalThis.document.location?.origin;
     const out = [];
     for (const tool of Array.from(tools ?? [])) {
       try {

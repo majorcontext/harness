@@ -69,8 +69,6 @@ function config(row) {
   return { model: "anthropic/claude-fable-5", providers: { anthropic }, ...row.settings };
 }
 
-// start starts the module in a Worker with the paths relative to this page, and
-// opens the ACP connection. A row with persist keeps the store in OPFS.
 // webmcpPageTools registers two real WebMCP tools on the page and returns them
 // as page tools. It needs the WebMCPTesting feature of the browser.
 async function webmcpPageTools() {
@@ -93,6 +91,8 @@ async function webmcpPageTools() {
   return webmcpTools();
 }
 
+// start starts the module in a Worker with the paths relative to this page, and
+// opens the ACP connection. A row with persist keeps the store in OPFS.
 export async function start(row, log = () => {}) {
   const logs = [];
   const started = performance.now();
