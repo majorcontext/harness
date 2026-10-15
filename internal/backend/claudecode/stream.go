@@ -75,8 +75,8 @@ type run struct {
 	// CLI would queue the input behind its own continuation and answer it in a
 	// second result.
 	steer bool
-	// calls holds the tool calls of the main thread that wait for their
-	// result. A steer input reaches the CLI only while one is in flight: the
+	// calls holds the tool calls that wait for their result.
+	// A steer input reaches the CLI only while one is in flight: the
 	// CLI takes a queued message at the next tool result, and a message that
 	// arrives in a final text reply starts a second turn after the result.
 	calls map[string]bool
@@ -91,9 +91,8 @@ type run struct {
 	compactPostTokens int64
 	compact           string
 	sawCompact        bool
-	// live is the API response that the stream events of each thread are
-	// streaming, by parent tool call ID.
-	live map[string]*liveMessage
+	// live is the API response that the stream events are streaming.
+	live *liveMessage
 	// compacting reports a compaction that the CLI started and did not settle.
 	compacting bool
 }
@@ -147,14 +146,14 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 	}
 }
 
-// steerable reports that a steer input may reach the CLI: a tool call of the
-// main thread waits for its result and no question call does, and the response
+// steerable reports that a steer input may reach the CLI: a tool call
+// waits for its result and no question call does, and the response
 // that holds the calls ended. A question call ends the run once its response
 // ends, and the CLI would not answer an input that this run promoted. A call
 // of a response that still streams may be followed by a question call of the
 // same response.
 func (r *run) steerable() bool {
-	if lm := r.live[""]; lm != nil && !lm.stopped {
+	if lm := r.live; lm != nil && !lm.stopped {
 		return false
 	}
 	running := false
@@ -463,7 +462,7 @@ func (r *run) settleCompaction(status protocol.Status) {
 
 func (r *run) assistant(env envelope) error {
 	m := decodeMessage(env.Message)
-	if m.Usage != nil && env.ParentToolUseID == "" {
+	if m.Usage != nil {
 		r.lastCall = m.Usage
 		r.compactPostTokens = 0
 	}
@@ -476,36 +475,34 @@ func (r *run) assistant(env envelope) error {
 			r.unlisted[p.CallID] = p.Name
 		}
 	}
-	if parts = r.holdSearches(parts, env.ParentToolUseID); len(parts) == 0 {
+	if parts = r.holdSearches(parts); len(parts) == 0 {
 		return r.flush()
 	}
-	if r.pending == nil || m.ID == "" || m.ID != r.pendingID || r.pending.ParentCallID != env.ParentToolUseID {
+	if r.pending == nil || m.ID == "" || m.ID != r.pendingID {
 		if err := r.flush(); err != nil {
 			return err
 		}
-		r.pending, r.pendingID = &protocol.LogMessage{Role: protocol.RoleAssistant, ParentCallID: env.ParentToolUseID}, m.ID
+		r.pending, r.pendingID = &protocol.LogMessage{Role: protocol.RoleAssistant}, m.ID
 	}
 	for i, p := range parts {
 		switch p.Type {
 		case protocol.LogPartText, protocol.LogPartReasoning:
-			if text := r.unstreamed(env.ParentToolUseID, m.ID, p); text != "" {
-				r.thread(env.ParentToolUseID).Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
+			if text := r.unstreamed(m.ID, p); text != "" {
+				r.thread().Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
 			}
 		case protocol.LogPartToolCall:
 			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
 				parts[i].Name = name
 			}
 			r.names[p.CallID] = parts[i].Name
-			if env.ParentToolUseID == "" {
-				r.calls[p.CallID] = true
-			}
+			r.calls[p.CallID] = true
 		}
 	}
 	r.pending.Parts = append(r.pending.Parts, parts...)
 	if m.ID == "" || slices.ContainsFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartToolCall }) {
 		err := r.flush()
 		for _, p := range parts {
-			if p.Type == protocol.LogPartToolCall && p.Name == turn.AskTool && env.ParentToolUseID == "" {
+			if p.Type == protocol.LogPartToolCall && p.Name == turn.AskTool {
 				r.askMsg[p.CallID] = m.ID
 			}
 		}
@@ -536,20 +533,18 @@ func (r *run) record(env envelope, parts []protocol.LogPart) error {
 	if err := r.attachBlobs(parts); err != nil {
 		return err
 	}
-	if env.ParentToolUseID == "" {
-		r.owed = false
-		for _, p := range parts {
-			delete(r.calls, p.CallID)
-		}
+	r.owed = false
+	for _, p := range parts {
+		delete(r.calls, p.CallID)
 	}
 	if err := r.flush(); err != nil {
 		return err
 	}
-	parts, err := r.recordSearches(parts, env.ParentToolUseID, env.ToolUseResult)
+	parts, err := r.recordSearches(parts, env.ToolUseResult)
 	if err != nil || len(parts) == 0 {
 		return err
 	}
-	return r.out.Item(protocol.LogMessage{Role: protocol.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID})
+	return r.out.Item(protocol.LogMessage{Role: protocol.RoleTool, Parts: parts})
 }
 
 // flush records the pending assistant item.
@@ -559,10 +554,10 @@ func (r *run) flush() error {
 	}
 	m := *r.pending
 	r.pending, r.pendingID, r.spoke = nil, "", true
-	if err := r.thread(m.ParentCallID).Item(m); err != nil {
+	if err := r.thread().Item(m); err != nil {
 		return err
 	}
-	r.replay(m.ParentCallID)
+	r.replay()
 	return nil
 }
 

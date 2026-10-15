@@ -258,7 +258,6 @@ export interface LastTurn {
 export interface LogMessage {
   role: string;
   parts: LogPart[];
-  parent_call_id?: string;
 }
 
 export interface LogPart {
@@ -283,7 +282,6 @@ export interface Message {
   role: string;
   parts: MessagePart[];
   created_at?: string;
-  parent_call_id?: string;
   source?: string;
   source_id?: string;
   source_label?: string;

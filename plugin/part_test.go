@@ -28,10 +28,9 @@ func sampleMessage(t *testing.T) message.Message {
 			&message.ToolCall{CallID: "c1", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)},
 			&message.ToolResult{CallID: "c1", Content: message.Parts{&message.Text{Text: "out"}}, IsError: true},
 		},
-		Model:           ref,
-		CreatedAt:       time.Date(2026, 10, 12, 1, 2, 3, 0, time.UTC),
-		Origin:          "summary",
-		ParentToolUseID: "t1",
+		Model:     ref,
+		CreatedAt: time.Date(2026, 10, 12, 1, 2, 3, 0, time.UTC),
+		Origin:    "summary",
 	}
 }
 

@@ -77,11 +77,9 @@ func (a claudeWatchLive) run(t *testing.T, r *run) {
 
 // claudeLive waits for the end of the first turn on the stream that
 // claudeWatchLive opened, and checks that the deltas of each live item add up
-// to the text of the item that it completes as, and that a main thread item
-// came in pieces before it completed. A type that the item does not hold is
-// not checked: a thread that a subagent frame cut in the middle of a block
-// sends that block again, as the first delta of the item that records it. It records the stream, and the live
-// items that never completed.
+// to the text of the item that it completes as, and that an item came in
+// pieces before it completed. It records the stream, and the live items that
+// never completed.
 type claudeLive struct{ as string }
 
 func (a claudeLive) run(t *testing.T, r *run) {
@@ -114,9 +112,6 @@ func (a claudeLive) run(t *testing.T, r *run) {
 			continue
 		}
 		step := map[string]any{"item": "assistant"}
-		if msg.ParentCallID != "" {
-			step["parent"] = msg.ParentCallID
-		}
 		for _, typ := range []string{"reasoning", "text"} {
 			final := ""
 			for _, p := range msg.Parts {
@@ -131,7 +126,7 @@ func (a claudeLive) run(t *testing.T, r *run) {
 			if got := strings.Join(pieces, ""); got != final {
 				t.Errorf("deltas of %s before the item %v = %q, want the text of the item %q", typ, step, got, final)
 			}
-			if msg.ParentCallID == "" && len(pieces) < 2 {
+			if len(pieces) < 2 {
 				t.Errorf("%s of the item came in %d delta before the item, want it in pieces", typ, len(pieces))
 			}
 			step[typ] = map[string]any{"text": final, "pieces": pieces}

@@ -43,9 +43,6 @@ type Message struct {
 	// means an ordinary source. It is presentation metadata: no transcoder
 	// reads it and it never reaches a provider.
 	Origin string `json:"origin,omitempty"`
-	// ParentToolUseID identifies the tool_use call that spawned the subagent
-	// turn which produced this message. Empty for a top-level message.
-	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 }
 
 // Normalize scrubs known encoding/json footguns from m's parts in place. It

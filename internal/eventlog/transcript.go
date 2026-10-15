@@ -62,7 +62,7 @@ func cloneReaderMessage(m protocol.Message) protocol.Message {
 }
 
 func readerMessage(e entry) protocol.Message {
-	return protocol.Message{ID: e.id, Role: e.msg.Role, CreatedAt: e.at, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts),
+	return protocol.Message{ID: e.id, Role: e.msg.Role, CreatedAt: e.at, Parts: messageParts(e.msg.Parts),
 		Source: e.from.source, SourceID: e.from.id, SourceLabel: e.from.label, OperatorBatch: operatorBatch(e.promoted)}
 }
 

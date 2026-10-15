@@ -100,14 +100,6 @@ func TestResolutionOutlivesTheRequest(t *testing.T) {
 	}
 }
 
-func TestHistoryKeepsTheSubagentParent(t *testing.T) {
-	sub := protocol.ItemCompleted{ItemID: "i1", TurnID: "t1", Message: protocol.LogMessage{Role: protocol.RoleAssistant, ParentCallID: "toolu_p", Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "inside"}}}}
-	h := replay(t, with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), sub)).History()
-	if len(h) != 2 || h[1].ParentCallID != "toolu_p" {
-		t.Errorf("History = %+v, want the subagent message with its parent", h)
-	}
-}
-
 func TestSteerMessageKeepsTheBlobPartsOfEachInput(t *testing.T) {
 	blob := protocol.LogPart{Type: protocol.LogPartBlob, MediaType: "image/png", BlobKey: "k", Bytes: 3}
 	m := SteerMessage([][]protocol.LogPart{{{Type: protocol.LogPartText, Text: "look"}, blob}, {blob}})

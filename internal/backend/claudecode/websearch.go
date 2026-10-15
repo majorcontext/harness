@@ -83,10 +83,10 @@ func searchPart(callID, query string, res protocol.LogPart, structured []protoco
 	return p
 }
 
-// holdSearches removes the WebSearch calls of the main thread from parts and
+// holdSearches removes the WebSearch calls from parts and
 // remembers their queries. A search is one item, which its result records.
-func (r *run) holdSearches(parts []protocol.LogPart, parent string) []protocol.LogPart {
-	if parent != "" || !r.allowed[searchTool] {
+func (r *run) holdSearches(parts []protocol.LogPart) []protocol.LogPart {
+	if !r.allowed[searchTool] {
 		return parts
 	}
 	return slices.DeleteFunc(parts, func(p protocol.LogPart) bool {
@@ -105,7 +105,7 @@ func (r *run) holdSearches(parts []protocol.LogPart, parent string) []protocol.L
 
 // recordSearches records the results of held WebSearch calls as assistant
 // items, and returns the other results.
-func (r *run) recordSearches(parts []protocol.LogPart, parent string, toolUseResult json.RawMessage) ([]protocol.LogPart, error) {
+func (r *run) recordSearches(parts []protocol.LogPart, toolUseResult json.RawMessage) ([]protocol.LogPart, error) {
 	structured := structuredResults(toolUseResult)
 	if len(parts) != 1 {
 		structured = nil
@@ -119,11 +119,11 @@ func (r *run) recordSearches(parts []protocol.LogPart, parent string, toolUseRes
 		}
 		delete(r.searches, p.CallID)
 		r.spoke = true
-		item := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{searchPart(p.CallID, query, p, structured)}, ParentCallID: parent}
-		if err := r.thread(parent).Item(item); err != nil {
+		item := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{searchPart(p.CallID, query, p, structured)}}
+		if err := r.thread().Item(item); err != nil {
 			return nil, err
 		}
-		r.replay(parent)
+		r.replay()
 	}
 	return rest, nil
 }

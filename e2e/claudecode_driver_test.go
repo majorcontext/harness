@@ -604,37 +604,6 @@ func (d *runtimeDriver) journalEvents(t *testing.T, id, prefix string) []any {
 	return out
 }
 
-// messageParents lists the role and the parent tool call of each message of
-// session id, in transcript order: an input and an item.
-func (d *runtimeDriver) messageParents(t *testing.T, id string) callResult {
-	t.Helper()
-	var out []any
-	add := func(role, parent string) {
-		out = append(out, map[string]any{"role": role, "parent_tool_use_id": parent})
-	}
-	for _, ev := range d.events(t, id) {
-		switch ev.Kind {
-		case "turn.started":
-			for range decodeEvent[struct {
-				InputIDs []string `json:"input_ids"`
-			}](t, ev).InputIDs {
-				add("user", "")
-			}
-		case "input.promoted":
-			add("user", "")
-		case "item.completed":
-			it := decodeEvent[struct {
-				Message struct {
-					Role   string `json:"role"`
-					Parent string `json:"parent_call_id"`
-				} `json:"message"`
-			}](t, ev)
-			add(it.Message.Role, it.Message.Parent)
-		}
-	}
-	return callResult{Status: http.StatusOK, Body: out}
-}
-
 // claudeMirror records, for each fakeclaude spawn in order, the session that
 // it resumed, whether it ran with the session mirror, and a digest of each
 // transcript file that it found in its config dir at start.

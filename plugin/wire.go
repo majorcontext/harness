@@ -59,13 +59,12 @@ type SessionMessagesResponse struct {
 
 // Message is one message of a session, with the JSON of the canonical message.
 type Message struct {
-	ID              string    `json:"id"`
-	Role            string    `json:"role"` // user, assistant, or tool
-	Parts           []Part    `json:"parts"`
-	Model           string    `json:"model,omitzero"` // provider/model reference of an assistant message
-	CreatedAt       time.Time `json:"created_at,omitzero"`
-	Origin          string    `json:"origin,omitempty"`             // display label of the source beyond Role; empty for an ordinary message
-	ParentToolUseID string    `json:"parent_tool_use_id,omitempty"` // tool call that started the subagent turn
+	ID        string    `json:"id"`
+	Role      string    `json:"role"` // user, assistant, or tool
+	Parts     []Part    `json:"parts"`
+	Model     string    `json:"model,omitzero"` // provider/model reference of an assistant message
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	Origin    string    `json:"origin,omitempty"` // display label of the source beyond Role; empty for an ordinary message
 }
 
 // MarshalJSON encodes m with an empty array for nil Parts.

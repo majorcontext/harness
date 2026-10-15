@@ -26,7 +26,7 @@ var partialModes = map[string]mode{
 }
 
 func streamEvent(ev obj) obj {
-	return obj{"type": "stream_event", "event": ev, "session_id": "fake-session-1", "parent_tool_use_id": nil}
+	return obj{"type": "stream_event", "event": ev, "session_id": "fake-session-1"}
 }
 
 func messageStart(id string) obj {
