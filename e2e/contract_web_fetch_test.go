@@ -89,9 +89,16 @@ func webProxyDriver(row webProxyRow) func(*testing.T, host, string) driver {
 					http.Error(w, err.Error(), http.StatusBadGateway)
 					return
 				}
-				w.WriteHeader(http.StatusOK)
-				c, _, _ := w.(http.Hijacker).Hijack()
-				go func() { _, _ = io.Copy(up, c); _ = up.Close() }()
+				c, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					_ = up.Close()
+					return
+				}
+				// Hijack first and answer on the raw conn: after a flushed 200 the
+				// client may send its hello before Hijack, and the server buffers
+				// those bytes in rw.
+				_, _ = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n")
+				go func() { _, _ = io.Copy(up, rw); _ = up.Close() }()
 				_, _ = io.Copy(c, up)
 				_ = c.Close()
 			case row.redirectTo != "":
