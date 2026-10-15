@@ -5,6 +5,7 @@ package webfetch
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,14 +58,22 @@ const (
 type Options struct {
 	// Version is the build version that the User-Agent names. Empty: no version.
 	Version string
-	// AllowLoopback lets the tool reach 127.0.0.0/8 and ::1, for tests.
+	// Test is a test seam. The zero value changes nothing.
+	Test Seam
+}
+
+// Seam holds the test seams of the tool.
+type Seam struct {
+	// AllowLoopback lets the tool reach 127.0.0.0/8 and ::1.
 	AllowLoopback bool
-	// Getenv reads HTTP_PROXY, HTTPS_PROXY, and NO_PROXY. nil: no proxy.
-	Getenv func(key string) string
 	// Resolver resolves host names. nil: the system resolver.
 	Resolver interface {
 		LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 	}
+	// Proxy replaces http.ProxyFromEnvironment. nil: the environment decides.
+	Proxy func(*url.URL) (*url.URL, error)
+	// RootCAs replaces the system roots of a request that goes through a proxy. nil: the system roots.
+	RootCAs *x509.CertPool
 }
 
 type tool struct {

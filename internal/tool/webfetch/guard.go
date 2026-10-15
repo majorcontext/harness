@@ -2,14 +2,15 @@ package webfetch
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
-
-	"golang.org/x/net/http/httpproxy"
 )
 
 // notPublicError reports a host with an address that web_fetch refuses.
@@ -81,13 +82,13 @@ func public(addr netip.Addr, loopback bool) bool {
 // address. The choice is per request, so each redirect hop makes it again.
 type router struct {
 	direct, proxied http.RoundTripper
-	proxy           func(*url.URL) (*url.URL, error)
+	proxy           func(*http.Request) (*url.URL, error)
 	res             resolver
 	loopback        bool
 }
 
 func (r *router) RoundTrip(req *http.Request) (*http.Response, error) {
-	pu, err := r.proxy(req.URL)
+	pu, err := r.proxy(req)
 	if err != nil {
 		return nil, err
 	}
@@ -101,18 +102,29 @@ func (r *router) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // precheck refuses a literal IP that is not public, and a host name with any
-// resolved address that is not public. A name that does not resolve passes,
-// because a host that has only proxy egress may have no DNS; the proxy then
-// resolves it and owns the policy.
+// resolved address that is not public. A name that does not exist, or a host
+// with no DNS server, passes, because a host that has only proxy egress has no
+// DNS and the proxy then resolves the name. Any other lookup error, such as a
+// timeout, refuses the request.
 func precheck(ctx context.Context, host string, r resolver, loopback bool) error {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return checkAll([]netip.Addr{ip}, host, loopback)
 	}
 	ips, err := r.LookupNetIP(ctx, "ip", host)
 	if err != nil {
-		return nil
+		if noDNS(err) {
+			return nil
+		}
+		return err
 	}
 	return checkAll(ips, host, loopback)
+}
+
+// noDNS reports a lookup that failed because the name does not exist or the
+// host has no DNS server to ask.
+func noDNS(err error) bool {
+	de, ok := errors.AsType[*net.DNSError](err)
+	return ok && !de.IsTimeout && !de.IsTemporary && (de.IsNotFound || strings.Contains(de.Err, "no servers"))
 }
 
 func checkAll(ips []netip.Addr, host string, loopback bool) error {
@@ -124,37 +136,20 @@ func checkAll(ips []netip.Addr, host string, loopback bool) error {
 	return nil
 }
 
-// proxyFunc returns the proxy for a URL, with the rules of
-// http.ProxyFromEnvironment, read once from getenv.
-func proxyFunc(getenv func(string) string) func(*url.URL) (*url.URL, error) {
-	if getenv == nil {
-		return func(*url.URL) (*url.URL, error) { return nil, nil }
-	}
-	first := func(keys ...string) string {
-		for _, k := range keys {
-			if v := getenv(k); v != "" {
-				return v
-			}
-		}
-		return ""
-	}
-	return (&httpproxy.Config{
-		HTTPProxy:  first("HTTP_PROXY", "http_proxy"),
-		HTTPSProxy: first("HTTPS_PROXY", "https_proxy"),
-		NoProxy:    first("NO_PROXY", "no_proxy"),
-	}).ProxyFunc()
-}
-
 // newTransport returns the router of a tool. The direct transport reads no
 // proxy variable and dials public addresses only. The proxied transport trusts
 // the system roots, as the other clients do, so a proxy that intercepts TLS and
-// has its CA in that pool works; no option skips the verification.
+// has its CA in that pool works; no option skips the verification. The proxy
+// comes from http.ProxyFromEnvironment, like the proxy of the other clients.
 func newTransport(o Options) http.RoundTripper {
 	var res resolver = net.DefaultResolver
-	if o.Resolver != nil {
-		res = o.Resolver
+	if o.Test.Resolver != nil {
+		res = o.Test.Resolver
 	}
-	proxy := proxyFunc(o.Getenv)
+	proxy := http.ProxyFromEnvironment
+	if o.Test.Proxy != nil {
+		proxy = func(req *http.Request) (*url.URL, error) { return o.Test.Proxy(req.URL) }
+	}
 	d := &net.Dialer{Timeout: 10 * time.Second}
 	base := func() *http.Transport {
 		return &http.Transport{
@@ -165,11 +160,14 @@ func newTransport(o Options) http.RoundTripper {
 		}
 	}
 	direct := base()
-	direct.DialContext = guardedDial(d.DialContext, res, o.AllowLoopback)
+	direct.DialContext = guardedDial(d.DialContext, res, o.Test.AllowLoopback)
 	proxied := base()
 	proxied.DialContext = d.DialContext
-	proxied.Proxy = func(req *http.Request) (*url.URL, error) { return proxy(req.URL) }
-	return &router{direct: direct, proxied: proxied, proxy: proxy, res: res, loopback: o.AllowLoopback}
+	proxied.Proxy = proxy
+	if o.Test.RootCAs != nil {
+		proxied.TLSClientConfig = &tls.Config{RootCAs: o.Test.RootCAs}
+	}
+	return &router{direct: direct, proxied: proxied, proxy: proxy, res: res, loopback: o.Test.AllowLoopback}
 }
 
 type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)

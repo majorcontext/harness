@@ -31,8 +31,7 @@ import (
 type runtimeDriver struct {
 	store, workDir string
 	ask            bool
-	webLoopback    bool
-	webResolver    fakeWebResolver
+	webSeam        harness.WebTestSeam
 	getenv         func(string) string
 	cfg            config.Config
 	rt             *harness.Runtime
@@ -65,9 +64,6 @@ func getenv(env map[string]string) func(string) string {
 		if k == "ANTHROPIC_API_KEY" {
 			return codexAPIKey
 		}
-		if proxyVars[k] {
-			return ""
-		}
 		return os.Getenv(k)
 	}
 }
@@ -88,7 +84,7 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 	if err := c.ApplyEnv(func(k string) string { return env[k] }); err != nil {
 		t.Fatalf("apply env: %v", err)
 	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, webLoopback: env[webLoopbackEnv] == "1", webResolver: parseWebHosts(env[webHostsEnv]), getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, webSeam: webSeamOf(env), getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -119,7 +115,7 @@ func (d *runtimeDriver) start(t *testing.T) {
 		return
 	}
 	mcpsrc.HoldRetries()
-	rt, err := newWired(t, harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask, WebAllowLoopback: d.webLoopback, WebResolver: d.webResolver.resolver()})
+	rt, err := newWired(t, harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask, WebTest: d.webSeam})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
