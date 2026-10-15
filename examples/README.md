@@ -8,6 +8,7 @@ Each directory is a small program. Run it from the repository root.
 | [`custom-tool`](custom-tool) | Give the model a Go function to call. |
 | [`switch-model`](switch-model) | Continue one conversation on a different model or provider. |
 | [`guardrail`](guardrail) | One Go plugin value that blocks a force push, `rm -rf` on a broad target, and a `read_file` call on a `.env` file. It runs in the host process and as a process plugin. |
+| [`embed-server`](embed-server) | A server for the WebAssembly module in a page: it holds the ChatGPT login of each user and adds it to the model requests. Its own Go module. |
 | [`plugins/redactor.mjs`](plugins/redactor.mjs) | A process plugin written with the TypeScript SDK. |
 
 ```bash

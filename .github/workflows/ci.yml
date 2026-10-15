@@ -214,6 +214,13 @@ jobs:
           set -o pipefail
           go test -race -count=1 -json -skip '^TestRepository$' $(go list ./... | grep -v '/e2e$') | go run ./internal/testtime -title Unit -job unit
 
+      - name: Reference server example
+        # examples/embed-server is its own module, so ./... skips it.
+        working-directory: examples/embed-server
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
