@@ -41,7 +41,7 @@ func (a *Actor) questions() bool {
 // source waits in the queue until the request resolves.
 func fromPerson(in protocol.InputAdmitted) bool {
 	switch in.Source {
-	case "", "user", protocol.SourceTyped, "command":
+	case "", protocol.SourceUser, protocol.SourceTyped, protocol.SourceCommand:
 		return true
 	}
 	return false

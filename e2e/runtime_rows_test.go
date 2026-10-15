@@ -711,6 +711,8 @@ var runtimeRows = map[string]runtimeRow{
 	"model_api_question_dismissed_by_resolve":                                               sameAsServe(),
 	"model_api_question_dismissed_by_next_prompt":                                           sameAsServe(),
 	"model_api_question_stays_open_when_an_input_of_a_client_source_arrives":                sameAsServe(),
+	"model_api_goal_set_while_machine_input_waits_behind_a_question_dismisses_it":           sameAsServe(),
+	"claudecode_question_stays_open_when_an_input_of_a_client_source_arrives":               reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
 	"model_api_question_stays_open_when_a_child_report_arrives":                             sameAsServe(),
 	"model_api_queued_machine_input_runs_after_the_question_is_dismissed":                   sameAsServe(),
 	"model_api_typed_input_dismisses_the_question_and_runs_with_the_queued_machine_input":   sameAsServe(),

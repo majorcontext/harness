@@ -1,0 +1,333 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "pick a db"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "ask_user_question",
+            "arguments": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ci failed"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "answer_question.a": {
+      "status": 202,
+      "body": {
+        "seq": 11,
+        "status": "started"
+      }
+    },
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "pick a db",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind.",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "ci failed",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 10,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 9,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "awaiting_input",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "waiting",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.017629,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 277
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 10,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 10,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "awaiting_input",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "queued": [
+          "in2"
+        ],
+        "status": "waiting",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.017629,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 277
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#3": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 113,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 23,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.029928999999999997,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 112,
+          "output_tokens": 320
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#4": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 113,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 23,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.029928999999999997,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 112,
+          "output_tokens": 320
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "send_from_github.a": {
+      "status": 201,
+      "body": {
+        "input_id": "in2",
+        "seq": 10
+      }
+    }
+  }
+}

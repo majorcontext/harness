@@ -64,7 +64,8 @@ func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...
 	}
 	q := append(a.state.Queue(), in)
 	r := a.run
-	starts := r == nil && !a.compactDue() && !a.heldByRequest(q)
+	closes := slices.ContainsFunc(before, func(p protocol.Payload) bool { _, ok := p.(protocol.RequestResolved); return ok })
+	starts := r == nil && !a.compactDue() && (closes || !a.heldByRequest(q))
 	dismiss := a.dismissFrom(q[len(q)-1:])
 	if starts {
 		dismiss = a.dismissFrom(q)

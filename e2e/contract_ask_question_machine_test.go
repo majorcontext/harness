@@ -59,6 +59,15 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 				dismissQuestion{as: "a", callID: "toolu_ask"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
+			name:   "model_api_goal_set_while_machine_input_waits_behind_a_question_dismisses_it",
+			driver: askLane(true),
+			model: []harnesstest.Step{
+				askSteps()[0], evaluatorStep("judge", "MET: ok", true), {Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
+			},
+			actions: withActions(asked, sendFrom{as: "a", text: "ci failed", source: "github"},
+				setGoal{as: "a", condition: "say ok", maxTurns: 3}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
 			name:   "model_api_typed_input_dismisses_the_question_and_runs_with_the_queued_machine_input",
 			driver: askLane(true),
 			model:  askSteps(),
@@ -66,6 +75,24 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 				waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 	})
+}
+
+func TestContractClaudeCodeQuestionKeptOpenByMachineInput(t *testing.T) {
+	lane := claudeLane{mode: "question", ask: true, signals: true}.newDriver
+	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
+	runScenarios(t, []scenario{{
+		name:   "claudecode_question_stays_open_when_an_input_of_a_client_source_arrives",
+		driver: lane,
+		actions: withActions(parked,
+			sendFrom{as: "a", text: "ci failed", source: "github"}, getSession{as: "a"},
+			expectQueued{as: "a", texts: []string{"ci failed"}}, expectNoResolved{as: "a"},
+			claudeAnswer{as: "a", callID: "toolu_q", answers: map[string]string{"Which database?": "SQLite"}},
+			waitIdle{as: "a"}, getSession{as: "a"},
+			claudeSession{as: "a"},
+			claudeInvocations{as: "a"},
+			claudeInputs{as: "a"},
+		),
+	}})
 }
 
 // expectNoResolved checks that the log of the session holds no request.resolved record.
