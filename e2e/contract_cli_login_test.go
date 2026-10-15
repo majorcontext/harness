@@ -291,7 +291,7 @@ func TestContractCLILoginClaudeCodeRunsTheConfiguredCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "status --text\nlogin --console --sso\nstatus --text\nlogout\n"
+	want := "status --text\nlogin --console --sso\nstatus --json\nstatus --text\nlogout\n"
 	if string(b) != want {
 		t.Errorf("CLI calls:\n%s\nwant:\n%s", b, want)
 	}

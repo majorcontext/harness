@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/codexauth"
-	"github.com/majorcontext/harness/internal/modelmeta"
 )
 
 const loginUsage = "usage: harness login codex [--device] [--no-browser] [--status]\n       harness login claude-code [--console] [--sso] [--status]\n       harness logout codex\n       harness logout claude-code"
@@ -104,7 +104,38 @@ func loginClaude(args []string) error {
 	if *sso {
 		cli = append(cli, "--sso")
 	}
-	return runClaude(cli...)
+	if err := runClaude(cli...); err != nil {
+		return err
+	}
+	if claudeLoggedIn() {
+		saveDefaultModel(config.SubscriptionClaudeModel)
+	}
+	return nil
+}
+
+// claudeLoggedIn asks `claude auth status --json` whether the sign-in holds. Any failure to ask means no.
+func claudeLoggedIn() bool {
+	bin, err := claudeBinary()
+	if err != nil {
+		return false
+	}
+	out, err := exec.Command(bin, "auth", "status", "--json").Output() //nolint:gosec // operator config
+	var st struct {
+		LoggedIn bool `json:"loggedIn"`
+	}
+	return err == nil && json.Unmarshal(out, &st) == nil && st.LoggedIn
+}
+
+// saveDefaultModel makes ref the default model of the user config when that file sets none. It never fails the login:
+// a file that cannot change gets one line that says why.
+func saveDefaultModel(ref string) {
+	path := userConfigPath()
+	switch set, err := config.SetModel(path, ref); {
+	case err != nil:
+		fmt.Printf("Default model not set: %v\n", err)
+	case set:
+		fmt.Printf("Default model set to %s in %s.\n", ref, path)
+	}
 }
 
 // loginCmd runs the login of the provider that the first argument names.
@@ -141,9 +172,8 @@ func loginCodex(args []string) error {
 		return err
 	}
 	fmt.Println("Signed in to Codex.")
-	if models := modelmeta.CodexModels(); len(models) > 0 {
-		fmt.Printf("Try: harness run -model codex/%s -p \"...\"\n", models[0].ID)
-	}
+	saveDefaultModel(config.SubscriptionCodexModel)
+	fmt.Printf("Try: harness run -model %s -p \"...\"\n", config.SubscriptionCodexModel)
 	return nil
 }
 

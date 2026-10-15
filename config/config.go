@@ -190,13 +190,13 @@ type WebSpec struct {
 	Search *bool `json:"search,omitempty"`
 }
 
-// ResolveModel returns s, else Model, else DefaultModel, after one alias lookup. It does not parse.
+// ResolveModel returns s, else Model, else the default model (see defaultModel), after one alias lookup. It does not parse.
 func (c *Config) ResolveModel(s string) string {
 	if s == "" && c != nil {
 		s = c.Model
 	}
 	if s == "" {
-		s = DefaultModel
+		s = c.defaultModel()
 	}
 	if c != nil {
 		if target, ok := c.Aliases[s]; ok {
