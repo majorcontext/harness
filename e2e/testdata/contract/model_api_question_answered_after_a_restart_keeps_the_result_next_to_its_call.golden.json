@@ -29,7 +29,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -61,6 +61,10 @@
             {
               "kind": "text",
               "text": "pick a db"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -101,10 +105,6 @@
               "text": "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind.",
               "tool_name": "ask_user_question",
               "tool_use_id": "toolu#1"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }

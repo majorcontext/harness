@@ -111,7 +111,7 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 	pins, _ := call(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
 		for _, n := range ns {
-			t.a.pins.Set(n.Kind, n.Text, n.Cleared, at)
+			t.a.pins.Set(n.Kind, n.Text, n.Cleared, cmp.Or(n.At, at))
 		}
 		reply(t.a.pins.Pinned(), nil)
 	})

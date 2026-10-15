@@ -138,7 +138,7 @@ const (
 	specProcessUnknown = "An unknown name, or any name without a `WorkDir`, is `process_not_found`."
 	specNoRoute        = "A path or method that no route serves answers 404 or 405 with `invalid_request`."
 	specGitOracle      = "workspace-changes-rows"
-	specBannerPrefix   = "Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction moves the place to the end of the history that it leaves."
+	specBannerPrefix   = "each request of the session is a prefix of the next, also across processes and after a compaction in the middle of a turn"
 	specPinsMove       = "A compaction moves every pin, the banner and each notice, to the end of the history that it leaves"
 )
 
@@ -447,6 +447,8 @@ var runtimeRows = map[string]runtimeRow{
 	"goal_provider_exhausted_parks":                                          deletedBy(specGoalDeferred),
 	"goal_update_deferred_goal_waits_for_first_turn":                         deletedBy(specGoalDeferred),
 	"goal_update_while_busy":                                                 reGolden(specView),
+	"banner_and_history_prefix_stay_the_same_after_a_restart":                sameAsServe(),
+	"banner_names_the_created_time_of_the_session":                           sameAsServe(),
 	"history_survives_clean_restart":                                         sameAsServe(),
 	"interrupt_drops_unfinished_text_then_queue_continues":                   sameAsServe(),
 	"interrupt_idle_is_noop":                                                 sameAsServe(),

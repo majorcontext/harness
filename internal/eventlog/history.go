@@ -235,6 +235,7 @@ func (s *State) remember(env Envelope) {
 		if s.turn.ID != "" {
 			s.settle(env.Seq)
 		}
+		s.compactedLen = len(s.messages(true))
 	}
 }
 
