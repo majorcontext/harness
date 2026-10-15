@@ -24,6 +24,10 @@ type sessions struct {
 	secure bool // the cookie carries Secure even when the request is plain http
 	mu     sync.Mutex
 	m      map[string]*session
+
+	// file, when set, keeps the sessions on disk so that a restart keeps them.
+	file   string
+	saveMu sync.Mutex
 }
 
 func newSessions(secure bool) *sessions { return &sessions{secure: secure, m: map[string]*session{}} }
@@ -43,7 +47,14 @@ func (s *sessions) login(w http.ResponseWriter, r *http.Request, user string) {
 	s.mu.Lock()
 	s.m[id] = &session{user: user, csrf: randomHex(16)}
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
+	// A login that is not saved is lost at a restart, which only signs the user out.
+	_ = s.save()
+	c := &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil}
+	if s.file != "" {
+		// The session outlives the server, so the cookie outlives the browser.
+		c.MaxAge = 30 * 24 * 60 * 60
+	}
+	http.SetCookie(w, c)
 }
 
 // sessionOf returns the session id and the session of the request, or nil.
@@ -60,12 +71,24 @@ func (s *sessions) sessionOf(r *http.Request) (string, *session) {
 	return "", nil
 }
 
-// end deletes the session and clears the cookie.
-func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) {
+// end deletes the session and clears the cookie. When the session file cannot
+// be written, the session stays and end returns the error: the file still
+// holds the session, so a restart would bring the cookie back.
+func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) error {
 	s.mu.Lock()
+	sess := s.m[id]
 	delete(s.m, id)
 	s.mu.Unlock()
+	if err := s.save(); err != nil {
+		s.mu.Lock()
+		if sess != nil && s.m[id] == nil {
+			s.m[id] = sess
+		}
+		s.mu.Unlock()
+		return err
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
+	return nil
 }
 
 // alive reports whether the session id is still valid.

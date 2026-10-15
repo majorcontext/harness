@@ -40,7 +40,7 @@ A token is refreshed when it ends within five minutes. When the backend answers 
 
 ## Stand-ins
 
-- `session.go` is a stand-in for the session of your application. `/login` trusts any user name and sets a random cookie. Replace it with your own session layer.
+- `session.go` is a stand-in for the session of your application. `/login` trusts any user name and sets a random cookie. Replace it with your own session layer. Its sessions are in memory, so a restart signs everyone out; for development, `-session-file <path>` keeps them in that file (mode 0600, plain text) and gives the cookie a 30-day lifetime.
 - The token store is memory, so a restart drops every ChatGPT login. For development, `-token-file <path>` keeps the logins in that file (mode 0600, plain text) and reads them at start. A real server keeps the tokens encrypted at rest.
 - Plain `http` on a loopback address. Serve a real deployment over `https` only. The `-secure` flag (`auto`, `true`, `false`) sets `Secure` on the session cookie; `auto` turns it on unless `-addr` is a loopback address, and the cookie also gets `Secure` on a TLS request.
 
