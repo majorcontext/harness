@@ -377,6 +377,20 @@ func TestContractRuntimeWebFetchAllowedTools(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a_host_without_a_network_offers_no_web_fetch_though_web_fetch_is_true", func(t *testing.T) {
+		fake := harnesstest.NewChat(t, reply)
+		t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+		cfg := on
+		cfg.Providers = map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}
+		r, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: t.TempDir(), Getenv: os.Getenv, Config: cfg, Host: harness.HostLimits{NoNetwork: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = r.Close(context.Background()) })
+		if got := firstRequestTools(t, r, fake, nil); strings.Contains(strings.Join(got, ","), "web_fetch") {
+			t.Errorf("tools = %v, want no web_fetch", got)
+		}
+	})
 	t.Run("an_embedder_tool_named_web_fetch_fails_new_when_web_fetch_is_true", func(t *testing.T) {
 		_, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: t.TempDir(), Config: on, Tools: []harness.Tool{hostWebFetch{}}})
 		if err == nil || !strings.Contains(err.Error(), "web_fetch") {

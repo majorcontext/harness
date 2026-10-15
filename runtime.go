@@ -135,6 +135,8 @@ type HostLimits struct {
 	NoProcess bool
 	// NoLogin says that the host has no way to create the ChatGPT login. A provider that uses the login then lists its models only when the login file exists.
 	NoLogin bool
+	// NoNetwork says that the host has no direct network. The runtime offers no web_fetch.
+	NoNetwork bool
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
