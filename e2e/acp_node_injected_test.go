@@ -120,20 +120,21 @@ func TestNodeWasmListsNoChatGPTModels(t *testing.T) {
 	initializeWith(t, c, map[string]any{})
 	if ids := listedModels(t, c); hasPrefixed(ids, "codex/") {
 		t.Errorf("codex models are listed on a host with no login file: %v", ids)
+	} else if hasPrefixed(ids, "claude-code/") {
+		t.Errorf("claude-code models are listed on a host that starts no process: %v", ids)
 	}
 	finish()
 }
 
-// TestNodeWasmFailsAChatGPTRequestBeforeSendingIt pins the WebAssembly section: a request on an entry with auth chatgpt
-// fails with login_required before it is sent, and reads no login file.
+// TestNodeWasmRefusesASessionOnAChatGPTEntry pins the WebAssembly section: a request on an entry with auth chatgpt
+// makes session/new fail with login_required before any request is sent, and reads no login file.
 func TestNodeWasmFailsAChatGPTRequestBeforeSendingIt(t *testing.T) {
 	skipShort(t)
 	nodePath(t)
 	t.Parallel()
 	c, openai, finish := startChatGPTNode(t, "codex/gpt-5.6-sol")
 	initializeWith(t, c, map[string]any{})
-	acpNew{as: "a"}.run(t, c)
-	acpPrompt{as: "a", text: "go", code: acpAuthRequired, dataCode: "login_required"}.run(t, c)
+	acpNew{as: "a", code: acpAuthRequired}.run(t, c)
 	if n := len(openai.WireEvents()); n != 0 {
 		t.Errorf("the model server got %d requests, want none", n)
 	}

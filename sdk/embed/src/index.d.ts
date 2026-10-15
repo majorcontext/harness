@@ -60,7 +60,7 @@ export interface CreateHarnessOptions {
   config?: object;
   /**
    * A same-origin proxy: baseURL fills every provider that sets none; headers go only on requests to the origin of baseURL.
-   * providers maps a provider name to the base_url and the login_url of its entry, also of a native provider such as codex, which then gets auth "injected":
+   * providers maps a provider name to the base_url and the login_url of its entry, also of a native provider such as codex, which then gets auth "injected" and needs a baseURL (a provider that config defines may set either field):
    * a server that holds the credential adds it to the request, and loginURL is the page where the user signs in. Relative URLs resolve against the page.
    */
   proxy?: { baseURL?: string | URL; headers?: Record<string, string>; providers?: Record<string, { baseURL?: string | URL; loginURL?: string | URL }> };

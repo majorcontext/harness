@@ -223,7 +223,9 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, mode acp.CheckMode)
 	case p.UsesInjectedAuth():
 		return a.checkInjected(ctx, provider, p, mode)
 	case mode == acp.CheckProbed:
-	case p.UsesChatGPTLogin() && !a.opts.NoLogin:
+	case p.UsesChatGPTLogin() && a.opts.NoLogin:
+		return &acp.AuthRequiredError{Message: "not logged in to " + provider + "; this host has no ChatGPT login, so set auth to injected on the provider entry"}
+	case p.UsesChatGPTLogin():
 		if _, err := store(cfg).Load(); codexauth.IsLoginRequired(err) {
 			return &acp.AuthRequiredError{Message: err.Error()}
 		}
