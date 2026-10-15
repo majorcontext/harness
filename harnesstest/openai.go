@@ -132,6 +132,8 @@ type WireEvent struct {
 	RejectedSchemaKeywords []string `json:"rejected_schema_keywords,omitempty"`
 	// ReasoningItems counts the reasoning items that the request replays.
 	ReasoningItems int `json:"reasoning_items,omitempty"`
+	// HostedTools lists the types of the hosted tools of the request, those other than function.
+	HostedTools []string `json:"hosted_tools,omitempty"`
 	// Credential is the label of the bearer token of the request, from OpenAIOptions.Credentials.
 	Credential string `json:"credential,omitempty"`
 	// AccountID is the chatgpt-account-id header of the request.
@@ -174,7 +176,7 @@ func newWireEvent(transport, event string, conn int, b openAIBody) WireEvent {
 		Transport: transport, Event: event, Conn: conn, PreviousResponseID: b.PreviousResponseID,
 		InputItems: len(b.Input), Params: b.params, Include: b.Include,
 		ReasoningEffort: b.Reasoning.Effort, ReasoningSummary: b.Reasoning.Summary, ReasoningItems: b.reasoningItems,
-		RejectedSchemaKeywords: b.schemaKeywords,
+		RejectedSchemaKeywords: b.schemaKeywords, HostedTools: b.hostedTools,
 	}
 }
 

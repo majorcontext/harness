@@ -64,7 +64,7 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 		return turn.Capabilities{}
 	}
 	control, _ := b.effortControl(ref)
-	search := b.nativeSearch()
+	search := b.nativeSearch(ref.Model)
 	if b.window > 0 {
 		return turn.Capabilities{ContextWindow: b.window, Efforts: control.Levels, WebSearch: search}
 	}
@@ -78,10 +78,10 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true, Efforts: control.Levels, WebSearch: search}
 }
 
-// nativeSearch reports whether the client offers the web search of its API.
-func (b *Backend) nativeSearch() bool {
+// nativeSearch reports whether the client offers the web search of its API for model.
+func (b *Backend) nativeSearch(model string) bool {
 	w, ok := b.client.(provider.WebSearcher)
-	return ok && w.NativeWebSearch()
+	return ok && w.NativeWebSearch(model)
 }
 
 // effortSource is a provider client that knows the effort control of its models.
@@ -249,7 +249,7 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
 	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ThinksByDefault: control.ThinksByDefault, OffThinking: control.OffThinking, ServiceTier: req.Settings.ServiceTier,
-		SessionKey: req.SessionID, WebSearch: req.WebSearch && b.nativeSearch(),
+		SessionKey: req.SessionID, WebSearch: req.WebSearch && b.nativeSearch(ref.Model),
 		Temperature: req.Temperature, TopP: req.TopP}
 	if req.Instructions != "" {
 		preq.System = []string{req.Instructions}

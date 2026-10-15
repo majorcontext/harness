@@ -167,6 +167,15 @@ func TestContractWebSearch(t *testing.T) {
 func codexSearchRows() []codexScenario {
 	return []codexScenario{
 		{scenario: scenario{name: "codex_web_search_is_logged_and_replayed_to_the_same_provider", config: searchOn, model: searchTurns(), actions: codexSession(searchActions[1:])}},
+		{
+			scenario: scenario{
+				name: "codex_web_search_sends_no_hosted_tool_before_the_model_list_is_read", config: searchOn,
+				model:   []harnesstest.Step{{Name: "reply", Reply: harnesstest.Reply{Text: "ok"}}},
+				actions: codexSession([]action{setModel{as: "a", model: "codex/gpt-6-luna"}}, codexTurn("a", "find the release"), []action{recordWire{}}),
+			},
+			opts:  harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}, Models: []harnesstest.CodexModel{{Slug: "gpt-6-luna", DisplayName: "GPT-6 Luna", ResponsesLite: true}}},
+			entry: injectedEntry(map[string]any{"models_from": "chatgpt"}),
+		},
 		{scenario: scenario{name: "codex_web_search_is_off_unless_the_config_turns_it_on", model: searchTurns()[:1], actions: codexSession(codexTurn("a", "find the release"))}},
 	}
 }

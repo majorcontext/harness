@@ -43,6 +43,7 @@ type codexEntry struct {
 	Description              string `json:"description"`
 	Visibility               string `json:"visibility"`
 	Priority                 int    `json:"priority"`
+	UseResponsesLite         bool   `json:"use_responses_lite"`
 	SupportedReasoningLevels []struct {
 		Effort string `json:"effort"`
 	} `json:"supported_reasoning_levels"`
@@ -91,8 +92,21 @@ func (c *Client) ListModels(ctx context.Context) ([]modelmeta.Model, error) {
 			levels[m.ID] = m.Efforts
 		}
 	}
-	c.live.Store(levels)
+	lite := map[string]bool{}
+	for _, e := range body.Models {
+		if e.Slug != "" {
+			lite[e.Slug] = e.UseResponsesLite
+		}
+	}
+	c.live.Store(&liveCatalog{efforts: levels, lite: lite})
 	return models, nil
+}
+
+// liveCatalog is what the last model list says about the models. A Client replaces it whole.
+type liveCatalog struct {
+	efforts map[string][]string
+	// lite holds the use_responses_lite flag of each model the list names; a model with the flag takes no hosted tool.
+	lite map[string]bool
 }
 
 // catalogModels maps the picker models of a catalog to modelmeta models, lowest priority first.

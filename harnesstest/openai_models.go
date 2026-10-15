@@ -16,6 +16,8 @@ type CodexModel struct {
 	Priority int
 	// Efforts are the reasoning levels the model supports, in the words of the backend.
 	Efforts []string
+	// ResponsesLite is the use_responses_lite flag of the model: the backend takes no hosted tool for it.
+	ResponsesLite bool
 }
 
 // ModelRequests counts the requests for the model catalog.
@@ -51,7 +53,7 @@ func (o *OpenAI) serveModels(w http.ResponseWriter, r *http.Request) {
 		models = append(models, map[string]any{
 			"slug": m.Slug, "display_name": m.DisplayName, "description": m.Description,
 			"visibility": visibility, "priority": m.Priority, "supported_in_api": true,
-			"supported_reasoning_levels": levels,
+			"supported_reasoning_levels": levels, "use_responses_lite": m.ResponsesLite,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
