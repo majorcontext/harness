@@ -40,6 +40,14 @@ const continuation = "The previous turn was interrupted. " +
 const historyDirective = "You are continuing a conversation that happened on another model. " +
 	"Before responding, call the " + turn.HistoryTool + " tool to read what happened so far."
 
+// toolNames tells the CLI that its tools are the Harness tools. The CLI reads
+// instructions written for its own tools.
+const toolNames = "Your tools are the Harness tools. Where instructions name Read, Write, Edit, " +
+	"MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, " +
+	"ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. " +
+	"There is no TodoWrite, WebFetch, WebSearch, or Skill tool. To use a skill, read its SKILL.md file " +
+	"with read_file."
+
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
 
@@ -190,12 +198,14 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if e, ok := effortArg(effort); ok {
 		args = append(args, "--effort", e)
 	}
-	system := b.system
-	if req.Foreign {
-		system = strings.Trim(system+"\n\n"+historyDirective, "\n")
+	system := b.systemPrompt(req)
+	file, err := r.writeTemp("harness-claude-system-*.txt", []byte(system))
+	if err != nil {
+		return nil, err
 	}
-	if system != "" {
-		args = append(args, "--append-system-prompt", system)
+	args = append(args, "--append-system-prompt-file", file)
+	if req.Sent != nil {
+		req.Sent(system)
 	}
 	env := os.Environ()
 	if b.p.SessionMirror {
@@ -211,6 +221,17 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	cmd.Env = env
 	cmd.Dir = b.workDir
 	return cmd, nil
+}
+
+// systemPrompt returns the --append-system-prompt value of a run: the tool
+// names, the entries of append_system_prompt, the skill segment of the
+// session, and the history directive of a session that another model began.
+func (b *Backend) systemPrompt(req turn.Request) string {
+	segs := []string{toolNames, b.system, req.Skills}
+	if req.Foreign {
+		segs = append(segs, historyDirective)
+	}
+	return strings.Join(slices.DeleteFunc(segs, func(s string) bool { return s == "" }), "\n\n")
 }
 
 // resumes reports whether a run resumes the external session of m. A
@@ -322,13 +343,20 @@ func (r *run) writeMCPConfig(servers map[string]mcpServer) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp("", "harness-claude-mcp-*.json")
+	return r.writeTemp("harness-claude-mcp-*.json", data)
+}
+
+// writeTemp writes data to a new private file, which cleanup removes, and
+// returns its path. A file keeps a long value out of the argv, where Linux
+// caps one argument at 128 KiB.
+func (r *run) writeTemp(pattern string, data []byte) (string, error) {
+	f, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", err
 	}
-	r.mcpConfig = f.Name()
+	r.temps = append(r.temps, f.Name())
 	_, err = f.Write(data)
-	return r.mcpConfig, errors.Join(err, f.Close())
+	return f.Name(), errors.Join(err, f.Close())
 }
 
 func effortArg(e modelref.Effort) (string, bool) {

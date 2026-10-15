@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -138,17 +139,19 @@ func TestAppendSystemPromptValidation(t *testing.T) {
 		"--append-system-prompt-file",
 		"--append-system-prompt-file=x",
 	} {
-		t.Run(arg, func(t *testing.T) {
-			cfg := &Config{
-				AppendSystemPrompt: []string{"platform"},
-				Providers: map[string]Provider{
-					"claude-code": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{arg}},
-				},
-			}
-			if _, err := mergeAndValidate(cfg, &Config{}); err == nil {
-				t.Fatal("accepted conflicting extra_args")
-			}
-		})
+		for _, appended := range [][]string{{"platform"}, nil} {
+			t.Run(fmt.Sprintf("%s with %d entries", arg, len(appended)), func(t *testing.T) {
+				cfg := &Config{
+					AppendSystemPrompt: appended,
+					Providers: map[string]Provider{
+						"claude-code": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{arg}},
+					},
+				}
+				if _, err := mergeAndValidate(cfg, &Config{}); err == nil {
+					t.Fatal("accepted conflicting extra_args")
+				}
+			})
+		}
 	}
 }
 
@@ -158,14 +161,6 @@ func TestAppendSystemPromptAllowsCompatibleExtraArgs(t *testing.T) {
 		Providers: map[string]Provider{
 			"claude-code": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--dangerously-skip-permissions"}},
 		},
-	}
-	if _, err := mergeAndValidate(cfg, &Config{}); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg.AppendSystemPrompt = nil
-	cfg.Providers["claude-code"] = Provider{
-		Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--append-system-prompt", "legacy"},
 	}
 	if _, err := mergeAndValidate(cfg, &Config{}); err != nil {
 		t.Fatal(err)

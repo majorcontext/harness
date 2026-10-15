@@ -134,19 +134,16 @@ func mergeAndValidate(base, over *Config) (*Config, error) {
 	return out, out.Validate()
 }
 
-// validateAppendSystemPromptArgs prevents ExtraArgs from replacing the managed value or selecting
-// the mutually exclusive file option.
+// validateAppendSystemPromptArgs prevents ExtraArgs from replacing the system prompt that harness
+// builds for the CLI.
 func validateAppendSystemPromptArgs(cfg *Config) error {
-	if len(cfg.AppendSystemPrompt) == 0 {
-		return nil
-	}
 	for name, p := range cfg.Providers {
 		if p.Type != TypeClaudeCodeCLI {
 			continue
 		}
 		for _, arg := range p.ExtraArgs {
 			if claudeCodeAppendPromptArg(arg) {
-				return fmt.Errorf("providers.%s.extra_args: %q conflicts with append_system_prompt", name, arg)
+				return fmt.Errorf("providers.%s.extra_args: %q is managed by harness; use append_system_prompt", name, arg)
 			}
 		}
 	}

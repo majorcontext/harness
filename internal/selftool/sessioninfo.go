@@ -50,9 +50,10 @@ type Prompt struct {
 	read     prompt.Info
 	segments []string
 
-	mu   sync.Mutex
-	turn []string
-	call modelCall
+	mu       sync.Mutex
+	turn     []string
+	reported bool
+	call     modelCall
 }
 
 // modelCall is what the newest model call took from the Source: the names of
@@ -74,6 +75,17 @@ func NewPrompt(read prompt.Info, agent string, p prompt.Profile, procs *process.
 	return &Prompt{procs: procs, workDir: workDir, read: read, segments: segs}
 }
 
+// SkillList returns the skill segment that the session read, or "".
+func (p *Prompt) SkillList() string { return p.read.SkillList }
+
+// Sent records system as the system prompt of the newest turn, in place of the
+// segments of the session, for a backend that builds its own prompt.
+func (p *Prompt) Sent(system string) {
+	p.mu.Lock()
+	p.turn, p.reported = []string{system}, true
+	p.mu.Unlock()
+}
+
 // System returns the system prompt of a turn: the prompt of the session, the
 // prompt of its agent profile, and the process status line. It records the
 // segments as the segments of the turn.
@@ -85,7 +97,7 @@ func (p *Prompt) System() string {
 		}
 	}
 	p.mu.Lock()
-	p.turn = segs
+	p.turn, p.reported = segs, false
 	p.mu.Unlock()
 	return strings.Join(segs, "\n\n")
 }
@@ -111,12 +123,12 @@ func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, al
 }
 
 // sent returns the system segments and the sorted tool names of the newest
-// model call.
+// model call. A backend that reported its prompt sent no prompt of the call.
 func (p *Prompt) sent() (system, tools []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	system = slices.Clone(p.turn)
-	if p.call.prompt != "" {
+	if p.call.prompt != "" && !p.reported {
 		system = append(system, p.call.prompt)
 	}
 	tools = slices.Clone(p.call.tools)

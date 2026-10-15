@@ -39,7 +39,8 @@ func TestValidate(t *testing.T) {
 		{name: "a models list with a namespaced id", cfg: Config{Providers: map[string]Provider{"gw": {Type: TypeOpenAICompat, BaseURL: "https://gw.test", Models: []string{"anthropic/claude-sonnet-5-5", "m"}}}}},
 		{name: "a models list with an empty id", cfg: Config{Providers: map[string]Provider{"gw": {Type: TypeOpenAICompat, BaseURL: "https://gw.test", Models: []string{"m", ""}}}}, want: "providers.gw: models[1] is empty"},
 		{name: "a models list with a duplicate id", cfg: Config{Providers: map[string]Provider{"gw": {Type: TypeOpenAICompat, BaseURL: "https://gw.test", Models: []string{"m", "n", "m"}}}}, want: `providers.gw: models holds "m" twice`},
-		{name: "an append prompt that extra_args replaces", cfg: Config{AppendSystemPrompt: []string{"fact"}, Providers: cc}, want: "conflicts with append_system_prompt"},
+		{name: "an append prompt that extra_args replaces", cfg: Config{AppendSystemPrompt: []string{"fact"}, Providers: cc}, want: "is managed by harness"},
+		{name: "a system prompt arg in extra_args with no append prompt", cfg: Config{Providers: map[string]Provider{"claude-code": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--append-system-prompt-file", "p"}}}}, want: "is managed by harness"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := maps.Clone(tc.cfg.Providers)

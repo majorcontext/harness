@@ -145,6 +145,11 @@ type Config struct {
 	Retain bool
 	// Prompt returns the system prompt of a turn, when the turn starts.
 	Prompt func() string
+	// Skills is the skill segment of the session prompt, read when the
+	// session started.
+	Skills string
+	// Sent records the system prompt that a backend that builds its own sent.
+	Sent func(system string)
 	// Appended receives the events of each append, and the state after it,
 	// on the actor goroutine. It must not block, wait for the actor, or keep
 	// the state. nil: none.

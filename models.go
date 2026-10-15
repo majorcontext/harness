@@ -6,6 +6,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -71,4 +72,19 @@ func (r *Runtime) createdForOpen(ctx context.Context, id string) (protocol.Sessi
 		err = r.checkShadowed(c.AllowedTools)
 	}
 	return c, err
+}
+
+// lineageOf returns the creation record of session id and its place in the
+// session tree. On an error it releases own.
+func (r *Runtime) lineageOf(ctx context.Context, own session.Ownership, id string, l launch) (c protocol.SessionCreated, root string, depth int, err error) {
+	if l.created != nil {
+		c = *l.created
+	} else if c, err = r.createdForOpen(ctx, id); err != nil {
+		session.Discard(own, id, r.log)
+		return c, "", 0, err
+	}
+	if root, depth, err = r.tree.Lineage(ctx, id, c.ParentID); err != nil {
+		session.Discard(own, id, r.log)
+	}
+	return c, root, depth, err
 }

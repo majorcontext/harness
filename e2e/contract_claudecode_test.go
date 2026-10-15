@@ -252,6 +252,10 @@ func TestContractClaudeCodeConfig(t *testing.T) {
 		driver:  claudeLane{mode: "normal", extra: map[string]any{"append_system_prompt": []string{"one", "two"}}}.newDriver,
 		actions: withActions(claudeOneTurn, claudeSystemPrompt{as: "a", contains: "one\n\ntwo"}),
 	}, {
+		name:    "claudecode_append_system_prompt_over_the_argument_limit_reaches_the_cli",
+		driver:  claudeLane{mode: "normal", extra: map[string]any{"append_system_prompt": []string{strings.Repeat("a", 200<<10)}}}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSystemPrompt{as: "a", contains: strings.Repeat("a", 200<<10)}),
+	}, {
 		name:    "claudecode_compact_result_with_no_local_command_ends_the_turn",
 		driver:  claudeLane{mode: "compact_turn", env: map[string]string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND": ""}}.newDriver,
 		actions: withActions(claudeOneTurn, claudeJournalEvents{as: "a", prefix: "compaction."}, claudeSession{as: "a"}),
