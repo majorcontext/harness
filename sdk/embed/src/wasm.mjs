@@ -57,6 +57,21 @@ async function lockStore(store) {
 
 async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log }) {
   if (transport.worker !== true) throw new Error("the wasm transport runs in a Worker: set worker: true");
+  const options = {
+    config,
+    builtinTools,
+    proxy: {
+      headers: proxy.headers,
+      baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL),
+      providerBaseURLs: proxy.providerBaseURLs && Object.fromEntries(Object.entries(proxy.providerBaseURLs).map(([name, base]) => [name, absolute(base)])),
+    },
+    pageOrigin: typeof globalThis.location?.origin === "string" ? globalThis.location.origin : undefined,
+    storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
+    persist: !isNode && Boolean(store.persist),
+    tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),
+    bridgeFetch: typeof pageFetch === "function",
+  };
+  const init = { module: absolute(transport.module), wasmExec: absolute(transport.wasmExec), options };
   const unlock = await lockStore(store);
   let w;
   try {
@@ -103,16 +118,7 @@ async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, bu
       cleanup(err);
     });
   });
-  const options = {
-    config,
-    builtinTools,
-    proxy: { headers: proxy.headers, baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL) },
-    storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
-    persist: !isNode && Boolean(store.persist),
-    tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),
-    bridgeFetch: typeof pageFetch === "function",
-  };
-  w.post({ init: { module: absolute(transport.module), wasmExec: absolute(transport.wasmExec), options } });
+  w.post({ init });
   try {
     await ready;
   } catch (err) {

@@ -8,7 +8,7 @@ import { createHarness, wasm } from "@majorcontext/harness-embed";
 const h = await createHarness({
   transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
   config,                 // config.Config JSON; no keys
-  proxy: { baseURL: "/model-proxy", headers: {} },
+  proxy: { baseURL: "/model-proxy", headers: {}, providerBaseURLs: {} },
   fetch,                  // optional: a page fetch that carries the model requests
   tools: [{ name, description, schema, run: async (input, { signal }) => "text" }],
   builtinTools,           // allowed tool names; absent: defaultBuiltinTools and the names of tools. A list you pass is used as it is: page tools are not added
@@ -23,6 +23,7 @@ await h.close();
 - `wasm_exec.js` is the file of the same Go version as the module (`$(go env GOROOT)/lib/wasm/wasm_exec.js`).
 - Node 24 can deadlock in `process.exit` when V8 compiles baseline code (Sparkplug) on worker threads at the same time. The Node host of the harness (`cmd/harness-wasm/node/host.mjs`) turns this off with `v8.setFlagsFromString("--no-concurrent-sparkplug")`. If you build your own Node host for the module, set the same flag, either that way or with `node --no-concurrent-sparkplug`. `NODE_OPTIONS` cannot carry this flag: Node refuses it there.
 - `proxy.baseURL` sends all model traffic to a same-origin proxy: the module sets `base_url` of the native `anthropic` and `openai` providers and of each `config.providers` entry that sets none. The module fills `base_url` before it validates the config, so an `openai` entry that has no `base_url` is valid. Put no key in the page: the proxy holds it.
+- `proxy.providerBaseURLs` maps a provider name to the `base_url` of its entry, also of a native provider: `{ codex: "/codex" }` sends the ChatGPT backend traffic to that path (see "Log in with ChatGPT"). It is a pass-through path and holds no credential. In a browser, a request of a provider that uses the ChatGPT login to another origin than the page fails before it is sent, whatever option set the URL, because the token would go there. The `fetch` option carries model requests only: the sign-in and the refresh go to the ChatGPT issuer directly, and neither follows a redirect. A `fetch` callback must pass `init.redirect` on to the network: when it follows a redirect itself, the module cannot stop the request that the redirect makes.
 
 ## Files and a shell in the browser
 
@@ -57,6 +58,17 @@ The tool takes `{command}` and returns stdout, stderr, and the exit code. The wo
 The default `load` is `import("just-bash/browser")`. That build has dependencies of its own and imports the names `gzipSync`, `gunzipSync`, and `constants` from `node:zlib`, which a browser bundler cannot resolve. Bundle it with `node:zlib` aliased to the stub of this package, `@majorcontext/harness-embed/zlib-stub`; with the stub, `gzip`, `gunzip`, `zcat`, and `rg -z` on a `.gz` file fail with "gzip is not available in the browser" and no other command is affected. With esbuild: `alias: { "node:zlib": "@majorcontext/harness-embed/zlib-stub" }` (the test fixture builds this way). Vite (`resolve.alias`) and webpack 5 (`resolve.alias`) take the same alias; they are not tested here. Without a bundler, build just-bash once that way, serve the file, and pass `load`: `shellTool({ load: () => import("/vendor/just-bash.js") })`. The tool does not allow the network, and nothing here lets a caller turn it on.
 
 Every page tool gets `fs`, and `fs` can write `/persist`, the session store of the harness. Give `fs` only to code that you trust, and do not pass it to code that takes input from the model. The shell tool mounts `/work` and `/tmp` only.
+
+## Log in with ChatGPT
+
+The module signs in with the device code flow, and keeps the ChatGPT token in its store, so the login survives a reload. This holds the token of the user in the page: any script of the page can read it. Use it only when the page is the user's own, as in a demo. An application with many users keeps the proxy of the next section, which holds the credential on the server.
+
+1. Start the harness with a persistent store (`store: { persist: true }` in a browser, `store: { dir }` under Node). A store in memory has no login file, and the module then offers no login.
+2. Use an ACP client that advertises `clientCapabilities.elicitation.url` (`{}`). Without it the module offers no login. The module offers the method `chatgpt` in `authMethods`.
+3. Call `authenticate` with `{ methodId: "chatgpt" }`. The module sends `elicitation/create` with `mode: "url"`, `requestId` of the `authenticate` request, a `url` (the ChatGPT device page with the code filled in), and a `message` that names the code. Show the URL to the user and answer `{ action: "accept" }` when the user opens it, or `decline` or `cancel` to stop. The module polls the issuer, stores the login under `<store dir>/auth/codex.json` (in a browser, `/persist/sessions/auth/codex.json` by default), sends `elicitation/complete`, and answers `{}`. `$/cancel_request` for the `authenticate` stops the sign-in.
+4. Use a model such as `codex/gpt-5.6-sol`. `codex/*` models are listed when the module offers the login or a login file exists.
+
+`auth.openai.com` allows cross-origin calls, so the sign-in and the token refresh run in the browser. `https://chatgpt.com/backend-api/codex` does not, so a browser needs one pass-through path on the server of the page. Set `proxy: { providerBaseURLs: { codex: "/codex" } }`, and forward `/codex/<path>` to `https://chatgpt.com/backend-api/codex/<path>` unchanged: same method, body, and headers, a streamed response, and no credential added. The module sends `Authorization`, `ChatGPT-Account-ID`, and `originator` itself. Keep the route off the open internet for a multi-user application. Under Node there is no CORS, so the module calls the backend directly and needs no option.
 
 ## Reach a model
 

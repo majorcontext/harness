@@ -27,11 +27,13 @@ type acpEnv struct {
 	defaultDir string
 	// login is the scripted login of the row. Nil: the host offers none.
 	login *acpLoginRun
+	// device is the scripted issuer of the device code login. Nil: none.
+	device *deviceRun
 	// jsTool gives the wasm hosts the page tool js_echo.
 	jsTool bool
 	// memoryStore marks a host whose sessions the test cannot read: the browser host keeps them in the Worker.
 	memoryStore bool
-	// wasm marks a wasm host, which offers no login.
+	// wasm marks a wasm host, which offers a login only to a client with elicitation.url.
 	wasm bool
 }
 

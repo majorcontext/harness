@@ -2,15 +2,10 @@ package codexauth
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,15 +13,7 @@ import (
 )
 
 const (
-	// browserPort is the redirect port that the Codex OAuth client registers.
-	// Source: codex-rs/login/src/server.rs DEFAULT_PORT.
-	browserPort = "1455"
-	// fallbackPort is the second redirect port, for when browserPort is busy. Source: codex-rs/login/src/server.rs FALLBACK_PORT.
-	fallbackPort = "1457"
-	// scope is the scope that the Codex CLI asks for. Source: codex-rs/login/src/server.rs build_authorize_url.
-	scope         = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 	deviceTimeout = 15 * time.Minute
-	loginTimeout  = 10 * time.Minute
 )
 
 // LoginOptions configure a sign-in.
@@ -57,134 +44,31 @@ func (o *LoginOptions) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}
 }
 
-func randomSecret() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+// Client returns a client over rt that follows no redirect and gives up after 30 s. A host that has its own
+// transport, such as a WebAssembly host, sends the requests to the issuer through it.
+func Client(rt http.RoundTripper) *http.Client {
+	return &http.Client{Transport: rt, Timeout: 30 * time.Second, CheckRedirect: noRedirect}
 }
 
-// LoginBrowser runs the authorization code flow with PKCE. It prints the
-// sign-in URL, waits for the one callback of the browser on a loopback
-// listener, exchanges the code, and stores the login.
-func LoginBrowser(ctx context.Context, o LoginOptions) error {
-	verifier, err := randomSecret()
-	if err != nil {
-		return err
-	}
-	state, err := randomSecret()
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256([]byte(verifier))
-	ln, err := listenCallback(o.issuer())
-	if err != nil {
-		return fmt.Errorf("codex login: the callback ports are busy: %w (run `%s --device` instead)", err, LoginCommand)
-	}
-	// The Codex CLI redirects to 127.0.0.1 (codex-rs/login/src/server.rs:194).
-	redirect := "http://127.0.0.1:" + portOf(ln) + "/auth/callback"
-	signIn := o.issuer() + "/oauth/authorize?" + url.Values{
-		"response_type":              {"code"},
-		"client_id":                  {ClientID},
-		"redirect_uri":               {redirect},
-		"scope":                      {scope},
-		"code_challenge":             {base64.RawURLEncoding.EncodeToString(sum[:])},
-		"code_challenge_method":      {"S256"},
-		"id_token_add_organizations": {"true"},
-		"codex_cli_simplified_flow":  {"true"},
-		"state":                      {state},
-		"originator":                 {Originator},
-	}.Encode()
-	_, _ = fmt.Fprintf(o.Out, "Open this URL in your browser to sign in with ChatGPT:\n\n%s\n\n", signIn)
-	if o.Open != nil {
-		_ = o.Open(signIn)
-	}
-	ctx, cancel := context.WithTimeout(ctx, loginTimeout)
-	defer cancel()
-	code, err := waitForCallback(ctx, ln, state)
-	if err != nil {
-		return err
-	}
-	return exchange(ctx, o, "authorization_code", code, verifier, redirect)
+// DeviceCode is a device sign-in that the issuer started and the user has not finished.
+type DeviceCode struct {
+	// UserCode is the one-time code that the user enters.
+	UserCode string
+	// VerificationURL is the page where the user enters the code.
+	VerificationURL string
+
+	o        LoginOptions
+	id       string
+	interval time.Duration
 }
 
-// listenCallback listens for the browser callback on loopback. Only the default
-// issuer knows the registered redirect ports, so another issuer (a test issuer) gets a free port.
-func listenCallback(issuer string) (net.Listener, error) {
-	ports := []string{"0"}
-	if issuer == DefaultIssuer {
-		ports = []string{browserPort, fallbackPort}
-	}
-	var err error
-	for _, port := range ports {
-		var ln net.Listener
-		if ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", port)); err == nil {
-			return ln, nil
-		}
-	}
-	return nil, err
+// URL returns the verification page with the user code filled in.
+func (d *DeviceCode) URL() string {
+	return d.VerificationURL + "?" + url.Values{"user_code": {d.UserCode}}.Encode()
 }
 
-func portOf(ln net.Listener) string {
-	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	return port
-}
-
-type callbackResult struct {
-	code string
-	err  error
-}
-
-// waitForCallback serves /auth/callback on ln until the first request to it, and returns its code.
-func waitForCallback(ctx context.Context, ln net.Listener, state string) (string, error) {
-	done := make(chan callbackResult, 1)
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/auth/callback" {
-			http.NotFound(w, r)
-			return
-		}
-		q := r.URL.Query()
-		var res callbackResult
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		switch {
-		case subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1, q.Get("code") == "" && q.Get("error") == "":
-			// A request from another sign-in, or a stray one, ends nothing: the real callback can still come.
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, "This is not the callback of the sign-in that is waiting.\n")
-			return
-		case q.Get("error") != "":
-			res.err = fmt.Errorf("codex login: the sign-in was refused: %q", q.Get("error"))
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, "Sign-in failed. Return to the terminal.\n")
-		default:
-			res.code = q.Get("code")
-			_, _ = io.WriteString(w, "Signed in. You can close this tab.\n")
-		}
-		select {
-		case done <- res:
-		default:
-		}
-	})
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = srv.Serve(ln) }()
-	defer func() {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(sctx)
-		// A cancel that comes before Serve registers the listener can leave it open after Shutdown.
-		_ = ln.Close()
-	}()
-	select {
-	case res := <-done:
-		return res.code, res.err
-	case <-ctx.Done():
-		return "", fmt.Errorf("codex login: no sign-in before the end: %w", ctx.Err())
-	}
-}
-
-// LoginDevice runs the device code flow: it prints a code and the URL where the user enters it, then polls until the user did.
-func LoginDevice(ctx context.Context, o LoginOptions) error {
+// StartDevice asks the issuer for a device code. It reads and writes no file.
+func StartDevice(ctx context.Context, o LoginOptions) (*DeviceCode, error) {
 	api := o.issuer() + "/api/accounts/deviceauth"
 	var uc struct {
 		DeviceAuthID string          `json:"device_auth_id"`
@@ -195,24 +79,39 @@ func LoginDevice(ctx context.Context, o LoginOptions) error {
 	status, err := postJSON(ctx, o.client(), api+"/usercode", map[string]string{"client_id": ClientID}, &uc)
 	switch {
 	case err != nil:
-		return err
+		return nil, err
 	case status == http.StatusNotFound:
-		return errors.New("codex login: device code sign-in is not enabled for this account; use the browser sign-in")
+		return nil, errors.New("codex login: device code sign-in is not enabled for this account; use the browser sign-in")
 	case status != http.StatusOK:
-		return fmt.Errorf("codex login: the device code request failed: HTTP %d", status)
+		return nil, fmt.Errorf("codex login: the device code request failed: HTTP %d", status)
 	}
 	if uc.UserCode == "" {
 		uc.UserCode = uc.Alias
 	}
 	if uc.UserCode == "" || uc.DeviceAuthID == "" {
-		return errors.New("codex login: the device code answer is incomplete")
+		return nil, errors.New("codex login: the device code answer is incomplete")
 	}
-	_, _ = fmt.Fprintf(o.Out, "Follow these steps to sign in with ChatGPT:\n\n1. Open this link in your browser and sign in:\n   %s/codex/device\n\n2. Enter this one-time code (it expires in 15 minutes):\n   %s\n\nContinue only if you started this sign-in.\n", o.issuer(), uc.UserCode)
-	grant, err := pollDevice(ctx, o, api+"/token", uc.DeviceAuthID, uc.UserCode, intervalOf(uc.Interval))
+	return &DeviceCode{UserCode: uc.UserCode, VerificationURL: o.issuer() + "/codex/device", o: o, id: uc.DeviceAuthID, interval: intervalOf(uc.Interval)}, nil
+}
+
+// Wait polls the issuer at the interval that it gave, until the user enters the code or the sign-in expires. Then it exchanges the grant and stores the login.
+func (d *DeviceCode) Wait(ctx context.Context) error {
+	o := d.o
+	grant, err := pollDevice(ctx, o, o.issuer()+"/api/accounts/deviceauth/token", d.id, d.UserCode, d.interval)
 	if err != nil {
 		return err
 	}
 	return exchange(ctx, o, "authorization_code", grant.AuthorizationCode, grant.CodeVerifier, o.issuer()+"/deviceauth/callback")
+}
+
+// LoginDevice runs the device code flow: it prints a code and the URL where the user enters it, then polls until the user did.
+func LoginDevice(ctx context.Context, o LoginOptions) error {
+	d, err := StartDevice(ctx, o)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(o.Out, "Follow these steps to sign in with ChatGPT:\n\n1. Open this link in your browser and sign in:\n   %s\n\n2. Enter this one-time code (it expires in 15 minutes):\n   %s\n\nContinue only if you started this sign-in.\n", d.VerificationURL, d.UserCode)
+	return d.Wait(ctx)
 }
 
 // intervalOf reads the poll interval, which the issuer sends as a string or a number.
@@ -231,59 +130,104 @@ type deviceGrant struct {
 	CodeVerifier      string `json:"code_verifier"`
 }
 
-// pollDevice asks for the grant until the user enters the code. A 403 or 404 means not yet.
+// slowDownStep is what a slow_down answer adds to the polling interval (RFC 8628, section 3.5).
+const slowDownStep = 5 * time.Second
+
+// pollDevice asks for the grant until the user enters the code. A 403 or 404, and an authorization_pending answer, mean not yet.
+// A slow_down answer adds slowDownStep to the interval. A sign-in that ctx ends fails with the error of ctx;
+// one that deviceTimeout ends is expired.
 func pollDevice(ctx context.Context, o LoginOptions, endpoint, id, code string, interval time.Duration) (deviceGrant, error) {
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, deviceTimeout)
 	defer cancel()
 	for {
 		var g deviceGrant
-		status, err := postJSON(ctx, o.client(), endpoint, map[string]string{"device_auth_id": id, "user_code": code}, &g)
-		switch {
-		case err != nil:
+		status, raw, err := postRaw(ctx, o.client(), endpoint, map[string]string{"device_auth_id": id, "user_code": code})
+		if err != nil {
 			return g, err
-		case status == http.StatusOK && g.AuthorizationCode != "":
-			return g, nil
-		case status != http.StatusForbidden && status != http.StatusNotFound:
+		}
+		switch {
+		case status == http.StatusOK:
+			if json.Unmarshal(raw, &g) != nil {
+				return g, errors.New("codex login: the issuer sent an answer that is not JSON")
+			}
+			if g.AuthorizationCode != "" {
+				return g, nil
+			}
+			return g, fmt.Errorf("codex login: the device sign-in failed: HTTP %d", status)
+		case status == http.StatusForbidden, status == http.StatusNotFound:
+		case status == http.StatusBadRequest && errorCode(raw) == "slow_down":
+			interval += slowDownStep
+		case status == http.StatusBadRequest && errorCode(raw) == "authorization_pending":
+		default:
 			return g, fmt.Errorf("codex login: the device sign-in failed: HTTP %d", status)
 		}
 		t := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			t.Stop()
+			if parent.Err() != nil {
+				return g, fmt.Errorf("codex login: %w", context.Cause(parent))
+			}
 			return g, errors.New("codex login: the device code expired before it was entered")
 		case <-t.C:
 		}
 	}
 }
 
+// errorCode reads the error member of an OAuth error answer.
+func errorCode(raw []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &e)
+	return e.Error
+}
+
 // postJSON posts body as JSON and decodes a 200 answer into out. It returns the status.
 func postJSON(ctx context.Context, hc *http.Client, endpoint string, body, out any) (int, error) {
+	status, raw, err := postRaw(ctx, hc, endpoint, body)
+	if err == nil && status == http.StatusOK && out != nil {
+		if json.Unmarshal(raw, out) != nil {
+			return status, errors.New("codex login: the issuer sent an answer that is not JSON")
+		}
+	}
+	return status, err
+}
+
+// postRaw posts body as JSON and returns the status and the answer.
+func postRaw(ctx context.Context, hc *http.Client, endpoint string, body any) (int, []byte, error) {
 	raw, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(raw)))
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return do(hc, req, out)
+	return doRaw(hc, req)
 }
 
 func do(hc *http.Client, req *http.Request, out any) (int, error) {
+	status, raw, err := doRaw(hc, req)
+	if err == nil && status == http.StatusOK && out != nil {
+		if json.Unmarshal(raw, out) != nil {
+			return status, errors.New("codex login: the issuer sent an answer that is not JSON")
+		}
+	}
+	return status, err
+}
+
+func doRaw(hc *http.Client, req *http.Request) (int, []byte, error) {
 	resp, err := hc.Do(req)
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return 0, fmt.Errorf("codex login: %w", err)
+		return 0, nil, fmt.Errorf("codex login: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode == http.StatusOK && out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return resp.StatusCode, errors.New("codex login: the issuer sent an answer that is not JSON")
-		}
-	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, raw, nil
 }
 
 // exchange trades an authorization code for tokens and stores the login.

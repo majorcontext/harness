@@ -34,6 +34,10 @@ type Options struct {
 	// ModelTransport and Tools are the matching harness.Options of every runtime.
 	ModelTransport func(provider string) http.RoundTripper
 	Tools          []harness.Tool
+	// IssuerTransport is the matching harness.Options of every runtime.
+	IssuerTransport http.RoundTripper
+	// Host is the harness.Options.Host of every runtime. A connection whose client can take the login (RuntimeOptions.Login) clears NoLogin.
+	Host harness.HostLimits
 }
 
 // Runtimes implements acp.Runtimes.
@@ -78,7 +82,9 @@ func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (
 			return nil, err
 		}
 	}
-	rt, err := harness.New(harness.Options{Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
+	host := r.opts.Host
+	host.NoLogin = host.NoLogin && !opts.Login
+	rt, err := harness.New(harness.Options{Host: host, IssuerTransport: r.opts.IssuerTransport, Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
 		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
 		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
 	if err != nil {

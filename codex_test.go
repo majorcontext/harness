@@ -249,3 +249,37 @@ func TestNativeProvidersListTheirModelsWithoutALogin(t *testing.T) {
 		t.Errorf("log without a login: %s", logs)
 	}
 }
+
+func TestChatGPTRefreshDoesNotUseTheModelTransport(t *testing.T) {
+	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Credentials: harnesstest.TokenLabel, AccountID: "acct-1"},
+		harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
+	issuer := harnesstest.NewCodexIssuer(t, harnesstest.CodexIssuerOptions{})
+	file := filepath.Join(t.TempDir(), "auth", "codex.json")
+	body := `{"access_token":"` + harnesstest.AccessToken("old", "acct-1", -time.Hour) + `","refresh_token":"` + harnesstest.CodexInitialRefresh + `","account_id":"acct-1"}`
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retries, rec := 0, &transport{}
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(),
+		Config:         config.Config{CodexAuthFile: file, CodexIssuer: issuer.URL(), RequestMaxRetries: &retries, StreamMaxRetries: &retries},
+		ModelTransport: func(string) http.RoundTripper { return toDouble{rec, strings.TrimPrefix(s.URL(), "http://")} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeRuntime(t, r) })
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5.6-sol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	converse(t, sess, "hi")
+	if n := issuer.Refreshes(); n != 1 {
+		t.Errorf("issuer refreshes = %d, want 1", n)
+	}
+	if got, want := rec.Calls(), []string{"POST chatgpt.com/backend-api/codex/responses"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("transport calls = %q, want %q, so no request to the issuer", got, want)
+	}
+}

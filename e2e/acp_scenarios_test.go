@@ -47,8 +47,10 @@ type acpScenario struct {
 	login *acpLoginSpec
 	// jsTool adds the page tool js_echo to the wasm hosts. The native hosts have no JavaScript tools, so the row runs on the wasm hosts only.
 	jsTool bool
-	// wasmOnly runs the row on the wasm hosts only, because the native hosts always offer a login.
+	// wasmOnly runs the row on the wasm hosts only, because the native hosts always offer a login. The golden is the output of the wasm host, with no alignment to the native hosts.
 	wasmOnly bool
+	// device scripts the issuer of the device code login of a wasm host. The config names it as codex_issuer.
+	device *deviceSpec
 	// browser marks a row that also runs on the browser host. It needs no file, no directory beyond "main", and no restart.
 	browser bool
 }
@@ -62,6 +64,8 @@ type acpInit struct {
 	compaction bool
 	// elicitation adds the client capability elicitation.form.
 	elicitation bool
+	// elicitationURL adds the client capability elicitation.url.
+	elicitationURL bool
 	// terminal adds the client capability auth.terminal. methods are the ids of authMethods, in order.
 	terminal bool
 	methods  []string
@@ -100,8 +104,15 @@ func (s acpInit) run(t *testing.T, c *acpConn) {
 	if s.terminal {
 		caps["auth"] = map[string]any{"terminal": true}
 	}
-	if s.elicitation {
-		caps["elicitation"] = map[string]any{"form": map[string]any{}}
+	if s.elicitation || s.elicitationURL {
+		elicitation := map[string]any{}
+		if s.elicitation {
+			elicitation["form"] = map[string]any{}
+		}
+		if s.elicitationURL {
+			elicitation["url"] = map[string]any{}
+		}
+		caps["elicitation"] = elicitation
 	}
 	id := c.request("initialize", map[string]any{
 		"protocolVersion":    s.version,
@@ -149,7 +160,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpDeviceScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
@@ -331,6 +342,10 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 					env.login = startACPLogin(t, *sc.login, sc.model)
 					fake = env.login.fake
 					env.configPath = writeGoalConfigWith(t, "", env.login.config())
+				} else if sc.device != nil {
+					env.device = startDevice(t, *sc.device)
+					fake = harnesstest.NewAnthropic(t)
+					env.configPath = writeGoalConfigWith(t, fake.URL(), map[string]any{"codex_issuer": env.device.issuer.URL()})
 				} else {
 					fake = harnesstest.NewAnthropic(t, sc.model...)
 					env.configPath = writeGoalConfigWith(t, fake.URL(), sc.config)
@@ -343,6 +358,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				c.fake, c.env = fake, env
 				c.paths[env.configPath] = "<user-config>"
 				env.login.register(c)
+				env.device.register(c)
 				c.reconnect = func() {
 					c.t.Helper()
 					c.drain()
@@ -366,7 +382,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				c.finish(stop)
 				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil) && host.name == "in-process" || (sc.jsTool || sc.wasmOnly) && host.name == nodeHostName)
 				got := acpGoldenOf(t, c, sc.wireOnly)
-				if host.name == nodeHostName || host.name == browserHostName {
+				if (host.name == nodeHostName || host.name == browserHostName) && !sc.wasmOnly {
 					got = alignNodeGolden(t, got)
 				}
 				if host.name == browserHostName {

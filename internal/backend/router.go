@@ -34,6 +34,8 @@ type Router struct {
 	backends map[string]turn.Backend
 	// listed holds the models of each provider whose entry sets models.
 	listed map[string][]modelmeta.Model
+	// shown holds, for a provider that lists only when the host can serve it, the test of that.
+	shown map[string]func() bool
 }
 
 // NewRouter returns a Router over backends, by provider name.
@@ -57,6 +59,12 @@ type Env struct {
 	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
+	// IssuerTransport carries the requests of the ChatGPT login to its issuer, the refresh among them. nil: the default transport. It is not the model transport, so a gateway credential or a host rewrite of that transport never sees the refresh token.
+	IssuerTransport http.RoundTripper
+	// NoProcess says that the host starts no process, so a provider that runs a child process has no backend.
+	NoProcess bool
+	// NoLogin says that the host has no way to create the ChatGPT login, so a provider that uses the login lists its models only when the login file exists.
+	NoLogin bool
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
@@ -66,22 +74,37 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	env.Log = cmp.Or(env.Log, slog.Default())
 	backends := map[string]turn.Backend{}
 	cfg.Providers = cfg.ProviderEntries()
+	var login *http.Client
+	if env.IssuerTransport != nil {
+		login = codexauth.Client(env.IssuerTransport)
+	}
 	codex := sync.OnceValue(func() *codexauth.Source {
-		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
+		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, HTTP: login, Log: env.Log})
 	})
+	shown := map[string]func() bool{}
 	for name, p := range cfg.Providers {
 		if p.Type == config.TypeClaudeCodeCLI {
+			if env.NoProcess {
+				continue
+			}
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 			if rc, ok := c.(*responses.Client); ok && p.Auth == config.AuthChatGPT {
 				backends[name] = &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return codex().AccessToken() }}
+				if env.NoLogin {
+					shown[name] = func() bool {
+						_, err := (codexauth.Store{Path: cfg.CodexAuthFile}).Load()
+						return !codexauth.IsLoginRequired(err)
+					}
+				}
 			} else {
 				backends[name] = be
 			}
 		}
 	}
 	r := NewRouter(backends)
+	r.shown = shown
 	for name, p := range cfg.Providers {
 		if _, ok := backends[name]; ok && len(p.Models) > 0 {
 			r.listModels(name, modelmeta.Named(p.Models, modelmeta.Models(name)))
@@ -217,6 +240,9 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 	slices.Sort(names)
 	out := []protocol.Model{}
 	for _, name := range names {
+		if show, limited := m.shown[name]; limited && !show() {
+			continue
+		}
 		be := m.backends[name]
 		models, set := m.listed[name]
 		if !set {

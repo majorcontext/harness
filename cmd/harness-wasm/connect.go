@@ -8,14 +8,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"path"
 	"syscall/js"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
+	"github.com/majorcontext/harness/internal/acp/acpauth"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/jshost"
 	"github.com/majorcontext/harness/store"
 )
@@ -31,11 +36,17 @@ type options struct {
 	tools        []harness.Tool
 	proxyHeaders map[string]string
 	proxyBase    string
-	onFrame      js.Value
-	logger       *slog.Logger
+	// modelFetch carries the model requests of a page fetch. Absent: the global fetch.
+	modelFetch js.Value
+	// pageOrigin is the origin of the page, or empty when the host has none (Node). "null" is an opaque origin.
+	pageOrigin string
+	// providerBases maps a provider name to the base_url of its entry.
+	providerBases map[string]string
+	onFrame       js.Value
+	logger        *slog.Logger
 }
 
-// readOptions reads {config, storeDir, defaultDir, env, tools, builtinTools, proxy: {headers, baseURL},
+// readOptions reads {config, storeDir, defaultDir, env, tools, builtinTools, proxy: {headers, baseURL, providerBaseURLs},
 // onFrame, onLog}. Every option that is present must have its type. A bad value
 // does not throw: the first error fails the first session/new as an invalid
 // request.
@@ -52,6 +63,12 @@ func readOptions(o js.Value) *options {
 	keep(err)
 	opts.defaultDir, err = jshost.StringField(o, "defaultDir")
 	keep(err)
+	opts.modelFetch = o.Get("modelFetch")
+	if t := opts.modelFetch.Type(); t != js.TypeUndefined && t != js.TypeNull && t != js.TypeFunction {
+		keep(errors.New("modelFetch must be a function"))
+	}
+	opts.pageOrigin, err = jshost.StringField(o, "pageOrigin")
+	keep(err)
 	opts.env, err = jshost.StringMap("env", o.Get("env"))
 	keep(err)
 	opts.builtinTools, err = jshost.StringList("builtinTools", o.Get("builtinTools"))
@@ -67,6 +84,8 @@ func readOptions(o js.Value) *options {
 		if proxy.Type() == js.TypeObject {
 			opts.proxyBase, err = jshost.StringField(proxy, "baseURL")
 			keep(err)
+			opts.providerBases, err = jshost.StringMap("proxy.providerBaseURLs", proxy.Get("providerBaseURLs"))
+			keep(err)
 		}
 	}
 	if fn := o.Get("onLog"); fn.Type() == js.TypeFunction {
@@ -74,6 +93,9 @@ func readOptions(o js.Value) *options {
 	}
 	opts.user, err = readConfig(o.Get("config"))
 	keep(err)
+	if opts.user != nil {
+		keep(opts.applyHostConfig())
+	}
 	opts.err = errors.Join(errs...)
 	return opts
 }
@@ -92,6 +114,32 @@ func readConfig(c js.Value) (*config.Config, error) {
 		return nil, errors.New("config must be an object")
 	}
 	return config.Parse("the config of harnessConnect", []byte(text))
+}
+
+// applyHostConfig sets what the host decides in the user config: the base_url of each provider in providerBases,
+// and the login file in the store directory, so a login survives a reload. A store in memory has no login file.
+func (o *options) applyHostConfig() error {
+	if len(o.providerBases) > 0 {
+		providers := maps.Clone(o.user.Providers)
+		if providers == nil {
+			providers = map[string]config.Provider{}
+		}
+		for name, base := range o.providerBases {
+			p, ok := providers[name]
+			if !ok {
+				if p, ok = config.NativeProvider(name); !ok {
+					return fmt.Errorf("proxy.providerBaseURLs: %q is not a provider", name)
+				}
+			}
+			p.BaseURL = base
+			providers[name] = p
+		}
+		o.user.Providers = providers
+	}
+	if o.storeDir != "" && o.user.CodexAuthFile == "" {
+		o.user.CodexAuthFile = path.Join(o.storeDir, "auth", "codex.json")
+	}
+	return nil
 }
 
 // proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
@@ -127,10 +175,39 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 		Version:    "wasm",
 		Getenv:     func(k string) string { return o.env[k] },
 		Logger:     o.logger,
-		ModelTransport: func(string) http.RoundTripper {
-			return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin()}
+		ModelTransport: func(name string) http.RoundTripper {
+			rt := jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin(), Fetch: o.modelFetch}
+			if o.user.ProviderEntries()[name].UsesChatGPTLogin() {
+				// The login must reach the page origin only, and a redirect must not carry it on.
+				rt.OnlyOrigin, rt.NoRedirect = o.pageOrigin, true
+			}
+			return rt
 		},
-		Tools: o.tools,
+		Tools:           o.tools,
+		Host:            harness.HostLimits{NoProcess: true, NoLogin: true},
+		IssuerTransport: jshost.FetchRT{NoRedirect: true},
+	})
+}
+
+// login is the ChatGPT login of the connection: the device code flow, shown to a client that takes an elicitation in URL mode.
+func (o *options) login() acp.Auth {
+	return acpauth.New(acpauth.Options{
+		Config: func(cwd string) (*config.Config, error) {
+			if cwd == "" {
+				cwd = o.defaultDir
+			}
+			if o.err != nil {
+				return nil, o.err
+			}
+			if cwd == "" {
+				return o.user, nil
+			}
+			return config.MergeProject(o.user, "the config of harnessConnect", cwd, o.proxyBase)
+		},
+		DeviceCode: true,
+		HTTP:       codexauth.Client(jshost.FetchRT{NoRedirect: true}),
+		LoginStore: o.storeDir != "",
+		LookPath:   func(string) (string, error) { return "", exec.ErrNotFound },
 	})
 }
 
@@ -159,7 +236,7 @@ func harnessConnect(_ js.Value, args []js.Value) any {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cfg := acp.Config{Version: "wasm", Logger: opts.logger, AllowedTools: opts.builtinTools, List: opts.defaultDir != ""}
+		cfg := acp.Config{Version: "wasm", Logger: opts.logger, AllowedTools: opts.builtinTools, List: opts.defaultDir != "", Auth: opts.login()}
 		if err := acp.Serve(context.Background(), opts.runtimes(), inR, outW, cfg); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 			opts.logger.Error("acp", "error", err.Error())
 		}

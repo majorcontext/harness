@@ -40,6 +40,8 @@ type CodexIssuerOptions struct {
 	RefreshStatus int
 	// DevicePending is the number of device polls that answer 403 before the code is entered.
 	DevicePending int
+	// SlowDown is the number of leading device polls that answer 400 slow_down.
+	SlowDown int
 	// AccountID is the chatgpt_account_id claim. Empty is "acct-1".
 	AccountID string
 	// Secret, when set, is a value that no request header may hold. SawSecret reports a request that did.
@@ -60,6 +62,7 @@ type CodexIssuer struct {
 	refreshes    int
 	exchanges    int
 	polls        int
+	pollAt       []time.Time
 	valid        map[string]bool // refresh tokens that a refresh grant accepts
 	lastRedirect string
 	secretSeen   bool
@@ -157,6 +160,17 @@ func (i *CodexIssuer) Exchanges() int { i.mu.Lock(); defer i.mu.Unlock(); return
 
 // Polls counts the device polls.
 func (i *CodexIssuer) Polls() int { i.mu.Lock(); defer i.mu.Unlock(); return i.polls }
+
+// PollGaps returns the time between each device poll and the one before it.
+func (i *CodexIssuer) PollGaps() []time.Duration {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var gaps []time.Duration
+	for k := 1; k < len(i.pollAt); k++ {
+		gaps = append(gaps, i.pollAt[k].Sub(i.pollAt[k-1]))
+	}
+	return gaps
+}
 
 // LastRedirectURI is the redirect_uri of the newest accepted authorization code grant.
 func (i *CodexIssuer) LastRedirectURI() string {
@@ -325,11 +339,16 @@ func (i *CodexIssuer) devicePoll(w http.ResponseWriter, r *http.Request) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.polls++
+	i.pollAt = append(i.pollAt, time.Now())
 	if f["device_auth_id"] != codexDeviceID || f["user_code"] != CodexUserCode {
 		oauthError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if i.polls <= i.opts.DevicePending {
+	if i.polls <= i.opts.SlowDown {
+		oauthError(w, http.StatusBadRequest, "slow_down")
+		return
+	}
+	if i.polls <= i.opts.SlowDown+i.opts.DevicePending {
 		oauthError(w, http.StatusForbidden, "authorization_pending")
 		return
 	}

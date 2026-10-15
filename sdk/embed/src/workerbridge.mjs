@@ -116,6 +116,7 @@ export function workerBridge(post) {
         { once: true },
       );
       const message = { fid, method: init.method ?? "GET", url: String(input), headers: [...new Headers(init.headers)] };
+      if (init.redirect) message.redirect = init.redirect;
       const transfer = [];
       if (init.body) {
         message.body = new Uint8Array(init.body).slice().buffer;
