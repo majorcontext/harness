@@ -62,11 +62,17 @@ func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...
 	if in.Delivery == protocol.DeliverySteer && expectedTurn != "" && (a.run == nil || a.run.id != expectedTurn) {
 		return 0, ErrTurnMismatch
 	}
-	events := append(append(before, a.dismissRequests()...), in)
-	seq := a.state.Head() + uint64(len(events))
+	q := append(a.state.Queue(), in)
 	r := a.run
-	if r == nil && !a.compactDue() {
-		ids := a.startInputs(append(a.state.Queue(), in))
+	starts := r == nil && !a.compactDue() && !a.heldByRequest(q)
+	dismiss := a.dismissFrom(q[len(q)-1:])
+	if starts {
+		dismiss = a.dismissFrom(q)
+	}
+	events := append(append(before, dismiss...), in)
+	seq := a.state.Head() + uint64(len(events))
+	if starts {
+		ids := a.startInputs(q)
 		id := newID("turn")
 		if err := a.append(append(events, protocol.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
 			return 0, err
@@ -255,7 +261,7 @@ func (a *Actor) ended(r *running, runErr error) {
 // when the context reading passes the threshold.
 func (a *Actor) next(check bool) error {
 	q := a.state.Queue()
-	if len(q) == 0 || check && a.autoCompact() {
+	if len(q) == 0 || a.heldByRequest(q) || check && a.autoCompact() {
 		return nil
 	}
 	id, ids := newID("turn"), a.startInputs(q)

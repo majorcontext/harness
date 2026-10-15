@@ -425,7 +425,7 @@ func (a *Actor) retry(at time.Time) error {
 	}
 	events := a.resumed()
 	if !a.judgeable() {
-		events = append(append(events, a.dismissRequests()...), goalInput("Continue working toward the goal.\n\nGOAL: "+g.Condition))
+		events = append(events, goalInput("Continue working toward the goal.\n\nGOAL: "+g.Condition))
 	}
 	if err := a.append(events...); err != nil || a.run != nil {
 		return err
