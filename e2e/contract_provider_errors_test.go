@@ -108,6 +108,21 @@ func TestContractProviderMaxTokens(t *testing.T) {
 			actions: oneTurn(getSession{as: "a"}),
 		},
 		{
+			name: "retried_call_with_a_tool_call_alone_completes_under_a_new_item",
+			model: []harnesstest.Step{
+				{Name: "cut", Reply: harnesstest.Reply{Text: "first half ", StopReason: "max_tokens"}},
+				{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "ls", Input: map[string]any{"path": "."}}}}},
+				{Name: "done", Reply: harnesstest.Reply{Text: "done"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				watchItems{as: "a"},
+				submit{as: "a", text: "go"},
+				waitIdle{as: "a"},
+				itemFrames{as: "a"},
+			},
+		},
+		{
 			name:   "max_tokens_cut_response_fails_the_turn_after_stream_max_retries",
 			config: map[string]any{"stream_max_retries": 1},
 			model: []harnesstest.Step{

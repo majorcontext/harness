@@ -171,7 +171,8 @@ type Sink interface {
 	Item(m protocol.LogMessage) error
 	// Delta streams a piece of the item that the backend calls itemID.
 	Delta(itemID string, d Delta)
-	// Discard tells subscribers to remove the live item itemID.
+	// Discard tells subscribers to remove the live item. A sink keeps one
+	// live item and does not use itemID.
 	Discard(itemID string)
 	// Alive reports model output that is not a delta yet, such as tool
 	// arguments that still stream.
@@ -203,25 +204,6 @@ type Attacher interface {
 	Attach(mediaType string, data []byte) (protocol.LogPart, error)
 }
 
-// Threaded is a Sink that gives each key a live item of its own. A backend
-// that runs several threads of output at once, such as a main thread and a
-// subagent, gives each thread a key, so the deltas of one never join the item
-// of another.
-type Threaded interface {
-	Thread(key string) Thread
-}
-
-// Thread is a Sink whose Delta and Item use the live item of one key. The
-// live item of the key starts with its first Delta and completes with its next
-// Item.
-type Thread interface {
-	Sink
-	// Drop forgets the live item without completing it: the next Delta starts
-	// a new item, and the dropped item never completes, as the item of a
-	// failed attempt.
-	Drop()
-}
-
 // Limits bounds how a turn recovers from a failed model call.
 type Limits struct {
 	// Retries bounds the new attempts of a model call after an ErrRetryable error.
@@ -234,16 +216,14 @@ type Limits struct {
 }
 
 // Turn is what a running turn reports through, bound to its turn. Started
-// announces an item and returns the ID that its Delta calls name and its Item
-// records; it replaces an item that a failed call streamed. CompactTurn
-// returns ok false when no turn can fold. Only CompactTurn takes a ctx.
+// announces an item and returns the ID that its Delta calls name and ItemAs
+// records. CompactTurn returns ok false when no turn can fold. Only
+// CompactTurn takes a ctx.
 type Turn interface {
 	Sink
 	Started() string
-	// Announce is Started for a keyed thread: it announces an item and returns
-	// its ID, and Item does not use it.
-	Announce() string
-	// ItemAs records m under the ID that Announce returned.
+	// ItemAs records m under the ID that Started returned, or under a new ID
+	// when id is "".
 	ItemAs(id string, m protocol.LogMessage) error
 	// Attach stores a blob of a tool result and returns the blob part that names it.
 	Attach(mediaType string, data []byte) (protocol.LogPart, error)
@@ -341,7 +321,7 @@ func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits,
 	s.call = callOf(req, 0, ownsLoop)
 	err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && retryable(err); n++ {
-		s.item, s.threads = "", nil
+		s.item = ""
 		if err = s.wait(ctx, n, err); err == nil {
 			s.call = callOf(req, n+1, ownsLoop)
 			err = watch(ctx, b, req, s, lim.Idle)
@@ -384,36 +364,6 @@ func (w watched) Delta(itemID string, d Delta) {
 }
 
 func (w watched) Alive() { w.alive() }
-
-// Thread gives a sink that has no threads one live item for every key.
-func (w watched) Thread(key string) Thread {
-	if t, ok := w.Sink.(Threaded); ok {
-		return watchedThread{t.Thread(key), w.alive}
-	}
-	return flatThread{w}
-}
-
-// flatThread is the thread of a sink that keeps one live item.
-type flatThread struct{ Sink }
-
-func (flatThread) Drop() {}
-
-type liveThread Thread
-
-type watchedThread struct {
-	liveThread
-	alive func()
-}
-
-func (w watchedThread) Item(m protocol.LogMessage) error {
-	w.alive()
-	return w.liveThread.Item(m)
-}
-
-func (w watchedThread) Delta(itemID string, d Delta) {
-	w.alive()
-	w.liveThread.Delta(itemID, d)
-}
 
 func (s *sink) wait(ctx context.Context, attempt int, cause error) error {
 	d := retryDelay(attempt+1, cause)
@@ -473,8 +423,6 @@ type sink struct {
 	items []protocol.LogMessage
 	// item is the item that the deltas since the last Item build, or "".
 	item string
-	// threads holds the live item of each keyed thread.
-	threads map[string]string
 	// call describes the model call in flight, for its turn_metrics line.
 	call callInfo
 	log  *slog.Logger
@@ -489,46 +437,23 @@ func (s *sink) Delta(_ string, d Delta) {
 	s.Turn.Delta(s.item, d)
 }
 
-// thread is the view of a sink with the live item of one key.
-type thread struct {
-	*sink
-	key string
-}
-
-func (s *sink) Thread(key string) Thread { return thread{s, key} }
-
-func (t thread) Delta(_ string, d Delta) {
-	id, ok := t.threads[t.key]
-	if !ok {
-		if t.threads == nil {
-			t.threads = map[string]string{}
-		}
-		id = t.Announce()
-		t.threads[t.key] = id
-	}
-	t.Turn.Delta(id, d)
-}
-
-func (t thread) Item(m protocol.LogMessage) error {
-	id := t.threads[t.key]
-	delete(t.threads, t.key)
-	if err := t.ItemAs(id, m); err != nil {
-		return err
-	}
-	t.items = append(t.items, m)
-	return nil
-}
-
-func (t thread) Drop() {
-	if id, ok := t.threads[t.key]; ok {
-		delete(t.threads, t.key)
-		t.Discard(id)
+// Discard removes the live item and starts no new one. Nothing happens while
+// no item is live.
+func (s *sink) Discard(string) {
+	if s.item != "" {
+		s.Turn.Discard(s.item)
+		s.item = ""
 	}
 }
 
+// Item records m. An assistant message completes the live item and takes its
+// ID; any other message takes a new ID and leaves the live item.
 func (s *sink) Item(m protocol.LogMessage) error {
-	s.item = ""
-	if err := s.Turn.Item(m); err != nil {
+	id := ""
+	if m.Role == protocol.RoleAssistant {
+		id, s.item = s.item, ""
+	}
+	if err := s.ItemAs(id, m); err != nil {
 		return err
 	}
 	s.items = append(s.items, m)

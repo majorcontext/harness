@@ -32,7 +32,6 @@ type recorder struct {
 
 func (r *recorder) Item(m protocol.LogMessage) error             { r.items = append(r.items, m); return nil }
 func (r *recorder) Delta(id string, _ turn.Delta)                { r.deltas = append(r.deltas, id) }
-func (r *recorder) Announce() string                             { return r.Started() }
 func (r *recorder) ItemAs(_ string, m protocol.LogMessage) error { return r.Item(m) }
 func (r *recorder) Started() string {
 	r.started++

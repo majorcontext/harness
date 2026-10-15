@@ -487,7 +487,7 @@ func (r *run) assistant(env envelope) error {
 		switch p.Type {
 		case protocol.LogPartText, protocol.LogPartReasoning:
 			if text := r.unstreamed(m.ID, p); text != "" {
-				r.thread().Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
+				r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
 			}
 		case protocol.LogPartToolCall:
 			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
@@ -553,7 +553,7 @@ func (r *run) flush() error {
 	}
 	m := *r.pending
 	r.pending, r.pendingID, r.spoke = nil, "", true
-	if err := r.thread().Item(m); err != nil {
+	if err := r.out.Item(m); err != nil {
 		return err
 	}
 	r.replay()
