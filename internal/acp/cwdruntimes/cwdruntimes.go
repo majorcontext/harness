@@ -37,7 +37,7 @@ type Options struct {
 	Tools          []harness.Tool
 	// IssuerTransport is the matching harness.Options of every runtime.
 	IssuerTransport http.RoundTripper
-	// Logins is the sign-in state of the injected providers, shared with the ACP logins. It binds the ModelTransport below. nil: each runtime makes its own.
+	// Logins is the sign-in state of the injected providers, shared with the ACP logins. Its transport must be the same function as ModelTransport, or probes and model calls take different routes. nil: each runtime makes its own.
 	Logins *injectedauth.Logins
 	// Host is the harness.Options.Host of every runtime. A connection whose client can take the login (RuntimeOptions.Login) clears NoLogin.
 	Host harness.HostLimits
