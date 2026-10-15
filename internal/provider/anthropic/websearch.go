@@ -18,7 +18,7 @@ const (
 )
 
 // NativeWebSearch reports that the Messages API runs a web search inside a model call.
-func (c *Client) NativeWebSearch() bool { return true }
+func (c *Client) NativeWebSearch(string) bool { return true }
 
 // webSearchData is the entry of ProviderData[Family] on a WebSearch part: the
 // content of the web_search_tool_result block, which holds encrypted result

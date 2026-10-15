@@ -32,6 +32,8 @@ const defaultResponsesPath = "/v1/responses"
 // plus APIKey is usable; nothing touches the network until Stream.
 type Client struct {
 	live atomic.Value
+	// LiteUntilListed makes every model count as Responses Lite until a model list names it: the entry reads its model list from the ChatGPT backend.
+	LiteUntilListed bool
 	// APIKey may be empty when HTTPClient sets the Authorization header.
 	APIKey string
 	// NoKeyReason says why APIKey is empty. The error of an empty APIKey names it.
@@ -93,14 +95,21 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 // Name returns the provider family key of this client.
 func (c *Client) Name() string { return c.family() }
 
-// NativeWebSearch reports that the Responses API runs a web search inside a model call.
-func (c *Client) NativeWebSearch() bool { return true }
+// NativeWebSearch reports whether model takes the hosted web search of the Responses API.
+func (c *Client) NativeWebSearch(model string) bool {
+	live, _ := c.live.Load().(*liveCatalog)
+	if live == nil {
+		return !c.LiteUntilListed
+	}
+	lite, listed := live.lite[model]
+	return !lite && (listed || !c.LiteUntilListed)
+}
 
 // EffortControl returns the effort control of a model id.
 func (c *Client) EffortControl(model string) (modelmeta.EffortControl, bool) {
 	ctl, ok := modelmeta.OpenAIEfforts(model)
-	if levels, live := c.live.Load().(map[string][]string); live {
-		if l, found := levels[model]; found {
+	if live, _ := c.live.Load().(*liveCatalog); live != nil {
+		if l, found := live.efforts[model]; found {
 			ctl.Levels, ctl.Field, ok = slices.Clone(l), true, true
 		}
 	}

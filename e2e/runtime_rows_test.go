@@ -241,6 +241,7 @@ var runtimeRows = map[string]runtimeRow{
 	"web_search_on_openai_compat_sends_no_search":                                                              sameAsServe(),
 	"web_search_of_anthropic_replays_as_text_after_a_switch_to_another_provider":                               sameAsServe(),
 	"codex_web_search_is_logged_and_replayed_to_the_same_provider":                                             sameAsServe(),
+	"codex_web_search_sends_no_hosted_tool_before_the_model_list_is_read":                                      sameAsServe(),
 	"codex_web_search_is_off_unless_the_config_turns_it_on":                                                    sameAsServe(),
 	"claudecode_web_search_is_offered_and_recorded_as_one_item":                                                sameAsServe(),
 	"claudecode_web_search_call_without_the_option_fails_the_turn":                                             sameAsServe(),

@@ -44,6 +44,7 @@ type openAIBody struct {
 	params         []string // optional params present on the wire
 	schemaKeywords []string // keywords the Codex tool-schema validator rejects
 	reasoningItems int      // reasoning items replayed in Input
+	hostedTools    []string // types of the tools that are not functions
 }
 
 func decodeOpenAIBody(raw []byte) (openAIBody, error) {
@@ -64,6 +65,11 @@ func decodeOpenAIBody(raw []byte) (openAIBody, error) {
 		}
 	}
 	b.schemaKeywords = rejectedSchemaKeywords(b)
+	for _, t := range b.Tools {
+		if t.Type != "function" {
+			b.hostedTools = append(b.hostedTools, t.Type)
+		}
+	}
 	for _, p := range optionalParams {
 		if _, ok := keys[p]; ok {
 			b.params = append(b.params, p)

@@ -100,9 +100,9 @@ type Usage struct {
 }
 
 // WebSearcher is an optional capability of a Provider: NativeWebSearch reports
-// that the API of the client runs a web search inside a model call.
+// that the API of the client runs a web search inside a model call of model.
 type WebSearcher interface {
-	NativeWebSearch() bool
+	NativeWebSearch(model string) bool
 }
 
 // EventType discriminates streaming events.
