@@ -126,6 +126,35 @@ test("fromOrigins reaches getTools and a tool of another origin names its origin
   });
 });
 
+test("a frame tool with the name of a page tool is left out and logged", async () => {
+  const frame = webmcpTool({ origin: "https://other.test", description: "Frame." });
+  const own = webmcpTool();
+  const mc = context([frame, own]);
+  const { lines, log } = logger();
+  await withContext(mc, async () => {
+    const tools = await webmcpTools({ fromOrigins: ["https://other.test"], log });
+    assert.equal(tools.length, 1);
+    assert.equal(tools[0].name, "webmcp__search");
+    assert.equal(tools[0].description, "Searches.");
+    await tools[0].run({}, { signal });
+    assert.equal(mc.calls.executeTool[0][0], own);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0].msg ?? JSON.stringify(lines[0]), /page has a tool of that name/);
+  });
+});
+
+test("two frame tools with one name keep the first", async () => {
+  const first = webmcpTool({ origin: "https://a.test", description: "A." });
+  const second = webmcpTool({ origin: "https://b.test", description: "B." });
+  const mc = context([first, second]);
+  const { lines, log } = logger();
+  await withContext(mc, async () => {
+    const tools = await webmcpTools({ fromOrigins: ["https://a.test", "https://b.test"], log });
+    assert.deepEqual(tools.map((t) => t.description), ["A.\nOrigin: https://a.test."]);
+    assert.equal(lines.length, 1);
+  });
+});
+
 test("without fromOrigins getTools gets no origins", async () => {
   const mc = context([]);
   await withContext(mc, async () => {

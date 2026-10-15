@@ -81,13 +81,22 @@ export async function webmcpTools({ prefix = "webmcp__", fromOrigins, log } = {}
         } else if (!isObject(tool.inputSchema)) {
           warn("webmcp: tool left out: inputSchema is not a JSON Schema object", { tool: tool.name });
         } else {
-          out.push(pageTool(modelContext, tool, name, pageOrigin));
+          const own = tool.origin === undefined || tool.origin === pageOrigin;
+          const prior = out.findIndex((e) => e.name === name);
+          if (prior < 0) {
+            out.push({ name, own, tool });
+          } else if (own && !out[prior].own) {
+            warn("webmcp: tool left out: the page has a tool of that name", { tool: tool.name, origin: out[prior].tool.origin });
+            out[prior] = { name, own, tool };
+          } else {
+            warn("webmcp: tool left out: the name repeats", { tool: tool.name, origin: tool.origin });
+          }
         }
       } catch (err) {
         warn("webmcp: tool left out", { error: errorText(err) });
       }
     }
-    return out;
+    return out.map((e) => pageTool(modelContext, e.tool, e.name, pageOrigin));
   } catch (err) {
     warn("webmcp: failed", { error: errorText(err) });
     return [];
