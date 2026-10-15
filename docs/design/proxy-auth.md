@@ -148,14 +148,16 @@ Choice: a gatekeeper credential resolver, not `SetContextResolver`, and not `Tok
 - `SetContextResolver` cannot serve a relay. `ServeHTTP` sends `/relay/` paths to `handleRelay` before it calls the context resolver, and `runContextKey` is unexported, so a middleware cannot attach a `RunContextData` to a relay request.
 - `TokenExchangeResolver` returns one header, so it cannot add `ChatGPT-Account-ID`, and it needs an STS endpoint in the example. A `proxy.CredentialResolver` returns a list of headers and reads the store directly.
 
-The middleware authenticates the app session and strips the page headers. It sets one header, `X-App-User`, from the session. The resolver for `chatgpt.com` reads that header (registered as a strip header, so it never reaches the upstream), loads the token of the user from the store, refreshes it near expiry, and returns `Authorization` and `ChatGPT-Account-ID`. The store is filled by the `/settings/codex` page, which runs the device code flow on the server against `auth.openai.com`. Harness `internal/codexauth` is internal, so the example cannot import it. Harness exports no login package. The example holds about 80 lines of its own for the device flow, as boxes does.
+The middleware authenticates the app session and strips the page headers. It sets one header, `X-App-User`, from the session. The resolver for `chatgpt.com` reads that header and deletes it from the request, loads the token of the user from the store, refreshes it near expiry, and returns `Authorization` and `ChatGPT-Account-ID`. The store is filled by the `/settings/codex` page, which runs the device code flow on the server against `auth.openai.com`. Harness `internal/codexauth` is internal, so the example cannot import it. Harness exports no login package. The example holds about 80 lines of its own for the device flow, as boxes does.
 
 ```go
 p := proxy.NewProxy()
 _ = p.AddRelay("codex", "https://chatgpt.com/backend-api/codex")
 p.SetCredentialResolverWithStripHeaders("chatgpt.com",
 	func(ctx context.Context, _, r *http.Request, _ string) ([]proxy.CredentialHeader, error) {
-		tok, ok := store.Fresh(ctx, r.Header.Get("X-App-User"))
+		user := r.Header.Get("X-App-User")
+		r.Header.Del("X-App-User")
+		tok, ok := store.Fresh(ctx, user)
 		if !ok {
 			return nil, errNoToken
 		}

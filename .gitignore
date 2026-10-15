@@ -12,3 +12,4 @@ __pycache__/
 # .gitignore's own directory.
 **/testdata/rapid/
 sdk/embed/node_modules/
+/examples/embed-server/embed-server

@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness embed</title>
+<style>body{font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem}textarea{width:100%}pre{white-space:pre-wrap;background:#f4f4f4;padding:.75rem}</style>
+<h1>Harness embed</h1>
+<p id="who">Loading...</p>
+<p><a href="/login">Sign in to the app</a> | <a href="/settings/codex" target="_blank" rel="noopener">ChatGPT login</a></p>
+<textarea id="prompt" rows="3">Say hello in five words.</textarea>
+<p><button id="send" disabled>Send</button> <span id="status"></span></p>
+<pre id="out"></pre>
+<script type="module">
+import { createHarness, wasm } from "/embed/index.mjs";
+
+const $ = (id) => document.getElementById(id);
+const who = await (await fetch("/whoami")).json();
+$("who").textContent = who.user ? `Signed in as ${who.user}. ChatGPT login: ${who.codex ? "yes" : "no"}` : "Not signed in to the app.";
+
+// The module holds no credential. The server adds it to the requests that go
+// to /model-proxy/, and answers 401 until the user signs in at /settings/codex.
+const h = await createHarness({
+  transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
+  config: {
+    model: "codex/gpt-6.1-sol",
+    providers: {
+      codex: {
+        type: "openai", auth: "injected", responses_path: "/responses", models_from: "chatgpt",
+        omit_response_params: ["max_output_tokens", "temperature", "top_p", "metadata"],
+        sanitize_tool_schemas: true,
+      },
+    },
+  },
+  proxy: { providers: { codex: { baseURL: "/model-proxy/relay/codex", loginURL: "/settings/codex" } } },
+  tools: [],
+  builtinTools: [],
+});
+
+// A minimal ACP client: JSON-RPC over h.stream.
+const writer = h.stream.writable.getWriter();
+const reader = h.stream.readable.getReader();
+const pending = new Map();
+let nextId = 1;
+let onText = () => {};
+(async () => {
+  for (;;) {
+    const { value: m, done } = await reader.read();
+    if (done) return;
+    if (m.id !== undefined && pending.has(m.id)) {
+      pending.get(m.id)(m);
+      pending.delete(m.id);
+    } else if (m.method === "session/update" && m.params.update.sessionUpdate === "agent_message_chunk") {
+      onText(m.params.update.content.text);
+    }
+  }
+})();
+const call = (method, params) =>
+  new Promise((resolve) => {
+    const id = nextId++;
+    pending.set(id, resolve);
+    writer.write({ jsonrpc: "2.0", id, method, params });
+  });
+
+await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
+const created = await call("session/new", { cwd: "/work", mcpServers: [] });
+if (created.error) $("status").textContent = created.error.message;
+const sessionId = created.result?.sessionId;
+$("send").disabled = !sessionId;
+
+$("send").onclick = async () => {
+  $("out").textContent = "";
+  $("status").textContent = "Running...";
+  onText = (t) => ($("out").textContent += t);
+  const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text: $("prompt").value }] });
+  $("status").textContent = done.error ? `Error: ${done.error.message}` : `Done (${done.result.stopReason})`;
+  window.__done = true;
+};
+</script>
