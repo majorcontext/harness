@@ -204,8 +204,9 @@ type Attacher interface {
 }
 
 // Threaded is a Sink that gives each key a live item of its own. A backend
-// that runs several threads of output at once gives each thread a key, so the deltas of
-// one never join the item of another.
+// that runs several threads of output at once, such as a main thread and a
+// subagent, gives each thread a key, so the deltas of one never join the item
+// of another.
 type Threaded interface {
 	Thread(key string) Thread
 }

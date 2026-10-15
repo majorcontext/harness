@@ -75,10 +75,10 @@ type run struct {
 	// CLI would queue the input behind its own continuation and answer it in a
 	// second result.
 	steer bool
-	// calls holds the tool calls that wait for their result.
-	// A steer input reaches the CLI only while one is in flight: the
-	// CLI takes a queued message at the next tool result, and a message that
-	// arrives in a final text reply starts a second turn after the result.
+	// calls holds the tool calls that wait for their result. A steer input
+	// reaches the CLI only while one is in flight: the CLI takes a queued
+	// message at the next tool result, and a message that arrives in a final
+	// text reply starts a second turn after the result.
 	calls map[string]bool
 	// owed reports a steer input on stdin that no tool result has taken, and
 	// waiting a run that reads on for the second result that the CLI owes.
@@ -146,12 +146,11 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 	}
 }
 
-// steerable reports that a steer input may reach the CLI: a tool call
-// waits for its result and no question call does, and the response
-// that holds the calls ended. A question call ends the run once its response
-// ends, and the CLI would not answer an input that this run promoted. A call
-// of a response that still streams may be followed by a question call of the
-// same response.
+// steerable reports that a steer input may reach the CLI: a tool call waits
+// for its result and no question call does, and the response that holds the
+// calls ended. A question call ends the run once its response ends, and the
+// CLI would not answer an input that this run promoted. A call of a response
+// that still streams may be followed by a question call of the same response.
 func (r *run) steerable() bool {
 	if lm := r.live; lm != nil && !lm.stopped {
 		return false

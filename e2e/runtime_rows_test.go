@@ -63,7 +63,7 @@ const (
 	specCompactOwned         = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
 	specClaudeGauge             = "A Claude Code turn reads its context gauge and its cost from the `result` frame."
-	specClaudeCompactPostTokens = "A `compact_boundary` with positive `post_tokens` sets the reading until a later main-thread assistant frame reports usage."
+	specClaudeCompactPostTokens = "A `compact_boundary` with positive `post_tokens` sets the reading until a later assistant frame reports usage."
 	specToolCallsAtOnce         = "The backend records the assistant item that holds a tool call when the `tool_use` frame arrives"
 	specClaudeOnce              = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
 	specHistoryBridge           = "When another provider recorded a message after the newest message that this backend saw"
