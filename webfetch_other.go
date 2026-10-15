@@ -16,7 +16,7 @@ func newWebOptions(opts Options) *webOptions {
 	if !opts.Config.WebFetchEnabled() || opts.Host.NoNetwork {
 		return nil
 	}
-	return &webOptions{Version: opts.Version, AllowLoopback: opts.WebAllowLoopback}
+	return &webOptions{Version: opts.Version, AllowLoopback: opts.WebAllowLoopback, Getenv: opts.Getenv, Resolver: opts.WebResolver}
 }
 
 func newWebTool(o webOptions) turn.Tool { return webfetch.New(o) }

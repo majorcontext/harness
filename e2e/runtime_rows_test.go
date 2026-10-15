@@ -168,6 +168,9 @@ const reasonRetryHeld = "mcp-retry-held"
 // reasonWebLoopback is the id of the reason that the rows which fetch from a local server cite.
 const reasonWebLoopback = "web-loopback-seam"
 
+// reasonWebProxy is the id of the reason that the rows which fetch through a proxy cite.
+const reasonWebProxy = "web-proxy-seam"
+
 // reasonReportHeld is the id of the reason that the row with a held child report cites.
 const reasonReportHeld = "child-report-held"
 
@@ -216,6 +219,9 @@ var runtimeRows = map[string]runtimeRow{
 	"web_fetch_sends_a_get_with_the_harness_user_agent_and_no_cookie_or_credential":                            runtimeOnly(reasonWebLoopback),
 	"web_fetch_follows_redirects_and_names_the_final_url":                                                      runtimeOnly(reasonWebLoopback),
 	"web_fetch_checks_the_address_of_each_redirect":                                                            runtimeOnly(reasonWebLoopback),
+	"web_fetch_sends_the_request_through_the_proxy_of_the_environment":                                         runtimeOnly(reasonWebProxy),
+	"web_fetch_skips_the_proxy_for_a_host_in_no_proxy":                                                         runtimeOnly(reasonWebProxy),
+	"web_fetch_refuses_a_host_that_resolves_to_a_private_address_before_it_uses_the_proxy":                     runtimeOnly(reasonWebProxy),
 	"web_fetch_stops_after_five_redirects":                                                                     runtimeOnly(reasonWebLoopback),
 	"claudecode_bridge_offers_web_fetch_when_web_fetch_is_true":                                                sameAsServe(),
 	"claudecode_bridge_runs_web_fetch_through_the_engine":                                                      sameAsServe(),

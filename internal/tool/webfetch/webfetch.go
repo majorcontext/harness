@@ -15,6 +15,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ const (
 }`
 	description = "Read a web page or a text file at an http or https URL with a GET request, and return its text. " +
 		"Use it to read a page the user gives you or a page you found by search. Prefer it over curl in bash. " +
-		"It reads public pages only: an address on a private or local network is refused. It sends no cookie and no credential. " +
+		"It reads public pages only: an address on a private or local network is refused. It sends no cookie and adds no credential. " +
 		"An HTML page becomes markdown with its links (format markdown), plain text (format text), or its source (format raw). " +
 		"Text and JSON pass through. A PNG, JPEG, GIF, or WebP image comes back as an image. " +
 		"Any other type answers with its type and size. The result starts with the final URL and the status."
@@ -58,6 +59,12 @@ type Options struct {
 	Version string
 	// AllowLoopback lets the tool reach 127.0.0.0/8 and ::1, for tests.
 	AllowLoopback bool
+	// Getenv reads HTTP_PROXY, HTTPS_PROXY, and NO_PROXY. nil: no proxy.
+	Getenv func(key string) string
+	// Resolver resolves host names. nil: the system resolver.
+	Resolver interface {
+		LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+	}
 }
 
 type tool struct {
@@ -72,7 +79,7 @@ func New(o Options) turn.Tool {
 		agent += "/" + o.Version
 	}
 	return &tool{
-		client: &http.Client{Transport: newTransport(o.AllowLoopback), CheckRedirect: checkRedirect},
+		client: &http.Client{Transport: newTransport(o), CheckRedirect: checkRedirect},
 		agent:  agent + " (web_fetch)",
 	}
 }

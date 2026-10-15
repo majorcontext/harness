@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -21,6 +23,50 @@ import (
 // webLoopbackEnv makes the runtime host let web_fetch reach loopback. The
 // serve binary has no such seam, so a row that sets it is a runtime-only row.
 const webLoopbackEnv = "HARNESS_E2E_WEB_LOOPBACK"
+
+// webHostsEnv names the hosts that the web_fetch resolver of the runtime host
+// answers: name=address pairs, comma separated. Any other name does not resolve.
+const webHostsEnv = "HARNESS_E2E_WEB_HOSTS"
+
+// proxyVars are the variables that the web_fetch proxy choice reads. The
+// runtime host hides them from the process unless a row sets them.
+var proxyVars = map[string]bool{"HTTP_PROXY": true, "http_proxy": true, "HTTPS_PROXY": true, "https_proxy": true, "NO_PROXY": true, "no_proxy": true}
+
+// portOf replaces the port of a local fixture address with a placeholder.
+func portOf(addr string) string {
+	host, _, _ := strings.Cut(addr, ":")
+	return host + ":<port>"
+}
+
+type fakeWebResolver map[string][]netip.Addr
+
+func (f fakeWebResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	if a, ok := f[host]; ok {
+		return a, nil
+	}
+	return nil, fmt.Errorf("no such host %s", host)
+}
+
+func (f fakeWebResolver) resolver() interface {
+	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+} {
+	if f == nil {
+		return nil
+	}
+	return f
+}
+
+func parseWebHosts(spec string) fakeWebResolver {
+	if spec == "" {
+		return nil
+	}
+	out := fakeWebResolver{}
+	for pair := range strings.SplitSeq(spec, ",") {
+		name, addr, _ := strings.Cut(pair, "=")
+		out[name] = []netip.Addr{netip.MustParseAddr(addr)}
+	}
+	return out
+}
 
 var webOn = map[string]any{"web": map[string]any{"fetch": true}}
 
@@ -112,6 +158,63 @@ func fetchCall(url string, kv ...any) harnesstest.ToolCall {
 
 func webLoopbackDriver(config map[string]any) func(*testing.T, host, string) driver {
 	return inTreeEnv(nil, "", config, map[string]string{webLoopbackEnv: "1"})
+}
+
+// webProxyDriver runs the runtime with a forward proxy in HTTP_PROXY and
+// HTTPS_PROXY. The proxy answers each request with the request line it got, and
+// the driver checks at the end how many requests it saw.
+func webProxyDriver(noProxy string, wantHits int) func(*testing.T, host, string) driver {
+	return func(t *testing.T, h host, modelURL string) driver {
+		t.Helper()
+		var hits atomic.Int32
+		proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = fmt.Fprintf(w, "proxy saw %s %s via-proxy=true", r.Method, r.URL)
+		}))
+		t.Cleanup(proxy.Close)
+		t.Cleanup(func() {
+			if got := int(hits.Load()); got != wantHits {
+				t.Errorf("the proxy saw %d requests, want %d", got, wantHits)
+			}
+		})
+		env := map[string]string{
+			webLoopbackEnv: "1",
+			webHostsEnv:    "proxied.example=93.184.216.34,direct.example=127.0.0.1,private.example=10.0.0.5",
+			"HTTP_PROXY":   proxy.URL,
+			"HTTPS_PROXY":  proxy.URL,
+			"NO_PROXY":     noProxy,
+		}
+		return inTreeEnv(nil, "", webOn, env)(t, h, modelURL)
+	}
+}
+
+func webHostURL(host, path string) string {
+	_, port, _ := strings.Cut(strings.TrimPrefix(webFixture().URL, "http://"), ":")
+	return "http://" + host + ":" + port + path
+}
+
+func TestContractWebFetchProxy(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:    "web_fetch_sends_the_request_through_the_proxy_of_the_environment",
+			driver:  webProxyDriver("", 2),
+			model:   toolChain(fetchCall("http://proxied.example/page"), fetchCall("http://proxied.example/hop1")),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_skips_the_proxy_for_a_host_in_no_proxy",
+			driver:  webProxyDriver("direct.example", 0),
+			model:   toolChain(fetchCall(webHostURL("direct.example", "/page"))),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_refuses_a_host_that_resolves_to_a_private_address_before_it_uses_the_proxy",
+			driver:  webProxyDriver("", 0),
+			model:   toolChain(fetchCall("http://private.example/"), fetchCall("http://10.0.0.1/")),
+			actions: oneTurn,
+		},
+	})
 }
 
 func TestContractWebFetchOffer(t *testing.T) {

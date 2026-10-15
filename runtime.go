@@ -87,9 +87,8 @@ type Options struct {
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Getenv reads the variables that hold provider API keys, by the api_key_env of the provider or its
-	// default name. nil: New and the runtime read no variable, so a provider has no key unless
-	// ModelTransport supplies the credentials. A backend child process, such as the claude CLI, a plugin,
-	// an MCP stdio server, a process, or a bash call, still inherits the environment of this process.
+	// default name, and the proxy variables of web_fetch (HTTP_PROXY, HTTPS_PROXY, NO_PROXY). nil: New and the runtime read no variable, so a provider has no key unless
+	// ModelTransport supplies the credentials. A backend child process, such as the claude CLI, a plugin, an MCP stdio server, a process, or a bash call, still inherits the environment of this process.
 	Getenv func(key string) string
 	// IssuerTransport carries the ChatGPT login requests to the issuer. nil: the default transport. ModelTransport never carries them.
 	IssuerTransport http.RoundTripper
@@ -116,8 +115,9 @@ type Options struct {
 	// without it no turn may ask. A child session and a session with an
 	// active goal never ask.
 	AskUserQuestion bool
-	// WebAllowLoopback lets web_fetch reach loopback addresses, for tests that fetch from a local server. The config has no such key.
+	// WebAllowLoopback lets web_fetch reach loopback addresses, and a non-nil WebResolver resolves its host names, for tests that fetch from a local server. The config has no such key.
 	WebAllowLoopback bool
+	WebResolver      WebResolver
 	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
 	// sends the banner as engine context, after the newest message of the session when its first request left. Empty: no banner.
 	Version string

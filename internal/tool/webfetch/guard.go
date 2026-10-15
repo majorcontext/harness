@@ -6,7 +6,10 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"time"
+
+	"golang.org/x/net/http/httpproxy"
 )
 
 // notPublicError reports a host with an address that web_fetch refuses.
@@ -72,19 +75,101 @@ func public(addr netip.Addr, loopback bool) bool {
 	return true
 }
 
-// newTransport returns a transport whose every dial goes to a public address.
-// It reads no proxy variable: a proxy would dial for the client and skip the
-// check.
-func newTransport(loopback bool) *http.Transport {
-	d := &net.Dialer{Timeout: 10 * time.Second}
-	return &http.Transport{
-		Proxy:                  nil,
-		DialContext:            guardedDial(d.DialContext, net.DefaultResolver, loopback),
-		ForceAttemptHTTP2:      true,
-		DisableKeepAlives:      true,
-		TLSHandshakeTimeout:    10 * time.Second,
-		MaxResponseHeaderBytes: 1 << 20,
+// router sends each request one of two ways. With a proxy that the
+// environment names for the URL, it checks the host as far as it can before the
+// send, and the proxy owns the dial. Without one, every dial goes to a public
+// address. The choice is per request, so each redirect hop makes it again.
+type router struct {
+	direct, proxied http.RoundTripper
+	proxy           func(*url.URL) (*url.URL, error)
+	res             resolver
+	loopback        bool
+}
+
+func (r *router) RoundTrip(req *http.Request) (*http.Response, error) {
+	pu, err := r.proxy(req.URL)
+	if err != nil {
+		return nil, err
 	}
+	if pu == nil {
+		return r.direct.RoundTrip(req)
+	}
+	if err := precheck(req.Context(), req.URL.Hostname(), r.res, r.loopback); err != nil {
+		return nil, err
+	}
+	return r.proxied.RoundTrip(req)
+}
+
+// precheck refuses a literal IP that is not public, and a host name with any
+// resolved address that is not public. A name that does not resolve passes,
+// because a host that has only proxy egress may have no DNS; the proxy then
+// resolves it and owns the policy.
+func precheck(ctx context.Context, host string, r resolver, loopback bool) error {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return checkAll([]netip.Addr{ip}, host, loopback)
+	}
+	ips, err := r.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil
+	}
+	return checkAll(ips, host, loopback)
+}
+
+func checkAll(ips []netip.Addr, host string, loopback bool) error {
+	for _, ip := range ips {
+		if !public(ip, loopback) {
+			return &notPublicError{host: host}
+		}
+	}
+	return nil
+}
+
+// proxyFunc returns the proxy for a URL, with the rules of
+// http.ProxyFromEnvironment, read once from getenv.
+func proxyFunc(getenv func(string) string) func(*url.URL) (*url.URL, error) {
+	if getenv == nil {
+		return func(*url.URL) (*url.URL, error) { return nil, nil }
+	}
+	first := func(keys ...string) string {
+		for _, k := range keys {
+			if v := getenv(k); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	return (&httpproxy.Config{
+		HTTPProxy:  first("HTTP_PROXY", "http_proxy"),
+		HTTPSProxy: first("HTTPS_PROXY", "https_proxy"),
+		NoProxy:    first("NO_PROXY", "no_proxy"),
+	}).ProxyFunc()
+}
+
+// newTransport returns the router of a tool. The direct transport reads no
+// proxy variable and dials public addresses only. The proxied transport trusts
+// the system roots, as the other clients do, so a proxy that intercepts TLS and
+// has its CA in that pool works; no option skips the verification.
+func newTransport(o Options) http.RoundTripper {
+	var res resolver = net.DefaultResolver
+	if o.Resolver != nil {
+		res = o.Resolver
+	}
+	proxy := proxyFunc(o.Getenv)
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	base := func() *http.Transport {
+		return &http.Transport{
+			ForceAttemptHTTP2:      true,
+			DisableKeepAlives:      true,
+			TLSHandshakeTimeout:    10 * time.Second,
+			MaxResponseHeaderBytes: 1 << 20,
+		}
+	}
+	direct := base()
+	direct.DialContext = guardedDial(d.DialContext, res, o.AllowLoopback)
+	proxied := base()
+	proxied.DialContext = d.DialContext
+	proxied.Proxy = func(req *http.Request) (*url.URL, error) { return proxy(req.URL) }
+	return &router{direct: direct, proxied: proxied, proxy: proxy, res: res, loopback: o.AllowLoopback}
 }
 
 type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -112,10 +197,8 @@ func guardedDial(dial dialFunc, r resolver, loopback bool) func(ctx context.Cont
 		if len(ips) == 0 {
 			return nil, fmt.Errorf("no address for %s", host)
 		}
-		for _, ip := range ips {
-			if !public(ip, loopback) {
-				return nil, &notPublicError{host: host}
-			}
+		if err := checkAll(ips, host, loopback); err != nil {
+			return nil, err
 		}
 		var last error
 		for _, ip := range ips {
