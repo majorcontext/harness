@@ -37,7 +37,9 @@ func TestTypeScriptSDKConformance(t *testing.T) {
 
 	command := []string{nodePath, pluginPath}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 30 s equals the probe budget of a configured plugin; a cold node start
+	// on a loaded parallel run can pass 10 s.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	manifest, err := Probe(ctx, command)
@@ -139,7 +141,7 @@ createPlugin({
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	manifest, err := Probe(ctx, []string{nodePath, script})
 	if err != nil {
