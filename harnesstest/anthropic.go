@@ -262,6 +262,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		if rep.Block && !s.block(r, name) {
 			return
 		}
+		if rep.Tail != "" {
+			e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Tail}})
+			if rep.TailBlock && !s.block(r, name+":tail") {
+				return
+			}
+		}
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
 	}

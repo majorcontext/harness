@@ -549,12 +549,16 @@ func (a *Actor) Read(ctx context.Context, f func(*eventlog.State)) error {
 	return err
 }
 
-func (a *Actor) publish(stopped bool) {
+func (a *Actor) publish(stopped bool, appended ...protocol.Payload) {
 	caps := a.cfg.Backend.Capabilities(a.state.Model())
 	next := &View{Session: Describe(a.cfg.ID, a.state, caps.ContextWindow, caps.WindowEstimated), Unsettled: a.state.Unsettled(),
 		Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
+	a.live.settle(appended)
+	if stopped {
+		a.live.stop()
+	}
 	close(a.view.Swap(next).changed)
 }
 
@@ -638,7 +642,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	if a.cfg.Appended != nil {
 		a.cfg.Appended(events, a.state)
 	}
-	a.publish(false)
+	a.publish(false, events...)
 	return nil
 }
 
