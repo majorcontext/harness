@@ -173,7 +173,7 @@ func codexSearchRows() []codexScenario {
 				model:   []harnesstest.Step{{Name: "reply", Reply: harnesstest.Reply{Text: "ok"}}},
 				actions: codexSession([]action{setModel{as: "a", model: "codex/gpt-6-luna"}}, codexTurn("a", "find the release"), []action{recordWire{}}),
 			},
-			opts:  harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}, Models: []harnesstest.CodexModel{{Slug: "gpt-6-luna", DisplayName: "GPT-6 Luna", ResponsesLite: true}}},
+			opts:  harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
 			entry: injectedEntry(map[string]any{"models_from": "chatgpt"}),
 		},
 		{scenario: scenario{name: "codex_web_search_is_off_unless_the_config_turns_it_on", model: searchTurns()[:1], actions: codexSession(codexTurn("a", "find the release"))}},

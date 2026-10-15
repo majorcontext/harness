@@ -95,9 +95,7 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 // Name returns the provider family key of this client.
 func (c *Client) Name() string { return c.family() }
 
-// NativeWebSearch reports that the Responses API runs a web search inside a model call of model. A model that the model
-// list marks Responses Lite takes no hosted tool. With LiteUntilListed, a model counts as Responses Lite until a model list
-// names it without the flag.
+// NativeWebSearch reports whether model takes the hosted web search of the Responses API.
 func (c *Client) NativeWebSearch(model string) bool {
 	live, _ := c.live.Load().(*liveCatalog)
 	if live == nil {
