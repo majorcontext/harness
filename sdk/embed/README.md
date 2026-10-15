@@ -59,6 +59,24 @@ The default `load` is `import("just-bash/browser")`. That build has dependencies
 
 Every page tool gets `fs`, and `fs` can write `/persist`, the session store of the harness. Give `fs` only to code that you trust, and do not pass it to code that takes input from the model. The shell tool mounts `/work` and `/tmp` only.
 
+## Tools from a page with WebMCP
+
+`@majorcontext/harness-embed/webmcp` offers the [WebMCP](https://webmachinelearning.github.io/webmcp/) tools of the page to the model. `webmcpTools` reads `document.modelContext.getTools()` and returns the tools as page tools:
+
+```js
+import { createHarness, wasm } from "@majorcontext/harness-embed";
+import { webmcpTools } from "@majorcontext/harness-embed/webmcp";
+
+const h = await createHarness({
+  transport: wasm({ module, wasmExec, worker: true }),
+  tools: await webmcpTools(), // { prefix: "webmcp__", fromOrigins: [], log }
+});
+```
+
+A tool is named `prefix` and its WebMCP name, and keeps its description and input schema. A tool with a name that providers do not take, or with no JSON Schema object as `inputSchema`, is left out and `log` names it. `fromOrigins` adds the tools that frames of those origins expose, and the description of such a tool names its origin. The list is a snapshot: call `webmcpTools` again and start a new harness to see tools that the page registers later. A call to a tool that the page has unregistered fails with `NotFoundError`.
+
+`webmcpTools` never rejects. It returns an empty list where the page has no `document.modelContext` (no WebMCP in the browser, or Node) or `getTools` rejects, so a page can always call it. A failed call is an error result with the name and message of the exception. A call that navigates the page ends the page and the Worker. The hints are data for the model and block no call: `readOnlyHint` and `consequentialHint` add a line to the description, and the result of a tool with `untrustedContentHint` is wrapped in `<untrusted_tool_output>` tags with each `<` escaped. A page that wants the user to confirm a call asks in its `execute` callback.
+
 ## Log in through your server
 
 The module holds no model credential, and signs in no user itself. A server holds the credential of each user and adds it to the request. The page marks a provider as `injected`, and the module sends no `Authorization`, `x-api-key`, `ChatGPT-Account-ID`, or `originator`, and no user identifier:

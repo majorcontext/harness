@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
+import { webmcpTools } from "../src/webmcp.mjs";
 import { createHarness, defaultBuiltinTools, wasm } from "../src/index.mjs";
 import { workerBridge } from "../src/workerbridge.mjs";
 import { clientSuite } from "./suite.mjs";
@@ -53,6 +54,41 @@ test("a tool failure on the page is an error result for the model", async () => 
     assert.match(bodyText((await model.requests())[1]), /disk on fire/);
   } finally {
     await h.close();
+    model.close();
+  }
+});
+
+test("a WebMCP tool of the page is a page tool that the model calls", async () => {
+  const model = await fakeModel([{ toolCalls: [{ id: "c1", name: "webmcp__lookup", input: { q: "cats" } }] }, { text: "ok" }]);
+  const wm = { name: "lookup", description: "Looks a word up.", inputSchema: { type: "object", properties: { q: { type: "string" } } }, annotations: { readOnlyHint: true }, origin: "https://page.test" };
+  const seen = [];
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      location: { origin: "https://page.test" },
+      modelContext: {
+        getTools: async () => [wm],
+        executeTool: async (tool, input) => {
+          seen.push([tool, input]);
+          return JSON.stringify({ content: [{ type: "text", text: "webmcp found " + input.q }] });
+        },
+      },
+    },
+  });
+  let h;
+  try {
+    h = await harness({ config: userConfig(model.url), tools: await webmcpTools() });
+    const c = acpClient(h);
+    assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
+    const requests = await model.requests();
+    const spec = requests[0].body.tools.find((t) => t.name === "webmcp__lookup");
+    assert.equal(spec.description, "Looks a word up.\nRead-only.");
+    assert.deepEqual(spec.input_schema, wm.inputSchema);
+    assert.deepEqual(seen, [[wm, { q: "cats" }]]);
+    assert.match(bodyText(requests[1]), /webmcp found cats/);
+  } finally {
+    delete globalThis.document;
+    await h?.close();
     model.close();
   }
 });
