@@ -8,11 +8,18 @@ are for API keys.
 
 ## Default model
 
-`model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose in this order: the API default, `anthropic/claude-fable-5`, when `ANTHROPIC_API_KEY` is set; else `codex/gpt-6.1-sol` when a Codex login exists; else `claude-code/sonnet` when `claude` is on `PATH`; else the API default. `harness serve` and the Go API take the API default, unless the embedder sets `Config.SubscriptionDefault`. `harness login codex` and `harness login claude-code` write `model` to the user config when it has none, and print a line that says so. They never change a `model` that is set.
+`model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose the first match:
+
+1. The API default, `anthropic/claude-fable-5`, when the key variable of the `anthropic` entry is set (its `api_key_env`, else `ANTHROPIC_API_KEY`).
+2. `codex/gpt-6.1-sol`, when the `codex` entry is the native entry or has `auth` `chatgpt`, and the login file exists and is not empty.
+3. `claude-code/sonnet`, when the `claude-code` entry has type `claude-code-cli` and its program resolves on `PATH`.
+4. The API default.
+
+`harness serve` and the Go API take the API default, unless the embedder sets `Config.SubscriptionDefault`. `harness login codex` and `harness login claude-code` write `model` to the user config when it has none, and print a line that says so. They never change a `model` that is set.
 
 ## Web fetch
 
-Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, which reads public http and https pages. It is off by default. Its requests go through your `HTTPS_PROXY` like other requests.
+Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, which reads public http and https pages. It is off by default. It follows the standard proxy variables: `HTTP_PROXY` for http URLs, `HTTPS_PROXY` for https URLs, and `NO_PROXY` to skip the proxy.
 
 ## Web search
 

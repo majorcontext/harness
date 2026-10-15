@@ -222,8 +222,7 @@ git clone https://github.com/majorcontext/harness && cd harness
 ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
 ```
 
-The examples need `ANTHROPIC_API_KEY`. To run on a subscription, copy the
-`Config` of [Run a prompt](#run-a-prompt) into the program.
+The examples use an API key: set `ANTHROPIC_API_KEY`.
 
 - [`prompt`](../examples/prompt): send one prompt and stream the reply.
 - [`custom-tool`](../examples/custom-tool): give the model a Go function to call.
