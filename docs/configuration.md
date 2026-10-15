@@ -54,13 +54,14 @@ Harness keeps its own login in `auth/codex.json` beside the user config (`~/.har
       "base_url": "https://chatgpt.com/backend-api/codex",
       "responses_path": "/responses",
       "omit_response_params": ["max_output_tokens", "temperature", "top_p", "metadata"],
-      "sanitize_tool_schemas": true
+      "sanitize_tool_schemas": true,
+      "models_from": "chatgpt"
     }
   }
 }
 ```
 
-`auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
+`models_from` makes Harness fetch the live model list of the ChatGPT backend; an entry that sets `auth: "chatgpt"` and no `models_from` lists the static models. `auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
 
 In an editor, add Harness as an [agent server](cli.md#use-harness-in-your-editor). Zed shows a "Log in with ChatGPT" button when no login exists: the button opens your browser and stores the login. You can also run `harness login codex` once in a terminal. A client that supports terminal login also shows a terminal method, which runs `harness acp login codex`. If you start Harness through a wrapper script, the script must pass its arguments on (`"$@"`).
 
@@ -71,6 +72,21 @@ In an editor, add Harness as an [agent server](cli.md#use-harness-in-your-editor
 When you are logged out, a turn fails with ``not logged in to Claude Code; run `harness login claude-code` ``.
 
 In an [ACP client](cli.md#use-harness-in-your-editor) such as Zed, a "Log in with Claude Code" button appears when the program resolves on `PATH`. The button runs `claude auth login` as a child with no terminal, and the CLI opens your browser. A new `authenticate` cancels a sign-in that is still open. When the CLI reports that you are logged out, a new session or a prompt fails with the ACP error "Authentication required", which makes Zed show the button. Logging out from Zed removes only the Harness ChatGPT login. Harness never runs `claude auth logout` from ACP, because the CLI login is shared with every program that uses the CLI; run `harness logout claude-code` for that.
+
+## Let a proxy add the credential
+
+With `auth: "injected"`, Harness sends no credential. A proxy or gateway in front of the endpoint holds the credential and adds it to each request, as gatekeeper does. The entry can be of type `openai`, or the built-in `anthropic` entry. It cannot set `api_key_env`.
+
+```json
+{"providers": {"codex": {
+  "type": "openai", "auth": "injected",
+  "base_url": "https://chatgpt.com/backend-api/codex", "responses_path": "/responses",
+  "omit_response_params": ["max_output_tokens", "temperature", "top_p", "metadata"],
+  "sanitize_tool_schemas": true, "models_from": "chatgpt",
+  "login_url": "https://console.example.com/settings/codex"}}}
+```
+
+`models_from: "chatgpt"` makes Harness fetch the model list of the ChatGPT backend through the proxy. For a proxy that replaces placeholders, such as moat, set the placeholders in `extra_headers`: Harness sends them as they are. When the proxy answers 401, the turn fails with `login_required`. A 403 is not a login error. In an editor, the `login_url` is offered as a link, and the editor waits until you have signed in. Only the user config sets `auth`, `login_url`, and `models_from`.
 
 ## OpenAI-compatible endpoints
 

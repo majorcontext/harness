@@ -151,8 +151,10 @@ in and use your subscription login, with no config. `anthropic` and `openai` are
 built in and read an API key from the environment. A `providers` entry adds an
 OpenAI-compatible endpoint (Ollama, vLLM, OpenRouter) or an OpenAI Responses
 endpoint. `web` turns on the opt-in `web_fetch` tool (`{"fetch": true}`) and the
-web search of the provider (`{"search": true}`). See
-[Configuration](docs/configuration.md).
+web search of the provider (`{"search": true}`). A proxy that holds the
+credential can serve a provider with `auth: "injected"`; see
+[Let a proxy add the credential](docs/configuration.md#let-a-proxy-add-the-credential).
+See [Configuration](docs/configuration.md).
 
 ## Contributing
 
