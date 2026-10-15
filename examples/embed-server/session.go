@@ -7,9 +7,11 @@ import (
 	"sync"
 )
 
-// STAND-IN. This is not an authentication system. A real application already
-// has one: replace this file with the session layer of that application, and
-// keep only the contract: sessionOf(r) returns the session of the request, or nil.
+// STAND-IN. This is not an authentication system. /login trusts any user name.
+// A real application already has a session layer: replace this file and the
+// /login and /logout routes with it, and keep only the contract: sessionOf(r)
+// returns the session of the request, or nil. It rotates the session id on
+// login and ends the session on logout; a real layer must do both.
 
 const cookieName = "demo_session"
 
@@ -19,11 +21,12 @@ type session struct {
 }
 
 type sessions struct {
-	mu sync.Mutex
-	m  map[string]*session
+	secure bool // the cookie carries Secure even when the request is plain http
+	mu     sync.Mutex
+	m      map[string]*session
 }
 
-func newSessions() *sessions { return &sessions{m: map[string]*session{}} }
+func newSessions(secure bool) *sessions { return &sessions{secure: secure, m: map[string]*session{}} }
 
 func randomHex(n int) string {
 	b := make([]byte, n)
@@ -40,7 +43,7 @@ func (s *sessions) login(w http.ResponseWriter, r *http.Request, user string) {
 	s.mu.Lock()
 	s.m[id] = &session{user: user, csrf: randomHex(16)}
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
 }
 
 // sessionOf returns the session id and the session of the request, or nil.
@@ -55,4 +58,12 @@ func (s *sessions) sessionOf(r *http.Request) (string, *session) {
 		return c.Value, sess
 	}
 	return "", nil
+}
+
+// end deletes the session and clears the cookie.
+func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.Lock()
+	delete(s.m, id)
+	s.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
 }

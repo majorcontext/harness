@@ -148,7 +148,9 @@ Choice: a gatekeeper credential resolver, not `SetContextResolver`, and not `Tok
 - `SetContextResolver` cannot serve a relay. `ServeHTTP` sends `/relay/` paths to `handleRelay` before it calls the context resolver, and `runContextKey` is unexported, so a middleware cannot attach a `RunContextData` to a relay request.
 - `TokenExchangeResolver` returns one header, so it cannot add `ChatGPT-Account-ID`, and it needs an STS endpoint in the example. A `proxy.CredentialResolver` returns a list of headers and reads the store directly.
 
-The middleware authenticates the app session and strips the page headers. It sets one header, `X-App-User`, from the session. The resolver for `chatgpt.com` reads that header and deletes it from the request, loads the token of the user from the store, refreshes it near expiry, and returns `Authorization` and `ChatGPT-Account-ID`. The store is filled by the `/settings/codex` page, which runs the device code flow on the server against `auth.openai.com`. Harness `internal/codexauth` is internal, so the example cannot import it. Harness exports no login package. The example holds about 80 lines of its own for the device flow, as boxes does.
+The middleware authenticates the app session and strips the page headers. It sets one header, `X-App-User`, from the session. The resolver for `chatgpt.com` reads that header and deletes it from the request, loads the token of the user from the store, refreshes it near expiry, and returns `Authorization` and `ChatGPT-Account-ID`. The store is filled by the `/settings/codex` page, which runs the device code flow on the server against `auth.openai.com`. Harness `internal/codexauth` is internal, so the example cannot import it. Harness exports no login package. The example holds its own copy of the device flow, as boxes does.
+
+A gatekeeper `Proxy` is a forward proxy. Its relay branch depends on `r.URL.Host` being empty: `ServeHTTP` forwards an absolute-form request (`GET http://host/relay/...`) or a `CONNECT` to the host that it names, and the resolver then adds the token to it. So the middleware must refuse any request with a non-empty `r.URL.Host` or `r.URL.Scheme` and any `CONNECT` before `ServeHTTP`, and rebuild `r.URL` from the path and the query alone. An app must never pass a gatekeeper `Proxy` an absolute-form request.
 
 ```go
 p := proxy.NewProxy()
@@ -168,6 +170,11 @@ p.SetCredentialResolverWithStripHeaders("chatgpt.com",
 	}, "X-App-User")
 
 mux.Handle("/model-proxy/", http.StripPrefix("/model-proxy", appAuth(func(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Host != "" || r.URL.Scheme != "" || r.Method == http.MethodConnect {
+		http.Error(w, "bad request target", http.StatusBadRequest)
+		return
+	}
+	r.URL = &url.URL{Path: r.URL.Path, RawQuery: r.URL.RawQuery}
 	user := sessionUser(r)
 	if user == "" || !store.Has(user) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="app"`)

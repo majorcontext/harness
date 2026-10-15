@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"time"
 )
@@ -18,13 +19,35 @@ func main() {
 	wasmExec := flag.String("wasm-exec", "wasm_exec.js", "path of wasm_exec.js of the Go version that built the module")
 	embed := flag.String("embed", "../../sdk/embed/src", "directory of the sdk/embed sources")
 	upstream := flag.String("upstream", "https://chatgpt.com/backend-api/codex", "Codex backend")
+	secure := flag.String("secure", "auto", "Secure on the session cookie: true, false, or auto (true unless -addr is on a loopback address)")
 	flag.Parse()
 
 	_ = mime.AddExtensionType(".mjs", "text/javascript")
-	s, err := newServer(config{Upstream: *upstream, WasmPath: *wasm, WasmExecPath: *wasmExec, EmbedDir: *embed, HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
+	s, err := newServer(config{Upstream: *upstream, WasmPath: *wasm, WasmExecPath: *wasmExec, EmbedDir: *embed, SecureCookie: secureCookie(*secure, *addr), HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("listening on http://%s/", *addr)
 	log.Fatal((&http.Server{Addr: *addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
+}
+
+// secureCookie decides the Secure flag of the session cookie. A cookie that
+// carries it never travels over plain http, so auto turns it on for anything
+// that is not a loopback listener.
+func secureCookie(flagValue, addr string) bool {
+	switch flagValue {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return true
+	}
+	if host == "localhost" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -20,8 +21,6 @@ const (
 	relayName  = "codex"
 )
 
-var errNoToken = errors.New("no token for this user")
-
 type config struct {
 	// Upstream is the Codex backend that the relay forwards to.
 	Upstream string
@@ -31,6 +30,9 @@ type config struct {
 	HTTP *http.Client
 	// Pages are served by the static handlers.
 	WasmPath, WasmExecPath, EmbedDir string
+	// SecureCookie sets Secure on the session cookie. Set it for any
+	// deployment that is not on a loopback address.
+	SecureCookie bool
 }
 
 type server struct {
@@ -49,7 +51,7 @@ func newServer(cfg config) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &server{cfg: cfg, sessions: newSessions(), store: newTokenStore(cfg.Issuer, cfg.HTTP), flows: &flows{m: map[string]*flow{}}}
+	s := &server{cfg: cfg, sessions: newSessions(cfg.SecureCookie), store: newTokenStore(cfg.Issuer, cfg.HTTP), flows: &flows{m: map[string]*flow{}}}
 	p := proxy.NewProxy()
 	if err := p.AddRelay(relayName, cfg.Upstream); err != nil {
 		return nil, err
@@ -64,9 +66,9 @@ func newServer(cfg config) (*server, error) {
 			// header here is what keeps it from the upstream; the strip-header
 			// registration covers only a request that skips the resolver.
 			r.Header.Del(userHeader)
-			tok, ok := s.store.Fresh(ctx, user)
-			if !ok {
-				return nil, errNoToken
+			tok, err := s.store.Fresh(ctx, user)
+			if err != nil {
+				return nil, err
 			}
 			invalidate := func() { s.store.MarkStale(user) }
 			return []proxy.CredentialHeader{
@@ -89,6 +91,7 @@ func (s *server) handler() http.Handler {
 	mux.Handle("GET /embed/", http.StripPrefix("/embed/", http.FileServer(http.Dir(s.cfg.EmbedDir))))
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.loginSubmit)
+	mux.HandleFunc("POST /logout", s.logout)
 	mux.HandleFunc("GET /whoami", s.whoami)
 	mux.HandleFunc("GET /settings/codex", s.settingsPage)
 	mux.HandleFunc("POST /settings/codex/start", s.settingsStart)
@@ -105,6 +108,21 @@ var strippedHeaders = []string{"Cookie", "Origin", "Referer", "Authorization", "
 // listener of its own and no authentication: this function is its
 // authentication. Never mount the proxy where a request skips this function.
 func (s *server) modelProxy(w http.ResponseWriter, r *http.Request) {
+	// A gatekeeper Proxy is a forward proxy. It takes the relay branch only
+	// when r.URL.Host is empty; an absolute-form request (or CONNECT) would go
+	// to the host it names, with the credential of the resolver. Refuse them,
+	// and rebuild the URL from the path and the query alone.
+	if r.URL.Host != "" || r.URL.Scheme != "" || r.Method == http.MethodConnect {
+		http.Error(w, "bad request target", http.StatusBadRequest)
+		return
+	}
+	r.URL = &url.URL{Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+	r.RequestURI = ""
+	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		r.Host = addr.String()
+	} else {
+		r.Host = ""
+	}
 	_, sess := s.sessions.sessionOf(r)
 	if sess == nil {
 		unauthorized(w, "sign in to the app")
@@ -122,8 +140,13 @@ func (s *server) modelProxy(w http.ResponseWriter, r *http.Request) {
 	// Refresh happens here, so a login that the issuer rejected answers 401
 	// (the module maps it to login_required). The relay cannot send a reliable
 	// 401 for a missing credential: it forwards the request with none.
-	if _, ok := s.store.Fresh(r.Context(), sess.user); !ok {
+	switch _, err := s.store.Fresh(r.Context(), sess.user); {
+	case errors.Is(err, errNoLogin):
 		unauthorized(w, "not signed in to Codex")
+		return
+	case err != nil:
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "the sign-in could not be refreshed now", http.StatusServiceUnavailable)
 		return
 	}
 	for _, h := range strippedHeaders {
@@ -164,13 +187,39 @@ type flows struct {
 	m  map[string]*flow // by session id
 }
 
-func (f *flows) get(id string) flow {
+// view returns a copy of the flow of the session.
+func (f *flows) view(id string) flow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if fl := f.m[id]; fl != nil {
 		return flow{code: fl.code, err: fl.err, done: fl.done}
 	}
 	return flow{}
+}
+
+// take is view, and it forgets a flow that failed, so the page shows the
+// error once and the map holds no finished flow.
+func (f *flows) take(id string) flow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fl := f.m[id]
+	if fl == nil {
+		return flow{}
+	}
+	if fl.done {
+		delete(f.m, id)
+	}
+	return flow{code: fl.code, err: fl.err, done: fl.done}
+}
+
+// drop cancels and forgets the flow of the session.
+func (f *flows) drop(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if fl := f.m[id]; fl != nil && fl.cancel != nil {
+		fl.cancel()
+	}
+	delete(f.m, id)
 }
 
 // csrfOK checks the token of the form against the session, and the origin.

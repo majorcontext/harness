@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -187,11 +192,235 @@ func TestBackendRejectionForcesOneRefresh(t *testing.T) {
 	r.srv.store.Set("ann", tokens{Access: jwt(t, now.Add(time.Hour), "a"), Refresh: "old", Account: "a"})
 	now = now.Add(2 * staleCooldown)
 	r.srv.store.MarkStale("ann")
-	if _, ok := r.srv.store.Fresh(t.Context(), "ann"); !ok {
-		t.Fatal("no login")
+	tok, err := r.srv.store.Fresh(t.Context(), "ann")
+	if err != nil {
+		t.Fatal(err)
 	}
-	tok, _ := r.srv.store.Fresh(t.Context(), "ann")
 	if tok.Access != fresh || tok.Refresh != "next-refresh" {
 		t.Error("the stale login was not refreshed and rotated")
+	}
+}
+
+// rawStatus writes a request as bytes on a TCP connection, so the HTTP client
+// cannot normalize an absolute-form target, and returns the status code.
+func rawStatus(t *testing.T, addr, request string) int {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(conn, request); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	return resp.StatusCode
+}
+
+func TestModelProxyIsNotAForwardProxy(t *testing.T) {
+	r := newRig(t)
+	var victimHits atomic.Int32
+	var leaked atomic.Value
+	victim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		victimHits.Add(1)
+		leaked.Store(q.Header.Get("Authorization"))
+	}))
+	defer victim.Close()
+	r.srv.store.Set("ann", tokens{Access: jwt(t, time.Now().Add(time.Hour), "a"), Refresh: "r", Account: "a"})
+	cookie := r.signIn("ann")
+	front := strings.TrimPrefix(r.front.URL, "http://")
+	vhost := strings.TrimPrefix(victim.URL, "http://")
+
+	for name, req := range map[string]string{
+		"absolute-form": "GET " + victim.URL + "/model-proxy/relay/codex/x HTTP/1.1\r\nHost: " + front + "\r\nCookie: " + cookie.String() + "\r\nConnection: close\r\n\r\n",
+		"connect":       "CONNECT " + vhost + " HTTP/1.1\r\nHost: " + vhost + "\r\nCookie: " + cookie.String() + "\r\nConnection: close\r\n\r\n",
+	} {
+		if got := rawStatus(t, front, req); got == 200 {
+			t.Errorf("%s: status 200", name)
+		}
+	}
+	if victimHits.Load() != 0 || r.hits.Load() != 0 {
+		t.Errorf("a request reached another server (victim %d, upstream %d); token sent: %v", victimHits.Load(), r.hits.Load(), leaked.Load() != nil && leaked.Load() != "")
+	}
+}
+
+func TestTransientRefreshFailureKeepsTheLoginAndAnswers503(t *testing.T) {
+	for name, handler := range map[string]http.HandlerFunc{
+		"issuer down":     func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", http.StatusServiceUnavailable) },
+		"unparseable 200": func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html>") },
+		"rate limited":    func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "slow", http.StatusTooManyRequests) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			bad := httptest.NewServer(handler)
+			defer bad.Close()
+			r.srv.store.issuer = bad.URL
+			r.srv.store.Set("ann", tokens{Access: jwt(t, time.Now().Add(-time.Minute), "a"), Refresh: "r", Account: "a"})
+			if got := r.call(r.signIn("ann"), nil).StatusCode; got != http.StatusServiceUnavailable {
+				t.Errorf("status %d, want 503", got)
+			}
+			if !r.srv.store.Has("ann") || r.hits.Load() != 0 {
+				t.Error("the login was dropped, or the request reached the upstream")
+			}
+		})
+	}
+}
+
+func TestDeviceFlowPollingSlowsDownAndWaitsOnPending(t *testing.T) {
+	var polls atomic.Int32
+	access := jwt(t, time.Now().Add(time.Hour), "acct")
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		switch q.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			_, _ = io.WriteString(w, `{"device_auth_id":"id","user_code":"ABCD-1234","interval":"2"}`)
+		case "/api/accounts/deviceauth/token":
+			switch polls.Add(1) {
+			case 1:
+				http.Error(w, `{"error":"slow_down"}`, http.StatusBadRequest)
+			case 2:
+				http.Error(w, `{"error":"authorization_pending"}`, http.StatusBadRequest)
+			case 3:
+				http.Error(w, "", http.StatusForbidden)
+			default:
+				_, _ = io.WriteString(w, `{"authorization_code":"c","code_verifier":"v"}`)
+			}
+		case "/oauth/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": access, "refresh_token": "r"})
+		}
+	}))
+	defer issuer.Close()
+	store := newTokenStore(issuer.URL, http.DefaultClient)
+	var waits []time.Duration
+	store.sleep = func(_ context.Context, d time.Duration) bool { waits = append(waits, d); return true }
+	code, err := store.startDevice(t.Context())
+	if err != nil || code.UserCode != "ABCD-1234" {
+		t.Fatalf("start: %v %v", code, err)
+	}
+	tok, err := store.wait(t.Context(), code)
+	if err != nil || tok.Account != "acct" || tok.Refresh != "r" {
+		t.Fatalf("wait: %v", err)
+	}
+	// The first answer is slow_down: it adds 5 s to the interval of 2 s, and the interval stays.
+	if want := []time.Duration{7 * time.Second, 7 * time.Second, 7 * time.Second}; !slices.Equal(waits, want) {
+		t.Errorf("waits %v, want %v", waits, want)
+	}
+}
+
+func TestFinishedFlowsAreNotKept(t *testing.T) {
+	r := newRig(t)
+	access := jwt(t, time.Now().Add(time.Hour), "acct")
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		switch q.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			_, _ = io.WriteString(w, `{"device_auth_id":"id","user_code":"AAAA-0000","interval":1}`)
+		case "/api/accounts/deviceauth/token":
+			if q.Header.Get("X-Fail") != "" {
+				http.Error(w, "", http.StatusTeapot)
+				return
+			}
+			_, _ = io.WriteString(w, `{"authorization_code":"c","code_verifier":"v"}`)
+		case "/oauth/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": access, "refresh_token": "r"})
+		}
+	}))
+	defer issuer.Close()
+	r.srv.store.issuer = issuer.URL
+	run := func(id, user string) {
+		code, err := r.srv.store.startDevice(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fl := &flow{code: code, cancel: func() {}}
+		r.srv.flows.m[id] = fl
+		r.srv.runFlow(t.Context(), id, user, fl, code)
+	}
+	run("s1", "ann")
+	if !r.srv.store.Has("ann") || len(r.srv.flows.m) != 0 {
+		t.Errorf("after a finished sign-in: login %v, flows %d", r.srv.store.Has("ann"), len(r.srv.flows.m))
+	}
+
+	// A failed flow stays until the page shows it once.
+	r.srv.store.hc = &http.Client{Transport: failPoll{http.DefaultTransport}}
+	run("s2", "bob")
+	if fl := r.srv.flows.take("s2"); fl.err == "" {
+		t.Error("the failed flow lost its error")
+	}
+	if len(r.srv.flows.m) != 0 {
+		t.Error("the failed flow was kept after it was shown")
+	}
+}
+
+type failPoll struct{ http.RoundTripper }
+
+func (f failPoll) RoundTrip(q *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(q.URL.Path, "/deviceauth/token") {
+		q.Header.Set("X-Fail", "1")
+	}
+	return f.RoundTripper.RoundTrip(q)
+}
+
+func (r *rig) postForm(path string, c *http.Cookie, site string, form url.Values) *http.Response {
+	r.t.Helper()
+	req, _ := http.NewRequest("POST", r.front.URL+path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if site != "" {
+		req.Header.Set("Sec-Fetch-Site", site)
+	}
+	if c != nil {
+		req.AddCookie(c)
+	}
+	resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+func TestLoginRefusesCrossSiteRotatesTheSessionAndLogoutEndsIt(t *testing.T) {
+	r := newRig(t)
+	if got := r.postForm("/login", nil, "cross-site", url.Values{"user": {"mallory"}}).StatusCode; got != http.StatusBadRequest {
+		t.Errorf("cross-site login: status %d, want 400", got)
+	}
+	old := r.signIn("ann")
+	resp := r.postForm("/login", old, "same-origin", url.Values{"user": {"ann"}})
+	var fresh []*http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Value != "" {
+			fresh = append(fresh, c)
+		}
+	}
+	if len(fresh) != 1 || fresh[0].Value == old.Value {
+		t.Fatal("login did not issue a new session id")
+	}
+	if _, sess := r.srv.sessions.sessionOf(requestWith(old)); sess != nil {
+		t.Error("the old session id still works after login")
+	}
+	if got := r.postForm("/logout", fresh[0], "cross-site", nil).StatusCode; got != http.StatusForbidden {
+		t.Errorf("cross-site logout: status %d, want 403", got)
+	}
+	r.postForm("/logout", fresh[0], "same-origin", nil)
+	if _, sess := r.srv.sessions.sessionOf(requestWith(fresh[0])); sess != nil {
+		t.Error("the session survives logout")
+	}
+}
+
+func requestWith(c *http.Cookie) *http.Request {
+	q := httptest.NewRequest("GET", "/", nil)
+	q.AddCookie(c)
+	return q
+}
+
+func TestSessionCookieIsSecureWhenConfigured(t *testing.T) {
+	s := newSessions(true)
+	w := httptest.NewRecorder()
+	s.login(w, httptest.NewRequest("POST", "/login", nil), "ann")
+	if c := w.Result().Cookies()[0]; !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("cookie %+v", c)
 	}
 }

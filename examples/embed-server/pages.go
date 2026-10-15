@@ -44,7 +44,27 @@ func (s *server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// Rotate: the old session id, if any, ends here.
+	if old, _ := s.sessions.sessionOf(r); old != "" {
+		s.endSession(w, r, old)
+	}
 	s.sessions.login(w, r, user)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// endSession ends the session and the sign-in flow that it started.
+func (s *server) endSession(w http.ResponseWriter, r *http.Request, id string) {
+	s.flows.drop(id)
+	s.sessions.end(w, r, id)
+}
+
+func (s *server) logout(w http.ResponseWriter, r *http.Request) {
+	id, sess := s.sessions.sessionOf(r)
+	if sess == nil || !sameOrigin(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.endSession(w, r, id)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -69,7 +89,7 @@ func (s *server) settingsPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	fl := s.flows.get(id)
+	fl := s.flows.take(id)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
 	data := map[string]any{"User": sess.user, "CSRF": sess.csrf, "Connected": s.store.Has(sess.user), "Err": fl.err}
@@ -102,26 +122,31 @@ func (s *server) settingsStart(w http.ResponseWriter, r *http.Request) {
 	fl := &flow{code: code, cancel: cancel}
 	s.flows.m[id] = fl
 	s.flows.mu.Unlock()
-
-	user := sess.user
 	go func() {
 		defer cancel()
-		tok, err := s.store.wait(ctx, code)
-		s.flows.mu.Lock()
-		defer s.flows.mu.Unlock()
-		if s.flows.m[id] != fl {
-			return // replaced by a newer start
-		}
-		fl.done = true
-		if err != nil {
-			fl.err = err.Error()
-			slog.Warn("codex sign-in failed", "user", user, "err", err)
-			return
-		}
-		s.store.Set(user, tok)
-		slog.Info("codex sign-in finished", "user", user)
+		s.runFlow(ctx, id, sess.user, fl, code)
 	}()
 	http.Redirect(w, r, "/settings/codex", http.StatusSeeOther)
+}
+
+// runFlow waits for the user to enter the code, then stores the login. A
+// finished sign-in leaves nothing in the flows; a failed one stays until the
+// page shows it.
+func (s *server) runFlow(ctx context.Context, id, user string, fl *flow, code *deviceCode) {
+	tok, err := s.store.wait(ctx, code)
+	s.flows.mu.Lock()
+	defer s.flows.mu.Unlock()
+	if s.flows.m[id] != fl {
+		return // replaced by a newer start, or the session ended
+	}
+	if err != nil {
+		fl.done, fl.err = true, err.Error()
+		slog.Warn("codex sign-in failed", "user", user, "err", err)
+		return
+	}
+	delete(s.flows.m, id)
+	s.store.Set(user, tok)
+	slog.Info("codex sign-in finished", "user", user)
 }
 
 func (s *server) settingsDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -130,12 +155,7 @@ func (s *server) settingsDisconnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	s.flows.mu.Lock()
-	if fl := s.flows.m[id]; fl != nil && fl.cancel != nil {
-		fl.cancel()
-	}
-	delete(s.flows.m, id)
-	s.flows.mu.Unlock()
+	s.flows.drop(id)
 	s.store.Delete(sess.user)
 	http.Redirect(w, r, "/settings/codex", http.StatusSeeOther)
 }

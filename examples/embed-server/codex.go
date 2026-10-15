@@ -73,6 +73,8 @@ type tokenStore struct {
 	issuer string
 	hc     *http.Client
 	now    func() time.Time
+	// sleep waits d, and returns false when ctx ends first.
+	sleep func(ctx context.Context, d time.Duration) bool
 
 	mu sync.Mutex
 	m  map[string]*userTokens
@@ -89,8 +91,28 @@ func newTokenStore(issuer string, hc *http.Client) *tokenStore {
 	if issuer == "" {
 		issuer = defaultIssuer
 	}
-	return &tokenStore{issuer: strings.TrimRight(issuer, "/"), hc: hc, now: time.Now, m: map[string]*userTokens{}}
+	return &tokenStore{issuer: strings.TrimRight(issuer, "/"), hc: hc, now: time.Now, sleep: sleepContext, m: map[string]*userTokens{}}
 }
+
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// errNoLogin means the user has no login, or the issuer rejected the refresh
+// token and the login is gone. The user must sign in: answer 401.
+var errNoLogin = errors.New("no login")
+
+// errRefresh means that the login may still be good but could not be
+// refreshed now (the issuer is down, rate limited, or sent a bad answer).
+// The user need not sign in again: answer 503.
+var errRefresh = errors.New("the login could not be refreshed")
 
 func (s *tokenStore) entry(user string) *userTokens {
 	s.mu.Lock()
@@ -131,43 +153,41 @@ func (s *tokenStore) MarkStale(user string) {
 }
 
 // Fresh returns the login of user, refreshed when it ends within five minutes
-// or when the backend rejected it. It returns false when there is no login, or
-// when the issuer rejected the refresh token (the login is then dropped, so
-// the user signs in again). A transient refresh failure keeps a token that is
-// still valid.
-func (s *tokenStore) Fresh(ctx context.Context, user string) (tokens, bool) {
+// or when the backend rejected it. It returns errNoLogin when there is no
+// login, or when the issuer rejected the refresh token (the login is then
+// dropped). A transient refresh failure returns errRefresh and keeps the
+// login; a token that is still valid is used as it is.
+func (s *tokenStore) Fresh(ctx context.Context, user string) (tokens, error) {
 	e := s.entry(user)
 	if e == nil {
-		return tokens{}, false
+		return tokens{}, errNoLogin
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	exp, known := e.t.expiry()
 	soon := known && !exp.After(s.now().Add(refreshSkew))
 	if !e.stale && !soon {
-		return e.t, true
+		return e.t, nil
 	}
 	next, rejected, err := s.refresh(ctx, e.t)
 	switch {
 	case err == nil:
 		e.t, e.stale, e.refreshed = next, false, s.now()
-		return e.t, true
+		return e.t, nil
 	case rejected:
 		s.mu.Lock()
 		if s.m[user] == e {
 			delete(s.m, user)
 		}
 		s.mu.Unlock()
-		return tokens{}, false
-	case !e.stale && known && exp.After(s.now()):
-		return e.t, true
-	case e.stale:
-		// The backend rejected this token and the refresh failed for now:
-		// try the old token once more, and let the backend answer.
+		return tokens{}, errNoLogin
+	case known && exp.After(s.now()):
+		// Still valid, or only suspect: let the backend decide. Back off, so
+		// a stale mark does not retry the refresh on every request.
 		e.stale, e.refreshed = false, s.now()
-		return e.t, true
+		return e.t, nil
 	}
-	return tokens{}, false
+	return tokens{}, errRefresh
 }
 
 // refresh trades the refresh token for a new access token. rejected is true
@@ -196,7 +216,7 @@ func (s *tokenStore) refresh(ctx context.Context, t tokens) (next tokens, reject
 		Refresh string `json:"refresh_token"`
 	}
 	if json.Unmarshal(raw, &tok) != nil || tok.Access == "" {
-		return t, true, errors.New("refresh: no access token in the answer")
+		return t, false, errors.New("refresh: the answer holds no access token")
 	}
 	next = tokens{Access: tok.Access, Refresh: t.Refresh, Account: t.Account}
 	if tok.Refresh != "" {
@@ -281,12 +301,8 @@ func (s *tokenStore) wait(ctx context.Context, d *deviceCode) (tokens, error) {
 		default:
 			return tokens{}, fmt.Errorf("the device sign-in failed: HTTP %d", status)
 		}
-		t := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			t.Stop()
+		if !s.sleep(ctx, interval) {
 			return tokens{}, errors.New("the device code expired or the sign-in was canceled")
-		case <-t.C:
 		}
 	}
 }
