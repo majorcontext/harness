@@ -134,7 +134,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 	}
 	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), restricted: req.AllowedTools != nil,
 		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID,
-		askedCh: make(chan string, 1)}
+		askedCh: make(chan string, 1), askMsg: map[string]string{}}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {

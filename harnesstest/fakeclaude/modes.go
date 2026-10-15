@@ -202,8 +202,6 @@ var onInterrupt = map[string][]obj{
 	"success_on_interrupt":     {say("Finished anyway."), success("Finished anyway.", 7, 2)},
 	"placeholder_on_interrupt": {success("", 0, 0).set("num_turns", 0), failed(7, 2, interrupted)},
 	"exit_on_interrupt":        {},
-	"question":                 {user(toolResult("toolu_q", rejected, true)), user(textBlock("[Request interrupted by user]"))},
-	"question_sibling":         {user(toolResult("toolu_q", rejected, true)), user(textBlock("[Request interrupted by user]"))},
 }
 
 // builtinTool runs a built-in tool that the init frame does not list, which a

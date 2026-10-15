@@ -44,6 +44,8 @@ type run struct {
 	askedCh  chan string
 	asked    string
 	recorded recorded
+	// askMsg maps each question call that waits for its response to end to the ID of the response.
+	askMsg map[string]string
 	// read returns the bytes of an attachment of the turn.
 	read func(key string) ([]byte, error)
 	// continues reports a run of a turn whose input the CLI already took;
@@ -483,10 +485,11 @@ func (r *run) assistant(env envelope) error {
 	if m.ID == "" || slices.ContainsFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartToolCall }) {
 		err := r.flush()
 		for _, p := range parts {
-			if p.Type == protocol.LogPartToolCall && p.Name == turn.AskTool {
-				r.recorded.mark(p.CallID)
+			if p.Type == protocol.LogPartToolCall && p.Name == turn.AskTool && env.ParentToolUseID == "" {
+				r.askMsg[p.CallID] = m.ID
 			}
 		}
+		r.releaseAsks()
 		return err
 	}
 	return nil

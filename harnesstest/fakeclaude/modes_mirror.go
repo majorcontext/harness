@@ -127,6 +127,9 @@ func logInterrupt(mode string) {
 		<-ch
 		appendFile(path, "interrupt\n")
 		out, ok := onInterrupt[mode]
+		if strings.HasPrefix(mode, "question") {
+			out, ok = questionInterrupt(), true
+		}
 		if !ok || (len(out) > 0 && out[len(out)-1]["type"] != "result") {
 			out = append(out, failed(7, 2, interrupted))
 		}

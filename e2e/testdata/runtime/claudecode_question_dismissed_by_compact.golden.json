@@ -138,7 +138,7 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 7,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
@@ -155,14 +155,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 7,
-          "output_tokens": 2
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -188,7 +188,7 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0.0123,
+          "session_cost_usd": 0.029928999999999997,
           "windows": []
         },
         "synced_seq": 0,
@@ -196,8 +196,8 @@
         "usage": {
           "cache_read_tokens": 7,
           "cache_write_tokens": 5,
-          "input_tokens": 108,
-          "output_tokens": 44
+          "input_tokens": 111,
+          "output_tokens": 319
         },
         "work_dir": "\u003cworkdir\u003e"
       }

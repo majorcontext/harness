@@ -43,6 +43,20 @@ func (r *recorded) mark(id string) {
 	c.once.Do(func() { close(c.done) })
 }
 
+// releaseAsks lets the bridge open the request of each question call that the
+// run recorded and whose response ended. The CLI starts the tool call while the
+// response still streams, and an interrupt before the response ends makes the
+// CLI drop the usage and the cost of the turn.
+func (r *run) releaseAsks() {
+	lm := r.live[""]
+	for id, msg := range r.askMsg {
+		if lm == nil || lm.id != msg || lm.stopped {
+			r.recorded.mark(id)
+			delete(r.askMsg, id)
+		}
+	}
+}
+
 // ask opens the request of a call to the question tool once the run recorded
 // the call. It never replies to an opened call: the run interrupts the CLI,
 // which records the call as cut off, and the turn that the answer starts sends

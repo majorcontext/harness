@@ -1,0 +1,97 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "pick a db"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "ask_user_question",
+            "arguments": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "The user dismissed this question without answering."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "dismiss_question.a": {
+      "status": 204
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 10,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 9,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "awaiting_input",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "waiting",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.017629,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 277
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

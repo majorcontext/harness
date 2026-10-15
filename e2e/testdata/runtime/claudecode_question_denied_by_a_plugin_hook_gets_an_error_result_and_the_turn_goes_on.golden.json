@@ -1,0 +1,123 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "pick a db"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "ask_user_question",
+            "arguments": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "denied by fixture"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Noted."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 1,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 10,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "plugins": [
+          {
+            "hooks": [
+              "system.transform",
+              "tool.execute.before",
+              "tool.execute.after",
+              "event"
+            ],
+            "name": "fixture",
+            "state": "running",
+            "tools": [
+              "fixture_echo",
+              "fixture_fail",
+              "fixture_config",
+              "fixture_crash",
+              "fixture_report"
+            ]
+          }
+        ],
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

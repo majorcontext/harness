@@ -15,6 +15,8 @@ type liveMessage struct {
 	blocks []*liveBlock
 	// byIndex maps the index of a content block to its entry in blocks.
 	byIndex map[int]*liveBlock
+	// stopped reports that the response ended.
+	stopped bool
 }
 
 // liveBlock is a text or thinking block, and the text of it that the stream
@@ -52,6 +54,11 @@ func (r *run) streamEvent(env envelope) error {
 			r.live = map[string]*liveMessage{}
 		}
 		r.live[parent] = &liveMessage{id: ev.Message.ID, byIndex: map[int]*liveBlock{}}
+	case "message_stop":
+		if lm := r.live[parent]; lm != nil {
+			lm.stopped = true
+		}
+		r.releaseAsks()
 	case "content_block_start":
 		lm := r.live[parent]
 		if lm == nil || ev.ContentBlock == nil {

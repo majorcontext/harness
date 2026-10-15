@@ -94,14 +94,35 @@ var askQuestionInput = obj{"questions": []obj{{
 // answeredPrefix starts the text that harness sends as the answer to a question.
 const answeredPrefix = "User has answered your questions:"
 
+const questionMsg = "msg_011FAKEQUESTION"
+
+// questionStopped is the file that marks the end of the streamed response
+// that holds the question call.
+func questionStopped() string { return os.Getenv("FAKE_CLAUDE_STATE") + ".stopped" }
+
+// questionInterrupt is what the CLI prints for a SIGINT in "question" modes: a
+// SIGINT during the response aborts the run before the CLI accounts the call
+// (no cost), and a SIGINT after the response ends accounts it.
+func questionInterrupt() []obj {
+	if _, err := os.Stat(questionStopped()); err != nil {
+		return []obj{user(toolResult("toolu_q", rejected, true)), user(textBlock("[Request interrupted by user]")),
+			failed(0, 0, interrupted).set("terminal_reason", "aborted_streaming").set("total_cost_usd", 0).set("modelUsage", obj{})}
+	}
+	return []obj{user(toolResult("toolu_q", rejected, true)), user(textBlock("[Request interrupted by user for tool use]")),
+		failed(10, 277, interrupted).set("terminal_reason", "aborted_tools").set("total_cost_usd", 0.017629).
+			set("modelUsage", obj{"claude-haiku-4-5": obj{"costUSD": 0.017629, "inputTokens": 10, "outputTokens": 277}})}
+}
+
 // rejected is the result that the CLI prints for the call that a SIGINT cut off.
 const rejected = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
 
-// question calls ask_user_question on the harness MCP server and waits for
-// the reply, which never comes: harness opens the request and interrupts the
-// CLI. A turn that starts with the answer text prints a reply, and so does
-// every turn after the first question. The mode
-// question_sibling calls bash beside the question.
+// question calls ask_user_question on the harness MCP server while its
+// response still streams, and waits for the reply, which never comes: harness
+// opens the request and interrupts the CLI once the response ends. With
+// FAKE_CLAUDE_QUESTION_GATE set, the response ends when the window gate opens.
+// A turn that starts with the answer text prints a reply, and so does every
+// turn after the first question. The mode question_sibling calls bash beside
+// the question.
 func question(f *fake) {
 	if strings.Contains(f.first, answeredPrefix) {
 		f.emit(say("Noted."), success("Noted.", 1, 1))
@@ -113,11 +134,12 @@ func question(f *fake) {
 		return
 	}
 	_ = os.WriteFile(asked, nil, 0o644)
+	partialEmit(f, messageStart(questionMsg), blockStart(0, toolUse("toolu_q", "mcp__harness__ask_user_question", obj{})))
 	calls := []obj{toolUse("toolu_q", "mcp__harness__ask_user_question", askQuestionInput)}
 	if f.mode == "question_sibling" {
 		calls = append(calls, toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"}))
 	}
-	f.emit(assistant(calls...))
+	f.emit(assistant(calls...).inMessage("id", questionMsg))
 	if _, ok := hostedServer(); !ok {
 		hang(f)
 		return
@@ -126,7 +148,14 @@ func question(f *fake) {
 		sibling := hostedCall("bash", obj{"command": "echo hi"}, "toolu_s")
 		f.emit(user(toolResult("toolu_s", sibling.text(), sibling.Result.IsError)))
 	}
-	res := hostedCall("ask_user_question", askQuestionInput, "toolu_q")
+	done := make(chan hostedText, 1)
+	go func() { done <- hostedCall("ask_user_question", askQuestionInput, "toolu_q") }()
+	if os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" {
+		awaitGate()
+	}
+	_ = os.WriteFile(questionStopped(), nil, 0o644)
+	partialEmit(f, blockStop(0), messageStop("tool_use"), streamEvent(obj{"type": "message_stop"}))
+	res := <-done
 	f.emit(user(toolResult("toolu_q", res.text(), res.Result.IsError)), say("Noted."), success("Noted.", 1, 1))
 }
 

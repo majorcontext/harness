@@ -202,7 +202,7 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 7,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
@@ -219,14 +219,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 7,
-          "output_tokens": 2
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -235,7 +235,7 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 7,
+          "tokens": 10,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
@@ -252,14 +252,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 7,
-          "output_tokens": 2
+          "input_tokens": 10,
+          "output_tokens": 277
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -285,14 +285,14 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0,
+          "session_cost_usd": 0.017629,
           "windows": []
         },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 8,
-          "output_tokens": 3
+          "input_tokens": 11,
+          "output_tokens": 278
         },
         "work_dir": "\u003cworkdir\u003e"
       }

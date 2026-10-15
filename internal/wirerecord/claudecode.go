@@ -39,7 +39,8 @@ func runCLI(dir string, prompts []string, args []string, interrupt bool) ([]byte
 	return runCLIStopped(dir, prompts, args, interrupt, nil)
 }
 
-// runCLIStopped is runCLI that also sends SIGINT once stop is closed.
+// runCLIStopped is runCLI that also sends SIGINT once stop is closed and the
+// response that holds the call has ended, as the backend does.
 func runCLIStopped(dir string, prompts []string, args []string, interrupt bool, stop <-chan struct{}) ([]byte, error) {
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = dir
@@ -59,13 +60,18 @@ func runCLIStopped(dir string, prompts []string, args []string, interrupt bool, 
 	done := make(chan error, 1)
 	finished := make(chan struct{})
 	defer close(finished)
+	messageStopped := make(chan struct{})
+	var stoppedOnce sync.Once
 	if stop != nil {
 		go func() {
-			select {
-			case <-stop:
-				_ = cmd.Process.Signal(os.Interrupt)
-			case <-finished:
+			for _, wait := range []<-chan struct{}{stop, messageStopped} {
+				select {
+				case <-wait:
+				case <-finished:
+					return
+				}
 			}
+			_ = cmd.Process.Signal(os.Interrupt)
 		}()
 	}
 	go func() {
@@ -81,7 +87,13 @@ func runCLIStopped(dir string, prompts []string, args []string, interrupt bool, 
 				raw.Write(sc.Bytes())
 				raw.WriteByte('\n')
 				var f struct {
-					Type string `json:"type"`
+					Type  string `json:"type"`
+					Event struct {
+						Type string `json:"type"`
+					} `json:"event"`
+				}
+				if json.Unmarshal(sc.Bytes(), &f) == nil && f.Type == "stream_event" && f.Event.Type == "message_stop" {
+					stoppedOnce.Do(func() { close(messageStopped) })
 				}
 				if json.Unmarshal(sc.Bytes(), &f) == nil && f.Type == "result" {
 					break
@@ -241,7 +253,7 @@ func recordClaudeCodeQuestion(r *recorder, work string) error {
 
 const (
 	questionPrompt = "Use the mcp__harness__ask_user_question tool once to ask which database to use, with the options PostgreSQL and SQLite. Do nothing else first."
-	answerPrompt   = "User has answered your questions: \"Which database?\"=\"SQLite\". You can now continue with the user's answers in mind."
+	answerPrompt   = "User has answered your questions: \"Which database would you like to use?\"=\"SQLite\". You can now continue with the user's answers in mind."
 )
 
 // askServer serves ask_user_question as the harness bridge does: a call gets
@@ -273,7 +285,7 @@ func recordQuestion(dir string) (asked, answered []byte, err error) {
 	if err := os.Setenv("ENABLE_TOOL_SEARCH", "auto"); err != nil {
 		return nil, nil, err
 	}
-	asked, err = runCLIStopped(dir, []string{questionPrompt}, cliArgs(claudeModel, "ToolSearch", flags...), false, called)
+	asked, err = runCLIStopped(dir, []string{questionPrompt}, cliArgs(claudeModel, "ToolSearch", append([]string{"--include-partial-messages"}, flags...)...), false, called)
 	if err != nil {
 		return nil, nil, fmt.Errorf("question run: %w", err)
 	}
@@ -289,7 +301,7 @@ func recordQuestion(dir string) (asked, answered []byte, err error) {
 	if sessionID == "" || len(callsOf(asked, "mcp__harness__ask_user_question")) == 0 {
 		return nil, nil, fmt.Errorf("question run: no session or ask_user_question call in the output")
 	}
-	answered, err = runCLI(dir, []string{answerPrompt}, cliArgs(claudeModel, "ToolSearch", append([]string{"--resume", sessionID}, flags...)...), false)
+	answered, err = runCLI(dir, []string{answerPrompt}, cliArgs(claudeModel, "ToolSearch", append([]string{"--include-partial-messages", "--resume", sessionID}, flags...)...), false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("answer run: %w", err)
 	}

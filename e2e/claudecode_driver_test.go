@@ -766,3 +766,22 @@ func (d *runtimeDriver) compactKeeping(t *testing.T, id string, keep int) callRe
 	t.Helper()
 	return d.call(t, http.MethodPost, "/sessions/"+id+"/compact", map[string]any{"keep_turns": keep})
 }
+
+// requestHoldsCall checks that the newest model request holds a call to the
+// tool name and a result of that call whose text holds result.
+type requestHoldsCall struct{ name, result string }
+
+func (a requestHoldsCall) run(t *testing.T, r *run) {
+	t.Helper()
+	reqs := r.fake.Requests()
+	called, answered := false, false
+	for _, m := range reqs[len(reqs)-1].Messages {
+		for _, p := range m.Parts {
+			called = called || p.Kind == "tool_use" && p.ToolName == a.name
+			answered = answered || p.Kind == "tool_result" && p.ToolName == a.name && strings.Contains(p.Text, a.result)
+		}
+	}
+	if !called || !answered {
+		t.Fatalf("the newest request holds a %s call = %v and its result = %v, want both", a.name, called, answered)
+	}
+}
