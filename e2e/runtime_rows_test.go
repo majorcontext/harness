@@ -573,6 +573,7 @@ var runtimeRows = map[string]runtimeRow{
 	"create_checks_the_provider":                                              reGolden(specNoProvider, specUnknownWindow, specErrors, specInvalidReason, specView),
 	"create_names_no_built_in_openrouter_provider":                            reGolden(specNoProvider, specErrors, specView),
 	"create_without_a_model_takes_the_default_model":                          reGolden(specView),
+	"create_without_a_model_ignores_claude_on_path_and_a_codex_login":         reGolden(specView),
 	"create_takes_an_unknown_model_with_a_configured_window":                  reGolden(specView),
 	"goal_tool_actions_report_and_refuse":                                     reGolden(specView, specGoalTranscript),
 	"goal_tool_adjust_after_set_runs_the_adjusted_condition":                  reGolden(specView, specGoalOwnTurn, specGoalAdjustPost),

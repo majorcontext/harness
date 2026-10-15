@@ -59,6 +59,7 @@ func acpLogin() acp.Auth {
 			if err != nil {
 				return nil, err
 			}
+			cfg.SubscriptionDefault = true
 			return cfg, applyOverrides(cfg, false, nil, nil)
 		},
 		Open: openBrowser,
@@ -75,6 +76,7 @@ func acpRuntimes(logger *slog.Logger) *cwdruntimes.Runtimes {
 		Config: func(cwd string) (*config.Config, error) {
 			cfg, err := config.LoadProject(userConfigPath(), cwd)
 			if err == nil {
+				cfg.SubscriptionDefault = true
 				err = applyOverrides(cfg, false, nil, nil)
 			}
 			return cfg, err

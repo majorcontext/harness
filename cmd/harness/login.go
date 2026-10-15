@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/codexauth"
-	"github.com/majorcontext/harness/internal/modelmeta"
 )
 
 const loginUsage = "usage: harness login codex [--device] [--no-browser] [--status]\n       harness login claude-code [--console] [--sso] [--status]\n       harness logout codex\n       harness logout claude-code"
@@ -104,7 +104,35 @@ func loginClaude(args []string) error {
 	if *sso {
 		cli = append(cli, "--sso")
 	}
-	return runClaude(cli...)
+	if err := runClaude(cli...); err != nil {
+		return err
+	}
+	if claudeLoggedIn(context.Background()) {
+		saveDefaultModel(config.SubscriptionClaudeModel)
+	}
+	return nil
+}
+
+// claudeLoggedIn asks the CLI whether the sign-in holds. A CLI that gives no answer counts as not signed in.
+func claudeLoggedIn(ctx context.Context) bool {
+	bin, err := claudeBinary()
+	if err != nil {
+		return false
+	}
+	ok, known := claudeauth.LoggedIn(ctx, bin, nil, "")
+	return ok && known
+}
+
+// saveDefaultModel makes ref the default model of the user config when that file sets none. It never fails the login:
+// a file that cannot change gets one line that says why.
+func saveDefaultModel(ref string) {
+	path := userConfigPath()
+	switch set, err := config.SetModel(path, ref); {
+	case err != nil:
+		fmt.Printf("Default model not set: %v\n", err)
+	case set:
+		fmt.Printf("Default model set to %s in %s.\n", ref, path)
+	}
 }
 
 // loginCmd runs the login of the provider that the first argument names.
@@ -141,9 +169,8 @@ func loginCodex(args []string) error {
 		return err
 	}
 	fmt.Println("Signed in to Codex.")
-	if models := modelmeta.CodexModels(); len(models) > 0 {
-		fmt.Printf("Try: harness run -model codex/%s -p \"...\"\n", models[0].ID)
-	}
+	saveDefaultModel(config.SubscriptionCodexModel)
+	fmt.Printf("Try: harness run -model %s -p \"...\"\n", config.SubscriptionCodexModel)
 	return nil
 }
 

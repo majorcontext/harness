@@ -28,7 +28,7 @@ func holdLogin(path string) {
 
 // runAuth answers `claude auth login|logout|status`. FAKE_CLAUDE_AUTH is a file that holds the login state
 // ("in" or "out"; absent means logged in), and FAKE_CLAUDE_AUTH_LOG receives the arguments of each call.
-// Neither holds a token.
+// Neither holds a token. FAKE_CLAUDE_AUTH_LOGIN_KEEPS_OUT makes `auth login` exit 0 and leave the state as it was.
 func runAuth(args []string) int {
 	if path := os.Getenv("FAKE_CLAUDE_AUTH_LOG"); path != "" {
 		appendFile(path, strings.Join(args, " ")+"\n")
@@ -48,7 +48,9 @@ func runAuth(args []string) int {
 		if path := os.Getenv("FAKE_CLAUDE_AUTH_HOLD"); path != "" {
 			holdLogin(path)
 		}
-		set("in")
+		if os.Getenv("FAKE_CLAUDE_AUTH_LOGIN_KEEPS_OUT") == "" {
+			set("in")
+		}
 	case "logout":
 		set("out")
 	case "status":

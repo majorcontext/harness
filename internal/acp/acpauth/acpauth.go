@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
+	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/codexauth"
 )
 
@@ -57,12 +58,15 @@ type Auth struct {
 	opts Options
 
 	mu     sync.Mutex
-	status map[string]claudeStatus
+	status map[statusKey]claudeStatus
 	gen    int
 	stop   context.CancelFunc
 	// running serializes the sign-ins.
 	running sync.Mutex
 }
+
+// statusKey is what one cached login status answers for: a program asked from a directory.
+type statusKey struct{ bin, dir string }
 
 type claudeStatus struct {
 	at       time.Time
@@ -77,7 +81,7 @@ func New(opts Options) *Auth {
 	if opts.LookPath == nil {
 		opts.LookPath = exec.LookPath
 	}
-	return &Auth{opts: opts, status: map[string]claudeStatus{}}
+	return &Auth{opts: opts, status: map[statusKey]claudeStatus{}}
 }
 
 // target is what the user config offers a login for.
@@ -199,8 +203,8 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 			return &acp.AuthRequiredError{Message: err.Error()}
 		}
 	case p.UsesClaudeCLI() && a.userTargets(acp.ClientAuth{}).claude != "":
-		if ok, known := a.loggedIn(ctx, p.CLIBinary(), fresh); known && !ok {
-			return &acp.AuthRequiredError{Message: "not logged in to Claude Code; run `harness login claude-code`"}
+		if ok, known := a.loggedIn(ctx, p.CLIBinary(), cwd, fresh); known && !ok {
+			return &acp.AuthRequiredError{Message: (&claudeauth.LoginRequiredError{}).Error()}
 		}
 	}
 	return nil

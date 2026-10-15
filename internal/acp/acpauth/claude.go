@@ -3,9 +3,7 @@
 package acpauth
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -13,12 +11,12 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
+	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/process"
 )
 
 const (
-	statusTTL    = 30 * time.Second
-	statusBudget = 15 * time.Second
+	statusTTL = 30 * time.Second
 	// killGrace is the time that a killed child gets to close its pipes.
 	killGrace = 2 * time.Second
 )
@@ -43,7 +41,7 @@ func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config, _ acp.LoginC
 	if err != nil {
 		return fmt.Errorf("claude auth login: %w", err)
 	}
-	if ok, known := a.loggedIn(ctx, bin, true); known && !ok {
+	if ok, known := a.loggedIn(ctx, bin, "", true); known && !ok {
 		return errors.New("claude auth login ended without a login")
 	}
 	return nil
@@ -52,32 +50,29 @@ func (a *Auth) claudeLogin(ctx context.Context, cfg *config.Config, _ acp.LoginC
 func (a *Auth) forget(bin string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.status, bin)
+	for k := range a.status {
+		if k.bin == bin {
+			delete(a.status, k)
+		}
+	}
 }
 
-// loggedIn asks the CLI bin for its login status. known is false when the CLI gave no answer, so a missing
+// loggedIn asks the CLI bin for its login status from dir, where a relative bin is found. The cache holds one answer for each bin and dir. known is false when the CLI gave no answer, so a missing
 // binary or a changed output never blocks a turn: the turn then fails with the error of the CLI.
-func (a *Auth) loggedIn(ctx context.Context, bin string, fresh bool) (ok, known bool) {
+func (a *Auth) loggedIn(ctx context.Context, bin, dir string, fresh bool) (ok, known bool) {
+	key := statusKey{bin: bin, dir: dir}
 	a.mu.Lock()
-	cached, hit := a.status[bin]
+	cached, hit := a.status[key]
 	a.mu.Unlock()
 	if hit && !fresh && time.Since(cached.at) < statusTTL {
 		return cached.loggedIn, true
 	}
-	ctx, cancel := context.WithTimeout(ctx, statusBudget)
-	defer cancel()
-	var out bytes.Buffer
-	cmd := a.claudeCmd(ctx, bin, "auth", "status", "--json")
-	cmd.Stdout = &out
-	_ = cmd.Run() // the CLI may exit non-zero when logged out and still print the status
-	var st struct {
-		LoggedIn *bool `json:"loggedIn"`
-	}
-	if json.Unmarshal(out.Bytes(), &st) != nil || st.LoggedIn == nil {
+	ok, known = claudeauth.LoggedIn(ctx, bin, a.opts.Env, dir)
+	if !known {
 		return false, false
 	}
 	a.mu.Lock()
-	a.status[bin] = claudeStatus{at: time.Now(), loggedIn: *st.LoggedIn}
+	a.status[key] = claudeStatus{at: time.Now(), loggedIn: ok}
 	a.mu.Unlock()
-	return *st.LoggedIn, true
+	return ok, true
 }

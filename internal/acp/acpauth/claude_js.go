@@ -18,4 +18,4 @@ func (a *Auth) claudeLogin(context.Context, *config.Config, acp.LoginClient) err
 
 func (a *Auth) forget(string) {}
 
-func (a *Auth) loggedIn(context.Context, string, bool) (ok, known bool) { return false, false }
+func (a *Auth) loggedIn(context.Context, string, string, bool) (ok, known bool) { return false, false }

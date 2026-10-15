@@ -55,6 +55,10 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		harnessBin = bin
+		if err := os.Setenv("PATH", pathWithClaude()); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e:", err)
+			os.Exit(1)
+		}
 		stop := guardProcessGroups()
 		code := m.Run()
 		stop()
@@ -265,4 +269,13 @@ func setDefaultParallel(n int) {
 	if f := flag.Lookup("test.parallel"); f != nil && !set {
 		_ = f.Value.Set(strconv.Itoa(n))
 	}
+}
+
+// pathWithClaude is the PATH of every test process: a program named claude, which the default model of a server and of the Go API must ignore, before the PATH of shadowPath.
+func pathWithClaude() string {
+	dir := filepath.Join(filepath.Dir(harnessBin), "claudepath")
+	if err := os.MkdirAll(dir, 0o755); err == nil {
+		_ = os.Symlink(fakeClaudePath(), filepath.Join(dir, "claude"))
+	}
+	return dir + string(os.PathListSeparator) + shadowPath()
 }

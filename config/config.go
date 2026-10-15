@@ -179,6 +179,9 @@ type Config struct {
 	// catalog, so a stray minus sign would silently turn "auto" into "always
 	// defer" -- and is rejected loudly, like MCPServerSpec.ConnectTimeoutS.
 	MCPToolLoadingThreshold int `json:"mcp_tool_loading_threshold,omitempty"`
+	// SubscriptionDefault lets an unset model resolve to the subscription of the user (see defaultModel). Only the
+	// composition root of a command that a person runs sets it. No file, variable, or flag does.
+	SubscriptionDefault bool `json:"-" env:"-"`
 }
 
 // WebSpec holds the switches of the web tools. A nil field is off, and a
@@ -190,13 +193,13 @@ type WebSpec struct {
 	Search *bool `json:"search,omitempty"`
 }
 
-// ResolveModel returns s, else Model, else DefaultModel, after one alias lookup. It does not parse.
+// ResolveModel returns s, else Model, else the default model (see defaultModel), after one alias lookup. It does not parse.
 func (c *Config) ResolveModel(s string) string {
 	if s == "" && c != nil {
 		s = c.Model
 	}
 	if s == "" {
-		s = DefaultModel
+		s = c.defaultModel()
 	}
 	if c != nil {
 		if target, ok := c.Aliases[s]; ok {

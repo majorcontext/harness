@@ -78,6 +78,7 @@ linters:
             - github.com/majorcontext/harness/config
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/acpauth
+            - github.com/majorcontext/harness/internal/claudeauth
             - github.com/majorcontext/harness/internal/codexauth
             - github.com/majorcontext/harness/internal/process
         acp-rpc-leaf:
