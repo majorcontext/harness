@@ -33,6 +33,8 @@ type config struct {
 	// SecureCookie sets Secure on the session cookie. Set it for any
 	// deployment that is not on a loopback address.
 	SecureCookie bool
+	// TokenFile, when set, keeps the ChatGPT logins on disk across restarts.
+	TokenFile string
 }
 
 type server struct {
@@ -52,6 +54,10 @@ func newServer(cfg config) (*server, error) {
 		return nil, err
 	}
 	s := &server{cfg: cfg, sessions: newSessions(cfg.SecureCookie), store: newTokenStore(cfg.Issuer, cfg.HTTP), flows: &flows{m: map[string]*flow{}}}
+	s.store.file = cfg.TokenFile
+	if err := s.store.load(); err != nil {
+		return nil, err
+	}
 	p := proxy.NewProxy()
 	if err := p.AddRelay(relayName, cfg.Upstream); err != nil {
 		return nil, err
@@ -85,6 +91,10 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(indexHTML)
+	})
+	mux.HandleFunc("GET /style.css", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		_, _ = w.Write(styleCSS)
 	})
 	mux.HandleFunc("GET /harness.wasm", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.WasmPath) })
 	mux.HandleFunc("GET /wasm_exec.js", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.WasmExecPath) })

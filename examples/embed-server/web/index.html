@@ -2,27 +2,78 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Harness embed</title>
-<style>body{font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem}textarea{width:100%}pre{white-space:pre-wrap;background:#f4f4f4;padding:.75rem}</style>
-<h1>Harness embed</h1>
-<p id="who">Loading...</p>
-<p><a href="/login">Sign in to the app</a> <form method="post" action="/logout" style="display:inline"><button>Sign out</button></form> | <a href="/settings/codex" target="_blank" rel="noopener">ChatGPT login</a></p>
-<p><label for="prompt">Prompt</label></p>
-<textarea id="prompt" rows="3">Say hello in five words.</textarea>
-<p><button id="send" disabled>Send</button> <span id="status" role="status"></span></p>
-<pre id="out"></pre>
+<link rel="stylesheet" href="/style.css">
+<div class="term">
+  <header class="bar">
+    <span>harness</span>
+    <span id="model"></span>
+  </header>
+
+  <main class="log" id="log" aria-live="polite"></main>
+
+  <form class="input" id="form">
+    <label for="prompt">&gt;</label>
+    <textarea id="prompt" rows="1" disabled autocomplete="off" spellcheck="false" aria-label="Prompt"></textarea>
+  </form>
+
+  <footer class="status">
+    <span id="status" role="status">loading</span>
+    <span class="keys">
+      <span id="who"></span>
+      <button class="link" id="new" type="button">new session</button>
+      <a href="/settings/codex" target="_blank" rel="noopener">chatgpt login</a>
+      <a href="/login" id="login">sign in</a>
+      <form method="post" action="/logout"><button class="link" id="logout">sign out</button></form>
+    </span>
+  </footer>
+</div>
 <script type="module">
 import { createHarness, wasm } from "/embed/index.mjs";
 
 const $ = (id) => document.getElementById(id);
-const who = await (await fetch("/whoami")).json();
-$("who").textContent = who.user ? `Signed in as ${who.user}. ChatGPT login: ${who.codex ? "yes" : "no"}` : "Not signed in to the app.";
+const log = $("log");
+const input = $("prompt");
+
+const status = (text, cls = "") => {
+  $("status").textContent = text;
+  $("status").className = cls;
+};
+const el = (tag, cls, text = "") => {
+  const e = document.createElement(tag);
+  e.className = cls;
+  e.textContent = text;
+  return e;
+};
+const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+const follow = (fn) => {
+  const stick = atBottom();
+  fn();
+  if (stick) log.scrollTop = log.scrollHeight;
+};
+
+// user is the signed-in user of the app. refreshWho reports whether it changed.
+let user = null;
+const refreshWho = async () => {
+  const who = await (await fetch("/whoami")).json();
+  $("who").textContent = who.user ?? "not signed in";
+  $("login").hidden = !!who.user;
+  $("logout").hidden = !who.user;
+  const changed = (who.user ?? null) !== user;
+  user = who.user ?? null;
+  return changed;
+};
+await refreshWho();
 
 // The module holds no credential. The server adds it to the requests that go
 // to /model-proxy/, and answers 401 until the user signs in at /settings/codex.
-const h = await createHarness({
+const model = "codex/gpt-6.1-sol";
+$("model").textContent = model;
+// The sessions live in the origin private file system, so a reload keeps
+// them. One tab holds the store at a time; another tab runs on a memory store.
+const options = {
   transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
   config: {
-    model: "codex/gpt-6.1-sol",
+    model,
     providers: {
       codex: {
         type: "openai", auth: "injected", responses_path: "/responses", models_from: "chatgpt",
@@ -34,14 +85,28 @@ const h = await createHarness({
   proxy: { providers: { codex: { baseURL: "/model-proxy/relay/codex", loginURL: "/settings/codex" } } },
   tools: [],
   builtinTools: [],
-});
+};
+let h;
+let persisted = true;
+try {
+  h = await createHarness({ ...options, store: { persist: true } });
+} catch (err) {
+  if (err?.code !== "store_in_use") throw err;
+  persisted = false;
+  h = await createHarness(options);
+}
 
 // A minimal ACP client: JSON-RPC over h.stream.
 const writer = h.stream.writable.getWriter();
 const reader = h.stream.readable.getReader();
 const pending = new Map();
 let nextId = 1;
-let onText = () => {};
+let onUpdate = () => {};
+// sessionId is the open session; loadingId the one that session/load replays.
+let sessionId = null;
+let loadingId = null;
+let usage = "";
+let contextUsed = 0;
 (async () => {
   for (;;) {
     const { value: m, done } = await reader.read();
@@ -49,8 +114,17 @@ let onText = () => {};
     if (m.id !== undefined && pending.has(m.id)) {
       pending.get(m.id)(m);
       pending.delete(m.id);
-    } else if (m.method === "session/update" && m.params.update.sessionUpdate === "agent_message_chunk") {
-      onText(m.params.update.content.text);
+    } else if (m.method === "session/update") {
+      // Updates of a session that the page left (a cancelled turn, the session
+      // of another user) are dropped.
+      if (m.params.sessionId !== (sessionId ?? loadingId)) continue;
+      const u = m.params.update;
+      if (u.sessionUpdate === "usage_update" && u.size) {
+        const pct = (100 * u.used) / u.size;
+        usage = `${pct > 0 && pct < 1 ? "<1" : Math.round(pct)}% context`;
+        contextUsed = u.used;
+      }
+      onUpdate(u);
     }
   }
 })();
@@ -62,17 +136,251 @@ const call = (method, params) =>
   });
 
 await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
-const created = await call("session/new", { cwd: "/work", mcpServers: [] });
-if (created.error) $("status").textContent = created.error.message;
-const sessionId = created.result?.sessionId;
-$("send").disabled = !sessionId;
 
-$("send").onclick = async () => {
-  $("out").textContent = "";
-  $("status").textContent = "Running...";
-  onText = (t) => ($("out").textContent += t);
-  const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text: $("prompt").value }] });
-  $("status").textContent = done.error ? `Error: ${done.error.message}` : `Done (${done.result.stopReason})`;
-  window.__done = true;
+// A session needs the ChatGPT login of the user. Until the server holds one,
+// session/new and session/load fail; the page tries again when the tab gets
+// the focus back. The id of the session stays in localStorage, and
+// session/load replays its conversation into the scrollback.
+// The saved id is per app user, so one user never opens the conversation of
+// another. A tab on a memory store neither reads nor writes it: it would point
+// the tab that holds the store at a session that the store does not have.
+const savedKey = () => (persisted && user ? `harness.session:${user}` : null);
+const saved = {
+  get: (k) => { if (!k) return null; try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, id) => { if (!k) return; try { id ? localStorage.setItem(k, id) : localStorage.removeItem(k); } catch {} },
 };
+// epoch counts the sessions that the page has left. An open or a turn that
+// started before a reset writes nothing after it.
+let epoch = 0;
+let notice = null;
+let running = false;
+let last = "";
+
+// replay renders the updates of session/load: a user_message_chunk starts a
+// turn, the agent chunks fill it.
+const replay = () => {
+  let turn = null, reply = null, thought = null, lastUser = null;
+  return (u) => {
+    const t = u.content?.type === "text" ? u.content.text : null;
+    if (t === null) return;
+    if (u.sessionUpdate === "user_message_chunk") {
+      if (lastUser && u.messageId && u.messageId === lastUser.id) {
+        lastUser.el.textContent += t;
+        return;
+      }
+      turn = el("section", "turn");
+      lastUser = { id: u.messageId, el: el("div", "line you", t) };
+      reply = el("div", "line reply");
+      thought = null;
+      turn.append(lastUser.el, reply);
+      log.append(turn);
+    } else if (turn && u.sessionUpdate === "agent_message_chunk") {
+      reply.textContent += t;
+    } else if (turn && u.sessionUpdate === "agent_thought_chunk") {
+      thought ??= turn.insertBefore(el("div", "line thought"), reply);
+      thought.textContent += t;
+    }
+  };
+};
+
+// A login that the server got a moment ago can still read as missing: the
+// module caches a failed probe for 30 s. So a missing login retries on a timer
+// for five minutes, and on each focus.
+let retry = 0;
+let retries = 0;
+const fail = (err) => {
+  if (err?.data?.code === "login_required" && retries < 30) {
+    retries++;
+    clearTimeout(retry);
+    retry = setTimeout(() => open(), 10_000);
+  }
+  notice = el("section", "turn");
+  notice.append(el("div", "line warn", err?.message ?? "no session"));
+  if (err?.data?.code === "login_required") notice.append(el("div", "line meta", "Sign in with ChatGPT, then come back to this tab."));
+  follow(() => log.append(notice));
+  status(err?.data?.code === "login_required" ? "no chatgpt login" : "error", "warn");
+};
+
+const doOpen = async () => {
+  if (sessionId) return;
+  const my = epoch;
+  const key = savedKey();
+  notice?.remove();
+  notice = null;
+  const id = saved.get(key);
+  if (id) {
+    status("loading session");
+    const mark = log.childElementCount;
+    onUpdate = replay();
+    loadingId = id;
+    const loaded = await call("session/load", { sessionId: id, cwd: "/work", mcpServers: [] });
+    loadingId = null;
+    if (my !== epoch) return;
+    // The replay renderer stays attached: a turn that was running when the page
+    // went away resumes, and its updates follow the answer.
+    if (loaded.result) {
+      sessionId = id;
+    } else {
+      onUpdate = () => {};
+      while (log.childElementCount > mark) log.lastElementChild.remove();
+      if (loaded.error?.code !== -32002) return fail(loaded.error);
+      saved.set(key, null);
+    }
+  }
+  if (!sessionId) {
+    status("starting session");
+    const created = await call("session/new", { cwd: "/work", mcpServers: [] });
+    if (my !== epoch) return;
+    if (!created.result) return fail(created.error);
+    sessionId = created.result.sessionId;
+    saved.set(key, sessionId);
+  }
+  clearTimeout(retry);
+  retries = 0;
+  log.scrollTop = log.scrollHeight;
+  status(persisted ? "enter: send · shift+enter: new line" : "another tab holds the store · this tab keeps no history", persisted ? "" : "warn");
+  input.disabled = false;
+  input.focus();
+};
+
+// One open at a time: focus events, the retry, and the new-session key share it.
+let opening = null;
+const open = () => {
+  $("new").disabled = true;
+  return (opening ??= doOpen().finally(() => {
+    opening = null;
+    $("new").disabled = false;
+  }));
+};
+
+// reset leaves the session of the page; the next open loads or starts one.
+const reset = () => {
+  if (running && sessionId) writer.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+  epoch++;
+  running = false;
+  clearTimeout(retry);
+  sessionId = null;
+  usage = "";
+  contextUsed = 0;
+  retries = 0;
+  onUpdate = () => {};
+  log.replaceChildren();
+  input.disabled = true;
+};
+
+$("new").addEventListener("click", async () => {
+  if (running || opening) return;
+  saved.set(savedKey(), null);
+  reset();
+  await open();
+});
+
+// A focus checks the app user: another user gets their own conversation.
+window.addEventListener("focus", async () => {
+  if (await refreshWho()) {
+    await opening;
+    reset();
+  }
+  open();
+});
+
+await open();
+
+const grow = () => {
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+};
+input.addEventListener("input", grow);
+
+const send = async () => {
+  const text = input.value.trim();
+  if (!text || running || !sessionId) return;
+  running = true;
+  last = text;
+  input.value = "";
+  grow();
+  input.disabled = true;
+
+  const turn = el("section", "turn");
+  const reply = el("div", "line reply");
+  const live = el("div", "line meta");
+  let thought = null;
+  let streamed = 0;
+  follow(() => {
+    turn.append(el("div", "line you", text), reply, live);
+    log.append(turn);
+  });
+
+  // ACP reports the context size, not the tokens of a turn: up is the context
+  // that the newest model call sent, down is estimated from the streamed text.
+  usage = "";
+  let measured = false;
+  const t0 = performance.now();
+  const kfmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const counts = () => {
+    const secs = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+    const up = measured ? `↑ ${kfmt(contextUsed)}` : "↑ –";
+    return [secs, up, `↓ ~${kfmt(Math.round(streamed / 4))}`];
+  };
+  const tick = () => {
+    const phase = reply.textContent ? "responding" : "thinking";
+    live.textContent = [phase, ...counts()].join(" · ");
+  };
+  tick();
+  const timer = setInterval(tick, 100);
+
+  onUpdate = (u) =>
+    follow(() => {
+      if (u.sessionUpdate === "usage_update") measured = true;
+      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {
+        reply.textContent += u.content.text;
+        streamed += u.content.text.length;
+      } else if (u.sessionUpdate === "agent_thought_chunk" && u.content?.type === "text") {
+        thought ??= turn.insertBefore(el("div", "line thought"), reply);
+        thought.textContent += u.content.text;
+        streamed += u.content.text.length;
+      }
+    });
+  status("running · esc: interrupt");
+
+  const my = epoch;
+  const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+
+  clearInterval(timer);
+  if (my !== epoch) return;
+  if (!reply.textContent) reply.remove();
+  follow(() => {
+    if (done.error) {
+      live.textContent = done.error.message;
+      live.classList.add("err");
+    } else {
+      live.textContent = [done.result.stopReason, ...counts(), usage].filter(Boolean).join(" · ");
+    }
+  });
+  status(done.error ? "error" : "enter: send · shift+enter: new line", done.error ? "err" : "");
+  running = false;
+  input.disabled = false;
+  input.focus();
+};
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  send();
+});
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    send();
+  } else if (e.key === "ArrowUp" && !input.value && last) {
+    e.preventDefault();
+    input.value = last;
+    grow();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && running) {
+    writer.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+    status("interrupting", "warn");
+  }
+});
 </script>
