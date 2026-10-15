@@ -686,6 +686,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_turn_gets_no_plugin_system_segment":                                         sameAsServe(),
 	"claudecode_question_turn_records_its_cost_after_the_response_ends":                     reGolden(specWaiting, specView, specClaudeGauge),
 	"claudecode_steer_during_a_pending_question_stays_queued_for_the_next_turn":             reGolden(specWaiting, specView, specClaudeGauge),
+	"claudecode_steer_between_a_call_and_a_later_question_of_one_response_stays_queued":     reGolden(specWaiting, specView, specClaudeGauge),
 	"claudecode_question_denied_by_a_plugin_hook_gets_an_error_result_and_the_turn_goes_on": reGolden(specOneResult, specView, specClaudeGauge),
 	"claudecode_answered_question_replays_to_a_model_api_session":                           reGolden(specView, specClaudeGauge),
 	"claudecode_question_dismissed_by_resolve":                                              reGolden(specDismissed, specNoStart, specWaiting, specView, specClaudeGauge),

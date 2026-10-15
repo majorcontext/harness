@@ -123,7 +123,9 @@ const rejected = "The user doesn't want to proceed with this tool use. The tool 
 // A turn that starts with the answer text prints a reply, and so does every
 // turn after the first question. A server that does not list the tool gets the
 // normal turn: a real CLI cannot call a tool that it was not given. The mode
-// question_sibling calls bash beside the question.
+// question_sibling calls bash beside the question. The mode
+// question_late_sibling streams the bash call in its own frame and, with the
+// gate set, holds the response until the gate opens before the question frame.
 func question(f *fake) {
 	if strings.Contains(f.first, answeredPrefix) {
 		f.emit(say("Noted."), success("Noted.", 1, 1))
@@ -139,7 +141,17 @@ func question(f *fake) {
 		return
 	}
 	_ = os.WriteFile(asked, nil, 0o644)
-	partialEmit(f, messageStart(questionMsg), blockStart(0, toolUse("toolu_q", "mcp__harness__ask_user_question", obj{})))
+	late := f.mode == "question_late_sibling"
+	if late {
+		bash := toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"})
+		partialEmit(f, messageStart(questionMsg), blockStart(0, bash))
+		f.emit(assistant(bash).inMessage("id", questionMsg))
+		if _, ok := hostedServer(); ok && os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" {
+			awaitGate()
+		}
+	} else {
+		partialEmit(f, messageStart(questionMsg), blockStart(0, toolUse("toolu_q", "mcp__harness__ask_user_question", obj{})))
+	}
 	calls := []obj{toolUse("toolu_q", "mcp__harness__ask_user_question", askQuestionInput)}
 	if f.mode == "question_sibling" {
 		calls = append(calls, toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"}))
@@ -149,13 +161,13 @@ func question(f *fake) {
 		hang(f)
 		return
 	}
-	if f.mode == "question_sibling" {
+	if f.mode == "question_sibling" || late {
 		sibling := hostedCall("bash", obj{"command": "echo hi"}, "toolu_s")
 		f.emit(user(toolResult("toolu_s", sibling.text(), sibling.Result.IsError)))
 	}
 	done := make(chan hostedText, 1)
 	go func() { done <- hostedCall("ask_user_question", askQuestionInput, "toolu_q") }()
-	if os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" {
+	if os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" && !late {
 		awaitGate()
 	}
 	_ = os.WriteFile(questionStopped(), nil, 0o644)

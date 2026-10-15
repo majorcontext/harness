@@ -148,10 +148,15 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 }
 
 // steerable reports that a steer input may reach the CLI: a tool call of the
-// main thread waits for its result and no question call does. A question call
-// ends the run once its response ends, and the CLI would not answer an input
-// that this run promoted.
+// main thread waits for its result and no question call does, and the response
+// that holds the calls ended. A question call ends the run once its response
+// ends, and the CLI would not answer an input that this run promoted. A call
+// of a response that still streams may be followed by a question call of the
+// same response.
 func (r *run) steerable() bool {
+	if lm := r.live[""]; lm != nil && !lm.stopped {
+		return false
+	}
 	running := false
 	for id := range r.calls {
 		if r.names[id] == turn.AskTool {

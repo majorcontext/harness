@@ -214,7 +214,7 @@ var fakeClaudeHangs = map[string]bool{
 	"hang_after_text": true, "hang_after_listing": true, "hang_in_tool": true,
 	"tool_on_interrupt": true, "tool_result_on_interrupt": true, "success_on_interrupt": true,
 	"placeholder_on_interrupt": true, "exit_on_interrupt": true,
-	"steer_hang": true, "question": true, "question_sibling": true,
+	"steer_hang": true, "question": true, "question_sibling": true, "question_late_sibling": true,
 }
 
 // fakeClaudeExitsByDesign holds the modes that end with an error or print no

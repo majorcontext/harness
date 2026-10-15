@@ -454,8 +454,7 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 			driver: claudeLane{mode: "question", ask: true, signals: true, env: map[string]string{"FAKE_CLAUDE_QUESTION_GATE": "1"}}.newDriver,
 			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, claudeAwaitToolCall{as: "a", callID: "toolu_q"},
 				enqueue{as: "a", text: "second"}, claudeAwaitAdmitted{as: "a", text: "second", n: 1},
-				writeFile{path: "child.gate", body: "open\n"}, waitIdle{as: "a"}, claudeSession{as: "a"}, claudeInputs{as: "a"},
-				claudeDismiss{as: "a", callID: "toolu_q"}, claudeSession{as: "a"}, claudeInputs{as: "a"}},
+				writeFile{path: "child.gate", body: "open\n"}, waitIdle{as: "a"}, claudeSession{as: "a"}, claudeInputs{as: "a"}},
 		},
 		{
 			name:    "claudecode_question_denied_by_a_plugin_hook_gets_an_error_result_and_the_turn_goes_on",
@@ -543,6 +542,13 @@ func TestContractClaudeCodeQuestionResults(t *testing.T) {
 				claudeSession{as: "a"},
 				claudeInvocations{as: "a"},
 			),
+		},
+		{
+			name:   "claudecode_steer_between_a_call_and_a_later_question_of_one_response_stays_queued",
+			driver: claudeLane{mode: "question_late_sibling", ask: true, signals: true, env: map[string]string{"FAKE_CLAUDE_QUESTION_GATE": "1"}}.newDriver,
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, claudeAwaitToolCall{as: "a", callID: "toolu_s"},
+				enqueue{as: "a", text: "second"}, claudeAwaitAdmitted{as: "a", text: "second", n: 1},
+				writeFile{path: "child.gate", body: "open\n"}, waitIdle{as: "a"}, claudeSession{as: "a"}, claudeInputs{as: "a"}},
 		},
 	})
 }

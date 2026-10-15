@@ -156,6 +156,7 @@ var basicModes = map[string]mode{
 	"hang_in_tool":                 hangInTool,
 	"question":                     question,
 	"question_sibling":             question,
+	"question_late_sibling":        question,
 	"tool_on_interrupt":            hangAfterText,
 	"tool_result_on_interrupt":     hangAfterText,
 	"success_on_interrupt":         hangAfterText,
