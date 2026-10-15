@@ -324,6 +324,7 @@ func failedEnd(turnID string, err error) protocol.TurnEnded {
 		ended = withError(ended, strings.TrimPrefix(err.Error(), turn.ErrExhausted.Error()+": "))
 		if pe, ok := provider.AsProviderExhausted(err); ok {
 			ended.RecoverHint = boundedText(pe.RecoverHint, hintCap)
+			ended.ResetsAt = pe.ResetsAt
 		}
 		return ended
 	}

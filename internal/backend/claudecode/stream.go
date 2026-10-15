@@ -56,7 +56,10 @@ type run struct {
 
 	// limits is the newest subscription snapshot of the run; the result
 	// reports it with the usage of its call.
-	limits  *protocol.SubscriptionUsage
+	limits *protocol.SubscriptionUsage
+	// refused is the newest rate_limit_event of the run when its limit
+	// refuses the requests of the run.
+	refused *rateLimitInfo
 	started bool
 	// early holds the mirror frames that arrive before the init frame names
 	// the session that they belong to.
@@ -241,7 +244,10 @@ func (r *run) outcome(err, exit error) error {
 	if res := r.result; res.IsError {
 		failure := res.failure()
 		err = fmt.Errorf("claudecode: the turn failed (%s): %s", res.Subtype, failure)
-		if retryable(res.Subtype, failure) {
+		switch {
+		case r.refused != nil:
+			err = fmt.Errorf("%w: %w", turn.ErrExhausted, r.refused.exhausted(err))
+		case retryable(res.Subtype, failure):
 			err = fmt.Errorf("%w: %w", turn.ErrRetryable, err)
 		}
 	}
@@ -320,6 +326,10 @@ func (r *run) handle(env envelope) error {
 	case "rate_limit_event":
 		if u := env.RateLimitInfo.subscription(); u != nil {
 			r.limits = u
+		}
+		r.refused = nil
+		if env.RateLimitInfo.rejected() {
+			r.refused = env.RateLimitInfo
 		}
 	}
 	return nil

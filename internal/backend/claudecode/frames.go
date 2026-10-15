@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -60,6 +61,8 @@ type streamEvent struct {
 
 // rateLimitInfo is the subscription limit signal of a rate_limit_event frame.
 type rateLimitInfo struct {
+	Status          string                     `json:"status,omitempty"`
+	ResetsAt        int64                      `json:"resetsAt,omitempty"`
 	OverageStatus   string                     `json:"overageStatus,omitempty"`
 	OverageResetsAt int64                      `json:"overageResetsAt,omitempty"`
 	IsUsingOverage  bool                       `json:"isUsingOverage,omitempty"`
@@ -91,6 +94,19 @@ func (i *rateLimitInfo) subscription() *protocol.SubscriptionUsage {
 		u.Overage = &protocol.SubscriptionOverage{InUse: i.IsUsingOverage, Status: i.OverageStatus, ResetsAt: i.OverageResetsAt}
 	}
 	return u
+}
+
+// rejected reports a usage limit that refuses the requests of the run. The
+// CLI sets this status only from the unified usage limit headers of a 429,
+// never for a transient throttle, and a run on overage is not refused.
+func (i *rateLimitInfo) rejected() bool {
+	return i != nil && i.Status == "rejected" && !i.IsUsingOverage
+}
+
+// exhausted is the error of a run that failed after the limit refused it.
+func (i *rateLimitInfo) exhausted(failure error) *provider.Error {
+	return &provider.Error{Kind: provider.ErrKindProviderExhausted, Raw: failure.Error(),
+		RecoverHint: provider.ResetHint(i.ResetsAt), ResetsAt: i.ResetsAt}
 }
 
 type modelUsage struct {

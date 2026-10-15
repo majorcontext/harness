@@ -314,6 +314,7 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 		goalRow("claudecode_error_during_execution_pauses_a_goal_and_keeps_its_errors", "error"),
 		goalRow("claudecode_credential_refusal_in_errors_fails_a_goal", "credential_error"),
 		row("claudecode_rate_limit_event_reaches_subscription_usage", "rate_limit_event", session),
+		row("claudecode_rejected_usage_limit_ends_the_turn_provider_exhausted", "usage_limit_rejected", session, claudeTurnEnds{as: "a"}, claudeInvocations{as: "a"}),
 		row("claudecode_context_window_from_model_usage", "per_call_usage", session),
 	})
 }

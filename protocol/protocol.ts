@@ -557,6 +557,7 @@ export interface TurnEnded {
   error?: string;
   error_class?: string;
   recover_hint?: string;
+  resets_at?: number;
   error_detail?: string;
 }
 

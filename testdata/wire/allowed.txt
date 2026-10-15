@@ -4,6 +4,7 @@
 # starts with the text before it. A path of * covers the whole kind. The gate
 # fails on a line that no check needs.
 parser responses response.failed|error * the Responses failed frame comes mid-stream, and no request provokes one on demand
+parser responses error-body error.resets_at the Codex backend sends resets_at only in the usage-limit error of a spent plan, and no request provokes one on demand
 parser claudecode * local_command the CLI prints a local command only for a slash command that runs in the terminal; headless runs refuse them
 parser claudecode * compact_metadata+ the CLI compacts only after a long conversation, and headless /compact is refused
 parser claudecode * compact_result the CLI prints a compact result only when a compaction ends, and compaction follows a long conversation

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrorKind classifies an error reported by a provider.
@@ -39,6 +40,9 @@ type Error struct {
 
 	// RecoverHint is provider text that states when exhausted access may return.
 	RecoverHint string
+
+	// ResetsAt is the Unix second at which exhausted access returns, or 0 when unknown.
+	ResetsAt int64
 }
 
 // Error returns a normalized context-overflow message when token counts exist.
@@ -71,4 +75,12 @@ func AsProviderExhausted(err error) (*Error, bool) {
 		return pe, true
 	}
 	return nil, false
+}
+
+// ResetHint states the Unix second unix as a RecoverHint, or returns "" when unix is not positive.
+func ResetHint(unix int64) string {
+	if unix <= 0 {
+		return ""
+	}
+	return time.Unix(unix, 0).UTC().Format("2006-01-02 15:04 UTC")
 }

@@ -419,6 +419,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_steer_during_final_text_runs_as_the_next_turn":                                   sameAsServe(),
 	"claudecode_steer_the_cli_queued_past_its_result_answers_in_the_same_turn":                   sameAsServe(),
 	"claudecode_rate_limit_event_reaches_subscription_usage":                                     reGolden(specView, specClaudeGauge),
+	"claudecode_rejected_usage_limit_ends_the_turn_provider_exhausted":                           reGolden(specView),
 	"claudecode_resume_across_turns":                                                             sameAsServe(),
 	"claudecode_resume_survives_restart":                                                         sameAsServe(),
 	"claudecode_thinking_block_is_reasoning":                                                     reGolden(specExternal, specView, specClaudeGauge),

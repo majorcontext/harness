@@ -303,6 +303,16 @@ func streamError(code, message string) error {
 	return err
 }
 
+// withReset gives an exhaustion error the reset time, in Unix seconds, that
+// the error body of the Codex backend states in resets_at.
+func withReset(err error, resetsAt int64) error {
+	if pe, ok := provider.AsProviderExhausted(err); ok && resetsAt > 0 {
+		pe.ResetsAt = resetsAt
+		pe.RecoverHint = cmp.Or(pe.RecoverHint, provider.ResetHint(resetsAt))
+	}
+	return err
+}
+
 var usageExhaustionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)usage limit has been reached`),
 	regexp.MustCompile(`(?i)usage limit (?:reached|exceeded)`),
@@ -573,8 +583,9 @@ func (s *stream) handle(name string, data []byte) error {
 				} `json:"error"`
 			} `json:"response"`
 			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
+				Code     string `json:"code"`
+				Message  string `json:"message"`
+				ResetsAt int64  `json:"resets_at"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -590,7 +601,7 @@ func (s *stream) handle(name string, data []byte) error {
 		case ev.Response.Error.Message != "" || ev.Response.Error.Code != "":
 			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
 		case ev.Error.Message != "" || ev.Error.Code != "":
-			return streamError(ev.Error.Code, ev.Error.Message)
+			return withReset(streamError(ev.Error.Code, ev.Error.Message), ev.Error.ResetsAt)
 		case ev.Message != "" || ev.Code != "":
 			return streamError(ev.Code, ev.Message)
 		default:

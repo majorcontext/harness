@@ -511,6 +511,14 @@ func (a claudeJournalEvents) run(t *testing.T, r *run) {
 	r.record(t, "journal_events", a.as, callResult{Status: http.StatusOK, Body: events})
 }
 
+// claudeTurnEnds records the turn.ended payload of each turn of the session.
+type claudeTurnEnds struct{ as string }
+
+func (a claudeTurnEnds) run(t *testing.T, r *run) {
+	ends := claudeDriverOf(t, r).turnEnds(t, r.id(t, a.as))
+	r.record(t, "turn_ends", a.as, callResult{Status: http.StatusOK, Body: ends})
+}
+
 var _ laneHost = (*runtimeDriver)(nil)
 
 // awaitAssistantText also takes the streamed text: the CLI can wait for
@@ -602,6 +610,17 @@ func (d *runtimeDriver) journalEvents(t *testing.T, id, prefix string) []any {
 		}
 	}
 	return out
+}
+
+func (d *runtimeDriver) turnEnds(t *testing.T, id string) []any {
+	t.Helper()
+	ends := []any{}
+	for _, ev := range d.events(t, id) {
+		if ev.Kind == protocol.KindTurnEnded {
+			ends = append(ends, decodeEvent[map[string]any](t, ev))
+		}
+	}
+	return ends
 }
 
 // claudeMirror records, for each fakeclaude spawn in order, the session that

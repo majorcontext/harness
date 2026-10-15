@@ -124,12 +124,15 @@ func TestUsageLimitExhaustionClassification(t *testing.T) {
 		wantExhausted bool
 		wantClass     provider.RetryableClass
 		wantContains  string
+		wantResetsAt  int64
 	}{
 		{name: "HTTP usage limit message", useHTTP: true, status: http.StatusBadRequest, body: `{"error":{"type":"invalid_request_error","message":"The usage limit has been reached"}}`, wantExhausted: true},
 		{name: "HTTP insufficient_quota code with empty message classifies exhausted", useHTTP: true, status: http.StatusBadRequest, body: `{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}`, wantExhausted: true, wantContains: "insufficient_quota"},
 		{name: "HTTP plain 429 rate limit stays retryable, not exhausted", useHTTP: true, status: http.StatusTooManyRequests, body: `{"error":{"type":"rate_limit_exceeded","message":"Rate limit reached for requests"}}`, wantClass: provider.RetryableRateLimited},
 		{name: "stream usage limit message, no code", eventData: `{"type":"error","message":"The usage limit has been reached"}`, wantExhausted: true},
 		{name: "stream insufficient_quota code with empty message classifies exhausted", eventData: `{"type":"error","code":"insufficient_quota"}`, wantExhausted: true, wantContains: "insufficient_quota"},
+		{name: "HTTP codex usage_limit_reached 429 carries resets_at", useHTTP: true, status: http.StatusTooManyRequests, body: `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"pro","resets_at":1738888888}}`, wantExhausted: true, wantResetsAt: 1738888888},
+		{name: "stream codex usage_limit_reached frame carries resets_at", eventData: `{"type":"error","status":429,"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"pro","resets_at":1738888888}}`, wantExhausted: true, wantResetsAt: 1738888888},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,6 +165,9 @@ func TestUsageLimitExhaustionClassification(t *testing.T) {
 				t.Fatal("err = nil, want a classified error")
 			}
 			assertExhaustionClassification(t, err, tc.wantExhausted, tc.wantClass)
+			if pe, _ := provider.AsProviderExhausted(err); pe != nil && pe.ResetsAt != tc.wantResetsAt {
+				t.Fatalf("ResetsAt = %d, want %d", pe.ResetsAt, tc.wantResetsAt)
+			}
 			if tc.wantContains != "" && !strings.Contains(err.Error(), tc.wantContains) {
 				t.Fatalf("err = %v, want it to contain %q", err, tc.wantContains)
 			}

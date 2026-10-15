@@ -95,6 +95,23 @@ func rateLimitTurn() mode {
 	}
 }
 
+// usageLimitRejected is a run that the plan limit refuses: the CLI reports
+// the rejected limit, then its API error message, then fails the run with
+// the text of that message.
+func usageLimitRejected(f *fake) {
+	info := obj{
+		"status": "rejected", "resetsAt": 1792050000, "rateLimitType": "five_hour",
+		"overageStatus": "rejected", "overageDisabledReason": "org_level_disabled", "isUsingOverage": false,
+		"unifiedWindows": obj{
+			"five_hour": obj{"utilization": 1, "resetsAt": 1792050000},
+			"seven_day": obj{"utilization": 0.4, "resetsAt": 1792260000},
+		},
+	}
+	const text = "You've hit your limit · resets 3pm (UTC)"
+	f.emit(rateLimitEvent(info), say(text).set("error", "rate_limit").set("is_api_error_message", true),
+		result("success", true, text, 0, 0).set("api_error_status", 429))
+}
+
 func compactBoundary(f *fake) {
 	f.emit(
 		system("compact_boundary", obj{"compact_metadata": obj{"trigger": "auto", "pre_tokens": 123456}, "session_id": f.sessionID}),
@@ -151,6 +168,7 @@ var basicModes = map[string]mode{
 	"compact_boundary":             compactBoundary,
 	"compact_boundary_post_tokens": compactBoundaryPostTokens,
 	"rate_limit_event":             rateLimitTurn(),
+	"usage_limit_rejected":         usageLimitRejected,
 	"hang_after_text":              hangAfterText,
 	"hang_after_listing":           hangAfterListing,
 	"hang_in_tool":                 hangInTool,

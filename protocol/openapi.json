@@ -1947,6 +1947,9 @@
           "recover_hint": {
             "type": "string"
           },
+          "resets_at": {
+            "type": "integer"
+          },
           "error_detail": {
             "type": "string"
           }

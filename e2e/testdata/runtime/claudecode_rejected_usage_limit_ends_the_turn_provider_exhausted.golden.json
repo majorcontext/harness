@@ -1,0 +1,110 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "You've hit your limit · resets 3pm (UTC)"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 8,
+        "id": "ses:a",
+        "last_turn": {
+          "cause": "provider_exhausted",
+          "error": "claudecode: the turn failed (success): You've hit your limit · resets 3pm (UTC)",
+          "stop_reason": "failed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "overage": {
+            "in_use": false,
+            "resets_at": 0,
+            "status": "rejected"
+          },
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour",
+              "resets_at": 1792050000,
+              "used_percent": 100
+            },
+            {
+              "key": "seven_day",
+              "label": "Weekly",
+              "resets_at": 1792260000,
+              "used_percent": 40
+            }
+          ]
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "turn_ends.a": {
+      "status": 200,
+      "body": [
+        {
+          "cause": "provider_exhausted",
+          "error": "claudecode: the turn failed (success): You've hit your limit · resets 3pm (UTC)",
+          "recover_hint": "2026-10-15 07:40 UTC",
+          "resets_at": 1792050000,
+          "stop_reason": "failed",
+          "turn_id": "turn#1"
+        }
+      ]
+    }
+  }
+}

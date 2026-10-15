@@ -317,9 +317,10 @@ func apiError(resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var body struct {
 		Error struct {
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Type     string `json:"type"`
+			Code     string `json:"code"`
+			Message  string `json:"message"`
+			ResetsAt int64  `json:"resets_at"`
 		} `json:"error"`
 	}
 	var err error
@@ -337,11 +338,11 @@ func apiError(resp *http.Response) error {
 			msg = fmt.Sprintf("openai: %s (HTTP %d)", kind, resp.StatusCode)
 		}
 		if hint, ok := parseUsageExhaustion(resp.StatusCode, body.Error.Message, body.Error.Type, body.Error.Code); ok {
-			return provider.MarkPermanent(&provider.Error{
+			return withReset(provider.MarkPermanent(&provider.Error{
 				Kind:        provider.ErrKindProviderExhausted,
 				Raw:         msg,
 				RecoverHint: hint,
-			})
+			}), body.Error.ResetsAt)
 		}
 		err = errors.New(msg)
 	} else {
