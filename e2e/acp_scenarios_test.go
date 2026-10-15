@@ -51,8 +51,6 @@ type acpScenario struct {
 	jsTool bool
 	// wasmOnly runs the row on the wasm hosts only, because the native hosts always offer a login. The golden is the output of the wasm host, with no alignment to the native hosts.
 	wasmOnly bool
-	// device scripts the issuer of the device code login of a wasm host. The config names it as codex_issuer.
-	device *deviceSpec
 	// browser marks a row that also runs on the browser host. It needs no file, no directory beyond "main", and no restart.
 	browser bool
 }
@@ -162,7 +160,7 @@ const (
 	acpInvalidParams  = -32602
 )
 
-var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpInjectedScenarios, acpDeviceScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios, acpSearchScenarios)
+var acpScenarios = slices.Concat(acpWireScenarios, acpSessionScenarios, acpToolScenarios, acpConfigScenarios, acpLoadScenarios, acpAuthScenarios, acpInjectedScenarios, acpCodexModelsScenarios, acpCompactionScenarios, acpPromptContentScenarios, acpElicitationScenarios, acpSearchScenarios)
 
 var acpWireScenarios = []acpScenario{
 	{
@@ -351,10 +349,6 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 					}
 					fake = env.login.fake
 					env.configPath = writeGoalConfigWith(t, "", env.login.config())
-				} else if sc.device != nil {
-					env.device = startDevice(t, *sc.device)
-					fake = harnesstest.NewAnthropic(t)
-					env.configPath = writeGoalConfigWith(t, fake.URL(), map[string]any{"codex_issuer": env.device.issuer.URL()})
 				} else {
 					fake = harnesstest.NewAnthropic(t, sc.model...)
 					env.configPath = writeGoalConfigWith(t, fake.URL(), sc.config)
@@ -367,7 +361,6 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				c.fake, c.env = fake, env
 				c.paths[env.configPath] = "<user-config>"
 				env.login.register(c)
-				env.device.register(c)
 				c.reconnect = func() {
 					c.t.Helper()
 					c.drain()

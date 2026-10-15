@@ -60,10 +60,10 @@ export interface CreateHarnessOptions {
   config?: object;
   /**
    * A same-origin proxy: baseURL fills every provider that sets none; headers go only on requests to the origin of baseURL.
-   * providerBaseURLs maps a provider name to the base_url of its entry, also of a native provider such as codex, so a page sends
-   * the ChatGPT backend traffic through a same-origin pass-through path that holds no credential. In a browser, a request of a provider that uses the ChatGPT login to another origin than the page fails before it is sent.
+   * providers maps a provider name to the base_url and the login_url of its entry, also of a native provider such as codex, which then gets auth "injected":
+   * a server that holds the credential adds it to the request, and loginURL is the page where the user signs in. Relative URLs resolve against the page.
    */
-  proxy?: { baseURL?: string | URL; headers?: Record<string, string>; providerBaseURLs?: Record<string, string | URL> };
+  proxy?: { baseURL?: string | URL; headers?: Record<string, string>; providers?: Record<string, { baseURL?: string | URL; loginURL?: string | URL }> };
   /** A page fetch that carries the model requests. A `fetch` callback must pass `init.redirect` on to the network: when it follows a redirect itself, the module cannot stop the request that the redirect makes. */
   fetch?: (url: string, init: { method: string; headers: Record<string, string>; body?: Uint8Array; signal: AbortSignal }) => Promise<Response>;
   tools?: PageTool[];

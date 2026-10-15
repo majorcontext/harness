@@ -36,8 +36,8 @@ type Router struct {
 	backends map[string]turn.Backend
 	// listed holds the models of each provider whose entry sets models.
 	listed map[string][]modelmeta.Model
-	// shown holds, for a provider that lists only when the host can serve it, the test of that.
-	shown map[string]func() bool
+	// hidden holds the providers that the host cannot serve, which List leaves out.
+	hidden map[string]bool
 }
 
 // NewRouter returns a Router over backends, by provider name.
@@ -61,13 +61,11 @@ type Env struct {
 	NoGetenv string
 	// Log receives the log lines of the backends. nil: slog.Default().
 	Log *slog.Logger
-	// IssuerTransport carries the requests of the ChatGPT login to its issuer, the refresh among them. nil: the default transport. It is not the model transport, so a gateway credential or a host rewrite of that transport never sees the refresh token.
-	IssuerTransport http.RoundTripper
 	// Logins owns the login state of the injected provider entries, and is shared with the ACP logins of the connection. nil: the backend makes one over its own model transport.
 	Logins *injectedauth.Logins
 	// NoProcess says that the host starts no process, so a provider that runs a child process has no backend.
 	NoProcess bool
-	// NoLogin says that the host has no way to create the ChatGPT login, so a provider that uses the login lists its models only when the login file exists.
+	// NoLogin says that the host has no file login: a provider that uses the ChatGPT login is not listed, reads no login file, and fails a request before it is sent.
 	NoLogin bool
 }
 
@@ -81,14 +79,10 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	if env.Logins == nil {
 		env.Logins = injectedauth.New(injectedauth.Options{Transport: transport, Probe: ProbeOf})
 	}
-	var login *http.Client
-	if env.IssuerTransport != nil {
-		login = codexauth.Client(env.IssuerTransport)
-	}
 	codex := sync.OnceValue(func() *codexauth.Source {
-		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, HTTP: login, Log: env.Log})
+		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
 	})
-	shown := map[string]func() bool{}
+	hidden := map[string]bool{}
 	for name, p := range cfg.Providers {
 		if p.Type == config.TypeClaudeCodeCLI {
 			if env.NoProcess {
@@ -110,15 +104,12 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 				backends[name] = be
 			}
 			if env.NoLogin && p.Auth == config.AuthChatGPT {
-				shown[name] = func() bool {
-					_, err := (codexauth.Store{Path: cfg.CodexAuthFile}).Load()
-					return !codexauth.IsLoginRequired(err)
-				}
+				hidden[name] = true
 			}
 		}
 	}
 	r := NewRouter(backends)
-	r.shown = shown
+	r.hidden = hidden
 	for name, p := range cfg.Providers {
 		if _, ok := backends[name]; ok && len(p.Models) > 0 {
 			r.listModels(name, modelmeta.Named(p.Models, modelmeta.Models(name)))
@@ -137,7 +128,9 @@ func client(name string, p config.Provider, transport func(provider string) http
 			hc = &http.Client{Transport: rt}
 		}
 	}
-	if p.Auth == config.AuthChatGPT {
+	if p.Auth == config.AuthChatGPT && env.NoLogin {
+		hc = &http.Client{Transport: noLoginTransport{name: name}}
+	} else if p.Auth == config.AuthChatGPT {
 		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath), responses.ModelsURL(p.BaseURL))
 	} else if e := env.Logins.Of(name, p); e != nil {
 		hc = e.Client(hc)
@@ -164,6 +157,16 @@ func client(name string, p config.Provider, transport func(provider string) http
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
+}
+
+// noLoginTransport fails every request before it is sent, because the host has no file login.
+type noLoginTransport struct{ name string }
+
+func (t noLoginTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	return nil, &injectedauth.LoginRequiredError{Text: "not logged in to " + t.name + "; this host has no ChatGPT login, so set auth to injected on the provider entry"}
 }
 
 // codexClient wraps hc so that the Codex login reaches the endpoints of the entry and no other URL.
@@ -259,7 +262,7 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 	slices.Sort(names)
 	out := []protocol.Model{}
 	for _, name := range names {
-		if show, limited := m.shown[name]; limited && !show() {
+		if m.hidden[name] {
 			continue
 		}
 		be := m.backends[name]

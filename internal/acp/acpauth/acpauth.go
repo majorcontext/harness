@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/http"
 	"os/exec"
 	"slices"
 	"strings"
@@ -48,12 +47,8 @@ type Options struct {
 	Out io.Writer
 	// Env is the environment of the Claude Code CLI. Nil is the environment of the process.
 	Env []string
-	// DeviceCode makes the ChatGPT login the device code flow, which the client shows as an elicitation in URL mode, in place of the browser callback on a loopback port. The login is then offered only to a client with that capability, with LoginStore, and when the config sets codex_auth_file. It has no terminal method, because the host has no command to run.
-	DeviceCode bool
-	// LoginStore says that the host has a persistent store, held under a lock of its own, that keeps the login file. DeviceCode offers no login without it, whatever codex_auth_file says.
-	LoginStore bool
-	// HTTP sends the requests of the device code flow. Nil: a client with a 30 s timeout.
-	HTTP *http.Client
+	// NoLogin says that the host has no file login: it offers no ChatGPT method, reads no login file, and owes no terminal method.
+	NoLogin bool
 	// LoginBudget bounds a sign-in from the start of authenticate. Zero: 10 minutes.
 	LoginBudget time.Duration
 	// Logins owns the login state of the injected provider entries. It carries the transport of the status probe, which is the transport of the model calls. nil: no entry is injected.
@@ -103,7 +98,7 @@ type target struct {
 
 // targets offers the ChatGPT login always, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
 func (a *Auth) targets(cfg *config.Config, c acp.ClientAuth) target {
-	t := target{chatgpt: !a.opts.DeviceCode || (c.URL && a.opts.LoginStore && cfg.CodexAuthFile != "")}
+	t := target{chatgpt: !a.opts.NoLogin}
 	if entries := cfg.ProviderEntries(); c.URL && a.opts.Logins != nil {
 		for _, name := range slices.Sorted(maps.Keys(entries)) {
 			if p := entries[name]; p.UsesInjectedAuth() && p.LoginURL != "" {
@@ -130,7 +125,7 @@ func (a *Auth) userTargets(c acp.ClientAuth) target {
 // Methods implements acp.Auth.
 func (a *Auth) Methods(c acp.ClientAuth) []acp.Method {
 	t := a.userTargets(c)
-	terminal := c.Terminal && !a.opts.DeviceCode
+	terminal := c.Terminal
 	var out []acp.Method
 	if t.chatgpt {
 		out = append(out, acp.Method{ID: chatGPT, Name: "Log in with ChatGPT", Description: "Open your browser and sign in with your ChatGPT subscription.", Logout: true})
@@ -197,10 +192,7 @@ func (a *Auth) Authenticate(ctx context.Context, id string, client acp.LoginClie
 	return login(a, ctx, cfg, client)
 }
 
-func (a *Auth) chatGPTLogin(ctx context.Context, cfg *config.Config, client acp.LoginClient) error {
-	if a.opts.DeviceCode {
-		return a.chatGPTDeviceLogin(ctx, cfg, client)
-	}
+func (a *Auth) chatGPTLogin(ctx context.Context, cfg *config.Config, _ acp.LoginClient) error {
 	return codexauth.LoginBrowser(ctx, codexauth.LoginOptions{Store: store(cfg), Issuer: cfg.CodexIssuer, Out: a.opts.Out, Open: a.opts.Open})
 }
 
@@ -228,7 +220,7 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, mode acp.CheckMode)
 	case p.UsesInjectedAuth():
 		return a.checkInjected(ctx, provider, p, mode)
 	case mode == acp.CheckProbed:
-	case p.UsesChatGPTLogin():
+	case p.UsesChatGPTLogin() && !a.opts.NoLogin:
 		if _, err := store(cfg).Load(); codexauth.IsLoginRequired(err) {
 			return &acp.AuthRequiredError{Message: err.Error()}
 		}

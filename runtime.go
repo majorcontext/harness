@@ -88,8 +88,6 @@ type Options struct {
 	// ModelTransport supplies the credentials. A backend child process, such as the claude CLI, a plugin,
 	// an MCP stdio server, a process, or a bash call, still inherits the environment of this process.
 	Getenv func(key string) string
-	// IssuerTransport carries the ChatGPT login requests to the issuer. nil: the default transport. ModelTransport never carries them.
-	IssuerTransport http.RoundTripper
 	// Logins holds the sign-in state of the injected providers. The hosts of this module set it; nil: the runtime makes its own from ModelTransport.
 	Logins *Logins
 	// Host says what the host cannot do. The zero value is a host that can do everything.
@@ -132,7 +130,7 @@ type Options struct {
 type HostLimits struct {
 	// NoProcess says that the host starts no process. A provider that runs a child process, such as the Claude Code CLI, has no backend.
 	NoProcess bool
-	// NoLogin says that the host has no way to create the ChatGPT login. A provider that uses the login then lists its models only when the login file exists.
+	// NoLogin says that the host has no file login. A provider that uses the ChatGPT login is then not listed, reads no login file, and fails a request before it is sent.
 	NoLogin bool
 	// NoNetwork says that the host has no direct network. The runtime offers no web_fetch.
 	NoNetwork bool
@@ -261,7 +259,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)

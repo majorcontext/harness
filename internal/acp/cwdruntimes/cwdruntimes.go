@@ -35,11 +35,9 @@ type Options struct {
 	// ModelTransport and Tools are the matching harness.Options of every runtime.
 	ModelTransport func(provider string) http.RoundTripper
 	Tools          []harness.Tool
-	// IssuerTransport is the matching harness.Options of every runtime.
-	IssuerTransport http.RoundTripper
 	// Logins is the sign-in state of the injected providers, shared with the ACP logins. Its transport must be the same function as ModelTransport, or probes and model calls take different routes. nil: each runtime makes its own.
 	Logins *injectedauth.Logins
-	// Host is the harness.Options.Host of every runtime. A connection whose client can take the login (RuntimeOptions.Login) clears NoLogin.
+	// Host is the harness.Options.Host of every runtime.
 	Host harness.HostLimits
 }
 
@@ -92,9 +90,7 @@ func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (
 			return nil, err
 		}
 	}
-	host := r.opts.Host
-	host.NoLogin = host.NoLogin && !opts.Login
-	rt, err := harness.New(harness.Options{Host: host, IssuerTransport: r.opts.IssuerTransport, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
+	rt, err := harness.New(harness.Options{Host: r.opts.Host, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
 		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
 		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
 	if err != nil {

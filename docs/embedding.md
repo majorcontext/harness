@@ -208,9 +208,9 @@ everything else.
 Worker, or spawns `harness acp` under Node. Either way, you get an ACP stream.
 In the WebAssembly module, the default tools have no `bash` or `process`;
 `shellTool()` adds a shell for the browser. Keep model keys behind a
-same-origin proxy, never in the page. The module can also sign in with a
-ChatGPT subscription by the device code flow when the page is the user's own;
-see the `sdk/embed` README.
+server, never in the page. A provider entry with `auth: "injected"` sends no
+credential, and the server adds it; `proxy.providers` sets the URLs of the
+server and of its sign-in page. See the `sdk/embed` README.
 
 ## Examples
 
