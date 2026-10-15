@@ -17,49 +17,43 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "mcp__harness__ask_user_question",
-            "arguments": {
-              "questions": [
-                {
-                  "header": "DB",
-                  "multiSelect": false,
-                  "options": [
-                    {
-                      "description": "a",
-                      "label": "PostgreSQL"
-                    },
-                    {
-                      "description": "b",
-                      "label": "SQLite"
-                    }
-                  ],
-                  "question": "Which database?"
-                }
-              ]
-            }
+            "type": "text",
+            "text": "Let me check that."
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "tool",
+        "role": "assistant",
         "parts": [
           {
-            "type": "tool_result",
+            "type": "tool_call",
             "call_id": "toolu#1",
-            "content": "(no output)"
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
           }
         ]
       },
       {
         "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "Noted."
+            "text": "Done — it printed hi."
           }
         ]
       }
@@ -301,31 +295,12 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
-            "kind": "other",
-            "name": "mcp__harness__ask_user_question",
-            "rawInput": {
-              "questions": [
-                {
-                  "header": "DB",
-                  "multiSelect": false,
-                  "options": [
-                    {
-                      "description": "a",
-                      "label": "PostgreSQL"
-                    },
-                    {
-                      "description": "b",
-                      "label": "SQLite"
-                    }
-                  ],
-                  "question": "Which database?"
-                }
-              ]
+            "content": {
+              "text": "Let me check that.",
+              "type": "text"
             },
-            "sessionUpdate": "tool_call",
-            "status": "in_progress",
-            "title": "mcp__harness__ask_user_question",
-            "toolCallId": "toolu_q"
+            "messageId": "\u003cmessage:1\u003e",
+            "sessionUpdate": "agent_message_chunk"
           }
         }
       }
@@ -338,10 +313,40 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
-            "rawOutput": "",
+            "kind": "execute",
+            "name": "bash",
+            "rawInput": {
+              "command": "echo hi"
+            },
+            "sessionUpdate": "tool_call",
+            "status": "in_progress",
+            "title": "bash echo hi",
+            "toolCallId": "toolu_1"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "content": [
+              {
+                "content": {
+                  "text": "hi\n",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "rawOutput": "hi\n",
             "sessionUpdate": "tool_call_update",
             "status": "completed",
-            "toolCallId": "toolu_q"
+            "toolCallId": "toolu_1"
           }
         }
       }
@@ -355,10 +360,10 @@
           "sessionId": "\u003csession:a\u003e",
           "update": {
             "content": {
-              "text": "Noted.",
+              "text": "Done — it printed hi.",
               "type": "text"
             },
-            "messageId": "\u003cmessage:1\u003e",
+            "messageId": "\u003cmessage:2\u003e",
             "sessionUpdate": "agent_message_chunk"
           }
         }

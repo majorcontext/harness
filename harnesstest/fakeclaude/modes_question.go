@@ -121,8 +121,9 @@ const rejected = "The user doesn't want to proceed with this tool use. The tool 
 // opens the request and interrupts the CLI once the response ends. With
 // FAKE_CLAUDE_QUESTION_GATE set, the response ends when the window gate opens.
 // A turn that starts with the answer text prints a reply, and so does every
-// turn after the first question. The mode question_sibling calls bash beside
-// the question.
+// turn after the first question. A server that does not list the tool gets the
+// normal turn: a real CLI cannot call a tool that it was not given. The mode
+// question_sibling calls bash beside the question.
 func question(f *fake) {
 	if strings.Contains(f.first, answeredPrefix) {
 		f.emit(say("Noted."), success("Noted.", 1, 1))
@@ -130,6 +131,10 @@ func question(f *fake) {
 	}
 	asked := os.Getenv("FAKE_CLAUDE_STATE") + ".asked"
 	if _, err := os.Stat(asked); err == nil {
+		normalTurn(f)
+		return
+	}
+	if _, ok := hostedServer(); ok && !hostedOffers("ask_user_question") {
 		normalTurn(f)
 		return
 	}
