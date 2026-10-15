@@ -12,8 +12,8 @@ import (
 
 // SetModel writes model into the config file at path when the file sets none, and reports whether it wrote.
 // It creates a missing file, inserts the key into the text of an existing file and so keeps every other byte
-// and the mode, and replaces the file in one rename. A file that holds an empty "model" key is the one case
-// that is written again with sorted keys. A file that does not parse is left as it is and is an error. A
+// and the mode, and replaces the file in one rename. A file that holds an empty "model" key, of any letter case, is the one case
+// that is written again with sorted keys. A file that does not parse, holds no object, or would not load back with the model is left as it is and is an error. A
 // symlink is written through, and a symlink to a missing file is an error.
 func SetModel(path, model string) (bool, error) {
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -58,16 +58,37 @@ func withModel(path string, data, raw []byte) (string, error) {
 	if err != nil || cfg.Model != "" {
 		return "", err
 	}
+	if bytes.TrimSpace(data)[0] != '{' {
+		return "", fmt.Errorf("config: %s holds no JSON object", path)
+	}
 	doc := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return "", fmt.Errorf("config: parsing %s: %w", path, err)
 	}
-	if _, has := doc["model"]; !has {
-		return insertModel(string(data), raw), nil
+	var want string
+	_ = json.Unmarshal(raw, &want)
+	has := false
+	for k := range doc {
+		if strings.EqualFold(k, "model") {
+			delete(doc, k)
+			has = true
+		}
 	}
-	doc["model"] = raw
-	b, err := json.MarshalIndent(doc, "", "  ")
-	return string(b) + "\n", err
+	var out string
+	if !has {
+		out = insertModel(string(data), raw)
+	} else {
+		doc["model"] = raw
+		b, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		out = string(b) + "\n"
+	}
+	if back, err := Parse(path, []byte(out)); err != nil || back.Model != want {
+		return "", fmt.Errorf("config: cannot set model in %s without changing its other keys", path)
+	}
+	return out, nil
 }
 
 func newDocument(raw []byte) string { return "{\n  \"model\": " + string(raw) + "\n}\n" }

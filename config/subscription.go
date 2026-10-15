@@ -31,10 +31,7 @@ func (c *Config) defaultModel() string {
 
 // apiKeyPresent says that the credential of the built-in default is set, so the default works and stays.
 func apiKeyPresent(entries map[string]Provider) bool {
-	env := entries["anthropic"].APIKeyEnv
-	if env == "" {
-		env = NativeKeyEnv("anthropic")
-	}
+	env := entries["anthropic"].KeyEnv("anthropic")
 	return env != "" && os.Getenv(env) != ""
 }
 
