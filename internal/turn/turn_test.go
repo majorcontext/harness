@@ -219,7 +219,7 @@ func (h *joinHooks) Join(_ context.Context, _ protocol.ToolCall, r protocol.Tool
 	return r
 }
 
-type loopOwner struct{ model }
+type loopOwner struct{}
 
 func (*loopOwner) Capabilities(string) turn.Capabilities { return turn.Capabilities{OwnsLoop: true} }
 
