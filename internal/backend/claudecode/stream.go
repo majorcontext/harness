@@ -139,12 +139,27 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}
-		if r.steer && len(r.calls) > 0 {
+		if r.steer && r.steerable() {
 			if err := r.steered(); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// steerable reports that a steer input may reach the CLI: a tool call of the
+// main thread waits for its result and no question call does. A question call
+// ends the run once its response ends, and the CLI would not answer an input
+// that this run promoted.
+func (r *run) steerable() bool {
+	running := false
+	for id := range r.calls {
+		if r.names[id] == turn.AskTool {
+			return false
+		}
+		running = true
+	}
+	return running
 }
 
 // awaitSecond reports that the CLI owes a second result. A steer input that

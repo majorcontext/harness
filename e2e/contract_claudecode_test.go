@@ -450,6 +450,14 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 				writeFile{path: "child.gate", body: "open\n"}, waitIdle{as: "a"}, claudeSession{as: "a"}, claudeDismiss{as: "a", callID: "toolu_q"}},
 		},
 		{
+			name:   "claudecode_steer_during_a_pending_question_stays_queued_for_the_next_turn",
+			driver: claudeLane{mode: "question", ask: true, signals: true, env: map[string]string{"FAKE_CLAUDE_QUESTION_GATE": "1"}}.newDriver,
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, claudeAwaitToolCall{as: "a", callID: "toolu_q"},
+				enqueue{as: "a", text: "second"}, claudeAwaitAdmitted{as: "a", text: "second", n: 1},
+				writeFile{path: "child.gate", body: "open\n"}, waitIdle{as: "a"}, claudeSession{as: "a"}, claudeInputs{as: "a"},
+				claudeDismiss{as: "a", callID: "toolu_q"}, claudeSession{as: "a"}, claudeInputs{as: "a"}},
+		},
+		{
 			name:    "claudecode_question_denied_by_a_plugin_hook_gets_an_error_result_and_the_turn_goes_on",
 			driver:  claudeLane{mode: "question", ask: true, signals: true, extra: pluginConfig(t, map[string]any{"deny_ask": "Which database?"})}.newDriver,
 			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}},
