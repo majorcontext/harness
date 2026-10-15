@@ -2,7 +2,11 @@
 // plugin blocks a force push, rm -rf on a broad target, and a read_file call on a
 // .env file. The model sees each block as an error result.
 //
-//	ANTHROPIC_API_KEY=... go run ./examples/guardrail "Run git push --force"
+//	go run ./examples/guardrail "Run git push --force"
+//
+// The model is the default of the machine: the API default when
+// ANTHROPIC_API_KEY is set, else the ChatGPT login of "harness login codex",
+// else the claude program on PATH.
 //
 // The plugin in examples/guardrail/cmd/guardrail-plugin runs the same value as
 // a plugin process.
@@ -18,15 +22,13 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/examples/guardrail/internal/guard"
+	"github.com/majorcontext/harness/examples/internal/login"
 	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
 
 func main() {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		log.Fatal("set ANTHROPIC_API_KEY")
-	}
 	prompt := strings.Join(os.Args[1:], " ")
 	if prompt == "" {
 		prompt = "Run git push --force origin main."
@@ -36,6 +38,7 @@ func main() {
 	rt, err := harness.New(harness.Options{
 		Store:   store.NewMemStore(),
 		WorkDir: ".",
+		Config:  login.Config(),
 		Getenv:  os.Getenv,
 		Plugins: []*plugin.Plugin{guard.Plugin},
 	})

@@ -219,10 +219,10 @@ run them from its root:
 
 ```bash
 git clone https://github.com/majorcontext/harness && cd harness
-ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
+go run ./examples/prompt "Summarize README.md"
 ```
 
-The examples use an API key: set `ANTHROPIC_API_KEY`.
+The examples set `Config.SubscriptionDefault`: they use `ANTHROPIC_API_KEY` when it is set, else the login of `harness login codex`, else the `claude` program on `PATH`.
 
 - [`prompt`](../examples/prompt): send one prompt and stream the reply.
 - [`custom-tool`](../examples/custom-tool): give the model a Go function to call.

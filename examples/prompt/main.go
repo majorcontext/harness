@@ -2,7 +2,11 @@
 // model can use the built-in tools (bash, file reads and edits) in the current
 // directory.
 //
-//	ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
+//	go run ./examples/prompt "Summarize README.md"
+//
+// The model is the default of the machine: the API default when
+// ANTHROPIC_API_KEY is set, else the ChatGPT login of "harness login codex",
+// else the claude program on PATH.
 package main
 
 import (
@@ -14,21 +18,19 @@ import (
 	"strings"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/examples/internal/login"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
 
 func main() {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		log.Fatal("set ANTHROPIC_API_KEY")
-	}
 	prompt := strings.Join(os.Args[1:], " ")
 	if prompt == "" {
 		prompt = "List the files in this directory."
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: ".", Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: ".", Config: login.Config(), Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}

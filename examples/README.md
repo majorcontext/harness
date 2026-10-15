@@ -12,8 +12,21 @@ Each directory is a small program. Run it from the repository root.
 | [`plugins/redactor.mjs`](plugins/redactor.mjs) | A process plugin written with the TypeScript SDK. |
 
 ```bash
-ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
+go run ./examples/prompt "Summarize README.md"
 ```
+
+Each example other than `embed-server` sets `Config.SubscriptionDefault` and
+takes the default model of your machine, the same order as `harness run`:
+
+1. With `ANTHROPIC_API_KEY` set, the API default.
+2. Else a ChatGPT login from `harness login codex` selects `codex/gpt-6.1-sol`.
+3. Else the `claude` program on `PATH` selects `claude-code/sonnet`. The CLI
+   keeps its own login; run `harness login claude-code` to sign in.
+
+`examples/internal/login` sets `Config.CodexAuthFile` to `auth/codex.json`
+beside `$HARNESS_CONFIG`, else in `~/.harness`; the Go API has no default for
+it. `switch-model` continues on another model that can run. Its `-first` and
+`-then` flags take any `provider/model`.
 
 The `guardrail` example runs in the host process with `harness.Options.Plugins`.
 To run the same plugin as a process, build `guardrail-plugin` and add it to

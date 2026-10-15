@@ -1,7 +1,11 @@
 // Custom-tool gives the model a Go function to call. The model calls
 // roll_dice, and the reply uses the result.
 //
-//	ANTHROPIC_API_KEY=... go run ./examples/custom-tool
+//	go run ./examples/custom-tool
+//
+// The model is the default of the machine: the API default when
+// ANTHROPIC_API_KEY is set, else the ChatGPT login of "harness login codex",
+// else the claude program on PATH.
 package main
 
 import (
@@ -14,6 +18,7 @@ import (
 	"strconv"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/examples/internal/login"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -47,12 +52,9 @@ func (rollDice) Run(_ context.Context, call harness.Call) (protocol.ToolResult, 
 }
 
 func main() {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		log.Fatal("set ANTHROPIC_API_KEY")
-	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: []harness.Tool{rollDice{}}, Config: login.Config(), Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
