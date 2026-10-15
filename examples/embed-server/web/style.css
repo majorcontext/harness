@@ -1,7 +1,7 @@
 :root {
   --bg: #101114;
   --fg: #d4d4d4;
-  --dim: #75787f;
+  --dim: #808389;
   --rule: #2c2e33;
   --you: #8fb4e0;
   --warn: #d7b46a;
@@ -12,7 +12,7 @@
   :root:not([data-theme="dark"]) {
     --bg: #fafaf8;
     --fg: #1e1e1e;
-    --dim: #73767c;
+    --dim: #686b71;
     --rule: #dadad5;
     --you: #2a5d9f;
     --warn: #8a6100;
@@ -57,9 +57,10 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
   white-space: nowrap;
 }
 .bar { padding: 10px 0; border-bottom: 1px solid var(--rule); }
-.status { padding: 6px 0 10px; }
+.status { padding: 6px 0 10px; flex-wrap: wrap; white-space: normal; }
 .status > :first-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.keys { display: flex; gap: 2ch; }
+.keys { display: flex; flex-wrap: wrap; gap: 0 2ch; min-width: 0; }
+#who { overflow-wrap: anywhere; }
 .keys form { display: inline; margin: 0; }
 
 .log { flex: 1; overflow-y: auto; padding: 14px 0; }
@@ -77,6 +78,9 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
   border-top: 1px solid var(--rule);
   padding: 8px 0 0;
 }
+/* The textarea draws no outline; the rule above it marks the focus. */
+.input:focus-within { border-top-color: var(--dim); }
+.input:focus-within label { color: var(--fg); }
 .input label { color: var(--dim); }
 .input textarea {
   flex: 1;
@@ -104,6 +108,7 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
   padding: 2px 0;
   width: 24ch;
 }
+.page input:focus { border-bottom-color: var(--fg); }
 .page button:not(.link) {
   font: inherit;
   color: var(--fg);

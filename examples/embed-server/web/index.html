@@ -51,14 +51,18 @@ const follow = (fn) => {
   if (stick) log.scrollTop = log.scrollHeight;
 };
 
+// user is the signed-in user of the app. refreshWho reports whether it changed.
+let user = null;
 const refreshWho = async () => {
   const who = await (await fetch("/whoami")).json();
   $("who").textContent = who.user ?? "not signed in";
   $("login").hidden = !!who.user;
   $("logout").hidden = !who.user;
+  const changed = (who.user ?? null) !== user;
+  user = who.user ?? null;
+  return changed;
 };
 await refreshWho();
-window.addEventListener("focus", refreshWho);
 
 // The module holds no credential. The server adds it to the requests that go
 // to /model-proxy/, and answers 401 until the user signs in at /settings/codex.
@@ -131,11 +135,13 @@ await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
 // session/new and session/load fail; the page tries again when the tab gets
 // the focus back. The id of the session stays in localStorage, and
 // session/load replays its conversation into the scrollback.
-// A tab on a memory store neither reads nor writes the id: it would point the
-// tab that holds the store at a session that the store does not have.
+// The saved id is per app user, so one user never opens the conversation of
+// another. A tab on a memory store neither reads nor writes it: it would point
+// the tab that holds the store at a session that the store does not have.
+const savedKey = () => (persisted && user ? `harness.session:${user}` : null);
 const saved = {
-  get: () => { if (!persisted) return null; try { return localStorage.getItem("harness.session"); } catch { return null; } },
-  set: (id) => { if (!persisted) return; try { id ? localStorage.setItem("harness.session", id) : localStorage.removeItem("harness.session"); } catch {} },
+  get: () => { const k = savedKey(); if (!k) return null; try { return localStorage.getItem(k); } catch { return null; } },
+  set: (id) => { const k = savedKey(); if (!k) return; try { id ? localStorage.setItem(k, id) : localStorage.removeItem(k); } catch {} },
 };
 let sessionId = null;
 let notice = null;
@@ -169,7 +175,17 @@ const replay = () => {
   };
 };
 
+// A login that the server got a moment ago can still read as missing: the
+// module caches a failed probe for 30 s. So a missing login retries on a timer
+// for five minutes, and on each focus.
+let retry = 0;
+let retries = 0;
 const fail = (err) => {
+  if (err?.data?.code === "login_required" && retries < 30) {
+    retries++;
+    clearTimeout(retry);
+    retry = setTimeout(() => open(), 10_000);
+  }
   notice = el("section", "turn");
   notice.append(el("div", "line warn", err?.message ?? "no session"));
   if (err?.data?.code === "login_required") notice.append(el("div", "line meta", "Sign in with ChatGPT, then come back to this tab."));
@@ -187,10 +203,12 @@ const doOpen = async () => {
     const mark = log.childElementCount;
     onUpdate = replay();
     const loaded = await call("session/load", { sessionId: id, cwd: "/work", mcpServers: [] });
-    onUpdate = () => {};
+    // The replay renderer stays attached: a turn that was running when the page
+    // went away resumes, and its updates follow the answer.
     if (loaded.result) {
       sessionId = id;
     } else {
+      onUpdate = () => {};
       while (log.childElementCount > mark) log.lastElementChild.remove();
       if (loaded.error?.code !== -32002) return fail(loaded.error);
       saved.set(null);
@@ -203,29 +221,53 @@ const doOpen = async () => {
     sessionId = created.result.sessionId;
     saved.set(sessionId);
   }
+  clearTimeout(retry);
+  retries = 0;
   log.scrollTop = log.scrollHeight;
   status(persisted ? "enter: send · shift+enter: new line" : "another tab holds the store · this tab keeps no history", persisted ? "" : "warn");
   input.disabled = false;
   input.focus();
 };
 
-// One open at a time: focus events and the new-session key share it.
+// One open at a time: focus events, the retry, and the new-session key share it.
 let opening = null;
-const open = () => (opening ??= doOpen().finally(() => (opening = null)));
+const open = () => {
+  $("new").disabled = true;
+  return (opening ??= doOpen().finally(() => {
+    opening = null;
+    $("new").disabled = false;
+  }));
+};
+
+// reset leaves the session of the page; the next open loads or starts one.
+const reset = () => {
+  if (running && sessionId) writer.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+  sessionId = null;
+  usage = "";
+  contextUsed = 0;
+  retries = 0;
+  onUpdate = () => {};
+  log.replaceChildren();
+  input.disabled = true;
+};
 
 $("new").addEventListener("click", async () => {
   if (running || opening) return;
   saved.set(null);
-  sessionId = null;
-  usage = "";
-  contextUsed = 0;
-  log.replaceChildren();
-  input.disabled = true;
+  reset();
   await open();
 });
 
+// A focus checks the app user: another user gets their own conversation.
+window.addEventListener("focus", async () => {
+  if (await refreshWho()) {
+    await opening;
+    reset();
+  }
+  open();
+});
+
 await open();
-window.addEventListener("focus", open);
 
 const grow = () => {
   input.style.height = "auto";
