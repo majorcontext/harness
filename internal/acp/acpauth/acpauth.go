@@ -54,6 +54,8 @@ type Options struct {
 	LoginStore bool
 	// HTTP sends the requests of the device code flow. Nil: a client with a 30 s timeout.
 	HTTP *http.Client
+	// LoginBudget bounds a sign-in from the start of authenticate. Zero: 10 minutes.
+	LoginBudget time.Duration
 	// Logins owns the login state of the injected provider entries. It carries the transport of the status probe, which is the transport of the model calls. nil: no entry is injected.
 	Logins *injectedauth.Logins
 	// LookPath resolves the program of the Claude Code CLI, as exec.LookPath does. Nil is exec.LookPath.
@@ -183,13 +185,7 @@ func (a *Auth) Authenticate(ctx context.Context, id string, client acp.LoginClie
 	a.mu.Unlock()
 	a.running.Lock()
 	defer a.running.Unlock()
-	// An injected login starts its budget when the user accepts the sign-in page.
-	var cancel context.CancelFunc
-	if strings.HasPrefix(id, injectedPrefix) {
-		ctx, cancel = context.WithCancel(ctx)
-	} else {
-		ctx, cancel = context.WithTimeout(ctx, loginBudget)
-	}
+	ctx, cancel := context.WithTimeout(ctx, a.budget())
 	defer cancel()
 	a.mu.Lock()
 	if a.gen != gen {

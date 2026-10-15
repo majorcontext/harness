@@ -44,6 +44,8 @@ type acpLoginSpec struct {
 	injected *harnesstest.InjectedOptions
 	// anthropic serves the injected entry as the native anthropic provider, over the Anthropic fake, in place of codex.
 	anthropic bool
+	// budget bounds a sign-in of the in-process host. Zero: 10 minutes.
+	budget time.Duration
 	// clock makes the row run on the in-process host only, with a clock that the steps move.
 	clock              bool
 	injectedNoLoginURL bool
@@ -225,9 +227,14 @@ func (l *acpLoginRun) auth(env acpEnv) acp.Auth {
 	if l != nil {
 		sink, opened = l.sink, l.opened
 	}
+	var budget time.Duration
+	if l != nil {
+		budget = l.spec.budget
+	}
 	return acpauth.New(acpauth.Options{
-		Logins:   env.logins,
-		LookPath: l.lookPath,
+		Logins:      env.logins.Owner(),
+		LoginBudget: budget,
+		LookPath:    l.lookPath,
 		Config: func(cwd string) (*config.Config, error) {
 			if cwd == "" {
 				cwd = env.defaultDir

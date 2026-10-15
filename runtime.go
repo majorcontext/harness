@@ -19,7 +19,6 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
-	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/listing"
 	"github.com/majorcontext/harness/internal/process"
@@ -91,8 +90,8 @@ type Options struct {
 	Getenv func(key string) string
 	// IssuerTransport carries the ChatGPT login requests to the issuer. nil: the default transport. ModelTransport never carries them.
 	IssuerTransport http.RoundTripper
-	// Logins owns the login state of the provider entries with auth injected. A host with a login that probes such an entry shares it with that login. nil: the runtime makes its own.
-	Logins *injectedauth.Logins
+	// Logins holds the sign-in state of the injected providers. Runtimes that serve one client share one value. nil: the runtime makes its own.
+	Logins *Logins
 	// Host says what the host cannot do. The zero value is a host that can do everything.
 	Host HostLimits
 	// Logger receives every log line of the runtime. nil: slog.Default().
@@ -262,7 +261,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, Logins: opts.Logins, NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, Logins: opts.Logins.owner(opts.ModelTransport), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)

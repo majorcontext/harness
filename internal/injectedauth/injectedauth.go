@@ -57,6 +57,7 @@ type Options struct {
 // Logins owns the login state of the injected entries of one connection. The backend and the ACP logins of the connection
 // share it.
 type Logins struct {
+	cfg  sync.RWMutex // guards opts.Transport and opts.Now
 	opts Options
 
 	mu      sync.Mutex
@@ -71,8 +72,29 @@ func New(opts Options) *Logins {
 	return &Logins{opts: opts, entries: map[string]*Entry{}}
 }
 
+// SetTransport sets the transport of the model calls, which the probe uses. nil leaves it as it is.
+func (l *Logins) SetTransport(f func(provider string) http.RoundTripper) {
+	if f == nil {
+		return
+	}
+	l.cfg.Lock()
+	defer l.cfg.Unlock()
+	l.opts.Transport = f
+}
+
+// SetNow sets the clock of the owner. Tests use it to move the 2-minute and 10-minute rules.
+func (l *Logins) SetNow(f func() time.Time) {
+	l.cfg.Lock()
+	defer l.cfg.Unlock()
+	l.opts.Now = f
+}
+
 // Now returns the time of the owner.
-func (l *Logins) Now() time.Time { return l.opts.Now() }
+func (l *Logins) Now() time.Time {
+	l.cfg.RLock()
+	defer l.cfg.RUnlock()
+	return l.opts.Now()
+}
 
 // Of returns the Entry of the providers entry name, and nil for an entry that does not use injected auth.
 func (l *Logins) Of(name string, p config.Provider) *Entry {
@@ -173,7 +195,10 @@ func (e *Entry) record(status int) State {
 // and records the answer. It follows no redirect. A failure and a wait of more than three seconds are Unknown.
 func (e *Entry) Probe(ctx context.Context, extra map[string]string) State {
 	rt := http.DefaultTransport
-	if f := e.logins.opts.Transport; f != nil {
+	e.logins.cfg.RLock()
+	f := e.logins.opts.Transport
+	e.logins.cfg.RUnlock()
+	if f != nil {
 		if t := f(e.provider); t != nil {
 			rt = t
 		}

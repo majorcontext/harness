@@ -17,7 +17,6 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
-	"github.com/majorcontext/harness/internal/injectedauth"
 )
 
 // Options holds what the host injects.
@@ -38,7 +37,7 @@ type Options struct {
 	// IssuerTransport is the matching harness.Options of every runtime.
 	IssuerTransport http.RoundTripper
 	// Logins is the matching harness.Options of every runtime.
-	Logins *injectedauth.Logins
+	Logins *harness.Logins
 	// Host is the harness.Options.Host of every runtime. A connection whose client can take the login (RuntimeOptions.Login) clears NoLogin.
 	Host harness.HostLimits
 }
@@ -57,6 +56,9 @@ type Runtimes struct {
 
 // New returns Runtimes that build a Runtime at the first request for a directory.
 func New(opts Options) *Runtimes {
+	if opts.Logins != nil {
+		opts.Logins.Owner().SetTransport(opts.ModelTransport)
+	}
 	return &Runtimes{opts: opts, rts: map[string]*harness.Runtime{}}
 }
 

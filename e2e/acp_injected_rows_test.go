@@ -121,6 +121,7 @@ const (
 	injected403Cite    = "A 403 is not `login_required`."
 	injectedLateCite   = "A 401 of a model call 2 minutes or more after the last probe that answered 200 fails the turn with the error class `login_required`."
 	injectedTimeout    = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes."
+	injectedBound      = "so a client that never answers the elicitation cannot hold the request open."
 	injectedNoProbe    = "A probe that answers 404 or 405 means that the server has no status probe: `authenticate` then answers `{}` when the user accepts the elicitation, and only the 401 of a turn is `login_required`."
 	injectedProbeCite  = "The status probe of the Anthropic adapter is `GET <base_url>/v1/models` with the header `Anthropic-Version`."
 )
@@ -373,6 +374,18 @@ var acpInjectedScenarios = []acpScenario{
 				c.env.clock.Advance(10 * time.Minute)
 			}),
 			acpAuthDone{id: "auth", code: acpInternal},
+		},
+	},
+	{
+		name:  "authenticate_injected_ends_when_the_client_never_answers_the_elicitation",
+		cite:  injectedBound,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true}, clock: true, budget: 300 * time.Millisecond},
+		steps: []acpStep{
+			injectedInit,
+			acpAuthStart{id: "auth", method: "injected-codex"},
+			acpInjectedElicit{as: "login", auth: "auth"},
+			acpAuthDone{id: "auth", code: acpInternal},
+			acpAwaitCancelRequest{as: "login"},
 		},
 	},
 	{

@@ -13,6 +13,14 @@ import (
 // elicitMessage is what the client shows with the sign-in URL of an injected entry.
 const elicitMessage = "Sign in on the page that opens, then return here."
 
+// budget is the time a sign-in may take. It bounds the whole authenticate, and the polling after the accept again.
+func (a *Auth) budget() time.Duration {
+	if a.opts.LoginBudget > 0 {
+		return a.opts.LoginBudget
+	}
+	return loginBudget
+}
+
 // pollInterval is the wait between two probes after the user accepts the sign-in page: 2 s, 4 s after 30 s, 8 s after 2 minutes.
 func pollInterval(elapsed time.Duration) time.Duration {
 	switch {
@@ -25,7 +33,7 @@ func pollInterval(elapsed time.Duration) time.Duration {
 }
 
 // injectedLogin sends the user to the login page of the entry and probes until the server accepts the sign-in. A server
-// with no status probe cannot say so: the accept of the user then ends the login. The budget of the login starts at the accept.
+// with no status probe cannot say so: the accept of the user then ends the login.
 func (a *Auth) injectedLogin(ctx context.Context, cfg *config.Config, name string, client acp.LoginClient) error {
 	p := cfg.ProviderEntries()[name]
 	entry := a.opts.Logins.Of(name, p)
@@ -61,7 +69,7 @@ func (a *Auth) injectedLogin(ctx context.Context, cfg *config.Config, name strin
 			return nil
 		}
 		elapsed := a.opts.Logins.Now().Sub(start)
-		if elapsed >= loginBudget {
+		if elapsed >= a.budget() {
 			return context.DeadlineExceeded
 		}
 		timer := time.NewTimer(pollInterval(elapsed))
