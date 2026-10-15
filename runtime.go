@@ -167,8 +167,8 @@ type Runtime struct {
 	workDir string
 	web     *webOptions // nil: no web_fetch
 	health  protocol.Health
-	// banner is the engine status that a model call sends; empty: none.
-	banner string
+	// version is the build version that the engine banner names; empty: no banner.
+	version string
 	// questions lets a backend ask the user a question.
 	questions bool
 	// webSearch is Config.Web.Search: models whose backend has a native web search get it.
@@ -279,7 +279,7 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
-	r.banner, r.questions, r.webSearch = banner(opts.Version, time.Now()), opts.AskUserQuestion, opts.Config.WebSearchEnabled()
+	r.version, r.questions, r.webSearch = opts.Version, opts.AskUserQuestion, opts.Config.WebSearchEnabled()
 	return r, nil
 }
 
@@ -388,7 +388,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Ownership:       own,
 		Owner:           r.name(),
 		Backend:         r.models,
-		Banner:          r.banner,
+		Version:         r.version,
 		AskUserQuestion: r.questions,
 		WebSearch:       r.webSearch,
 		Evaluator:       r.evaluator,

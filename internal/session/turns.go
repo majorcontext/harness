@@ -102,6 +102,16 @@ func (a *Actor) modelRequest() turn.Request {
 		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params, MCPServers: a.mcpServers()}
 }
 
+// banner renders the engine status line from the version and the created time
+// of the session, or "" for an empty version. No part of it depends on the
+// process, so a new process sends the same text.
+func (a *Actor) banner() string {
+	if a.cfg.Version == "" {
+		return ""
+	}
+	return "[engine: harness " + a.cfg.Version + " · session started " + a.state.CreatedAt().UTC().Format(time.RFC3339) + "]"
+}
+
 func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRun(kindTurn, id)
 	req := a.modelRequest()
@@ -114,7 +124,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 	}
 	req.Questions = a.questions()
 	req.SearchAllowed = a.cfg.WebSearch && (req.AllowedTools == nil || slices.Contains(req.AllowedTools, turn.WebSearchTool))
-	req.Banner, req.Pins = a.cfg.Banner, a.pins.Pinned()
+	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, protocol.LogMessage{Role: protocol.RoleUser, Parts: ev.Parts})

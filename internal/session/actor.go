@@ -130,9 +130,9 @@ type Config struct {
 	AskUserQuestion bool
 	// WebSearch offers the native web search of the provider to a turn whose model has one and whose session allows web_search.
 	WebSearch bool
-	// Banner is the engine status that each model call of a turn sends as
-	// engine context. Empty: none.
-	Banner string
+	// Version is the build version that the engine banner names. Each model
+	// call of a turn sends the banner as engine context. Empty: none.
+	Version string
 	// Evaluator is the model that judges goal turns.
 	Evaluator string
 	// MCPServers are the session servers of WithSessionMCP, for a backend that connects MCP servers itself.

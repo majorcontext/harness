@@ -42,6 +42,9 @@ type Notice struct {
 	Text string
 	// Cleared is pinned once when Text turns empty after a status with text.
 	Cleared string
+	// At is the number of messages of the history that the pin follows. Zero:
+	// the whole history of the call.
+	At int
 }
 
 // Hooks run around each tool call of a model call.
@@ -213,7 +216,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 		call.Instructions += "\n\n" + ts.Prompt
 	}
 	if !all && to != nil {
-		call.Pins = to.Pin(append(slices.Clip(ts.Notices), Notice{Kind: bannerKind, Text: call.Banner}), len(call.History))
+		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
 	t := runner{append(slices.Clip(ts.Tools), ts.Deferred...), ts.Hooks}
 	call.Call = t.run

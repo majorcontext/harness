@@ -119,11 +119,13 @@ type State struct {
 	// compactedTime is the time of that record.
 	compactedTime time.Time
 	compacted     int
-	children      map[string]protocol.Outcome
-	backends      map[string]BackendChain
-	retained      []protocol.ToolResultRetained
-	commands      map[string]command
-	history       []entry
+	// compactedLen is the length of ModelHistory right after that compaction.
+	compactedLen int
+	children     map[string]protocol.Outcome
+	backends     map[string]BackendChain
+	retained     []protocol.ToolResultRetained
+	commands     map[string]command
+	history      []entry
 	// folded holds the messages that readers see before the summary of the
 	// newest compaction: what each compaction folded, and the summary of each
 	// earlier compaction in its place. The model never reads it.
@@ -312,6 +314,19 @@ func (s *State) SubscriptionUsage() *protocol.SubscriptionUsage {
 	cost := *s.cost
 	u.SessionCostUSD = &cost
 	return &u
+}
+
+// CreatedAt returns the time of the record that created the session.
+func (s *State) CreatedAt() time.Time { return s.createdAt }
+
+// BannerAt returns the number of messages of ModelHistory that the engine
+// banner follows: the first message of the session, or the whole history that
+// the newest compaction left.
+func (s *State) BannerAt() int {
+	if s.compactedAt != 0 {
+		return s.compactedLen
+	}
+	return 1
 }
 
 // CompactionCount returns the number of compactions, by the harness or by a backend.

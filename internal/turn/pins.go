@@ -10,10 +10,9 @@ type Pin struct {
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
-// changes only when a compaction moves it, so each request is a prefix of the
-// next until a compaction applies. The pins live in memory: a restart makes
-// them again from the live state. Pins has no lock: the session actor owns it
-// and a turn reaches it through Turn.Pin.
+// changes only when a compaction moves it. The pins live in memory: a new
+// process makes them again at its first model call, and the banner, which
+// comes from the log, comes out the same. The session actor owns Pins.
 type Pins struct {
 	pins []Pin
 }
