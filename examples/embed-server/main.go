@@ -21,10 +21,11 @@ func main() {
 	upstream := flag.String("upstream", "https://chatgpt.com/backend-api/codex", "Codex backend")
 	secure := flag.String("secure", "auto", "Secure on the session cookie: true, false, or auto (true unless -addr is on a loopback address)")
 	tokenFile := flag.String("token-file", "", "file that keeps the ChatGPT logins across restarts, mode 0600, in plain text: for development only")
+	sessionFile := flag.String("session-file", "", "file that keeps the sessions of the app across restarts, mode 0600, in plain text: for development only")
 	flag.Parse()
 
 	_ = mime.AddExtensionType(".mjs", "text/javascript")
-	s, err := newServer(config{Upstream: *upstream, WasmPath: *wasm, WasmExecPath: *wasmExec, EmbedDir: *embed, SecureCookie: secureCookie(*secure, *addr), TokenFile: *tokenFile, HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
+	s, err := newServer(config{Upstream: *upstream, WasmPath: *wasm, WasmExecPath: *wasmExec, EmbedDir: *embed, SecureCookie: secureCookie(*secure, *addr), TokenFile: *tokenFile, SessionFile: *sessionFile, HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
 	if err != nil {
 		log.Fatal(err)
 	}

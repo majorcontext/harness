@@ -24,6 +24,10 @@ type sessions struct {
 	secure bool // the cookie carries Secure even when the request is plain http
 	mu     sync.Mutex
 	m      map[string]*session
+
+	// file, when set, keeps the sessions on disk so that a restart keeps them.
+	file   string
+	saveMu sync.Mutex
 }
 
 func newSessions(secure bool) *sessions { return &sessions{secure: secure, m: map[string]*session{}} }
@@ -43,7 +47,13 @@ func (s *sessions) login(w http.ResponseWriter, r *http.Request, user string) {
 	s.mu.Lock()
 	s.m[id] = &session{user: user, csrf: randomHex(16)}
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
+	s.save()
+	c := &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil}
+	if s.file != "" {
+		// The session outlives the server, so the cookie outlives the browser.
+		c.MaxAge = 30 * 24 * 60 * 60
+	}
+	http.SetCookie(w, c)
 }
 
 // sessionOf returns the session id and the session of the request, or nil.
@@ -65,6 +75,7 @@ func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) {
 	s.mu.Lock()
 	delete(s.m, id)
 	s.mu.Unlock()
+	s.save()
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
 }
 

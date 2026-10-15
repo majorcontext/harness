@@ -35,6 +35,8 @@ type config struct {
 	SecureCookie bool
 	// TokenFile, when set, keeps the ChatGPT logins on disk across restarts.
 	TokenFile string
+	// SessionFile, when set, keeps the sessions of the app on disk across restarts.
+	SessionFile string
 }
 
 type server struct {
@@ -55,6 +57,10 @@ func newServer(cfg config) (*server, error) {
 	}
 	s := &server{cfg: cfg, sessions: newSessions(cfg.SecureCookie), store: newTokenStore(cfg.Issuer, cfg.HTTP), flows: &flows{m: map[string]*flow{}}}
 	s.store.file = cfg.TokenFile
+	s.sessions.file = cfg.SessionFile
+	if err := s.sessions.load(); err != nil {
+		return nil, err
+	}
 	if err := s.store.load(); err != nil {
 		return nil, err
 	}
