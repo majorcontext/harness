@@ -165,6 +165,9 @@ func (o *options) applyHostConfig() error {
 			if p, ok = config.NativeProvider(name); !ok {
 				return fmt.Errorf("proxy.providers: %q is not a provider", name)
 			}
+			if u.baseURL == "" {
+				return fmt.Errorf("proxy.providers.%s: baseURL is required, because the native entry would send the request to the public endpoint with no credential", name)
+			}
 			p.Auth = config.AuthInjected
 		}
 		p.BaseURL = cmp.Or(u.baseURL, p.BaseURL)
@@ -180,6 +183,9 @@ func (o *options) applyHostConfig() error {
 func (o *options) modelTransport(string) http.RoundTripper {
 	return jshost.FetchRT{Headers: o.proxyHeaders, Origin: o.proxyOrigin(), Fetch: o.modelFetch, NoRedirect: true}
 }
+
+// hostLimits is what the wasm host cannot do. The login of the connection reads NoLogin from it.
+var hostLimits = harness.HostLimits{NoProcess: true, NoLogin: true, NoNetwork: true}
 
 // loginState returns the owner of the injected logins of the connection.
 func (o *options) loginState() *injectedauth.Logins {
@@ -225,7 +231,7 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 		Logger:         o.logger,
 		ModelTransport: o.modelTransport,
 		Tools:          o.tools,
-		Host:           harness.HostLimits{NoProcess: true, NoLogin: true, NoNetwork: true},
+		Host:           hostLimits,
 	})
 }
 
@@ -245,7 +251,7 @@ func (o *options) login() acp.Auth {
 			}
 			return config.MergeProject(o.user, "the config of harnessConnect", cwd, o.proxyBase)
 		},
-		NoLogin:  true,
+		NoLogin:  hostLimits.NoLogin,
 		LookPath: func(string) (string, error) { return "", exec.ErrNotFound },
 	})
 }

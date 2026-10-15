@@ -224,6 +224,17 @@ var acpWireScenarios = []acpScenario{
 		},
 	},
 	{
+		name:     "wasm_host_offers_no_chatgpt_login_whatever_the_config_sets",
+		cite:     "`authenticate` and `logout` are `-32601`",
+		wasmOnly: true,
+		config:   map[string]any{"codex_auth_file": "/nonexistent/auth/codex.json"},
+		steps: []acpStep{
+			acpInit{version: 1, want: 1, elicitationURL: true},
+			acpCall{method: "authenticate", params: map[string]any{"methodId": "chatgpt"}, code: acpMethodNotFound},
+			acpCall{method: "logout", params: map[string]any{}, code: acpMethodNotFound},
+		},
+	},
+	{
 		name: "unknown_method_is_not_found",
 		cite: "A request for a method that the agent lacks is answered with `-32601`; a notification for one has no answer.",
 		steps: []acpStep{

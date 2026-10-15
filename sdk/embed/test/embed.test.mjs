@@ -311,6 +311,33 @@ test("proxy.providers refuses a name that is no provider and a value that is no 
   await assert.rejects(harness({ proxy: { providers: { codex: "/codex" } } }), /proxy\.providers\.codex must be an object/);
 });
 
+test("proxy.providers needs a baseURL for a native provider", async () => {
+  const h = await harness({ proxy: { providers: { codex: { loginURL: "https://console.example/settings/codex" } } } });
+  try {
+    await assert.rejects(acpClient(h).session(), /proxy\.providers\.codex: baseURL is required/);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a redirect of a keyed Anthropic request is not followed and the key does not reach the target", async () => {
+  const sink = await fakeServer();
+  const redirecting = await fakeServer({ redirectTo: sink.url });
+  const h = await harness({
+    config: { model: "anthropic/claude-fable-5", request_max_retries: 0, stream_max_retries: 0, providers: { anthropic: { base_url: redirecting.url, extra_headers: { "x-api-key": "sk-test-key" } } } },
+  });
+  try {
+    const c = acpClient(h);
+    await c.prompt(await c.session(), "go").catch(() => {});
+    assert.ok(redirecting.requests.length > 0, "the model request did not reach the endpoint");
+    assert.deepEqual(sink.requests, [], "the redirect was followed");
+  } finally {
+    await h.close();
+    sink.close();
+    redirecting.close();
+  }
+});
+
 test("a redirect of an injected model endpoint is not followed", async () => {
   const sink = await fakeServer();
   const redirecting = await fakeServer({ redirectTo: sink.url });

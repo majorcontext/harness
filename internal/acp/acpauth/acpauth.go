@@ -96,7 +96,7 @@ type target struct {
 	claude   string // the CLI binary, empty when no entry uses the CLI
 }
 
-// targets offers the ChatGPT login always, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
+// targets offers the ChatGPT login unless the host has no file login, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
 func (a *Auth) targets(cfg *config.Config, c acp.ClientAuth) target {
 	t := target{chatgpt: !a.opts.NoLogin}
 	if entries := cfg.ProviderEntries(); c.URL && a.opts.Logins != nil {
@@ -159,6 +159,9 @@ var logins = map[string]func(a *Auth, ctx context.Context, cfg *config.Config, c
 // The cancelled call fails with context.Canceled.
 func (a *Auth) Authenticate(ctx context.Context, id string, client acp.LoginClient) error {
 	login, ok := logins[id]
+	if id == chatGPT && a.opts.NoLogin {
+		ok = false
+	}
 	if name, found := strings.CutPrefix(id, injectedPrefix); found && !ok {
 		login, ok = func(a *Auth, ctx context.Context, cfg *config.Config, client acp.LoginClient) error {
 			return a.injectedLogin(ctx, cfg, name, client)

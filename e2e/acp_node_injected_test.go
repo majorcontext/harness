@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -16,8 +15,6 @@ func initializeWith(t *testing.T, c *acpConn, caps map[string]any) map[string]an
 	id := c.request("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": caps, "clientInfo": map[string]any{"name": "e2e", "version": "0"}})
 	return c.mustBeResult(c.response(id), "InitializeResponse")
 }
-
-var urlElicitationCaps = map[string]any{"elicitation": map[string]any{"url": map[string]any{}}}
 
 // listedModels returns the model ids of the model option of a new session.
 func listedModels(t *testing.T, c *acpConn) []string {
@@ -90,30 +87,7 @@ func TestNodeWasmProxyProvidersSignsInThroughTheProbe(t *testing.T) {
 	} {
 		step.run(t, c)
 	}
-	c.finish(stop)
-}
-
-// TestNodeWasmOffersNoChatGPTLogin pins that the wasm host offers no ChatGPT login of any kind, whatever the client
-// advertises and whatever the config sets.
-func TestNodeWasmOffersNoChatGPTLogin(t *testing.T) {
-	skipShort(t)
-	nodePath(t)
-	t.Parallel()
-	fake := harnesstest.NewAnthropic(t)
-	authFile := filepath.Join(t.TempDir(), "auth", "codex.json")
-	env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), map[string]any{"codex_auth_file": authFile}), sessDir: t.TempDir(), wasm: true}
-	in, out, stop := startACPNodeOpts(t, nodeHostOptions{}.withBase(env))
-	c := newACPConn(t, loadACPSchema(t), in, out)
-	c.fake, c.env = fake, env
-	res := initializeWith(t, c, urlElicitationCaps)
-	if methods, _ := res["authMethods"].([]any); len(methods) != 0 {
-		t.Errorf("authMethods = %v, want none", methods)
-	}
-	if caps, _ := res["agentCapabilities"].(map[string]any); caps["auth"] != nil {
-		t.Errorf("agentCapabilities.auth = %v, want none", caps["auth"])
-	}
-	c.mustBeError(c.response(c.request("authenticate", map[string]any{"methodId": "chatgpt"})), acpMethodNotFound)
-	c.mustBeError(c.response(c.request("logout", map[string]any{})), acpMethodNotFound)
+	acpCall{method: "authenticate", params: map[string]any{"methodId": "chatgpt"}, code: acpInvalidParams}.run(t, c)
 	c.finish(stop)
 }
 
