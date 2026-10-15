@@ -116,6 +116,8 @@ type Options struct {
 	// without it no turn may ask. A child session and a session with an
 	// active goal never ask.
 	AskUserQuestion bool
+	// WebAllowLoopback lets web_fetch reach loopback addresses, for tests that fetch from a local server. The config has no such key.
+	WebAllowLoopback bool
 	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
 	// sends the banner as engine context, after the newest message of the session when its first request left. Empty: no banner.
 	Version string
@@ -161,6 +163,7 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	web     *webOptions // nil: no web_fetch
 	health  protocol.Health
 	// banner is the engine status that a model call sends; empty: none.
 	banner string
@@ -245,7 +248,7 @@ func New(opts Options) (*Runtime, error) {
 		tools = append(slices.Clip(tools), selftool.NewGoal(toolHost{r}))
 	}
 	if opts.WorkDir != "" {
-		r.workDir = opts.WorkDir
+		r.workDir, r.web = opts.WorkDir, newWebOptions(opts)
 		r.procs = proc.NewManager(opts.WorkDir, opts.Config.Processes)
 		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
 		if opts.Config.ModelToolEnabled() {

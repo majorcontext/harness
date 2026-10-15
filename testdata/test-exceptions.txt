@@ -36,3 +36,4 @@ internal/process/process_race_test.go the select race at the ready gate needs a 
 internal/session/failreason_test.go failReason is a pure function of a turn end; a child scenario can reach the login_required class only through a Responses double that rejects a refresh inside a child turn, which no scenario action scripts
 internal/modelmeta/internal/genctx/main_test.go The generator is pure code: it maps a fixed catalog to Go source, so a golden pins its output.
 protocol/errors_test.go Reason is a pure function of an error chain; a serve binary cannot build a chain that wraps a sentinel of another category
+internal/tool/webfetch/webfetch_test.go the address classifier, the dial check with a fake resolver, the HTML converter, and the redirect rule are pure tables; a serve binary cannot resolve a name to a chosen address

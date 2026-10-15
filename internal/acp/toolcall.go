@@ -26,6 +26,7 @@ var toolKinds = map[string]string{
 	"ls":               "search",
 	"bash":             "execute",
 	"process":          "execute",
+	"web_fetch":        "fetch",
 }
 
 // fileTools are the tools whose path argument is a file location.

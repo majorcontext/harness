@@ -342,6 +342,7 @@ func TestNodeWasmBadOptionFailsTheFirstSession(t *testing.T) {
 		"builtinTools that is a string":    {Connect: map[string]any{"builtinTools": "read_file"}},
 		"array-like tools":                 {Connect: map[string]any{"tools": map[string]any{"length": 1, "0": map[string]any{"name": "x"}}}},
 		"store directory that is a number": {Connect: map[string]any{"storeDir": 3}},
+		"config with web.fetch on":         {Connect: map[string]any{"config": map[string]any{"web": map[string]any{"fetch": true}}}},
 	}
 	for name, row := range rows {
 		t.Run(name, func(t *testing.T) {

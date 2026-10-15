@@ -526,6 +526,8 @@ These keys go in either [config file](#config-files). In a model ref
 `provider/model`, `provider` is a built-in family (`anthropic`, `openai`) or a
 key from `providers`.
 
+Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, which reads public http and https pages. It is off by default.
+
 ### OpenAI-compatible endpoints
 
 Ollama, vLLM, LM Studio, and other chat-completions endpoints take one

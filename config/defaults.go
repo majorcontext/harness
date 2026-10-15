@@ -38,6 +38,11 @@ func (c *Config) ModelToolEnabled() bool {
 	return valueOr(c, func(c *Config) *bool { return c.ModelTool })
 }
 
+// WebFetchEnabled returns web.fetch, which is off when unset.
+func (c *Config) WebFetchEnabled() bool {
+	return c != nil && c.Web.Fetch != nil && *c.Web.Fetch
+}
+
 func valueOr[T any](c *Config, field func(*Config) *T) T {
 	if c != nil && field(c) != nil {
 		return *field(c)

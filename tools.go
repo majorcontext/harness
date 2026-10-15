@@ -16,6 +16,7 @@ import (
 	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
+	"github.com/majorcontext/harness/internal/tool/webfetch"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -25,6 +26,17 @@ import (
 type sessionTool interface {
 	turn.Tool
 	Bind(id string, child bool, depth int) turn.Tool
+}
+
+// webOptions configure the web_fetch tool of the sessions of a runtime.
+type webOptions = webfetch.Options
+
+// newWebOptions returns the options of web_fetch, or nil while web.fetch is not true.
+func newWebOptions(opts Options) *webOptions {
+	if !opts.Config.WebFetchEnabled() {
+		return nil
+	}
+	return &webOptions{Version: opts.Version, AllowLoopback: opts.WebAllowLoopback}
 }
 
 // known reports whether a session at model can have a tool named name: a
@@ -48,7 +60,8 @@ func (r *Runtime) owns(name string) bool {
 
 // builtin reports whether name is a built-in tool of the WorkDir.
 func (r *Runtime) builtin(name string) bool {
-	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == selftool.SessionInfoName)
+	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == selftool.SessionInfoName ||
+		r.web != nil && name == webfetch.Name)
 }
 
 // shadowable reports whether name is a file, search, or shell tool of the
@@ -119,6 +132,9 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		taken := r.shadowed()
 		files := turn.Fixed(append(slices.DeleteFunc(builtin.Tools(r.workDir, env), func(t turn.Tool) bool { return slices.Contains(taken, t.Spec().Name) }),
 			selftool.NewSessionInfo(toolHost{r}, id, sp)))
+		if r.web != nil {
+			files = append(files, webfetch.New(*r.web))
+		}
 		srcs = append(srcs, files)
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {

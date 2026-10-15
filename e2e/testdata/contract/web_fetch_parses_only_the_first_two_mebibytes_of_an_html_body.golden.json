@@ -1,0 +1,149 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "max_bytes": 1000,
+                "url": "http://127.0.0.1:\u003cport\u003e/long"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "URL: http://127.0.0.1:\u003cport\u003e/long\nStatus: 200 OK\nContent-Type: text/html\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagrap\n\n[cut at max_bytes=1000; the page has more content. Call web_fetch again with a larger max_bytes to read more.]\n\n[only the first 2097152 bytes of the HTML were converted]",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "web_fetch",
+            "arguments": {
+              "max_bytes": 1000,
+              "url": "http://127.0.0.1:\u003cport\u003e/long"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "URL: http://127.0.0.1:\u003cport\u003e/long\nStatus: 200 OK\nContent-Type: text/html\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagraph number one two three\n\nparagrap\n\n[cut at max_bytes=1000; the page has more content. Call web_fetch again with a larger max_bytes to read more.]\n\n[only the first 2097152 bytes of the HTML were converted]"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

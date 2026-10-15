@@ -163,6 +163,9 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 			if err != nil {
 				return nil, err
 			}
+			if cfg.WebFetchEnabled() {
+				return nil, errors.New("web.fetch is not available in the WebAssembly module: a page has no dial for the address check")
+			}
 			return cfg, nil
 		},
 		Shared: func(*config.Config) (harness.Store, harness.Owner, error) {

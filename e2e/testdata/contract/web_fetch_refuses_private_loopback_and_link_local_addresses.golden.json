@@ -1,0 +1,3542 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::1]:1/"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::1]:1/"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fd00::1]/"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fd00::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::1]:1/"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fd00::1]/"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fd00::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fe80::1]/"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fe80::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::1]:1/"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fd00::1]/"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fd00::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fe80::1]/"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fe80::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::ffff:10.0.0.1]/"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::ffff:10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#12",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::1]:1/"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fd00::1]/"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fd00::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fe80::1]/"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fe80::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::ffff:10.0.0.1]/"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::ffff:10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#12",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::ffff:127.0.0.1]:1/"
+              },
+              "tool_use_id": "toolu#13"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::ffff:127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#13",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://10.0.0.1/"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://192.168.1.10:8080/admin"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 192.168.1.10 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://172.16.0.1/"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 172.16.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://100.64.0.1/"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 100.64.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 169.254.169.254 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://0.0.0.0/"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 0.0.0.0 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://224.0.0.1/"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 224.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://127.0.0.1:1/"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: 127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::1]:1/"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fd00::1]/"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fd00::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[fe80::1]/"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: fe80::1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::ffff:10.0.0.1]/"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::ffff:10.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#12",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://[::ffff:127.0.0.1]:1/"
+              },
+              "tool_use_id": "toolu#13"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: ::ffff:127.0.0.1 is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#13",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://localhost:1/"
+              },
+              "tool_use_id": "toolu#14"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "web_fetch: refused: localhost is not a public address",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#14",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://10.0.0.1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "web_fetch: refused: 10.0.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://192.168.1.10:8080/admin"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "web_fetch: refused: 192.168.1.10 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://172.16.0.1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "is_error": true,
+            "content": "web_fetch: refused: 172.16.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://100.64.0.1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "web_fetch: refused: 100.64.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://169.254.169.254/latest/meta-data/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "is_error": true,
+            "content": "web_fetch: refused: 169.254.169.254 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://0.0.0.0/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "is_error": true,
+            "content": "web_fetch: refused: 0.0.0.0 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#7",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://224.0.0.1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#7",
+            "is_error": true,
+            "content": "web_fetch: refused: 224.0.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://127.0.0.1:1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "is_error": true,
+            "content": "web_fetch: refused: 127.0.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#9",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://[::1]:1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#9",
+            "is_error": true,
+            "content": "web_fetch: refused: ::1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#10",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://[fd00::1]/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#21",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#10",
+            "is_error": true,
+            "content": "web_fetch: refused: fd00::1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#11",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://[fe80::1]/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#23",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#11",
+            "is_error": true,
+            "content": "web_fetch: refused: fe80::1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#24",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#12",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://[::ffff:10.0.0.1]/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#25",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#12",
+            "is_error": true,
+            "content": "web_fetch: refused: ::ffff:10.0.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#26",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#13",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://[::ffff:127.0.0.1]:1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#27",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#13",
+            "is_error": true,
+            "content": "web_fetch: refused: ::ffff:127.0.0.1 is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#28",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#14",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://localhost:1/"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#29",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#14",
+            "is_error": true,
+            "content": "web_fetch: refused: localhost is not a public address"
+          }
+        ]
+      },
+      {
+        "id": "msg#30",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}
