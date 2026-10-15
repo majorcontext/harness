@@ -570,6 +570,10 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "echo block-me"}}}}, extra: pluginConfig(t, nil)}.newDriver,
 		actions: claudeOneTurn,
 	}, {
+		name:    "claudecode_bridge_serves_a_text_item_for_a_tool_with_no_output",
+		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "true"}}}}}.newDriver,
+		actions: claudeOneTurn,
+	}, {
 		name:   "claudecode_bridge_image_result_reaches_the_log_and_a_model_api_replay",
 		driver: claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"read_file", map[string]any{"path": "pic.png"}}}}}.newDriver,
 		model:  []harnesstest.Step{{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}},

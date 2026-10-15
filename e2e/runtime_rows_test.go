@@ -378,6 +378,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_built_in_tool_call_fails_the_turn":                                             sameAsServe(),
 	"claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit":                             sameAsServe(),
 	"task_profile_maps_claude_code_tool_names_to_harness_tools":                                sameAsServe(),
+	"claudecode_bridge_serves_a_text_item_for_a_tool_with_no_output":                           sameAsServe(),
 	"claudecode_plugin_hook_denies_a_bash_call_of_the_cli":                                     sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":                                          sameAsServe(),
 	"claudecode_context_window_from_model_usage":                                               reGolden(specView, specClaudeGauge),

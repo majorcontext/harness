@@ -111,6 +111,28 @@ type Content struct {
 	Annotations json.RawMessage   `json:"annotations,omitempty"`
 }
 
+// MarshalJSON writes the fields that the MCP schema requires for the type
+// of c, even when they are empty: a text item always has "text", and an
+// image or audio item always has "data" and "mimeType". The client of a
+// peer rejects the whole result when one is missing.
+func (c Content) MarshalJSON() ([]byte, error) {
+	type plain Content
+	switch c.Type {
+	case ContentTypeText:
+		return json.Marshal(struct {
+			plain
+			Text string `json:"text"`
+		}{plain(c), c.Text})
+	case ContentTypeImage, ContentTypeAudio:
+		return json.Marshal(struct {
+			plain
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
+		}{plain(c), c.Data, c.MimeType})
+	}
+	return json.Marshal(plain(c))
+}
+
 // callToolParams is the tools/call request payload.
 type callToolParams struct {
 	Name      string `json:"name"`
