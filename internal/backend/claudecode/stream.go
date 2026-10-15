@@ -506,9 +506,16 @@ func (r *run) toolResults(env envelope) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	if err := r.checkRan(parts, env.ToolUseResult); err != nil {
+	ran := r.checkRan(parts, env.ToolUseResult)
+	if err := r.record(env, parts); err != nil {
 		return err
 	}
+	return ran
+}
+
+// record stores the results of a frame, also when a built-in tool ran, so the
+// log keeps every real result.
+func (r *run) record(env envelope, parts []protocol.LogPart) error {
 	if err := r.attachBlobs(parts); err != nil {
 		return err
 	}

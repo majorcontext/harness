@@ -34,7 +34,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "cut off before a result was recorded; check whether it took effect before running it again"
+            "content": "Exit code 1"
           }
         ]
       }

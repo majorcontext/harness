@@ -387,7 +387,7 @@ func recordClaudeCodeBuiltinRefused(r *recorder, work string) error {
 			sessionID = f.SessionID
 		}
 	}
-	if sessionID == "" || !bytes.Contains(prime, []byte(`"name":"Bash"`)) {
+	if sessionID == "" || len(callsOf(prime, "Bash")) == 0 {
 		return fmt.Errorf("the prime run holds no session or Bash call")
 	}
 	bash, stop, err := bashServer(dir)
@@ -400,8 +400,64 @@ func recordClaudeCodeBuiltinRefused(r *recorder, work string) error {
 	if err != nil {
 		return fmt.Errorf("refused run: %w", err)
 	}
-	if !bytes.Contains(raw, []byte(`"name":"Bash"`)) {
-		return fmt.Errorf("the model did not call Bash")
+	if !refusedCall(raw, "Bash") {
+		return fmt.Errorf("the CLI did not refuse a Bash call")
 	}
 	return r.saveJSONL("claudecode.builtin-refused.jsonl", raw)
+}
+
+// frameBlock is a content block of a CLI frame that the recorder checks.
+type frameBlock struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	ToolUseID string `json:"tool_use_id"`
+	IsError   bool   `json:"is_error"`
+	Content   any    `json:"content"`
+}
+
+// frameBlocks returns the content blocks of the top-level frames of type kind.
+func frameBlocks(raw []byte, kind string) []frameBlock {
+	var out []frameBlock
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		var f struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &f) != nil || f.Type != kind {
+			continue
+		}
+		var blocks []frameBlock
+		if json.Unmarshal(f.Message.Content, &blocks) == nil {
+			out = append(out, blocks...)
+		}
+	}
+	return out
+}
+
+// callsOf returns the IDs of the tool_use blocks that the model made to the tool name.
+func callsOf(raw []byte, name string) []string {
+	var ids []string
+	for _, b := range frameBlocks(raw, "assistant") {
+		if b.Type == "tool_use" && b.Name == name {
+			ids = append(ids, b.ID)
+		}
+	}
+	return ids
+}
+
+// refusedCall reports whether the model called the tool name and the CLI
+// answered that call with an error result that says no such tool is available.
+func refusedCall(raw []byte, name string) bool {
+	want := "No such tool available: " + name
+	for _, id := range callsOf(raw, name) {
+		for _, b := range frameBlocks(raw, "user") {
+			if text, _ := b.Content.(string); b.Type == "tool_result" && b.ToolUseID == id && b.IsError && strings.Contains(text, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
