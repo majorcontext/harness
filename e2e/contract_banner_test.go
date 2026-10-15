@@ -10,9 +10,9 @@ import (
 )
 
 // expectBannerStable checks that request n+1, which a new process sends, keeps
-// every message of request n byte for byte, and that request n carries the
-// engine banner.
-type expectBannerStable struct{ n int }
+// the system prompt, the tools, and every message of request n byte for byte,
+// and that request n carries the engine banner in the message at index at.
+type expectBannerStable struct{ n, at int }
 
 func (a expectBannerStable) run(t *testing.T, r *run) {
 	t.Helper()
@@ -20,7 +20,16 @@ func (a expectBannerStable) run(t *testing.T, r *run) {
 	if len(reqs) <= a.n {
 		t.Fatalf("model saw %d requests, want more than %d", len(reqs), a.n)
 	}
+	if reqs[a.n-1].System != reqs[a.n].System {
+		t.Fatalf("system prompt of request %d differs from request %d\n got: %q\nwant: %q", a.n+1, a.n, reqs[a.n].System, reqs[a.n-1].System)
+	}
+	if got, want := mustJSON(t, reqs[a.n].Tools), mustJSON(t, reqs[a.n-1].Tools); !bytes.Equal(got, want) {
+		t.Fatalf("tools of request %d differ from request %d\n got: %s\nwant: %s", a.n+1, a.n, got, want)
+	}
 	before, after := reqs[a.n-1].Messages, reqs[a.n].Messages
+	if a.at >= len(before) || !bytes.Contains(mustJSON(t, before[a.at]), []byte("[engine: harness ")) {
+		t.Fatalf("message %d of request %d holds no engine banner: %s", a.at, a.n, mustJSON(t, before))
+	}
 	if !bytes.Contains(mustJSON(t, before), []byte("[engine: harness ")) {
 		t.Fatalf("request %d holds no engine banner: %s", a.n, mustJSON(t, before))
 	}
@@ -72,7 +81,26 @@ func TestContractEngineBanner(t *testing.T) {
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
 				restart{},
 				submit{as: "a", text: "three"}, waitIdle{as: "a"},
-				expectBannerStable{n: 2},
+				expectBannerStable{n: 2, at: 0},
+			},
+		},
+		{
+			name:   "banner_and_history_prefix_stay_the_same_after_a_compaction_and_a_restart",
+			config: map[string]any{"compaction_keep_turns": 1},
+			model: []harnesstest.Step{
+				text("one", "one", "1"), text("two", "two", "2"),
+				{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+				text("three", "three", "3"), text("four", "four", "4"),
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				restart{},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				expectBannerStable{n: 4, at: 2},
 			},
 		},
 		{

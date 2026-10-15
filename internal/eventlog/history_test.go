@@ -115,3 +115,23 @@ func TestSteerMessageKeepsTheBlobPartsOfEachInput(t *testing.T) {
 		t.Errorf("SteerMessage parts = %+v, want the text, then each blob in order", m.Parts)
 	}
 }
+
+func TestBannerAt(t *testing.T) {
+	firstTurn := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), result("t1", "i2", "c1"), end("t1", protocol.StopCompleted, ""))
+	compacted := with(firstTurn, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"})
+	for _, tc := range []struct {
+		name   string
+		events []protocol.Payload
+		want   int
+	}{
+		{"the banner follows the first message", firstTurn, 1},
+		{"the banner follows the whole history that a compaction left", compacted, 2},
+		{"a later message leaves the place of the banner", with(compacted, call("t2", "i3", "c2"), result("t2", "i4", "c2")), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := replay(t, tc.events).BannerAt(); got != tc.want {
+				t.Fatalf("BannerAt = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

@@ -114,8 +114,8 @@ type Request struct {
 	WebSearch     bool // offers the native web search of the provider
 	// Foreign reports History messages that another provider recorded.
 	Foreign bool
-	// Banner is the engine status that the first model call of a process
-	// pins. Empty: none.
+	// Banner is the engine status of the session. It comes from the log, so
+	// every process sends the same text. Empty: none.
 	Banner string
 	// BannerAt is the number of messages of the history that the banner follows.
 	BannerAt int
