@@ -137,6 +137,22 @@ func TestContractProviderMaxTokens(t *testing.T) {
 			},
 		},
 		{
+			name: "a_late_subscriber_receives_the_frames_of_the_streaming_item",
+			model: []harnesstest.Step{
+				{Name: "slow", Reply: harnesstest.Reply{Text: "partial answer", Block: true}},
+			},
+			actions: []action{
+				create{as: "a"},
+				watchItems{as: "a"},
+				submit{as: "a", text: "go"},
+				watchItems{as: "a", late: true},
+				release{step: "slow"},
+				waitIdle{as: "a"},
+				itemFrames{as: "a"},
+				itemFrames{as: "a", late: true},
+			},
+		},
+		{
 			name:   "max_tokens_cut_response_fails_the_turn_after_stream_max_retries",
 			config: map[string]any{"stream_max_retries": 1},
 			model: []harnesstest.Step{

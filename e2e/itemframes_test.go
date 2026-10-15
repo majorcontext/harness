@@ -3,6 +3,7 @@ package e2e
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -18,8 +19,13 @@ var (
 // its start to the end of its first turn.
 type itemFeed struct {
 	done  chan struct{}
+	delta chan struct{}
 	steps []string
 	ids   map[string]int
+}
+
+func newItemFeed() *itemFeed {
+	return &itemFeed{done: make(chan struct{}), delta: make(chan struct{}), ids: map[string]int{}}
 }
 
 func (f *itemFeed) name(id string) string {
@@ -33,19 +39,51 @@ func (f *itemFeed) add(s string) {
 	if n := len(f.steps); n == 0 || f.steps[n-1] != s {
 		f.steps = append(f.steps, s)
 	}
+	if strings.HasPrefix(s, "delta ") {
+		select {
+		case <-f.delta:
+		default:
+			close(f.delta)
+		}
+	}
 }
 
 // watchItems subscribes to the event stream of a session before its first
-// input, and returns when the stream has sent its first frame.
-type watchItems struct{ as string }
+// input, and returns when the stream has sent its first frame. With late set,
+// it first waits until the earlier stream of the session has carried an
+// item.delta, so the new stream starts after an item began streaming.
+type watchItems struct {
+	as   string
+	late bool
+}
+
+func feedKey(id string, late bool) string {
+	if late {
+		return id + "#late"
+	}
+	return id
+}
 
 func (a watchItems) run(t *testing.T, r *run) {
 	t.Helper()
 	d := r.drv.(*runtimeDriver)
 	id := r.id(t, a.as)
-	feed := &itemFeed{done: make(chan struct{}), ids: map[string]int{}}
+	feed := newItemFeed()
+	if a.late {
+		itemFeedsMu.Lock()
+		early := itemFeeds[id]
+		itemFeedsMu.Unlock()
+		if early == nil {
+			t.Fatalf("late watchItems before watchItems for %s", a.as)
+		}
+		select {
+		case <-early.delta:
+		case <-early.done:
+			t.Fatalf("the event stream of %s ended before an item.delta", id)
+		}
+	}
 	itemFeedsMu.Lock()
-	itemFeeds[id] = feed
+	itemFeeds[feedKey(id, a.late)] = feed
 	itemFeedsMu.Unlock()
 	subscribed := make(chan struct{})
 	go func() {
@@ -81,17 +119,24 @@ func (a watchItems) run(t *testing.T, r *run) {
 
 // itemFrames waits for the end of the first turn on the stream that
 // watchItems opened, and records its item frames.
-type itemFrames struct{ as string }
+type itemFrames struct {
+	as   string
+	late bool
+}
 
 func (a itemFrames) run(t *testing.T, r *run) {
 	t.Helper()
 	id := r.id(t, a.as)
 	itemFeedsMu.Lock()
-	feed := itemFeeds[id]
+	feed := itemFeeds[feedKey(id, a.late)]
 	itemFeedsMu.Unlock()
 	if feed == nil {
 		t.Fatalf("itemFrames before watchItems for %s", a.as)
 	}
 	<-feed.done
-	r.record(t, "item_frames", a.as, callResult{Status: http.StatusOK, Body: map[string]any{"frames": feed.steps}})
+	name := a.as
+	if a.late {
+		name += "_late"
+	}
+	r.record(t, "item_frames", name, callResult{Status: http.StatusOK, Body: map[string]any{"frames": feed.steps}})
 }

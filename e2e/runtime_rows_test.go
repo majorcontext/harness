@@ -659,6 +659,7 @@ var runtimeRows = map[string]runtimeRow{
 	"compact_summary_is_retried_after_a_refusal":                                         sameAsServe(),
 	"retried_call_with_a_tool_call_alone_completes_under_a_new_item":                     sameAsServe(),
 	"retried_call_discards_the_item_that_the_failed_call_streamed":                       sameAsServe(),
+	"a_late_subscriber_receives_the_frames_of_the_streaming_item":                        sameAsServe(),
 	"max_tokens_cut_response_is_retried":                                                 sameAsServe(),
 	"stream_retries_stop_after_stream_max_retries":                                       reGolden(specView, specRetryable),
 	"settings_change_to_claude_code_mid_turn_fails_the_turn":                             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
