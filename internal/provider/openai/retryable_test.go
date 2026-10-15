@@ -132,7 +132,8 @@ func TestUsageLimitExhaustionClassification(t *testing.T) {
 		{name: "stream usage limit message, no code", eventData: `{"type":"error","message":"The usage limit has been reached"}`, wantExhausted: true},
 		{name: "stream insufficient_quota code with empty message classifies exhausted", eventData: `{"type":"error","code":"insufficient_quota"}`, wantExhausted: true, wantContains: "insufficient_quota"},
 		{name: "HTTP codex usage_limit_reached 429 carries resets_at", useHTTP: true, status: http.StatusTooManyRequests, body: `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"pro","resets_at":1738888888}}`, wantExhausted: true, wantResetsAt: 1738888888},
-		{name: "stream codex usage_limit_reached frame carries resets_at", eventData: `{"type":"error","status":429,"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"pro","resets_at":1738888888}}`, wantExhausted: true, wantResetsAt: 1738888888},
+		{name: "HTTP codex usage_limit_reached type classifies exhausted whatever its message", useHTTP: true, status: http.StatusTooManyRequests, body: `{"error":{"type":"usage_limit_reached","message":"Try again later","resets_at":1738888888}}`, wantExhausted: true, wantResetsAt: 1738888888},
+		{name: "stream codex usage_limit_reached frame with no message carries resets_at", eventData: `{"type":"error","status":429,"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":1738888888}}`, wantExhausted: true, wantResetsAt: 1738888888},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

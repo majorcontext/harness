@@ -275,7 +275,7 @@ func isInvalidPreviousResponseMessage(message string) bool {
 	return strings.Contains(message, "previous_response_id")
 }
 
-func streamError(code, message string) error {
+func streamError(code, message string, types ...string) error {
 	if isNotFoundErrorCode(code) || isInvalidPreviousResponseMessage(message) {
 		if message == "" {
 			message = "previous response not found"
@@ -286,7 +286,7 @@ func streamError(code, message string) error {
 	if code != "" {
 		msg = fmt.Sprintf("openai: %s (%s)", message, code)
 	}
-	if hint, ok := parseUsageExhaustion(0, message, code); ok {
+	if hint, ok := parseUsageExhaustion(0, message, append(types, code)...); ok {
 		return provider.MarkPermanent(&provider.Error{
 			Kind:        provider.ErrKindProviderExhausted,
 			Raw:         msg,
@@ -319,7 +319,8 @@ var usageExhaustionPatterns = []*regexp.Regexp{
 }
 
 var usageExhaustionCodes = map[string]bool{
-	"insufficient_quota": true,
+	"insufficient_quota":  true,
+	"usage_limit_reached": true,
 }
 
 var exhaustionStatuses = map[int]bool{
@@ -583,6 +584,7 @@ func (s *stream) handle(name string, data []byte) error {
 				} `json:"error"`
 			} `json:"response"`
 			Error struct {
+				Type     string `json:"type"`
 				Code     string `json:"code"`
 				Message  string `json:"message"`
 				ResetsAt int64  `json:"resets_at"`
@@ -600,8 +602,8 @@ func (s *stream) handle(name string, data []byte) error {
 			return streamError(ev.Code, ev.Message)
 		case ev.Response.Error.Message != "" || ev.Response.Error.Code != "":
 			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
-		case ev.Error.Message != "" || ev.Error.Code != "":
-			return withReset(streamError(ev.Error.Code, ev.Error.Message), ev.Error.ResetsAt)
+		case ev.Error.Message != "" || ev.Error.Code != "" || ev.Error.Type != "":
+			return withReset(streamError(ev.Error.Code, cmp.Or(ev.Error.Message, ev.Error.Type), ev.Error.Type), ev.Error.ResetsAt)
 		case ev.Message != "" || ev.Code != "":
 			return streamError(ev.Code, ev.Message)
 		default:
