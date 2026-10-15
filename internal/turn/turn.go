@@ -321,7 +321,7 @@ func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits,
 	s.call = callOf(req, 0, ownsLoop)
 	err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && retryable(err); n++ {
-		s.item = ""
+		s.Discard("")
 		if err = s.wait(ctx, n, err); err == nil {
 			s.call = callOf(req, n+1, ownsLoop)
 			err = watch(ctx, b, req, s, lim.Idle)

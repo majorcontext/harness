@@ -436,7 +436,7 @@ func TestContractCLIRunRetryAfterStreamedTextPrintsTheRestartNotice(t *testing.T
 		harnesstest.Step{Name: "retry", Reply: codexText("recovered")})
 	h := &cliHost{t: t, dir: t.TempDir(), work: t.TempDir(), config: writeGoalConfigWith(t, o.URL(), codexConfig(o.URL(), false, nil))}
 	out, errOut, code := h.run("run", "-p", "hi")
-	if code != 0 || out != "partial\nrecovered\n" || !strings.Contains(errOut, "[re-streaming after a transient provider error]") {
+	if code != 0 || out != "partial\nrecovered\n" || !strings.Contains(errOut, "[re-streaming the reply]") {
 		t.Errorf("run after a retry that followed streamed text = %d %q, want 0, the text before and after a line break, and the restart notice\n%s", code, out, errOut)
 	}
 }
