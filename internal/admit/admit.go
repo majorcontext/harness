@@ -58,7 +58,7 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 		ev.Delivery = protocol.DeliverySteer
 	}
 	if ev.Source == "" {
-		ev.Source = "user"
+		ev.Source = protocol.SourceUser
 	}
 	switch {
 	case in.ID == "":

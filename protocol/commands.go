@@ -3,6 +3,12 @@ package protocol
 // SourceTyped marks a typed input, the only kind that can be a slash command.
 const SourceTyped = "typed"
 
+// SourceCommand marks an input that a typed slash command expanded from commands_dirs.
+const SourceCommand = "command"
+
+// SourceUser is the source that the admission step stores for an input with no source.
+const SourceUser = "user"
+
 // Slash command statuses.
 const (
 	CommandAccepted    = "accepted"

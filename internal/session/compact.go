@@ -43,7 +43,7 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c protocol.CompactionApp
 		case owns:
 			in := protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliveryQueue, Source: "harness",
 				Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: compactCommand}}}
-			if _, err := a.admit(in, ""); err != nil {
+			if _, err := a.admit(in, "", a.dismissRequests()...); err != nil {
 				reply(result{}, err)
 				return
 			}

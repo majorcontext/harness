@@ -177,7 +177,7 @@ var applyRows = []struct {
 	{"awaiting_input needs an open request", with(running, end("t1", protocol.StopAwaitingInput, "")), "no open request", view{}},
 	{"awaiting_input needs a request from its own turn", with(asking, result("t1", "i2", "c1"), end("t1", protocol.StopCompleted, ""), start("t2"), end("t2", protocol.StopAwaitingInput, "")), "turn t2 awaits input with no open request from this turn", view{}},
 	{"a turn does not start while a tool call is open", with(asking, end("t1", protocol.StopAwaitingInput, ""), start("t2")), "turn t2 starts with open tool call c1", view{}},
-	{"an input is not admitted while a request is open", with(asking, admit("b")), "request c1 is open", view{}},
+	{"an input admitted while a request is open waits in the queue", with(asking, end("t1", protocol.StopAwaitingInput, ""), admit("b")), "", view{Status: protocol.StatusWaiting, Queue: []string{"b"}, Requests: []string{"c1"}, Calls: []string{"c1"}}},
 	{"a dismissed request lets an input start a turn", with(asking, end("t1", protocol.StopAwaitingInput, ""), dismiss("c1"), admit("b"), start("t2", "b")), "", view{Status: protocol.StatusRunning, Turn: "t2"}},
 	{"an answer leaves the tool call open for the turn that it starts", with(asking, end("t1", protocol.StopAwaitingInput, ""), resolve("c1")), "", view{Status: protocol.StatusIdle, Calls: []string{"c1"}}},
 	{"a turn starts while the call of an answer is open", with(asking, end("t1", protocol.StopAwaitingInput, ""), resolve("c1"), start("t2")), "", view{Status: protocol.StatusRunning, Turn: "t2", Calls: []string{"c1"}}},

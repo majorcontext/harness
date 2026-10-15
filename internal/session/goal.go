@@ -118,7 +118,13 @@ func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool
 		}
 		events := append(a.withdrawGoal(), *gs)
 		_, busy := a.state.Turn()
-		idle := !busy && len(a.state.Queue()) == len(events)-1
+		var rest []protocol.InputAdmitted
+		for _, in := range a.state.Queue() {
+			if in.Source != sourceGoal {
+				rest = append(rest, in)
+			}
+		}
+		idle := !busy && (len(rest) == 0 || a.heldByRequest(rest))
 		if idle || post {
 			events = append(append(events, a.dismissRequests()...), goalInput(gs.Condition))
 		}
@@ -425,7 +431,7 @@ func (a *Actor) retry(at time.Time) error {
 	}
 	events := a.resumed()
 	if !a.judgeable() {
-		events = append(append(events, a.dismissRequests()...), goalInput("Continue working toward the goal.\n\nGOAL: "+g.Condition))
+		events = append(events, goalInput("Continue working toward the goal.\n\nGOAL: "+g.Condition))
 	}
 	if err := a.append(events...); err != nil || a.run != nil {
 		return err

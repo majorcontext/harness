@@ -31,9 +31,6 @@ func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 	if e.Delivery != protocol.DeliveryQueue && e.Delivery != protocol.DeliverySteer {
 		return illegal("input %s has delivery %q", e.InputID, e.Delivery)
 	}
-	if len(s.prog.Requests) > 0 {
-		return illegal("request %s is open", s.prog.Requests[0])
-	}
 	s.inputs[e.InputID] = input{state: inputAdmitted, seq: seq, event: e}
 	return nil
 }

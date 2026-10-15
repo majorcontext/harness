@@ -256,7 +256,7 @@ func (s *Session) prompt(in protocol.Input, name string) (*plan, protocol.Input,
 	if err != nil {
 		return nil, in, invalidInput(in.ID, err)
 	}
-	in.Parts, in.Source, in.SourceLabel = []protocol.Part{{Type: protocol.PartText, Text: expanded}}, "command", label
+	in.Parts, in.Source, in.SourceLabel = []protocol.Part{{Type: protocol.PartText, Text: expanded}}, protocol.SourceCommand, label
 	return nil, in, nil
 }
 

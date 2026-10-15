@@ -731,6 +731,13 @@ func (a claudeCompactKeeping) run(t *testing.T, r *run) {
 	r.record(t, "compact_keeping", a.as, claudeDriverOf(t, r).compactKeeping(t, r.id(t, a.as), a.keep))
 }
 
+// sendFrom posts an input that names source and delivery.
+func (d *runtimeDriver) sendFrom(t *testing.T, id, text, source, delivery string) callResult {
+	t.Helper()
+	path, body := d.input(id, text, delivery, source)
+	return d.call(t, http.MethodPost, path, body)
+}
+
 func (d *runtimeDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
 	t.Helper()
 	return d.call(t, http.MethodPost, "/sessions/"+id+"/compact", map[string]any{"keep_turns": keep})
