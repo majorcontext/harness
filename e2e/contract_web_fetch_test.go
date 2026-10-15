@@ -78,6 +78,10 @@ var webFixture = sync.OnceValue(func() *httptest.Server {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write([]byte(pngBody()))
 	})
+	mux.HandleFunc("/mislabeled", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte(pngBody()))
+	})
 	mux.HandleFunc("/missing", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusNotFound)
@@ -85,7 +89,7 @@ var webFixture = sync.OnceValue(func() *httptest.Server {
 	})
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "method=%s ua-has-harness=%t cookie=%q authorization=%q referer=%q body=%d",
+		_, _ = fmt.Fprintf(w, "method=%s ua-has-harness=%t cookie=%q authorization=%q referer=%q body=%d",
 			r.Method, strings.HasPrefix(r.Header.Get("User-Agent"), "harness/"), r.Header.Get("Cookie"), r.Header.Get("Authorization"), r.Header.Get("Referer"), r.ContentLength)
 	})
 	mux.HandleFunc("/hostile", func(w http.ResponseWriter, _ *http.Request) {
@@ -163,6 +167,7 @@ func TestContractWebFetchRefusals(t *testing.T) {
 				fetchCall("example.com"),
 				fetchCall("https://example.com/", "format", "pdf"),
 				fetchCall("https://example.com/", "max_bytes", -1),
+				fetchCall("https://example.com/", "max_bytes", 0),
 				ftTool("web_fetch", ftArgs()),
 			),
 			config:  webOn,
@@ -215,6 +220,12 @@ func TestContractWebFetchContent(t *testing.T) {
 			name:    "web_fetch_parses_only_the_first_two_mebibytes_of_an_html_body",
 			driver:  loop,
 			model:   toolChain(fetchCall(webURL("/long"), "max_bytes", 1000)),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_treats_bytes_of_another_image_format_than_the_declared_one_as_binary",
+			driver:  loop,
+			model:   toolChain(fetchCall(webURL("/mislabeled"))),
 			actions: oneTurn,
 		},
 		{

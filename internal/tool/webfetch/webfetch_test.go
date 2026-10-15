@@ -2,6 +2,7 @@ package webfetch
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net"
 	"net/http"
@@ -263,5 +264,56 @@ func TestNestedQuoteAndListKeepTheirPrefixes(t *testing.T) {
 	}
 	if want := "> a\n>\n> > b\n\n- - x"; pg.Body != want {
 		t.Errorf("body = %q, want %q", pg.Body, want)
+	}
+}
+
+func TestConvertHTMLBoundsPendingInlineText(t *testing.T) {
+	base, _ := url.Parse("https://site.example/" + strings.Repeat("d/", 2000) + "page")
+	const max = 1000
+	links := strings.Repeat(`<a href="x/y">link</a> `, 5000)
+	cells := "<table><tr>" + strings.Repeat("<td>"+strings.Repeat("c", 50)+"</td>", 5000) + "</tr></table>"
+	for name, doc := range map[string]string{"links": "<p>" + links + "</p>", "cells": cells} {
+		pg, err := convertHTML(t.Context(), strings.NewReader(doc), base, true, max)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !pg.Truncated || len(pg.Body) > 20*max {
+			t.Errorf("%s: truncated = %v, body = %d bytes, want a stop near %d", name, pg.Truncated, len(pg.Body), max)
+		}
+	}
+}
+
+func TestConvertHTMLLeavesOutSkippedSubtreesInPreAndDeepContent(t *testing.T) {
+	base, _ := url.Parse("https://site.example/")
+	deep := strings.Repeat("<div>", 100) + "<script>evil()</script><span hidden>secret</span>shown" + strings.Repeat("</div>", 100)
+	for name, tc := range map[string]struct{ doc, want string }{
+		"pre":  {`<pre><span hidden>secret</span>visible</pre>`, "```\nvisible\n```"},
+		"deep": {deep, "shown"},
+	} {
+		pg, err := convertHTML(t.Context(), strings.NewReader(tc.doc), base, true, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pg.Body != tc.want {
+			t.Errorf("%s: body = %q, want %q", name, pg.Body, tc.want)
+		}
+	}
+}
+
+func TestConvertHTMLEscapesTableCellsInMarkdownOnly(t *testing.T) {
+	doc := `<table><tr><td>a|b</td></tr></table>`
+	md, _ := convertHTML(t.Context(), strings.NewReader(doc), nil, true, 1000)
+	txt, _ := convertHTML(t.Context(), strings.NewReader(doc), nil, false, 1000)
+	if !strings.Contains(md.Body, `a\|b`) || txt.Body != "a|b" {
+		t.Errorf("markdown = %q, text = %q", md.Body, txt.Body)
+	}
+}
+
+func TestSniffsAsImageNeedsTheDeclaredFormat(t *testing.T) {
+	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+	for mt, want := range map[string]bool{"image/png": true, "image/jpeg": false, "image/gif": false, "image/webp": false} {
+		if got := sniffsAsImage(png, mt); got != want {
+			t.Errorf("sniffsAsImage(png bytes, %s) = %v, want %v", mt, got, want)
+		}
 	}
 }

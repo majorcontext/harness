@@ -106,7 +106,7 @@ type input struct {
 }
 
 func parseInput(args json.RawMessage) (input, *url.URL, error) {
-	var in input
+	in := input{MaxBytes: defaultMax}
 	if err := json.Unmarshal(args, &in); err != nil || in.URL == "" {
 		return in, nil, errors.New("web_fetch: missing url argument")
 	}
@@ -118,10 +118,8 @@ func parseInput(args json.RawMessage) (input, *url.URL, error) {
 		return in, nil, fmt.Errorf("web_fetch: format %q is not one of markdown, text, raw", in.Format)
 	}
 	switch {
-	case in.MaxBytes < 0 || in.MaxBytes > maxBody:
+	case in.MaxBytes < 1 || in.MaxBytes > maxBody:
 		return in, nil, fmt.Errorf("web_fetch: max_bytes must be between 1 and %d", maxBody)
-	case in.MaxBytes == 0:
-		in.MaxBytes = defaultMax
 	}
 	u, err := url.Parse(in.URL)
 	switch {
@@ -200,7 +198,8 @@ func isText(mt string) bool {
 	return strings.HasPrefix(mt, "text/") || textTypes[mt] || strings.HasSuffix(mt, "+json") || strings.HasSuffix(mt, "+xml")
 }
 
-var imageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+// imageTypes maps the image media types to the format name that image.DecodeConfig reports.
+var imageTypes = map[string]string{"image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif", "image/webp": "webp"}
 
 // mediaType returns the media type of the response, or the sniffed type of its body.
 func mediaType(h http.Header, data []byte) string {
@@ -224,7 +223,7 @@ func render(ctx context.Context, resp *http.Response, data []byte, cut bool, in 
 	var body string
 	htmlCut := false
 	switch {
-	case imageTypes[mt] && !cut && sniffsAsImage(data, mt):
+	case !cut && sniffsAsImage(data, mt):
 		cfg, _, _ := image.DecodeConfig(bytes.NewReader(data))
 		body = fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", mt, len(data), cfg.Width, cfg.Height)
 		res.Blobs = []protocol.Blob{{MediaType: mt, Data: data}}
@@ -251,11 +250,11 @@ func render(ctx context.Context, resp *http.Response, data []byte, cut bool, in 
 	return res, nil
 }
 
+// sniffsAsImage reports whether data decodes as the image format that mt declares.
 func sniffsAsImage(data []byte, mt string) bool {
-	if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
-		return false
-	}
-	return imageTypes[mt]
+	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+	f, ok := imageTypes[mt]
+	return err == nil && ok && f == format
 }
 
 // textBody is a text body. extra counts the bytes that follow it and that the

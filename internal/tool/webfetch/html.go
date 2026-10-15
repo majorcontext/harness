@@ -147,7 +147,9 @@ func text(n *html.Node) string {
 			continue
 		}
 		for ch := m.LastChild; ch != nil; ch = ch.PrevSibling {
-			stack = append(stack, ch)
+			if !skip(ch) {
+				stack = append(stack, ch)
+			}
 		}
 	}
 	return b.String()
@@ -331,6 +333,7 @@ func (c *converter) pre(n *html.Node) string {
 
 func (c *converter) table(n *html.Node, depth int) string {
 	var rows [][]string
+	size := 0
 	var walk func(*html.Node, int)
 	walk = func(m *html.Node, d int) {
 		for ch := m.FirstChild; ch != nil && d < maxDepth && !c.stop(); ch = ch.NextSibling {
@@ -342,7 +345,15 @@ func (c *converter) table(n *html.Node, depth int) string {
 					if cell.Type == html.ElementNode && (cell.DataAtom == atom.Td || cell.DataAtom == atom.Th) && !skip(cell) {
 						var b strings.Builder
 						c.inline(&b, cell, depth)
-						cells = append(cells, strings.ReplaceAll(strings.TrimSpace(b.String()), "|", `\|`))
+						cell := strings.TrimSpace(b.String())
+						if c.markdown {
+							cell = strings.ReplaceAll(cell, "|", `\|`)
+						}
+						if size += len(cell); size > c.max {
+							c.full = true
+							break
+						}
+						cells = append(cells, cell)
 					}
 				}
 				if len(cells) > 0 {
@@ -378,6 +389,9 @@ func (c *converter) inline(b *strings.Builder, n *html.Node, depth int) {
 	switch {
 	case n.Type == html.TextNode:
 		writeText(b, n.Data)
+		return
+	case b.Len() > c.max:
+		c.full = true
 		return
 	case n.Type != html.ElementNode || skip(n) || c.stop():
 		return

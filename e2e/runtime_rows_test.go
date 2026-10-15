@@ -204,6 +204,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_system_prompt_keeps_webfetch_absent_when_the_turn_does_not_offer_web_fetch":                    sameAsServe(),
 	"web_fetch_bounds_the_output_for_a_deeply_nested_page":                                                     runtimeOnly(reasonWebLoopback),
 	"web_fetch_answers_a_binary_type_with_its_type_and_size":                                                   runtimeOnly(reasonWebLoopback),
+	"web_fetch_treats_bytes_of_another_image_format_than_the_declared_one_as_binary":                           runtimeOnly(reasonWebLoopback),
 	"web_fetch_returns_an_image_as_a_blob":                                                                     runtimeOnly(reasonWebLoopback),
 	"web_fetch_cuts_a_body_at_ten_mebibytes_and_the_text_at_max_bytes":                                         runtimeOnly(reasonWebLoopback),
 	"web_fetch_sends_a_get_with_the_harness_user_agent_and_no_cookie_or_credential":                            runtimeOnly(reasonWebLoopback),
