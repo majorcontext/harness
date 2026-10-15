@@ -407,6 +407,8 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_parks_then_answer_resumes":                                              reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
 	"claudecode_question_unknown_call_id_conflicts":                                              reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
 	"claudecode_text_and_thinking_stream_as_deltas_before_the_item":                              sameAsServe(),
+	"claudecode_retried_reply_with_a_tool_call_alone_completes_under_a_new_item":                 reGolden(specDiscard),
+	"claudecode_tool_result_between_the_deltas_and_the_frame_of_a_block_keeps_the_live_item":     sameAsServe(),
 	"claudecode_retried_reply_starts_a_new_live_item":                                            reGolden(specDiscard),
 	"claudecode_prompt_attachments":                                                              sameAsServe(),
 	"claudecode_queued_prompt_injected_mid_turn":                                                 reGolden(specView, specClaudeGauge),

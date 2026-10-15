@@ -21,8 +21,10 @@ func partialEmit(f *fake, fs ...obj) {
 // --include-partial-messages. Without the flag they print the assistant
 // frames alone, as the CLI does.
 var partialModes = map[string]mode{
-	"partial_messages": partialMessages,
-	"partial_retry":    partialRetry,
+	"partial_messages":                   partialMessages,
+	"partial_retry":                      partialRetry,
+	"partial_tool_result_between_deltas": partialToolResultBetweenDeltas,
+	"partial_retry_tool":                 partialRetryTool,
 }
 
 func streamEvent(ev obj) obj {
@@ -93,4 +95,35 @@ func partialRetry(f *fake) {
 	f.emit(say("Second try.").inMessage("id", partialSecondID))
 	emit(blockStop(0), messageStop("end_turn"), streamEvent(obj{"type": "message_stop"}))
 	f.emit(success("Second try.", 9, 4))
+}
+
+// partialRetryTool drops a reply that it began and answers again with a tool
+// call alone, which streams no text delta.
+func partialRetryTool(f *fake) {
+	emit := func(fs ...obj) { partialEmit(f, fs...) }
+	emit(messageStart(partialFirstID), blockStart(0, textBlock("")),
+		blockDelta(0, textDelta("Dropped ")), blockDelta(0, textDelta("reply")),
+		blockStop(0), messageStop("end_turn"), streamEvent(obj{"type": "message_stop"}),
+		messageStart(partialSecondID), blockStart(0, toolUse("toolu_partial", "mcp__harness__bash", obj{})),
+		blockDelta(0, obj{"type": "input_json_delta", "partial_json": ""}))
+	f.emit(assistant(toolUse("toolu_partial", "mcp__harness__bash", obj{"command": "echo hi"})).inMessage("id", partialSecondID))
+	emit(blockStop(0), messageStop("tool_use"), streamEvent(obj{"type": "message_stop"}))
+	f.emit(user(toolResult("toolu_partial", "hi\n", false)))
+	f.emit(success("", 9, 4))
+}
+
+// partialToolResultBetweenDeltas prints the result of a tool call after the
+// text deltas of a later block of the same response and before the assistant
+// frame of that block.
+func partialToolResultBetweenDeltas(f *fake) {
+	emit := func(fs ...obj) { partialEmit(f, fs...) }
+	emit(messageStart(partialFirstID), blockStart(0, toolUse("toolu_partial", "mcp__harness__bash", obj{})),
+		blockDelta(0, obj{"type": "input_json_delta", "partial_json": ""}))
+	f.emit(assistant(toolUse("toolu_partial", "mcp__harness__bash", obj{"command": "echo hi"})).inMessage("id", partialFirstID))
+	emit(blockStop(0), blockStart(1, textBlock("")),
+		blockDelta(1, textDelta("Let me ")), blockDelta(1, textDelta("see.")))
+	f.emit(user(toolResult("toolu_partial", "hi\n", false)))
+	f.emit(say("Let me see.").inMessage("id", partialFirstID))
+	emit(blockStop(1), messageStop("end_turn"), streamEvent(obj{"type": "message_stop"}))
+	f.emit(success("Let me see.", 9, 4))
 }

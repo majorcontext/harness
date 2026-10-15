@@ -195,6 +195,16 @@ func TestContractClaudeCodePartialMessages(t *testing.T) {
 			driver:  live("partial_retry"),
 			actions: watched,
 		},
+		{
+			name:    "claudecode_tool_result_between_the_deltas_and_the_frame_of_a_block_keeps_the_live_item",
+			driver:  live("partial_tool_result_between_deltas"),
+			actions: watched,
+		},
+		{
+			name:    "claudecode_retried_reply_with_a_tool_call_alone_completes_under_a_new_item",
+			driver:  live("partial_retry_tool"),
+			actions: watched,
+		},
 	})
 }
 
