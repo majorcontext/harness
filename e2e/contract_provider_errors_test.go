@@ -123,6 +123,20 @@ func TestContractProviderMaxTokens(t *testing.T) {
 			},
 		},
 		{
+			name: "retried_call_discards_the_item_that_the_failed_call_streamed",
+			model: []harnesstest.Step{
+				{Name: "cut", Reply: harnesstest.Reply{Text: "first half ", StopReason: "max_tokens"}},
+				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				watchItems{as: "a"},
+				submit{as: "a", text: "go"},
+				waitIdle{as: "a"},
+				itemFrames{as: "a"},
+			},
+		},
+		{
 			name:   "max_tokens_cut_response_fails_the_turn_after_stream_max_retries",
 			config: map[string]any{"stream_max_retries": 1},
 			model: []harnesstest.Step{

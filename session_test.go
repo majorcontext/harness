@@ -105,7 +105,7 @@ func TestEventsLiveFrames(t *testing.T) {
 		r := runtime(t, store.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
 		s := create(t, r)
 		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
-			"~4 item.started i1", "~4 item.delta i1 text z", "~4 status retrying 1", "~4 status running",
+			"~4 item.started i1", "~4 item.delta i1 text z", "~4 item.discarded i1", "~4 status retrying 1", "~4 status running",
 			"~4 item.started i2", "~4 item.delta i2 text x", "~4 item.delta i2 text x", "5 item.completed i2", "6 turn.ended")
 
 		got := watch(t, s, 4, 6, text("b", "two"), true)

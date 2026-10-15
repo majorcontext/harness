@@ -183,6 +183,7 @@
         "frames": [
           "started item#1",
           "delta item#1",
+          "discarded item#1",
           "completed item#2 assistant",
           "completed item#3 tool",
           "started item#4",
