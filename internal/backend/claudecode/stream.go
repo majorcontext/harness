@@ -387,21 +387,29 @@ func (r *run) mayCall(name string) bool {
 	return strings.HasPrefix(name, "mcp__") || r.allowed[name]
 }
 
-// checkRan fails the turn when the result of a call to an unlisted tool is not an
-// error: the tool ran. The CLI answers a call to a tool it was not given with an
-// error result, and the model then picks another tool.
-func (r *run) checkRan(parts []protocol.LogPart) error {
+// checkRan fails the turn when the result of a call to an unlisted tool is not
+// the refusal of the CLI: an error result that starts with "No such tool
+// available: <name>." in the tool_use_error text, in a frame whose
+// tool_use_result is a string. A tool that ran gives an object there, and any
+// other wording fails closed.
+func (r *run) checkRan(parts []protocol.LogPart, toolUseResult json.RawMessage) error {
 	for _, p := range parts {
 		name, ok := r.unlisted[p.CallID]
 		if !ok {
 			continue
 		}
 		delete(r.unlisted, p.CallID)
-		if !p.IsError {
+		if !refused(p, name, toolUseResult) {
 			return fmt.Errorf("%w: tool %s ran", ErrToolsNotRestricted, name)
 		}
 	}
 	return nil
+}
+
+func refused(p protocol.LogPart, name string, toolUseResult json.RawMessage) bool {
+	var s string
+	return p.IsError && strings.HasPrefix(p.Text, "<tool_use_error>Error: No such tool available: "+name+".") &&
+		json.Unmarshal(toolUseResult, &s) == nil
 }
 
 func (r *run) checkTools(tools *[]string) error {
@@ -498,7 +506,7 @@ func (r *run) toolResults(env envelope) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	if err := r.checkRan(parts); err != nil {
+	if err := r.checkRan(parts, env.ToolUseResult); err != nil {
 		return err
 	}
 	if err := r.attachBlobs(parts); err != nil {

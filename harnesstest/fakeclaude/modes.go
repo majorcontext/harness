@@ -126,9 +126,14 @@ var basicModes = map[string]mode{
 	"builtin_tool":   builtinTool,
 	"builtin_refused": func(f *fake) {
 		f.emit(say("Let me check that."), assistant(toolUse("toolu_b", "Bash", obj{"command": "ls"})),
-			user(toolResult("toolu_b", "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here.</tool_use_error>", true)))
+			user(toolResult("toolu_b", "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here.</tool_use_error>", true)).set("tool_use_result", "Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here."))
 		turnCalls(f)
 		f.emit(say("Done."), success("Done.", 0, 0))
+	},
+	"builtin_ran_failed": func(f *fake) {
+		f.emit(assistant(toolUse("toolu_b", "Bash", obj{"command": "touch x; false"})),
+			user(toolResult("toolu_b", "Exit code 1", true)).set("tool_use_result", obj{"stdout": "", "stderr": "", "interrupted": false}),
+			success("done", 0, 0))
 	},
 	"turn_calls": func(f *fake) {
 		f.emit(say("Let me check that."))
