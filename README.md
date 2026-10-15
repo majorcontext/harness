@@ -13,7 +13,7 @@ program.
 ## Before you start
 
 - Go 1.27.1 or later, to install the CLI and to build Go plugins and programs.
-- A ChatGPT account (Plus, Pro, or Team), or a Claude account with Claude Code
+- A ChatGPT account, or a Claude account with Claude Code
   installed. Harness signs in with the subscription, so no API key is needed.
   An API key also works, as [Choose a model](#choose-a-model) shows.
 - A directory you can reset, such as a git repository. Harness has no approval
@@ -36,9 +36,9 @@ go install github.com/majorcontext/harness/cmd/harness@latest
 With a ChatGPT account, run `harness login codex`. It opens your browser; on a
 machine with no browser, run `harness login codex --device` and enter the code
 it prints on another device. With a Claude account, log in to Claude Code with
-`claude auth login` or `harness login claude-code`. Either login writes `model`
-to your user config when it has none, and prints a line that says so. See
-[Configuration](docs/configuration.md) for both logins.
+`claude auth login` or `harness login claude-code`. `harness login codex` and
+`harness login claude-code` write `model` to your user config when it has none.
+See [Configuration](docs/configuration.md) for both logins.
 
 ### Run a prompt
 
@@ -48,11 +48,8 @@ Run a prompt in your project:
 harness run -p "Find the TODOs in this repo and fix the easy ones"
 ```
 
-With no model set, `harness run` and `harness acp` choose in this order: the
-Anthropic API default when `ANTHROPIC_API_KEY` is set; else `codex/gpt-6.1-sol`
-when a Codex login exists; else `claude-code/sonnet` when `claude` is on your
-`PATH`; else the Anthropic API default. `harness serve` and the Go API always
-take the API default.
+With no model set, Harness picks one from your API key and logins; see
+[Default model](docs/configuration.md#default-model).
 
 The reply goes to standard output. The tool calls, the session ID, and JSON log
 lines go to standard error. Run `harness --help` for every `run` flag.

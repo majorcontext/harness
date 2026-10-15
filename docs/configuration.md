@@ -8,7 +8,7 @@ are for API keys.
 
 ## Default model
 
-`model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose in this order: the API default, `anthropic/claude-fable-5`, when `ANTHROPIC_API_KEY` is set; else `codex/gpt-6.1-sol` when a Codex login exists; else `claude-code/sonnet` when `claude` is on `PATH`; else the API default. `harness serve` and the Go API always take the API default. `harness login codex` and `harness login claude-code` write `model` to the user config when it has none, and print a line that says so. They never change a `model` that is set.
+`model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose in this order: the API default, `anthropic/claude-fable-5`, when `ANTHROPIC_API_KEY` is set; else `codex/gpt-6.1-sol` when a Codex login exists; else `claude-code/sonnet` when `claude` is on `PATH`; else the API default. `harness serve` and the Go API take the API default, unless the embedder sets `Config.SubscriptionDefault`. `harness login codex` and `harness login claude-code` write `model` to the user config when it has none, and print a line that says so. They never change a `model` that is set.
 
 ## Web fetch
 
@@ -59,7 +59,7 @@ In an editor, add Harness as an [agent server](cli.md#use-harness-in-your-editor
 
 ## Log in with Claude Code
 
-`claude-code` is a built-in provider that drives the `claude` CLI, so `harness run -model claude-code/sonnet` needs no config. The CLI keeps its own login. The session runs on Harness tools, so a plugin sees every file, search, and shell call. Harness never reads or stores Claude Code credentials. `harness login claude-code` runs `claude auth login` in your terminal, and passes `--console` (API billing) and `--sso` to it. `harness login claude-code --status` runs `claude auth status --text`, and `harness logout claude-code` runs `claude auth logout`. Harness runs `claude` from `PATH`. To change the program or its arguments, write a `claude-code` entry of type `claude-code-cli` with `binary_path` or `extra_args`: it replaces the built-in entry as a whole.
+`claude-code` is a built-in provider that drives the `claude` CLI, so `harness run -model claude-code/sonnet` needs no config. The CLI keeps its own login. The session runs on Harness tools, so a plugin sees every file and shell call. Harness never reads or stores Claude Code credentials. `harness login claude-code` runs `claude auth login` in your terminal, and passes `--console` (API billing) and `--sso` to it. `harness login claude-code --status` runs `claude auth status --text`, and `harness logout claude-code` runs `claude auth logout`. Harness runs `claude` from `PATH`. To change the program or its arguments, write a `claude-code` entry of type `claude-code-cli` with `binary_path` or `extra_args`: it replaces the built-in entry as a whole.
 
 When you are logged out, a turn fails with ``not logged in to Claude Code; run `harness login claude-code` ``.
 
