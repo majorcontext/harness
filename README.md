@@ -13,10 +13,10 @@ program.
 ## Before you start
 
 - Go 1.27.1 or later, to install the CLI and to build Go plugins and programs.
-- An API key for one model provider. The default model is Anthropic's
-  (`ANTHROPIC_API_KEY`). With an OpenAI key, choose an OpenAI model, as
-  [Choose a model](#choose-a-model) shows. For any other provider, add a
-  `providers` entry, as [Configuration](#configuration) shows.
+- A ChatGPT account (Plus, Pro, or Team), or a Claude account with
+  Claude Code installed. Harness signs in with the
+  subscription, so no API key is needed. An API key also works, as
+  [Choose a model](#choose-a-model) shows.
 - A directory you can reset, such as a git repository. Harness has no approval
   prompts: the model reads and edits files and runs shell commands in the
   current directory without asking. Use a [plugin](#block-tool-calls-with-a-plugin)
@@ -32,35 +32,49 @@ Install the CLI. `go install` puts it in `$(go env GOBIN)`, or in
 go install github.com/majorcontext/harness/cmd/harness@latest
 ```
 
+### Sign in
+
+With a ChatGPT account, run `harness login codex`. It opens your browser; on a
+machine with no browser, run `harness login codex --device` and enter the code
+it prints on another device. With a Claude account, log in to Claude Code with
+`claude auth login`, or with `harness login claude-code`. See
+[Use your ChatGPT subscription](#use-your-chatgpt-subscription-codex) and
+[Log in with Claude Code](#log-in-with-claude-code).
+
 ### Run a prompt
 
-Set the key, then run a prompt in your project:
+Run a prompt in your project:
 
 ```bash
-export ANTHROPIC_API_KEY=...
 harness run -p "Find the TODOs in this repo and fix the easy ones"
 ```
 
-The reply goes to standard output. The tool calls, the session ID, and JSON log
-lines go to standard error. Run `harness --help` for every `run` flag.
+With no model set, Harness uses your Codex login when `harness login codex`
+stored one, else Claude Code when `claude` is on your `PATH`, else the Anthropic
+API (`ANTHROPIC_API_KEY`). The reply goes to standard output. The tool calls,
+the session ID, and JSON log lines go to standard error. Run `harness --help`
+for every `run` flag.
 
 ### Choose a model
 
 Model refs are `provider/model`. `-model` picks the model for one run:
 
 ```bash
-export OPENAI_API_KEY=...
-harness run -model openai/gpt-5-mini -p "Find the TODOs in this repo"
+harness run -model codex/gpt-6.1-sol -p "Find the TODOs in this repo"
+harness run -model claude-code/sonnet -p "Find the TODOs in this repo"
 ```
 
-To change the default, set `model` in a config file (see
-[Config files](#config-files)):
+`harness login` writes `model` to your user config when it has none. To set it
+yourself, put it in a config file (see [Config files](#config-files)):
 
 ```json
-{"model": "openai/gpt-5-mini"}
+{"model": "codex/gpt-6.1-sol"}
 ```
 
-[Configuration](#configuration) shows how to add OpenRouter, Ollama, and other endpoints.
+To pay by API key, set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` and use an
+`anthropic/` or `openai/` model, such as `openai/gpt-5-mini`.
+[Configuration](#configuration) shows how to add OpenRouter, Ollama, and other
+endpoints.
 
 ### Continue the session
 
@@ -134,11 +148,11 @@ For a remote server, set `url` and `headers` in place of `command`.
 ### Work toward a goal
 
 `-goal` runs turns until an independent evaluator model judges the condition
-met. Add the evaluator to `.harness.json`. It needs the key of its own
+met. Add the evaluator to `.harness.json`. It needs the login or key of its own
 provider:
 
 ```json
-{"goal_evaluator_model": "anthropic/claude-fable-5"}
+{"goal_evaluator_model": "codex/gpt-6.1-sol"}
 ```
 
 ```bash
@@ -269,7 +283,7 @@ curl -X POST localhost:4096/sessions/demo/inputs \
 curl -N -H 'Accept: text/event-stream' localhost:4096/sessions/demo/events
 ```
 
-To choose the model, add `"model": "openai/gpt-5-mini"` to the create request.
+To choose the model, add `"model": "codex/gpt-6.1-sol"` to the create request.
 With no `HARNESS_RUN_TOKEN` set, the server needs no token on `localhost`.
 `harness serve -h` lists the flags, and
 [`protocol/openapi.json`](protocol/openapi.json) describes every route.
@@ -288,6 +302,8 @@ settings:
 }
 ```
 
+The client shows a login button for ChatGPT, and for Claude Code when `claude`
+is on your `PATH`; see [Use your ChatGPT subscription](#use-your-chatgpt-subscription-codex).
 The client gets a model and effort picker, image and file attachments, and
 session list, load, and resume. When the client supports elicitation forms, a
 session can ask you questions in a form.
@@ -315,18 +331,28 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
 
 func main() {
 	ctx := context.Background()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal(err)
+	}
 	rt, err := harness.New(harness.Options{
 		Store:   store.NewMemStore(),
 		WorkDir: ".",
 		Getenv:  os.Getenv,
+		Config: config.Config{
+			Model:         "codex/gpt-6.1-sol",
+			CodexAuthFile: filepath.Join(home, ".harness", "auth", "codex.json"),
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -366,10 +392,15 @@ func main() {
 }
 ```
 
-`Getenv` lets the runtime read the API-key variables of the model providers.
-Without it, a provider has no key unless `ModelTransport` supplies the
-credentials. `protocol.CreateSession{Model: "openai/gpt-5-mini"}` picks the
-model of the session; empty selects the default. `WorkDir` gives each session
+The program uses the login of `harness login codex`. The runtime reads no
+config file, and `CodexAuthFile` names the login file; it has no default in Go.
+For Claude Code, set `Model: "claude-code/sonnet"` and no `CodexAuthFile`: the
+runtime runs the `claude` CLI, which keeps its own login. For an API key, set
+`Model` to an `anthropic/` or `openai/` model. `Getenv` lets the runtime read
+the API-key variables; without it, a provider has no key unless
+`ModelTransport` supplies the credentials. The later snippets show `Options`
+without `Config`; add the same `Config` to each. `protocol.CreateSession{Model: ...}`
+picks the model of one session; empty selects `Config.Model`. `WorkDir` gives each session
 the built-in tools, bash among them. Leave it empty for a session with no file
 access. A failed turn does not end `Events` with an error, so check
 `turn.Wait`.
@@ -513,6 +544,9 @@ git clone https://github.com/majorcontext/harness && cd harness
 ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
 ```
 
+The examples need `ANTHROPIC_API_KEY`. To run on a subscription, copy the
+`Config` of [Embed Harness in Go](#embed-harness-in-go) into the program.
+
 - [`prompt`](examples/prompt): send one prompt and stream the reply.
 - [`custom-tool`](examples/custom-tool): give the model a Go function to call.
 - [`switch-model`](examples/switch-model): continue one conversation on a
@@ -523,8 +557,10 @@ ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
 ## Configuration
 
 These keys go in either [config file](#config-files). In a model ref
-`provider/model`, `provider` is a built-in family (`anthropic`, `openai`) or a
-key from `providers`.
+`provider/model`, `provider` is a built-in provider (`codex` and `claude-code`
+use a subscription login; `anthropic` and `openai` use an API key) or a key
+from `providers`. The sections for OpenAI-compatible and Responses endpoints
+are for API keys.
 
 Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, which reads public http and https pages. It is off by default.
 
@@ -537,6 +573,45 @@ Set `web` to `{"search": true}` to let the model use the web search of its provi
 ```
 
 The provider runs the search itself, so a plugin hook cannot block it. A session that lists `allowed_tools` without `web_search` gets no search.
+
+### Use your ChatGPT subscription (Codex)
+
+A ChatGPT plan can pay for the model calls of the Codex lane. Sign in once:
+
+```bash
+harness login codex
+```
+
+The command prints a sign-in URL and opens it in your browser. After you sign in, the browser returns to a page on `localhost` and the command exits. On a machine with no browser, run `harness login codex --device`: it prints a code and a link, and you enter the code on another device. `harness login codex --status` prints the account and when the access token ends. It never prints a token. `harness logout codex` deletes the login.
+
+Harness keeps its own login in `auth/codex.json` beside the user config (`~/.harness/auth/codex.json` by default). The file has mode 0600. Harness never reads or writes `~/.codex`, so a login with the Codex CLI and a login with Harness are separate. Harness refreshes the access token before it ends. `harness logout codex` deletes the file; it does not revoke the tokens at OpenAI. The file lock is an exclusive lock on unix only; on Windows it does nothing, so run one Harness process at a time on a login there. If two processes refresh at once, run `harness login codex` again.
+
+`codex` is a built-in provider, so no config is needed. After you sign in, use the `codex/` prefix, as in `harness run -model codex/gpt-6.1-sol -p "Reply ok"`. To point it at another URL, write a `codex` entry in `~/.harness/config.json`. The entry replaces the built-in one as a whole, so it must hold every key of the built-in entry:
+
+```json
+{
+  "providers": {
+    "codex": {
+      "type": "openai",
+      "auth": "chatgpt",
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "responses_path": "/responses",
+      "omit_response_params": ["max_output_tokens", "temperature", "top_p", "metadata"],
+      "sanitize_tool_schemas": true
+    }
+  }
+}
+```
+
+`auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
+
+In an editor, add Harness as an [agent server](#use-harness-in-your-editor). Zed shows a "Log in with ChatGPT" button when no login exists: the button opens your browser and stores the login. You can also run `harness login codex` once in a terminal. A client that supports terminal login also shows a terminal method, which runs `harness acp login codex`. If you start Harness through a wrapper script, the script must pass its arguments on (`"$@"`).
+
+### Log in with Claude Code
+
+`claude-code` is a built-in provider that drives the `claude` CLI, so `harness run -model claude-code/sonnet` needs no config. The CLI keeps its own login. The session runs on Harness tools, so a plugin sees every file, search, and shell call. Harness never reads or stores Claude Code credentials. `harness login claude-code` runs `claude auth login` in your terminal, and passes `--console` (API billing) and `--sso` to it. `harness login claude-code --status` runs `claude auth status --text`, and `harness logout claude-code` runs `claude auth logout`. Harness runs `claude` from `PATH`. To change the program or its arguments, write a `claude-code` entry of type `claude-code-cli` with `binary_path` or `extra_args`: it replaces the built-in entry as a whole.
+
+In an [ACP client](#use-harness-in-your-editor) such as Zed, a "Log in with Claude Code" button appears when the program resolves on `PATH`. The button runs `claude auth login` as a child with no terminal, and the CLI opens your browser. A new `authenticate` cancels a sign-in that is still open. When the CLI reports that you are logged out, a new session or a prompt fails with the ACP error "Authentication required", which makes Zed show the button. Logging out from Zed removes only the Harness ChatGPT login. Harness never runs `claude auth logout` from ACP, because the CLI login is shared with every program that uses the CLI; run `harness logout claude-code` for that.
 
 ### OpenAI-compatible endpoints
 
@@ -644,51 +719,6 @@ The model ref `vendor/some-model` sends `some-model` as the model ID. Set
 `context_window_tokens` as [Context windows](#context-windows) says.
 `responses_path` is also valid on the built-in `openai` entry, and nowhere
 else.
-
-### Use your ChatGPT subscription (Codex)
-
-A ChatGPT plan can pay for the model calls of the Codex lane. Sign in once:
-
-```bash
-harness login codex
-```
-
-The command prints a sign-in URL and opens it in your browser. After you sign in, the browser returns to a page on `localhost` and the command exits. On a machine with no browser, run `harness login codex --device`: it prints a code and a link, and you enter the code on another device. `harness login codex --status` prints the account and when the access token ends. It never prints a token. `harness logout codex` deletes the login.
-
-Harness keeps its own login in `auth/codex.json` beside the user config (`~/.harness/auth/codex.json` by default). The file has mode 0600. Harness never reads or writes `~/.codex`, so a login with the Codex CLI and a login with Harness are separate. Harness refreshes the access token before it ends. `harness logout codex` deletes the file; it does not revoke the tokens at OpenAI. The file lock is an exclusive lock on unix only; on Windows it does nothing, so run one Harness process at a time on a login there. If two processes refresh at once, run `harness login codex` again.
-
-`codex` is a built-in provider, so no config is needed. After you sign in, run it with the `codex/` prefix:
-
-```bash
-harness run -model codex/gpt-5.6-sol -p "Reply ok"
-```
-
-The built-in entry is the one below. To point the lane at another URL, write a `codex` entry in `~/.harness/config.json`: it replaces the built-in entry as a whole, so it must hold every key.
-
-```json
-{
-  "providers": {
-    "codex": {
-      "type": "openai",
-      "auth": "chatgpt",
-      "base_url": "https://chatgpt.com/backend-api/codex",
-      "responses_path": "/responses",
-      "omit_response_params": ["max_output_tokens", "temperature", "top_p", "metadata"],
-      "sanitize_tool_schemas": true
-    }
-  }
-}
-```
-
-`auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
-
-In an editor, add Harness as an [agent server](#use-harness-in-your-editor). Zed shows a "Log in with ChatGPT" button when no login exists: the button opens your browser and stores the login. You can also run `harness login codex` once in a terminal. A client that supports terminal login also shows a terminal method, which runs `harness acp login codex`. If you start Harness through a wrapper script, the script must pass its arguments on (`"$@"`).
-
-### Log in with Claude Code
-
-`claude-code` is a built-in provider that drives the `claude` CLI, so `harness run -model claude-code/sonnet` needs no config. The CLI keeps its own login. Harness never reads or stores Claude Code credentials. `harness login claude-code` runs `claude auth login` in your terminal, and passes `--console` (API billing) and `--sso` to it. `harness login claude-code --status` runs `claude auth status --text`, and `harness logout claude-code` runs `claude auth logout`. Harness runs `claude` from `PATH`. To change the program or its arguments, write a `claude-code` entry of type `claude-code-cli` with `binary_path` or `extra_args`: it replaces the built-in entry as a whole.
-
-In an [ACP client](#use-harness-in-your-editor) such as Zed, a "Log in with Claude Code" button appears when the program resolves on `PATH`. The button runs `claude auth login` as a child with no terminal, and the CLI opens your browser. A new `authenticate` cancels a sign-in that is still open. When the CLI reports that you are logged out, a new session or a prompt fails with the ACP error "Authentication required", which makes Zed show the button. Logging out from Zed removes only the Harness ChatGPT login. Harness never runs `claude auth logout` from ACP, because the CLI login is shared with every program that uses the CLI; run `harness logout claude-code` for that.
 
 ### Context windows
 
