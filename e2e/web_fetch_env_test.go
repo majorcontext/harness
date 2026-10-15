@@ -29,7 +29,7 @@ func TestWebFetchEnvChild(t *testing.T) {
 	tool := webfetch.New(webfetch.Options{Test: webfetch.Seam{
 		AllowLoopback: true,
 		Resolver: fakeWebResolver{
-			"proxied.example": {netip.MustParseAddr("93.184.216.34")},
+			"proxied.example": {netip.MustParseAddr("192.0.2.1")},
 			"direct.example":  {netip.MustParseAddr("127.0.0.1")},
 		},
 	}})
@@ -59,7 +59,7 @@ func TestWebFetchReadsTheProxyVariablesOfTheEnvironment(t *testing.T) {
 				_, _ = fmt.Fprintf(w, "proxy saw %s %s via-proxy=true", r.Method, r.URL)
 			}))
 			defer proxy.Close()
-			cmd := exec.Command(os.Args[0], "-test.run=^TestWebFetchEnvChild$", "-test.count=1")
+			cmd := exec.Command(os.Args[0], "-test.run=^TestWebFetchEnvChild$", "-test.count=1", "-test.short")
 			cmd.Env = childEnv(map[string]string{webEnvChildURL: tc.url, "HTTP_PROXY": proxy.URL, "HTTPS_PROXY": proxy.URL, "NO_PROXY": tc.noProxy})
 			out, err := cmd.CombinedOutput()
 			if err != nil {
