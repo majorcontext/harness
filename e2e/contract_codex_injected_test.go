@@ -1,6 +1,9 @@
 package e2e
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +35,32 @@ func (a recordTurnError) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 	r.record(t, "turn_error", a.as, callResult{Status: 200, Body: state})
 }
 
+// recordCacheKey records whether each request carries the hash of the session id as prompt_cache_key and never the session id.
+type recordCacheKey struct{ as string }
+
+func (recordCacheKey) run(t *testing.T, _ *run) {
+	t.Fatal("recordCacheKey runs only under runCodexScenario")
+}
+func (a recordCacheKey) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	id := r.id(t, a.as)
+	sum := sha256.Sum256([]byte(id))
+	want := hex.EncodeToString(sum[:])[:32]
+	state := map[string]any{"requests_with_the_hash": 0, "requests_with_the_session_id": 0, "requests": 0}
+	for _, w := range o.WireEvents() {
+		if w.Event != "request" {
+			continue
+		}
+		state["requests"] = state["requests"].(int) + 1
+		if w.PromptCacheKey == want {
+			state["requests_with_the_hash"] = state["requests_with_the_hash"].(int) + 1
+		}
+		if strings.Contains(w.PromptCacheKey, id) {
+			state["requests_with_the_session_id"] = state["requests_with_the_session_id"].(int) + 1
+		}
+	}
+	r.record(t, "cache_key", a.as, callResult{Status: 200, Body: state})
+}
+
 func codexInjectedRows() []codexScenario {
 	record := []action{recordWire{}}
 	failed := []action{recordWire{}, recordTurnError{as: "a"}}
@@ -46,6 +75,17 @@ func codexInjectedRows() []codexScenario {
 		},
 		{
 			scenario:  scenario{name: "codex_injected_websocket_dial_carries_no_credential_header", model: codexHi, actions: codexSession(codexTurn("a", "hello"), record)},
+			opts:      harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
+			websocket: true,
+			entry:     injectedEntry(nil),
+		},
+		{
+			scenario: scenario{name: "codex_injected_http_request_carries_the_hash_of_the_session_id_as_cache_key", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordCacheKey{as: "a"}})},
+			opts:     harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
+			entry:    injectedEntry(nil),
+		},
+		{
+			scenario:  scenario{name: "codex_injected_websocket_request_carries_the_hash_of_the_session_id_as_cache_key", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordCacheKey{as: "a"}})},
 			opts:      harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
 			websocket: true,
 			entry:     injectedEntry(nil),
@@ -81,6 +121,11 @@ func codexInjectedRows() []codexScenario {
 			opts:     harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}, RedirectTo: "/backend-api/codex/elsewhere"},
 			entry:    injectedEntry(nil),
 		},
+	}
+}
+
+func codexModelsFromRows() []codexScenario {
+	return []codexScenario{
 		{
 			scenario: scenario{name: "codex_models_from_chatgpt_lists_the_models_of_the_backend", actions: []action{models{}}},
 			opts:     harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}, Models: chatgptCatalog},

@@ -115,7 +115,7 @@ const (
 	injectedElicitCite = "Otherwise it sends `elicitation/create` with `mode` `url`, no `sessionId`, `requestId` the id of the `authenticate` request, a fresh `elicitationId`, `url` the `login_url`, and `message` \"Sign in on the page that opens, then return here.\""
 	injectedPollCite   = "After `accept`, the agent sends the probe at once, then every 2 s (every 4 s after 30 s, every 8 s after 2 minutes), for at most 10 minutes. When the probe answers 200, the agent sends `elicitation/complete` with the `elicitationId` and answers `{}`."
 	injectedCheckCite  = "For an entry with `auth` `injected`, `session/new`, `session/load`, and `session/resume` send the status probe and fail with `-32000`, `data.code` `login_required`, when it answers 401."
-	injectedCacheCite  = "`session/prompt` sends no probe and reads the cached answer only. The answer is cached for 30 s, and it is read again after `authenticate` and after a failed turn."
+	injectedCacheCite  = "`session/prompt` sends no probe and reads the cached answer only. The answer is cached for 30 s, and `authenticate` probes again. A failed turn reads the cache only, so a probe never replaces the error of a turn."
 	injectedPermCite   = "A 401 of a model call within 2 minutes after a probe of the same entry answered 200 ends the turn `permanent`, with the message `the server accepted the sign-in check but rejected the model call; sign in again at <login_url>, or check how the server authorizes model calls`"
 	injected401Cite    = "A 401 of an entry with `auth` `injected` fails the turn with the error class `login_required`."
 	injected403Cite    = "A 403 is not `login_required`."
@@ -318,6 +318,18 @@ var acpInjectedScenarios = []acpScenario{
 			acpAuthDone{id: "auth"},
 			acpPrompt{as: "a", text: "two", code: acpInternal, class: "permanent"},
 			acpCheck(acpInjectedDenials(2)),
+		},
+	},
+	{
+		name:  "failed_turn_after_a_200_probe_reads_the_cache_and_keeps_the_permanent_error",
+		cite:  injectedCacheCite,
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{SignedOut: true, WeakProbe: true}},
+		model: []harnesstest.Step{{Name: "reply", Repeat: true, Reply: codexText("hi")}},
+		steps: []acpStep{
+			injectedInit,
+			acpNew{as: "a"},
+			acpCheck(func(t *testing.T, c *acpConn) { c.env.login.openai.SetWeakProbe(false) }),
+			acpPrompt{as: "a", text: "one", code: acpInternal, class: "permanent"},
 		},
 	},
 	{

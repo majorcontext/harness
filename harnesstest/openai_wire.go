@@ -28,6 +28,7 @@ type openAIBody struct {
 	ServiceTier        string            `json:"service_tier"`
 	MaxOutputTokens    int               `json:"max_output_tokens"`
 	PreviousResponseID string            `json:"previous_response_id"`
+	PromptCacheKey     string            `json:"prompt_cache_key"`
 	Generate           *bool             `json:"generate"`
 	Include            []string          `json:"include"`
 	Reasoning          struct {

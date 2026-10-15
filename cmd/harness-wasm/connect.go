@@ -153,6 +153,10 @@ func (o *options) modelTransport(name string) http.RoundTripper {
 		// The login must reach the page origin only, and a redirect must not carry it on.
 		rt.OnlyOrigin, rt.NoRedirect = o.pageOrigin, true
 	}
+	if o.user.ProviderEntries()[name].UsesInjectedAuth() {
+		// A redirect must not read as a sign-in, and must not carry a request body on.
+		rt.NoRedirect = true
+	}
 	return rt
 }
 

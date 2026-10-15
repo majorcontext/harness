@@ -627,6 +627,8 @@ var runtimeRows = map[string]runtimeRow{
 	"anthropic_injected_401_fails_the_turn_with_the_login_url":                           sameAsServe(),
 	"anthropic_injected_403_is_not_login_required":                                       sameAsServe(),
 	"codex_injected_http_request_carries_no_credential_header":                           sameAsServe(),
+	"codex_injected_http_request_carries_the_hash_of_the_session_id_as_cache_key":        sameAsServe(),
+	"codex_injected_websocket_request_carries_the_hash_of_the_session_id_as_cache_key":   sameAsServe(),
 	"codex_injected_websocket_dial_carries_no_credential_header":                         sameAsServe(),
 	"codex_injected_extra_headers_pass_through_as_placeholders":                          sameAsServe(),
 	"codex_injected_401_fails_the_turn_with_login_required":                              sameAsServe(),

@@ -92,7 +92,7 @@ func (a *Auth) checkInjected(ctx context.Context, name string, p config.Provider
 		return nil
 	}
 	state, cached := entry.Cached()
-	if mode == acp.CheckReprobe || (!cached && mode != acp.CheckCacheOnly) {
+	if !cached && (mode == acp.CheckAll || mode == acp.CheckProbed) {
 		state = entry.Probe(ctx, p.ExtraHeaders)
 	}
 	if state == injectedauth.SignedOut {

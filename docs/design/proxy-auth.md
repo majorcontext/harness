@@ -9,7 +9,7 @@ This document defines the provider auth mode `injected` and the login that the h
 1. `auth: "injected"` is a credential source of a provider entry, like `auth: "chatgpt"`. It says: a credential-injecting server in front of this endpoint holds the credential and adds it to the request. It is valid on an entry of type `openai` or `anthropic`, and not with `api_key_env`. It does not name ChatGPT. The word "proxy" is not used for the mode, because `base_url` need not point at a proxy, and `harnessConnect` already has `proxy.*` options with another meaning.
 2. `base_url` need not point at the server. A browser sets it to a path of the page origin. A box keeps the real URL, and a forward proxy (`HTTPS_PROXY`) adds the credential. The mode means "Harness holds no credential".
 3. Harness sends no `Authorization`, no `x-api-key`, no `ChatGPT-Account-ID`, and no `originator` on such an entry. The server owns the backend contract.
-4. Harness sends no user or session identifier. The server knows the caller from its own channel (section 4).
+4. Harness sends no user identifier and no raw session identifier. The Responses adapter sends a stable hash of the session id (the first 32 hex characters of its SHA-256) as `prompt_cache_key`, so the prompt cache still routes. The server knows the caller from its own channel (section 4).
 5. The server signals "no credential for this user" with HTTP 401. Only 401. Harness maps it to `login_required`.
 6. The host delegates the login to a URL (`login_url`). `authenticate` shows it as a URL elicitation, then polls a status probe until the probe succeeds. The host reports nothing to Harness.
 7. Wasm has the mode `injected` only. Native keeps the file login (`harness login codex`). This removes the Node device flow too.

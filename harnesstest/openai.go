@@ -138,6 +138,8 @@ type WireEvent struct {
 	AccountID string `json:"chatgpt_account_id,omitempty"`
 	// Originator is the originator header of the request.
 	Originator string `json:"originator,omitempty"`
+	// PromptCacheKey is the prompt_cache_key of the request, recorded for an Injected server. It is not in the JSON, because the hash of a session id differs between runs.
+	PromptCacheKey string `json:"-"`
 	// CredentialHeaders holds the credential headers of the request, by lower-case name, for an Injected server.
 	CredentialHeaders map[string]string `json:"credential_headers,omitempty"`
 	// SessionHeader reports a session-id header equal to the x-client-request-id header.
@@ -196,6 +198,7 @@ type OpenAI struct {
 
 	injectedOut  bool // guarded by wmu
 	probeStatus  int  // guarded by wmu
+	weakProbe    bool // guarded by wmu
 	denials      int  // guarded by wmu
 	secretSeen   bool
 	rejected     map[string]int // rejected bearer tokens by transport
@@ -228,7 +231,7 @@ func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
 		Server:    newServer(steps),
 	}
 	if opts.Injected != nil {
-		o.injectedOut, o.probeStatus = opts.Injected.SignedOut, opts.Injected.ProbeStatus
+		o.injectedOut, o.probeStatus, o.weakProbe = opts.Injected.SignedOut, opts.Injected.ProbeStatus, opts.Injected.WeakProbe
 	}
 	o.srv = httptest.NewServer(http.HandlerFunc(o.handle))
 	t.Cleanup(func() { o.cleanup(t) })
@@ -304,6 +307,13 @@ func (o *OpenAI) SignIn() {
 	o.injectedOut = false
 }
 
+// SetWeakProbe changes whether an Injected server answers the model list request while it is signed out.
+func (o *OpenAI) SetWeakProbe(weak bool) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	o.weakProbe = weak
+}
+
 // SetProbeStatus changes the status that an Injected server gives the model list request. Zero: the sign-in decides.
 func (o *OpenAI) SetProbeStatus(status int) {
 	o.wmu.Lock()
@@ -335,7 +345,7 @@ func (o *OpenAI) injectedStatus(r *http.Request, peek bool) int {
 func (o *OpenAI) injectedDenies(r *http.Request) bool {
 	o.wmu.Lock()
 	defer o.wmu.Unlock()
-	return o.injectedOut && (!o.opts.Injected.WeakProbe || r.URL.Path != codexModelsPath)
+	return o.injectedOut && (!o.weakProbe || r.URL.Path != codexModelsPath)
 }
 
 // Rejections counts the requests that Credentials rejected, over the websocket and over SSE.
@@ -494,6 +504,9 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wr := o.stamp(newWireEvent("sse", "request", 0, b), r)
+	if o.opts.Injected != nil {
+		wr.PromptCacheKey = b.PromptCacheKey
+	}
 	wr.ContentEncoding = r.Header.Get("Content-Encoding")
 	o.logWire(wr)
 	req := o.request(b)
@@ -588,7 +601,11 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 	if prewarm {
 		event = "prewarm"
 	}
-	o.logWire(newWireEvent("ws", event, n, b))
+	wev := newWireEvent("ws", event, n, b)
+	if o.opts.Injected != nil {
+		wev.PromptCacheKey = b.PromptCacheKey
+	}
+	o.logWire(wev)
 	if b.PreviousResponseID != "" && !o.isKnown(n, b.PreviousResponseID) {
 		return writeFrames(ctx, conn, previousResponseNotFound(b.PreviousResponseID, o.opts.UncodedChainMiss))
 	}

@@ -106,14 +106,14 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 					cb.credential, cb.refusedRetry = func() string { return strconv.FormatUint(e.Generation(), 10) }, catalogRetry
 				}
 				backends[name] = cb
-				if env.NoLogin && p.Auth == config.AuthChatGPT {
-					shown[name] = func() bool {
-						_, err := (codexauth.Store{Path: cfg.CodexAuthFile}).Load()
-						return !codexauth.IsLoginRequired(err)
-					}
-				}
 			} else {
 				backends[name] = be
+			}
+			if env.NoLogin && p.Auth == config.AuthChatGPT {
+				shown[name] = func() bool {
+					_, err := (codexauth.Store{Path: cfg.CodexAuthFile}).Load()
+					return !codexauth.IsLoginRequired(err)
+				}
 			}
 		}
 	}
@@ -150,7 +150,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
-			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, RequestRetries: retries}
+			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL,

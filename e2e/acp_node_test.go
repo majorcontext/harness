@@ -508,3 +508,28 @@ func TestNodeWasmProxyBaseURLFillsAnOpenAIProviderWithNoBaseURL(t *testing.T) {
 	acpRequests(t, c, 1)
 	c.finish(stop)
 }
+
+// TestNodeWasmInjectedEntryFollowsNoRedirect pins the sentence of the Injected auth section on a redirect: the fetch of an
+// injected entry does not follow it, so a 307 neither reads as a sign-in nor carries the body of a model call on.
+func TestNodeWasmInjectedEntryFollowsNoRedirect(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	openai := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}, RedirectTo: "/backend-api/codex/elsewhere"})
+	cfg := codexConfig(openai.URL(), false, nil)
+	entry := cfg["providers"].(map[string]any)["codex"].(map[string]any)
+	delete(entry, "api_key_env")
+	entry["auth"], entry["models_from"] = "injected", "chatgpt"
+	env := acpEnv{configPath: writeGoalConfigWith(t, "", cfg), sessDir: t.TempDir(), wasm: true}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{}.withBase(env))
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = openai.Server, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a"}.run(t, c)
+	acpPromptStart{as: "a", text: "go"}.run(t, c)
+	c.mustBeError(c.response(c.pending["a"]), acpInternal)
+	if hits, _ := openai.Redirected(); hits != 0 {
+		t.Errorf("the redirect target got %d requests, want none", hits)
+	}
+	c.finish(stop)
+}

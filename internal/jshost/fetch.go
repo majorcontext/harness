@@ -125,7 +125,7 @@ func (f FetchRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return nil, err
 	}
-	if f.NoRedirect && res.Get("type").String() == "opaqueredirect" {
+	if status := res.Get("status").Int(); f.NoRedirect && (res.Get("type").String() == "opaqueredirect" || status >= 300 && status < 400) {
 		stop()
 		return nil, fmt.Errorf("fetch %s %s: the server answered with a redirect, which is not followed", req.Method, req.URL.Scheme+"://"+req.URL.Host)
 	}
