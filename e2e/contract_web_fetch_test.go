@@ -2,13 +2,19 @@ package e2e
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -21,6 +27,115 @@ import (
 // webLoopbackEnv makes the runtime host let web_fetch reach loopback. The
 // serve binary has no such seam, so a row that sets it is a runtime-only row.
 const webLoopbackEnv = "HARNESS_E2E_WEB_LOOPBACK"
+
+// webSeamEnv names a seam in webSeams: the runtime host passes it as
+// Options.WebTest. A seam holds a proxy function, which an environment string
+// cannot.
+const webSeamEnv = "HARNESS_E2E_WEB_SEAM"
+
+var webSeams sync.Map
+
+// portOf replaces the port of a local fixture address with a placeholder.
+func portOf(addr string) string {
+	host, _, _ := strings.Cut(addr, ":")
+	return host + ":<port>"
+}
+
+// webSeamOf returns the seam of a runtime host for env.
+func webSeamOf(env map[string]string) harness.WebTestSeam {
+	if v, ok := webSeams.Load(env[webSeamEnv]); ok {
+		return v.(harness.WebTestSeam)
+	}
+	return harness.WebTestSeam{AllowLoopback: env[webLoopbackEnv] == "1"}
+}
+
+type fakeWebResolver map[string][]netip.Addr
+
+// LookupNetIP answers a known name and fails any other name as a missing host.
+func (f fakeWebResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	if a, ok := f[host]; ok {
+		return a, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// webProxyRow describes the proxy of a row and what the row expects of it.
+type webProxyRow struct {
+	hits       int    // requests that the proxy must see
+	noProxy    string // host that the seam sends direct
+	redirectTo string // the proxy answers a GET with a redirect to this URL
+	tls        bool   // the proxy tunnels a CONNECT to a TLS fixture, trusted by the seam
+	dead       bool   // the proxy address refuses connections
+}
+
+// webProxyDriver runs the runtime with a forward proxy in the seam. The proxy
+// answers a GET with the request line it got and tunnels a CONNECT to the TLS
+// fixture. At the end the driver checks how many requests the proxy saw.
+func webProxyDriver(row webProxyRow) func(*testing.T, host, string) driver {
+	return func(t *testing.T, h host, modelURL string) driver {
+		t.Helper()
+		var hits atomic.Int32
+		tlsFixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = fmt.Fprintf(w, "tls fixture got %s %s", r.Method, r.URL.Path)
+		}))
+		t.Cleanup(tlsFixture.Close)
+		proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			switch {
+			case r.Method == http.MethodConnect:
+				up, err := net.Dial("tcp", tlsFixture.Listener.Addr().String())
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadGateway)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				c, _, _ := w.(http.Hijacker).Hijack()
+				go func() { _, _ = io.Copy(up, c); _ = up.Close() }()
+				_, _ = io.Copy(c, up)
+				_ = c.Close()
+			case row.redirectTo != "":
+				http.Redirect(w, r, row.redirectTo, http.StatusFound)
+			default:
+				w.Header().Set("Content-Type", "text/plain")
+				_, _ = fmt.Fprintf(w, "proxy saw %s %s via-proxy=true", r.Method, r.URL)
+			}
+		}))
+		t.Cleanup(proxy.Close)
+		proxyURL, _ := url.Parse(proxy.URL)
+		if row.dead {
+			proxy.Close()
+		}
+		t.Cleanup(func() {
+			if got := int(hits.Load()); got != row.hits {
+				t.Errorf("the proxy saw %d requests, want %d", got, row.hits)
+			}
+		})
+		pool := x509.NewCertPool()
+		pool.AddCert(tlsFixture.Certificate())
+		seam := harness.WebTestSeam{
+			AllowLoopback: true,
+			Resolver: fakeWebResolver{
+				"proxied.example": {netip.MustParseAddr("93.184.216.34")},
+				"example.com":     {netip.MustParseAddr("93.184.216.34")},
+				"direct.example":  {netip.MustParseAddr("127.0.0.1")},
+				"private.example": {netip.MustParseAddr("10.0.0.5")},
+			},
+			Proxy: func(u *url.URL) (*url.URL, error) {
+				if u.Hostname() == row.noProxy {
+					return nil, nil
+				}
+				return proxyURL, nil
+			},
+		}
+		if row.tls {
+			seam.RootCAs = pool
+		}
+		webSeams.Store(t.Name(), seam)
+		t.Cleanup(func() { webSeams.Delete(t.Name()) })
+		return inTreeEnv(nil, "", webOn, map[string]string{webSeamEnv: t.Name()})(t, h, modelURL)
+	}
+}
 
 var webOn = map[string]any{"web": map[string]any{"fetch": true}}
 
@@ -112,6 +227,58 @@ func fetchCall(url string, kv ...any) harnesstest.ToolCall {
 
 func webLoopbackDriver(config map[string]any) func(*testing.T, host, string) driver {
 	return inTreeEnv(nil, "", config, map[string]string{webLoopbackEnv: "1"})
+}
+
+func webHostURL(host, path string) string {
+	_, port, _ := strings.Cut(strings.TrimPrefix(webFixture().URL, "http://"), ":")
+	return "http://" + host + ":" + port + path
+}
+
+func TestContractWebFetchProxy(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:    "web_fetch_sends_the_request_through_the_proxy_of_the_environment",
+			driver:  webProxyDriver(webProxyRow{hits: 2}),
+			model:   toolChain(fetchCall("http://proxied.example/page"), fetchCall("http://proxied.example/hop1")),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_skips_the_proxy_for_a_host_in_no_proxy",
+			driver:  webProxyDriver(webProxyRow{noProxy: "direct.example"}),
+			model:   toolChain(fetchCall(webHostURL("direct.example", "/page"))),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_refuses_a_host_that_resolves_to_a_private_address_before_it_uses_the_proxy",
+			driver:  webProxyDriver(webProxyRow{}),
+			model:   toolChain(fetchCall("http://private.example/"), fetchCall("http://10.0.0.1/")),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_fetches_an_https_page_through_a_connect_tunnel_of_the_proxy",
+			driver:  webProxyDriver(webProxyRow{hits: 1, tls: true}),
+			model:   toolChain(fetchCall("https://example.com/secure")),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_checks_the_address_of_a_redirect_that_the_proxy_answers",
+			driver:  webProxyDriver(webProxyRow{hits: 1, redirectTo: "http://private.example/secret"}),
+			model:   toolChain(fetchCall("http://proxied.example/start")),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_sends_a_name_that_does_not_resolve_to_the_proxy",
+			driver:  webProxyDriver(webProxyRow{hits: 1}),
+			model:   toolChain(fetchCall("http://unresolved.example/page")),
+			actions: oneTurn,
+		},
+		{
+			name:    "web_fetch_fails_when_the_proxy_is_unreachable_and_does_not_dial_the_host",
+			driver:  webProxyDriver(webProxyRow{dead: true}),
+			model:   toolChain(fetchCall(webHostURL("direct.example", "/page"))),
+			actions: oneTurn,
+		},
+	})
 }
 
 func TestContractWebFetchOffer(t *testing.T) {

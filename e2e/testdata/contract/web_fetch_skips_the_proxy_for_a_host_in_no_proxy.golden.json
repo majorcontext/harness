@@ -1,0 +1,147 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_fetch",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "web_fetch",
+              "tool_input": {
+                "url": "http://direct.example:\u003cport\u003e/page"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "URL: http://direct.example:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\nTitle: Fixture Page\n\n# Fixture heading\n\nRead the [guide](http://direct.example:\u003cport\u003e/docs/guide) and the [absolute link](https://example.org/abs), with **bold** and *italic* and `inline()`.\n\n- first\n- second\n  - nested\n\n```go\nfmt.Println(\"hi\")\n```\n\n| Name | Size |\n| --- | --- |\n| a | 1 |\n\n![A picture](http://direct.example:\u003cport\u003e/pic.png)",
+              "tool_name": "web_fetch",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "web_fetch",
+            "arguments": {
+              "url": "http://direct.example:\u003cport\u003e/page"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "URL: http://direct.example:\u003cport\u003e/page\nStatus: 200 OK\nContent-Type: text/html; charset=utf-8\nTitle: Fixture Page\n\n# Fixture heading\n\nRead the [guide](http://direct.example:\u003cport\u003e/docs/guide) and the [absolute link](https://example.org/abs), with **bold** and *italic* and `inline()`.\n\n- first\n- second\n  - nested\n\n```go\nfmt.Println(\"hi\")\n```\n\n| Name | Size |\n| --- | --- |\n| a | 1 |\n\n![A picture](http://direct.example:\u003cport\u003e/pic.png)"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -15,4 +15,5 @@ task-tool-wording The task tool has the actions spawn, cancel, status, send, and
 workspace-changes-rows The git_changes rows pin GET /workspace/changes and its error body.
 mcp-retry-held The background retry of the serve binary can connect a server before the connect action of the row, so only the runtime host, which holds the retry, runs the row.
 child-report-held The report of a child settles in its parent in a goroutine, so only the runtime host, which holds that report with the tree seam, places a send between the end of the child turn and the report.
-web-loopback-seam The serve binary refuses loopback, as the guard of web_fetch must; only the runtime host, whose Options.WebAllowLoopback lets the guard pass loopback, reaches the local server of the row.
+web-loopback-seam The serve binary refuses loopback, as the guard of web_fetch must; only the runtime host, whose Options.WebTest lets the guard pass loopback, reaches the local server of the row.
+web-proxy-seam The serve binary has no resolver seam and refuses loopback; only the runtime host, whose Options.WebTest names the hosts, the proxy, and the roots of the row, reaches the local proxy and server of the row.

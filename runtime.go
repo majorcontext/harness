@@ -116,8 +116,8 @@ type Options struct {
 	// without it no turn may ask. A child session and a session with an
 	// active goal never ask.
 	AskUserQuestion bool
-	// WebAllowLoopback lets web_fetch reach loopback addresses, for tests that fetch from a local server. The config has no such key.
-	WebAllowLoopback bool
+	// WebTest is a test seam of web_fetch: loopback, resolver, proxy, and root CAs. Production code leaves it zero.
+	WebTest WebTestSeam
 	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
 	// sends the banner as engine context, after the newest message of the session when its first request left. Empty: no banner.
 	Version string

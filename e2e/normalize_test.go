@@ -30,10 +30,10 @@ var ownerPattern = func() *regexp.Regexp {
 }()
 
 // loopbackPortPattern matches the address of a local test server.
-var loopbackPortPattern = regexp.MustCompile(`127\.0\.0\.1:\d{4,5}`)
+var loopbackPortPattern = regexp.MustCompile(`(?:127\.0\.0\.1|direct\.example):\d{4,5}`)
 
 func maskUnstable(s string) string {
-	s = loopbackPortPattern.ReplaceAllString(s, "127.0.0.1:<port>")
+	s = loopbackPortPattern.ReplaceAllStringFunc(s, portOf)
 	s = ownerPattern.ReplaceAllString(s, "<owner>")
 	s = timePattern.ReplaceAllString(s, "<time>")
 	s = sessionIDPattern.ReplaceAllString(s, "<session>")
@@ -159,7 +159,7 @@ func (n *normalizer) scrub(v any) any {
 		for _, w := range n.workdirs {
 			x = strings.ReplaceAll(x, w, "<workdir>")
 		}
-		x = loopbackPortPattern.ReplaceAllString(x, "127.0.0.1:<port>")
+		x = loopbackPortPattern.ReplaceAllStringFunc(x, portOf)
 		if strings.HasPrefix(x, "ses_") && fullIDPattern.MatchString(x) {
 			return n.id(x)
 		}
