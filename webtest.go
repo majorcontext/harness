@@ -12,8 +12,7 @@ import (
 type WebTestSeam struct {
 	// AllowLoopback lets web_fetch reach 127.0.0.0/8 and ::1.
 	AllowLoopback bool
-	// Resolver resolves host names. nil: the system resolver.
-	Resolver interface {
+	Resolver      interface {
 		LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 	}
 	// Proxy replaces http.ProxyFromEnvironment. nil: the environment decides.
