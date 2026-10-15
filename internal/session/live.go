@@ -29,6 +29,7 @@ type live struct {
 	item     []protocol.Event
 	itemSize int
 	full     bool
+	stopped  bool
 }
 
 // subscribe registers a subscriber. It also returns the frames of the item
@@ -64,6 +65,9 @@ func (l *live) send(e protocol.Event) {
 // remember keeps e when it belongs to the item that streams. A new item
 // replaces the kept frames, and a discard drops them. It needs l.mu.
 func (l *live) remember(e protocol.Event, f protocol.ItemFrame) {
+	if l.stopped {
+		return
+	}
 	switch e.Kind {
 	case protocol.KindItemDiscarded:
 		l.forget()
@@ -84,6 +88,13 @@ func (l *live) remember(e protocol.Event, f protocol.ItemFrame) {
 // forget drops the kept frames. It needs l.mu.
 func (l *live) forget() {
 	l.itemID, l.item, l.itemSize, l.full = "", nil, 0, false
+}
+
+// stop drops the kept frames and keeps no more, because a frame that is still
+// in flight must not leave a partial item behind. It needs l.mu.
+func (l *live) stop() {
+	l.forget()
+	l.stopped = true
 }
 
 // settle drops the kept frames once the log holds the item that streamed, or

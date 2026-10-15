@@ -557,7 +557,7 @@ func (a *Actor) publish(stopped bool, appended ...protocol.Payload) {
 	defer a.live.mu.Unlock()
 	a.live.settle(appended)
 	if stopped {
-		a.live.forget()
+		a.live.stop()
 	}
 	close(a.view.Swap(next).changed)
 }

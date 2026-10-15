@@ -21,12 +21,15 @@ var (
 type itemFeed struct {
 	done  chan struct{}
 	delta chan struct{}
-	steps []string
-	ids   map[string]int
+	// second is closed at the second item.delta frame, whatever the dedup of steps.
+	second chan struct{}
+	deltas int
+	steps  []string
+	ids    map[string]int
 }
 
 func newItemFeed() *itemFeed {
-	return &itemFeed{done: make(chan struct{}), delta: make(chan struct{}), ids: map[string]int{}}
+	return &itemFeed{done: make(chan struct{}), delta: make(chan struct{}), second: make(chan struct{}), ids: map[string]int{}}
 }
 
 func (f *itemFeed) name(id string) string {
@@ -41,6 +44,9 @@ func (f *itemFeed) add(s string) {
 		f.steps = append(f.steps, s)
 	}
 	if strings.HasPrefix(s, "delta ") {
+		if f.deltas++; f.deltas == 2 {
+			close(f.second)
+		}
 		select {
 		case <-f.delta:
 		default:
@@ -53,9 +59,10 @@ func (f *itemFeed) add(s string) {
 // input, and returns when the stream has sent its first frame. With late set,
 // it first waits until the earlier stream of the session has carried an
 // item.delta, so the new stream starts after an item began streaming. With
-// past set as well, the new stream resumes after the head seq of the session,
-// which is past the start of the item. It does not wait for a first frame: the
-// stream has none to send before the item ends.
+// past set as well, it waits for the second item.delta, resumes after the head
+// seq of the session, which is past the start of the item, and queues one more
+// input. The stream is registered once it carries that durable record, and a
+// replay of the kept frames would come before it.
 type watchItems struct {
 	as         string
 	late, past bool
@@ -83,8 +90,12 @@ func (a watchItems) run(t *testing.T, r *run) {
 		if early == nil {
 			t.Fatalf("late watchItems before watchItems for %s", a.as)
 		}
+		wait := early.delta
+		if a.past {
+			wait = early.second
+		}
 		select {
-		case <-early.delta:
+		case <-wait:
 		case <-early.done:
 			t.Fatalf("the event stream of %s ended before an item.delta", id)
 		}
@@ -100,10 +111,12 @@ func (a watchItems) run(t *testing.T, r *run) {
 	go func() {
 		defer close(feed.done)
 		d.stream(t, id, after, false, func(_ string, ev protocol.Event) bool {
-			select {
-			case <-subscribed:
-			default:
-				close(subscribed)
+			if !a.past || !ev.Ephemeral {
+				select {
+				case <-subscribed:
+				default:
+					close(subscribed)
+				}
 			}
 			switch ev.Kind {
 			case protocol.KindItemStarted:
@@ -122,7 +135,7 @@ func (a watchItems) run(t *testing.T, r *run) {
 		})
 	}()
 	if a.past {
-		return
+		d.Enqueue(t, id, "marker")
 	}
 	select {
 	case <-subscribed:
@@ -180,8 +193,8 @@ func TestContractLateSubscriber(t *testing.T) {
 		{
 			name: "a_subscriber_that_resumes_past_the_item_start_receives_no_frame_of_the_item",
 			model: []harnesstest.Step{
-				{Name: "slow", Reply: harnesstest.Reply{Text: "partial answer", Block: true}},
-				{Name: "next", Reply: harnesstest.Reply{Text: "next answer"}},
+				{Name: "slow", Reply: harnesstest.Reply{Text: "partial ", Tail: "answer", Block: true, TailBlock: true}},
+				{Name: "next", Repeat: true, Reply: harnesstest.Reply{Text: "next answer"}},
 			},
 			actions: []action{
 				create{as: "a"},
@@ -189,8 +202,9 @@ func TestContractLateSubscriber(t *testing.T) {
 				submit{as: "a", text: "go"},
 				watchItems{as: "a", late: true},
 				enqueue{as: "a", text: "more"},
-				watchItems{as: "a", past: true},
 				release{step: "slow"},
+				watchItems{as: "a", past: true},
+				release{step: "slow:tail"},
 				waitIdle{as: "a"},
 				itemFrames{as: "a", past: true},
 			},
