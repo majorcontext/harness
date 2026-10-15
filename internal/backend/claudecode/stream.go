@@ -34,6 +34,8 @@ type run struct {
 	blobMu sync.Mutex
 	blobs  map[string][]protocol.Blob
 	names  map[string]string
+	// unlisted holds the name of each call to a tool the run may not call, by call ID, until its result arrives.
+	unlisted map[string]string
 	// searches holds the query of each WebSearch call that waits for its result. The result records the search as one item.
 	searches map[string]string
 	// questions reports a run with the question channel; resolution answers
@@ -377,12 +379,29 @@ func (r *run) system(env envelope) error {
 
 // mayCall reports whether the CLI may call the tool name. A restricted run
 // calls only its allowed tools. Any run calls MCP tools, and AskUserQuestion
-// when it may ask. A built-in tool that acts on the machine fails the turn.
+// when it may ask. A call to any other tool waits for its result; see checkRan.
 func (r *run) mayCall(name string) bool {
 	if r.restricted {
 		return r.allowed[name]
 	}
 	return strings.HasPrefix(name, "mcp__") || r.allowed[name]
+}
+
+// checkRan fails the turn when the result of a call to an unlisted tool is not an
+// error: the tool ran. The CLI answers a call to a tool it was not given with an
+// error result, and the model then picks another tool.
+func (r *run) checkRan(parts []protocol.LogPart) error {
+	for _, p := range parts {
+		name, ok := r.unlisted[p.CallID]
+		if !ok {
+			continue
+		}
+		delete(r.unlisted, p.CallID)
+		if !p.IsError {
+			return fmt.Errorf("%w: tool %s ran", ErrToolsNotRestricted, name)
+		}
+	}
+	return nil
 }
 
 func (r *run) checkTools(tools *[]string) error {
@@ -436,7 +455,7 @@ func (r *run) assistant(env envelope) error {
 	}
 	for _, p := range parts {
 		if p.Type == protocol.LogPartToolCall && !r.mayCall(p.Name) {
-			return fmt.Errorf("%w: tool call %s", ErrToolsNotRestricted, p.Name)
+			r.unlisted[p.CallID] = p.Name
 		}
 	}
 	if parts = r.holdSearches(parts, env.ParentToolUseID); len(parts) == 0 {
@@ -478,6 +497,9 @@ func (r *run) toolResults(env envelope) error {
 	parts := toolResults(decodeMessage(env.Message), r.names)
 	if len(parts) == 0 {
 		return nil
+	}
+	if err := r.checkRan(parts); err != nil {
+		return err
 	}
 	if err := r.attachBlobs(parts); err != nil {
 		return err

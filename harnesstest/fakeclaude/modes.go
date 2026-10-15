@@ -124,6 +124,12 @@ func hang(f *fake) {
 var basicModes = map[string]mode{
 	"parallel_calls": parallelCalls,
 	"builtin_tool":   builtinTool,
+	"builtin_refused": func(f *fake) {
+		f.emit(say("Let me check that."), assistant(toolUse("toolu_b", "Bash", obj{"command": "ls"})),
+			user(toolResult("toolu_b", "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here.</tool_use_error>", true)))
+		turnCalls(f)
+		f.emit(say("Done."), success("Done.", 0, 0))
+	},
 	"turn_calls": func(f *fake) {
 		f.emit(say("Let me check that."))
 		turnCalls(f)

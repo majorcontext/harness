@@ -47,7 +47,7 @@
         "head_seq": 7,
         "id": "ses:a",
         "last_turn": {
-          "error": "claudecode: the CLI did not apply the tool restriction: tool call WebSearch",
+          "error": "claudecode: the CLI did not apply the tool restriction: tool WebSearch ran",
           "stop_reason": "failed",
           "turn_id": "turn#1"
         },

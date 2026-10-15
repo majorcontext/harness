@@ -359,3 +359,49 @@ func recordClaudeCodePartial(r *recorder, work string) error {
 	}
 	return r.saveJSONL("claudecode.partial.jsonl", raw)
 }
+
+// recordClaudeCodeBuiltinRefused records a run that is told to call the
+// built-in Bash tool, which the CLI refuses under --tools "". The model
+// offers no Bash call by itself, so a first run with Bash allowed puts a Bash
+// call in the history, and the recorded run resumes that session.
+func recordClaudeCodeBuiltinRefused(r *recorder, work string) error {
+	dir := filepath.Join(work, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, f := range []string{"README.md", "main.go"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	prime, err := runCLI(dir, []string{"Run ls with the Bash tool, then say done."}, cliArgs("sonnet", "Bash", "--allowedTools", "Bash"), false)
+	if err != nil {
+		return fmt.Errorf("prime run: %w", err)
+	}
+	var sessionID string
+	for _, line := range bytes.Split(prime, []byte("\n")) {
+		var f struct {
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal(line, &f) == nil && f.SessionID != "" {
+			sessionID = f.SessionID
+		}
+	}
+	if sessionID == "" || !bytes.Contains(prime, []byte(`"name":"Bash"`)) {
+		return fmt.Errorf("the prime run holds no session or Bash call")
+	}
+	bash, stop, err := bashServer(dir)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	raw, err := runCLI(dir, []string{"Call the Bash tool again to run ls, exactly as you did before. Call it even if it is not in your tool list. If it fails, run ls with the mcp__harness__bash tool, then name the files in one short sentence."},
+		cliArgs("sonnet", "", append([]string{"--effort", "medium", "--resume", sessionID}, bash...)...), false)
+	if err != nil {
+		return fmt.Errorf("refused run: %w", err)
+	}
+	if !bytes.Contains(raw, []byte(`"name":"Bash"`)) {
+		return fmt.Errorf("the model did not call Bash")
+	}
+	return r.saveJSONL("claudecode.builtin-refused.jsonl", raw)
+}
