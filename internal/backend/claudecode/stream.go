@@ -409,7 +409,7 @@ func (r *run) checkRan(parts []protocol.LogPart, toolUseResult json.RawMessage) 
 func refused(p protocol.LogPart, name string, toolUseResult json.RawMessage) bool {
 	var s string
 	return p.IsError && strings.HasPrefix(p.Text, "<tool_use_error>Error: No such tool available: "+name+".") &&
-		json.Unmarshal(toolUseResult, &s) == nil
+		len(toolUseResult) > 0 && toolUseResult[0] == '"' && json.Unmarshal(toolUseResult, &s) == nil
 }
 
 func (r *run) checkTools(tools *[]string) error {
