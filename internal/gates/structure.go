@@ -28,8 +28,8 @@ var publicAllow = map[string]string{}
 var providerOwners = []string{
 	"config/load.go#validateAppendSystemPromptArgs",
 	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
-	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders", "config/provider.go#WithProxyBase", "config/provider.go#UsesClaudeCLI",
-	"internal/backend/router.go#New", "internal/backend/router.go#client",
+	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders", "config/provider.go#WithProxyBase", "config/provider.go#WireOf", "config/provider.go#UsesClaudeCLI",
+	"internal/backend/probe.go#ProbeOf", "internal/backend/router.go#New", "internal/backend/router.go#client",
 	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models", "internal/modelmeta/modelmeta.go#infoOf",
 	"internal/modelmeta/internal/genctx/main.go#",
 	"internal/provider/",

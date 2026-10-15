@@ -13,6 +13,7 @@ func TestNativeProviderCodexIsTheCodexLaneEntry(t *testing.T) {
 	want := Provider{
 		Type:                TypeOpenAI,
 		Auth:                AuthChatGPT,
+		ModelsFrom:          ModelsFromChatGPT,
 		BaseURL:             "https://chatgpt.com/backend-api/codex",
 		ResponsesPath:       "/responses",
 		OmitResponseParams:  []string{OmitResponseParamMaxOutputTokens, OmitResponseParamTemperature, OmitResponseParamTopP, OmitResponseParamMetadata},

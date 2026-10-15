@@ -26,6 +26,9 @@ type scenario struct {
 	model      []harnesstest.Step
 	actions    []action
 	driver     func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
+	// inject makes the Anthropic fake a credential-injecting server. entry sets keys of the anthropic provider entry; a nil value deletes the key.
+	inject *harnesstest.InjectedOptions
+	entry  map[string]any
 }
 
 type action interface{ run(t *testing.T, r *run) }

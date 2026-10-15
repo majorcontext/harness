@@ -1,0 +1,39 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": null
+      }
+    },
+    "redirect": {
+      "status": 200,
+      "body": {
+        "target_got_credentials": false,
+        "target_requests": 0
+      }
+    },
+    "turn_error.a": {
+      "status": 200,
+      "body": {
+        "error": "openai: HTTP 307",
+        "stop_reason": "failed"
+      }
+    }
+  }
+}

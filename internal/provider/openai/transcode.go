@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -317,7 +318,7 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 		Include:         []string{"reasoning.encrypted_content"},
 	}
 	if req.SessionKey != "" {
-		out.PromptCacheKey = req.SessionKey
+		out.PromptCacheKey = cmp.Or(req.CacheKey, req.SessionKey)
 	}
 	if req.ServiceTier != "" {
 		out.ServiceTier = req.ServiceTier

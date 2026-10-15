@@ -1,0 +1,350 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      }
+    ]
+  },
+  "wire": [
+    {
+      "dir": "client",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "clientCapabilities": {
+            "elicitation": {
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "e2e",
+            "version": "0"
+          },
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "agentCapabilities": {
+            "auth": {
+              "logout": {}
+            },
+            "loadSession": true,
+            "mcpCapabilities": {
+              "http": true,
+              "sse": false
+            },
+            "promptCapabilities": {
+              "embeddedContext": true,
+              "image": true
+            },
+            "sessionCapabilities": {
+              "close": {},
+              "list": {},
+              "resume": {}
+            }
+          },
+          "agentInfo": {
+            "name": "harness",
+            "title": "Harness",
+            "version": "\u003cversion\u003e"
+          },
+          "authMethods": [
+            {
+              "description": "Open your browser and sign in with your ChatGPT subscription.",
+              "id": "chatgpt",
+              "name": "Log in with ChatGPT"
+            },
+            {
+              "description": "Sign in on the page of codex.",
+              "id": "injected-codex",
+              "name": "Log in to codex"
+            }
+          ],
+          "protocolVersion": 1
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "session/new",
+        "params": {
+          "cwd": "\u003cdir:main\u003e",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "configOptions": [
+            {
+              "category": "model",
+              "currentValue": "codex/gpt-5.6-sol",
+              "id": "model",
+              "name": "Model",
+              "options": [
+                {
+                  "name": "\u003cmodels\u003e",
+                  "value": "\u003cmodels\u003e"
+                }
+              ],
+              "type": "select"
+            },
+            {
+              "category": "thought_level",
+              "currentValue": "default",
+              "id": "effort",
+              "name": "Effort",
+              "options": [
+                {
+                  "name": "Default",
+                  "value": "default"
+                },
+                {
+                  "name": "Off",
+                  "value": "off"
+                },
+                {
+                  "name": "Low",
+                  "value": "low"
+                },
+                {
+                  "name": "Medium",
+                  "value": "medium"
+                },
+                {
+                  "name": "High",
+                  "value": "high"
+                },
+                {
+                  "name": "XHigh",
+                  "value": "xhigh"
+                },
+                {
+                  "name": "Max",
+                  "value": "max"
+                }
+              ],
+              "type": "select"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "availableCommands": [
+              {
+                "description": "Stop the running turn",
+                "name": "abort"
+              },
+              {
+                "description": "Summarize history and keep the last turns",
+                "input": {
+                  "hint": "[keep_turns]"
+                },
+                "name": "compact"
+              },
+              {
+                "description": "Pursue a goal until its condition holds",
+                "input": {
+                  "hint": "\u003ccondition\u003e"
+                },
+                "name": "goal"
+              },
+              {
+                "description": "Stop pursuing the current goal",
+                "name": "goal-clear"
+              },
+              {
+                "description": "Change the session model",
+                "input": {
+                  "hint": "\u003cprovider/model\u003e"
+                },
+                "name": "model"
+              },
+              {
+                "description": "List managed processes",
+                "name": "processes"
+              },
+              {
+                "description": "Show queued prompts",
+                "name": "queue"
+              },
+              {
+                "description": "Show the session state",
+                "name": "status"
+              },
+              {
+                "description": "Set the reasoning effort",
+                "input": {
+                  "hint": "\u003ceffort\u003e"
+                },
+                "name": "thinking"
+              },
+              {
+                "description": "Set the provider service tier",
+                "input": {
+                  "hint": "\u003ctier\u003e"
+                },
+                "name": "tier"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "one",
+              "type": "text"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "internal",
+            "error_class": "permanent"
+          },
+          "message": "[permanent] the server accepted the sign-in check but rejected the model call; sign in again at https://console.example/settings/codex, or check how the server authorizes model calls"
+        },
+        "id": 3,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "authenticate",
+        "params": {
+          "methodId": "injected-codex"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "result": {}
+      }
+    },
+    {
+      "dir": "client",
+      "frame": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "method": "session/prompt",
+        "params": {
+          "prompt": [
+            {
+              "text": "two",
+              "type": "text"
+            }
+          ],
+          "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "internal",
+            "error_class": "permanent"
+          },
+          "message": "[permanent] the server accepted the sign-in check but rejected the model call; sign in again at https://console.example/settings/codex, or check how the server authorizes model calls"
+        },
+        "id": 5,
+        "jsonrpc": "2.0"
+      }
+    }
+  ]
+}

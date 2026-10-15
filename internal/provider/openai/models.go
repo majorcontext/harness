@@ -129,3 +129,13 @@ func harnessEfforts(e codexEntry) []string {
 	}
 	return out
 }
+
+// ListURL is the URL of the model list that answers the status probe of an entry whose credential a server adds. The path is the
+// Responses path with its last segment replaced by models. With catalog it is the request of the ChatGPT model list.
+func ListURL(base, responsesPath string, catalog bool) string {
+	if catalog {
+		return ModelsURL(base)
+	}
+	u := responsesURL(base, responsesPath)
+	return u[:strings.LastIndex(u, "/")] + "/models"
+}

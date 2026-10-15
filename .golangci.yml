@@ -51,6 +51,7 @@ linters:
           files:
             - "**/internal/acp/**"
             - "!**/internal/acp/acpauth/**"
+            - "!**/internal/acp/cwdruntimes/**"
           list-mode: strict
           allow:
             - $gostd
@@ -69,6 +70,7 @@ linters:
             - github.com/majorcontext/harness/config
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/cwdruntimes
+            - github.com/majorcontext/harness/internal/injectedauth
         acp-acpauth:
           files:
             - "**/internal/acp/acpauth/**"
@@ -80,6 +82,7 @@ linters:
             - github.com/majorcontext/harness/internal/acp/acpauth
             - github.com/majorcontext/harness/internal/claudeauth
             - github.com/majorcontext/harness/internal/codexauth
+            - github.com/majorcontext/harness/internal/injectedauth
             - github.com/majorcontext/harness/internal/process
         acp-rpc-leaf:
           files:

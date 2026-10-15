@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestContractProviderErrors(t *testing.T) {
 	oneTurn := func(extra ...action) []action {
 		return append([]action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}}, extra...)
 	}
-	runScenarios(t, []scenario{
+	runScenarios(t, slices.Concat([]scenario{
 		{
 			// Retry-After 1 equals the fixed 1s backoff, so this row cannot tell them apart.
 			name: "provider_429_then_ok",
@@ -82,7 +83,7 @@ func TestContractProviderErrors(t *testing.T) {
 				getSession{as: "a"},
 			},
 		},
-	})
+	}, anthropicInjectedRows()))
 }
 
 func TestContractProviderMaxTokens(t *testing.T) {

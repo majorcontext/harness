@@ -29,8 +29,12 @@ func (c *Config) defaultModel() string {
 	return DefaultModel
 }
 
-// apiKeyPresent says that the credential of the built-in default is set, so the default works and stays.
+// apiKeyPresent says that the credential of the built-in default is set, so the default works and stays. A server holds
+// the credential of an entry with auth injected.
 func apiKeyPresent(entries map[string]Provider) bool {
+	if entries["anthropic"].UsesInjectedAuth() {
+		return true
+	}
 	env := entries["anthropic"].KeyEnv("anthropic")
 	return env != "" && os.Getenv(env) != ""
 }

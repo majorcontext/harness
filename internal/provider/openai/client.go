@@ -5,6 +5,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,7 +63,9 @@ type Client struct {
 	// instead of HTTP POST + SSE. Any failure falls back to HTTP for that
 	// request. The websocket path sends the already-transcoded body.
 	UseWebSocketTransport bool
-	RequestRetries        int // see provider.Do
+	// HashCacheKey sends a stable hash of the session key as prompt_cache_key, so the raw key never leaves. The websocket pool keeps the raw key.
+	HashCacheKey   bool
+	RequestRetries int // see provider.Do
 
 	wsPoolOnce sync.Once
 	wsPoolVal  *wsPool
@@ -126,6 +130,7 @@ type preparedRequest struct {
 }
 
 func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
+	req = c.withCacheKey(req)
 	if c.APIKey == "" && c.HTTPClient == nil && !c.NoKey {
 		return nil, provider.NoKeyError("openai", c.NoKeyReason)
 	}
@@ -154,6 +159,17 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 		headers: headers,
 		client:  c.httpClient(),
 	}, nil
+}
+
+// withCacheKey returns req with the hash of its session key as the cache key when HashCacheKey is set.
+func (c *Client) withCacheKey(req *provider.Request) *provider.Request {
+	if !c.HashCacheKey || req.SessionKey == "" {
+		return req
+	}
+	sum := sha256.Sum256([]byte(req.SessionKey))
+	out := *req
+	out.CacheKey = hex.EncodeToString(sum[:])[:32]
+	return &out
 }
 
 // Stream sends req and returns the response stream, over a websocket when

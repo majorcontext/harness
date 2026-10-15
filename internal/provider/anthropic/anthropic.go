@@ -731,3 +731,14 @@ func mapStopReason(s string) provider.StopReason {
 		return provider.StopOther
 	}
 }
+
+// ModelsURL is the URL of the model list at base, the status probe of an entry whose credential a server adds.
+func ModelsURL(base string) string {
+	if base == "" {
+		base = defaultBaseURL
+	}
+	return base + "/v1/models"
+}
+
+// Version is the value of the Anthropic-Version header of every request.
+const Version = apiVersion

@@ -1,0 +1,26 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "last_turn.a": {
+      "status": 200,
+      "body": {
+        "error": "anthropic: harnesstest: no credential for this caller (api_error, HTTP 403)",
+        "stop_reason": "failed"
+      }
+    }
+  }
+}

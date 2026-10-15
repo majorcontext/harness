@@ -60,10 +60,14 @@ func TestNodeWasmListsCodexModelsOnlyWithALogin(t *testing.T) {
 		caps      map[string]any
 		file      bool
 		wantCodex bool
+		// plain leaves models_from out of the login entry, so its list is the static one.
+		plain bool
 	}{
-		{"no login and no file", map[string]any{}, false, false},
-		{"login offered", urlElicitationCaps, false, true},
-		{"login file", map[string]any{}, true, true},
+		{"no login and no file", map[string]any{}, false, false, false},
+		{"login offered", urlElicitationCaps, false, true, false},
+		{"login file", map[string]any{}, true, true, false},
+		{"login entry without models_from and no login", map[string]any{}, false, false, true},
+		{"login entry without models_from and a login file", map[string]any{}, true, true, true},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -77,6 +81,9 @@ func TestNodeWasmListsCodexModelsOnlyWithALogin(t *testing.T) {
 			anthropic := harnesstest.NewAnthropic(t)
 			cfg := codexConfig(openai.URL(), false, nil)
 			auth.configure(cfg)
+			if row.plain {
+				delete(cfg["providers"].(map[string]any)["codex"].(map[string]any), "models_from")
+			}
 			cfg["model"] = "anthropic/claude-fable-5"
 			cfg["providers"].(map[string]any)["anthropic"] = map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": anthropic.URL()}
 			env := acpEnv{configPath: writeGoalConfigWith(t, "", cfg), sessDir: t.TempDir(), wasm: true}

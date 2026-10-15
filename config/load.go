@@ -82,15 +82,20 @@ func markKeyless(out, user, proj *Config) {
 	}
 }
 
-// rejectProjectProviderKeys fails when the project file sets auth, sets api_key_env on any provider, or
+// rejectProjectProviderKeys fails when the project file sets auth, login_url, models_from, sets api_key_env on any provider, or
 // sets a key that picks the endpoint of a request on a provider that the user config defines or that is
 // built in. A project file then cannot send an API key, the login, or an environment variable to a URL of
 // its own.
 func rejectProjectProviderKeys(user, proj *Config, userName, projPath string) error {
 	for _, name := range slices.Sorted(maps.Keys(proj.Providers)) {
 		p := proj.Providers[name]
-		if p.Auth != "" {
-			return fmt.Errorf("providers.%s.auth is set in %s, but only the user config %s sets auth", name, projPath, userName)
+		for _, k := range []struct {
+			key string
+			set bool
+		}{{"auth", p.Auth != ""}, {"login_url", p.LoginURL != ""}, {"models_from", p.ModelsFrom != ""}} {
+			if k.set {
+				return fmt.Errorf("providers.%s.%s is set in %s, but only the user config %s sets %s", name, k.key, projPath, userName, k.key)
+			}
 		}
 		if p.APIKeyEnv != "" {
 			return fmt.Errorf("providers.%s.api_key_env is set in %s, but only the user config %s sets api_key_env", name, projPath, userName)

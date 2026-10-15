@@ -17,6 +17,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
+	"github.com/majorcontext/harness/internal/injectedauth"
 )
 
 // Options holds what the host injects.
@@ -36,6 +37,8 @@ type Options struct {
 	Tools          []harness.Tool
 	// IssuerTransport is the matching harness.Options of every runtime.
 	IssuerTransport http.RoundTripper
+	// Logins is the sign-in state of the injected providers, shared with the ACP logins. Its transport must be the same function as ModelTransport, or probes and model calls take different routes. nil: each runtime makes its own.
+	Logins *injectedauth.Logins
 	// Host is the harness.Options.Host of every runtime. A connection whose client can take the login (RuntimeOptions.Login) clears NoLogin.
 	Host harness.HostLimits
 }
@@ -55,6 +58,13 @@ type Runtimes struct {
 // New returns Runtimes that build a Runtime at the first request for a directory.
 func New(opts Options) *Runtimes {
 	return &Runtimes{opts: opts, rts: map[string]*harness.Runtime{}}
+}
+
+func (r *Runtimes) logins() *harness.Logins {
+	if r.opts.Logins == nil {
+		return nil
+	}
+	return harness.InjectedLogins(r.opts.Logins)
 }
 
 // For returns the Runtime of cwd. After Close it fails with harness.ErrDraining. A directory that does not exist, and a config that does not load, fail with harness.ErrInvalidRequest.
@@ -84,7 +94,7 @@ func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (
 	}
 	host := r.opts.Host
 	host.NoLogin = host.NoLogin && !opts.Login
-	rt, err := harness.New(harness.Options{Host: host, IssuerTransport: r.opts.IssuerTransport, Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
+	rt, err := harness.New(harness.Options{Host: host, IssuerTransport: r.opts.IssuerTransport, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
 		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
 		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
 	if err != nil {

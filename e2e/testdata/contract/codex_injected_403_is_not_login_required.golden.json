@@ -1,0 +1,32 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": null
+      }
+    },
+    "turn_error.a": {
+      "status": 200,
+      "body": {
+        "error": "openai: harnesstest: no credential for this caller (api_error, HTTP 403)",
+        "stop_reason": "failed"
+      }
+    }
+  }
+}

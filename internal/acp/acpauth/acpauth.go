@@ -8,8 +8,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/codexauth"
+	"github.com/majorcontext/harness/internal/injectedauth"
 )
 
 // Method ids.
@@ -26,6 +29,8 @@ const (
 	chatGPTTerm = "chatgpt-terminal"
 	claudeCode  = "claude-code"
 	claudeTerm  = "claude-code-terminal"
+	// injectedPrefix starts the id of the method of an injected provider entry.
+	injectedPrefix = "injected-"
 )
 
 const (
@@ -49,6 +54,10 @@ type Options struct {
 	LoginStore bool
 	// HTTP sends the requests of the device code flow. Nil: a client with a 30 s timeout.
 	HTTP *http.Client
+	// LoginBudget bounds a sign-in from the start of authenticate. Zero: 10 minutes.
+	LoginBudget time.Duration
+	// Logins owns the login state of the injected provider entries. It carries the transport of the status probe, which is the transport of the model calls. nil: no entry is injected.
+	Logins *injectedauth.Logins
 	// LookPath resolves the program of the Claude Code CLI, as exec.LookPath does. Nil is exec.LookPath.
 	LookPath func(file string) (string, error)
 }
@@ -86,13 +95,22 @@ func New(opts Options) *Auth {
 
 // target is what the user config offers a login for.
 type target struct {
-	chatgpt bool
-	claude  string // the CLI binary, empty when no entry uses the CLI
+	// injected names the provider entries with auth injected and a login_url, sorted.
+	injected []string
+	chatgpt  bool
+	claude   string // the CLI binary, empty when no entry uses the CLI
 }
 
 // targets offers the ChatGPT login always, because the native codex provider needs no entry. It offers the Claude Code login when the program resolves on PATH, which starts no process.
 func (a *Auth) targets(cfg *config.Config, c acp.ClientAuth) target {
 	t := target{chatgpt: !a.opts.DeviceCode || (c.URL && a.opts.LoginStore && cfg.CodexAuthFile != "")}
+	if entries := cfg.ProviderEntries(); c.URL && a.opts.Logins != nil {
+		for _, name := range slices.Sorted(maps.Keys(entries)) {
+			if p := entries[name]; p.UsesInjectedAuth() && p.LoginURL != "" {
+				t.injected = append(t.injected, name)
+			}
+		}
+	}
 	if bin, ok := cfg.ClaudeCLI(); ok {
 		if _, err := a.opts.LookPath(bin); err == nil {
 			t.claude = bin
@@ -126,6 +144,9 @@ func (a *Auth) Methods(c acp.ClientAuth) []acp.Method {
 			out = append(out, acp.Method{ID: claudeTerm, Name: "Log in with Claude Code in a terminal", Description: "Run harness login claude-code in a terminal.", Terminal: true, Args: strings.Fields("login claude-code")})
 		}
 	}
+	for _, name := range t.injected {
+		out = append(out, acp.Method{ID: injectedPrefix + name, Name: "Log in to " + name, Description: "Sign in on the page of " + name + "."})
+	}
 	return out
 }
 
@@ -143,6 +164,11 @@ var logins = map[string]func(a *Auth, ctx context.Context, cfg *config.Config, c
 // The cancelled call fails with context.Canceled.
 func (a *Auth) Authenticate(ctx context.Context, id string, client acp.LoginClient) error {
 	login, ok := logins[id]
+	if name, found := strings.CutPrefix(id, injectedPrefix); found && !ok {
+		login, ok = func(a *Auth, ctx context.Context, cfg *config.Config, client acp.LoginClient) error {
+			return a.injectedLogin(ctx, cfg, name, client)
+		}, true
+	}
 	if !ok {
 		return fmt.Errorf("unknown authentication method %q", id)
 	}
@@ -159,7 +185,7 @@ func (a *Auth) Authenticate(ctx context.Context, id string, client acp.LoginClie
 	a.mu.Unlock()
 	a.running.Lock()
 	defer a.running.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, loginBudget)
+	ctx, cancel := context.WithTimeout(ctx, a.budget())
 	defer cancel()
 	a.mu.Lock()
 	if a.gen != gen {
@@ -188,7 +214,8 @@ func (a *Auth) Logout(ctx context.Context) error {
 }
 
 // Check implements acp.Auth.
-func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
+func (a *Auth) Check(ctx context.Context, cwd, model string, mode acp.CheckMode) error {
+	fresh := mode == acp.CheckReprobe
 	cfg, err := a.opts.Config(cwd)
 	if err != nil || cfg == nil {
 		return nil
@@ -198,6 +225,9 @@ func (a *Auth) Check(ctx context.Context, cwd, model string, fresh bool) error {
 	switch {
 	case !ok:
 		return nil
+	case p.UsesInjectedAuth():
+		return a.checkInjected(ctx, provider, p, mode)
+	case mode == acp.CheckProbed:
 	case p.UsesChatGPTLogin():
 		if _, err := store(cfg).Load(); codexauth.IsLoginRequired(err) {
 			return &acp.AuthRequiredError{Message: err.Error()}

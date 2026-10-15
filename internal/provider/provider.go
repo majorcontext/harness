@@ -60,6 +60,8 @@ type Request struct {
 	// routing or cache-affinity hint. It is not a secret and is not
 	// persisted.
 	SessionKey string
+	// CacheKey, when set, is the prompt-cache routing key in place of SessionKey. It leaves the raw session key out of the request.
+	CacheKey string
 }
 
 // StopReason is why the model stopped generating.

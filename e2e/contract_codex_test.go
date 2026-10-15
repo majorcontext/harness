@@ -37,6 +37,8 @@ type codexScenario struct {
 	env map[string]string
 	// listModels is the models list of the codex entry.
 	listModels []string
+	// entry sets keys of the codex entry after the default config. A nil value deletes the key.
+	entry map[string]any
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -164,6 +166,14 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	if ca != nil {
 		ca.configure(cfg)
 	}
+	for k, v := range sc.entry {
+		e := cfg["providers"].(map[string]any)["codex"].(map[string]any)
+		if v == nil {
+			delete(e, k)
+		} else {
+			e[k] = v
+		}
+	}
 	if sc.listModels != nil {
 		cfg["providers"].(map[string]any)["codex"].(map[string]any)["models"] = sc.listModels
 	}
@@ -253,7 +263,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
