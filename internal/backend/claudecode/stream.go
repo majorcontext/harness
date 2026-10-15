@@ -34,6 +34,8 @@ type run struct {
 	blobMu sync.Mutex
 	blobs  map[string][]protocol.Blob
 	names  map[string]string
+	// unlisted holds the name of each call to a tool the run may not call, by call ID, until its result arrives.
+	unlisted map[string]string
 	// searches holds the query of each WebSearch call that waits for its result. The result records the search as one item.
 	searches map[string]string
 	// questions reports a run with the question channel; resolution answers
@@ -377,12 +379,37 @@ func (r *run) system(env envelope) error {
 
 // mayCall reports whether the CLI may call the tool name. A restricted run
 // calls only its allowed tools. Any run calls MCP tools, and AskUserQuestion
-// when it may ask. A built-in tool that acts on the machine fails the turn.
+// when it may ask. A call to any other tool waits for its result; see checkRan.
 func (r *run) mayCall(name string) bool {
 	if r.restricted {
 		return r.allowed[name]
 	}
 	return strings.HasPrefix(name, "mcp__") || r.allowed[name]
+}
+
+// checkRan fails the turn when the result of a call to an unlisted tool is not
+// the refusal of the CLI: an error result that starts with "No such tool
+// available: <name>." in the tool_use_error text, in a frame whose
+// tool_use_result is a string. A tool that ran gives an object there, and any
+// other wording fails closed.
+func (r *run) checkRan(parts []protocol.LogPart, toolUseResult json.RawMessage) error {
+	for _, p := range parts {
+		name, ok := r.unlisted[p.CallID]
+		if !ok {
+			continue
+		}
+		delete(r.unlisted, p.CallID)
+		if !refused(p, name, toolUseResult) {
+			return fmt.Errorf("%w: tool %s ran", ErrToolsNotRestricted, name)
+		}
+	}
+	return nil
+}
+
+func refused(p protocol.LogPart, name string, toolUseResult json.RawMessage) bool {
+	var s string
+	return p.IsError && strings.HasPrefix(p.Text, "<tool_use_error>Error: No such tool available: "+name+".") &&
+		len(toolUseResult) > 0 && toolUseResult[0] == '"' && json.Unmarshal(toolUseResult, &s) == nil
 }
 
 func (r *run) checkTools(tools *[]string) error {
@@ -436,7 +463,7 @@ func (r *run) assistant(env envelope) error {
 	}
 	for _, p := range parts {
 		if p.Type == protocol.LogPartToolCall && !r.mayCall(p.Name) {
-			return fmt.Errorf("%w: tool call %s", ErrToolsNotRestricted, p.Name)
+			r.unlisted[p.CallID] = p.Name
 		}
 	}
 	if parts = r.holdSearches(parts, env.ParentToolUseID); len(parts) == 0 {
@@ -479,6 +506,16 @@ func (r *run) toolResults(env envelope) error {
 	if len(parts) == 0 {
 		return nil
 	}
+	ran := r.checkRan(parts, env.ToolUseResult)
+	if err := r.record(env, parts); err != nil {
+		return err
+	}
+	return ran
+}
+
+// record stores the results of a frame, also when a built-in tool ran, so the
+// log keeps every real result.
+func (r *run) record(env envelope, parts []protocol.LogPart) error {
 	if err := r.attachBlobs(parts); err != nil {
 		return err
 	}

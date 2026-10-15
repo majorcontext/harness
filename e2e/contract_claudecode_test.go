@@ -582,8 +582,20 @@ func TestContractClaudeCodeTools(t *testing.T) {
 				setModel{as: "a", model: "anthropic/claude-fable-5"},
 				submit{as: "a", text: "native"}, waitIdle{as: "a"})...),
 	}, {
-		name:    "claudecode_built_in_tool_call_fails_the_turn",
+		name:    "claudecode_built_in_tool_that_returns_a_result_fails_the_turn",
 		driver:  claudeLane{mode: "builtin_tool"}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
+	}, {
+		name:    "claudecode_refused_built_in_call_is_a_failed_tool_call_and_the_turn_goes_on",
+		driver:  claudeLane{mode: "builtin_refused", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "echo from-harness"}}}}}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
+	}, {
+		name:    "claudecode_built_in_tool_that_ran_and_failed_fails_the_turn",
+		driver:  claudeLane{mode: "builtin_ran_failed"}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
+	}, {
+		name:    "claudecode_init_frame_with_a_built_in_tool_fails_the_turn",
+		driver:  claudeLane{mode: "normal", initTools: `["Bash"]`}.newDriver,
 		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
 	}, {
 		name:    "claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit",

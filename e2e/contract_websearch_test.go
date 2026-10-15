@@ -258,6 +258,7 @@ func TestContractClaudeCodeWebSearch(t *testing.T) {
 				setModel{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "back"}, waitIdle{as: "a"},
 				claudeHistoryTool{as: "a"}),
 		},
+		{name: "claudecode_refused_web_search_without_the_option_is_a_failed_call_and_a_pair", driver: claudeLane{mode: "web_search_refused"}.newDriver, actions: turn("There is no TodoWrite, WebFetch, WebSearch, or Skill tool")},
 		{name: "claudecode_web_search_call_without_the_option_fails_the_turn", driver: lane(nil), actions: turn("There is no TodoWrite, WebFetch, WebSearch, or Skill tool")},
 	})
 }

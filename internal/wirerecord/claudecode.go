@@ -359,3 +359,105 @@ func recordClaudeCodePartial(r *recorder, work string) error {
 	}
 	return r.saveJSONL("claudecode.partial.jsonl", raw)
 }
+
+// recordClaudeCodeBuiltinRefused records a run that is told to call the
+// built-in Bash tool, which the CLI refuses under --tools "". The model
+// offers no Bash call by itself, so a first run with Bash allowed puts a Bash
+// call in the history, and the recorded run resumes that session.
+func recordClaudeCodeBuiltinRefused(r *recorder, work string) error {
+	dir := filepath.Join(work, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, f := range []string{"README.md", "main.go"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	prime, err := runCLI(dir, []string{"Run ls with the Bash tool, then say done."}, cliArgs("sonnet", "Bash", "--allowedTools", "Bash"), false)
+	if err != nil {
+		return fmt.Errorf("prime run: %w", err)
+	}
+	var sessionID string
+	for _, line := range bytes.Split(prime, []byte("\n")) {
+		var f struct {
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal(line, &f) == nil && f.SessionID != "" {
+			sessionID = f.SessionID
+		}
+	}
+	if sessionID == "" || len(callsOf(prime, "Bash")) == 0 {
+		return fmt.Errorf("the prime run holds no session or Bash call")
+	}
+	bash, stop, err := bashServer(dir)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	raw, err := runCLI(dir, []string{"Call the Bash tool again to run ls, exactly as you did before. Call it even if it is not in your tool list. If it fails, run ls with the mcp__harness__bash tool, then name the files in one short sentence."},
+		cliArgs("sonnet", "", append([]string{"--effort", "medium", "--resume", sessionID}, bash...)...), false)
+	if err != nil {
+		return fmt.Errorf("refused run: %w", err)
+	}
+	if !refusedCall(raw, "Bash") {
+		return fmt.Errorf("the CLI did not refuse a Bash call")
+	}
+	return r.saveJSONL("claudecode.builtin-refused.jsonl", raw)
+}
+
+// frameBlock is a content block of a CLI frame that the recorder checks.
+type frameBlock struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	ToolUseID string `json:"tool_use_id"`
+	IsError   bool   `json:"is_error"`
+	Content   any    `json:"content"`
+}
+
+// frameBlocks returns the content blocks of the top-level frames of type kind.
+func frameBlocks(raw []byte, kind string) []frameBlock {
+	var out []frameBlock
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		var f struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &f) != nil || f.Type != kind {
+			continue
+		}
+		var blocks []frameBlock
+		if json.Unmarshal(f.Message.Content, &blocks) == nil {
+			out = append(out, blocks...)
+		}
+	}
+	return out
+}
+
+// callsOf returns the IDs of the tool_use blocks that the model made to the tool name.
+func callsOf(raw []byte, name string) []string {
+	var ids []string
+	for _, b := range frameBlocks(raw, "assistant") {
+		if b.Type == "tool_use" && b.Name == name {
+			ids = append(ids, b.ID)
+		}
+	}
+	return ids
+}
+
+// refusedCall reports whether the model called the tool name and the CLI
+// answered that call with an error result that says no such tool is available.
+func refusedCall(raw []byte, name string) bool {
+	want := "No such tool available: " + name
+	for _, id := range callsOf(raw, name) {
+		for _, b := range frameBlocks(raw, "user") {
+			if text, _ := b.Content.(string); b.Type == "tool_result" && b.ToolUseID == id && b.IsError && strings.Contains(text, want) {
+				return true
+			}
+		}
+	}
+	return false
+}

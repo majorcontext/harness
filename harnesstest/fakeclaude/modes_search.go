@@ -12,6 +12,15 @@ import (
 var searchModes = map[string]mode{
 	"web_search":       webSearchTurn,
 	"web_search_plain": webSearchPlain,
+	"web_search_refused": func(f *fake) {
+		msg := "Error: No such tool available: WebSearch. WebSearch is disabled for this session, in subagents as well as here."
+		f.emit(
+			assistant(toolUse("toolu_ws", "WebSearch", obj{"query": "current Go release", "mode": "standard"})),
+			user(toolResult("toolu_ws", "<tool_use_error>"+msg+"</tool_use_error>", true)).set("tool_use_result", msg),
+			say("Done."),
+			success("Done.", 9, 4),
+		)
+	},
 }
 
 const plainResult = "Web search results for query: \"current Go release\"\n\nGo 1.27.2 is the current release."

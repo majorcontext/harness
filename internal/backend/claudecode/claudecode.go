@@ -154,7 +154,7 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	}
 	questions := req.Questions || res != nil
 	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req, questions, res != nil), restricted: req.AllowedTools != nil,
-		names: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: questions}
+		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: questions}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {

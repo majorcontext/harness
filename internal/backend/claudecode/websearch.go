@@ -86,7 +86,7 @@ func searchPart(callID, query string, res protocol.LogPart, structured []protoco
 // holdSearches removes the WebSearch calls of the main thread from parts and
 // remembers their queries. A search is one item, which its result records.
 func (r *run) holdSearches(parts []protocol.LogPart, parent string) []protocol.LogPart {
-	if parent != "" {
+	if parent != "" || !r.allowed[searchTool] {
 		return parts
 	}
 	return slices.DeleteFunc(parts, func(p protocol.LogPart) bool {
