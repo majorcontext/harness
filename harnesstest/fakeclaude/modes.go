@@ -130,6 +130,12 @@ var basicModes = map[string]mode{
 		turnCalls(f)
 		f.emit(say("Done."), success("Done.", 0, 0))
 	},
+	"unknown_refused": func(f *fake) {
+		f.emit(assistant(toolUse("toolu_u", "bash", obj{"command": "ls"})),
+			user(toolResult("toolu_u", "<tool_use_error>Error: No such tool available: bash</tool_use_error>", true)).set("tool_use_result", "Error: No such tool available: bash"))
+		turnCalls(f)
+		f.emit(say("Done."), success("Done.", 0, 0))
+	},
 	"builtin_ran_failed": func(f *fake) {
 		f.emit(assistant(toolUse("toolu_b", "Bash", obj{"command": "touch x; false"})),
 			user(toolResult("toolu_b", "Exit code 1", true)).set("tool_use_result", obj{"stdout": "", "stderr": "", "interrupted": false}),

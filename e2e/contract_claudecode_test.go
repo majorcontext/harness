@@ -590,6 +590,10 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		driver:  claudeLane{mode: "builtin_refused", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "echo from-harness"}}}}}.newDriver,
 		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
 	}, {
+		name:    "claudecode_refused_call_to_an_unknown_tool_name_is_a_failed_tool_call_and_the_turn_goes_on",
+		driver:  claudeLane{mode: "unknown_refused", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "echo from-harness"}}}}}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),
+	}, {
 		name:    "claudecode_built_in_tool_that_ran_and_failed_fails_the_turn",
 		driver:  claudeLane{mode: "builtin_ran_failed"}.newDriver,
 		actions: withActions(claudeOneTurn, claudeSession{as: "a"}),

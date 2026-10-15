@@ -388,8 +388,9 @@ func (r *run) mayCall(name string) bool {
 }
 
 // checkRan fails the turn when the result of a call to an unlisted tool is not
-// the refusal of the CLI: an error result that starts with "No such tool
-// available: <name>." in the tool_use_error text, in a frame whose
+// the refusal of the CLI: an error result whose tool_use_error text is "No
+// such tool available: <name>", ended by "." for a disabled built-in or by
+// the end of the text for a name the CLI does not know, in a frame whose
 // tool_use_result is a string. A tool that ran gives an object there, and any
 // other wording fails closed.
 func (r *run) checkRan(parts []protocol.LogPart, toolUseResult json.RawMessage) error {
@@ -408,7 +409,8 @@ func (r *run) checkRan(parts []protocol.LogPart, toolUseResult json.RawMessage) 
 
 func refused(p protocol.LogPart, name string, toolUseResult json.RawMessage) bool {
 	var s string
-	return p.IsError && strings.HasPrefix(p.Text, "<tool_use_error>Error: No such tool available: "+name+".") &&
+	rest, ok := strings.CutPrefix(p.Text, "<tool_use_error>Error: No such tool available: "+name)
+	return p.IsError && ok && (strings.HasPrefix(rest, ".") || rest == "</tool_use_error>") &&
 		len(toolUseResult) > 0 && toolUseResult[0] == '"' && json.Unmarshal(toolUseResult, &s) == nil
 }
 
