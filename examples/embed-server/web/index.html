@@ -102,6 +102,9 @@ const reader = h.stream.readable.getReader();
 const pending = new Map();
 let nextId = 1;
 let onUpdate = () => {};
+// sessionId is the open session; loadingId the one that session/load replays.
+let sessionId = null;
+let loadingId = null;
 let usage = "";
 let contextUsed = 0;
 (async () => {
@@ -112,6 +115,9 @@ let contextUsed = 0;
       pending.get(m.id)(m);
       pending.delete(m.id);
     } else if (m.method === "session/update") {
+      // Updates of a session that the page left (a cancelled turn, the session
+      // of another user) are dropped.
+      if (m.params.sessionId !== (sessionId ?? loadingId)) continue;
       const u = m.params.update;
       if (u.sessionUpdate === "usage_update" && u.size) {
         const pct = (100 * u.used) / u.size;
@@ -140,10 +146,12 @@ await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
 // the tab that holds the store at a session that the store does not have.
 const savedKey = () => (persisted && user ? `harness.session:${user}` : null);
 const saved = {
-  get: () => { const k = savedKey(); if (!k) return null; try { return localStorage.getItem(k); } catch { return null; } },
-  set: (id) => { const k = savedKey(); if (!k) return; try { id ? localStorage.setItem(k, id) : localStorage.removeItem(k); } catch {} },
+  get: (k) => { if (!k) return null; try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, id) => { if (!k) return; try { id ? localStorage.setItem(k, id) : localStorage.removeItem(k); } catch {} },
 };
-let sessionId = null;
+// epoch counts the sessions that the page has left. An open or a turn that
+// started before a reset writes nothing after it.
+let epoch = 0;
 let notice = null;
 let running = false;
 let last = "";
@@ -195,14 +203,19 @@ const fail = (err) => {
 
 const doOpen = async () => {
   if (sessionId) return;
+  const my = epoch;
+  const key = savedKey();
   notice?.remove();
   notice = null;
-  const id = saved.get();
+  const id = saved.get(key);
   if (id) {
     status("loading session");
     const mark = log.childElementCount;
     onUpdate = replay();
+    loadingId = id;
     const loaded = await call("session/load", { sessionId: id, cwd: "/work", mcpServers: [] });
+    loadingId = null;
+    if (my !== epoch) return;
     // The replay renderer stays attached: a turn that was running when the page
     // went away resumes, and its updates follow the answer.
     if (loaded.result) {
@@ -211,15 +224,16 @@ const doOpen = async () => {
       onUpdate = () => {};
       while (log.childElementCount > mark) log.lastElementChild.remove();
       if (loaded.error?.code !== -32002) return fail(loaded.error);
-      saved.set(null);
+      saved.set(key, null);
     }
   }
   if (!sessionId) {
     status("starting session");
     const created = await call("session/new", { cwd: "/work", mcpServers: [] });
+    if (my !== epoch) return;
     if (!created.result) return fail(created.error);
     sessionId = created.result.sessionId;
-    saved.set(sessionId);
+    saved.set(key, sessionId);
   }
   clearTimeout(retry);
   retries = 0;
@@ -242,6 +256,9 @@ const open = () => {
 // reset leaves the session of the page; the next open loads or starts one.
 const reset = () => {
   if (running && sessionId) writer.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+  epoch++;
+  running = false;
+  clearTimeout(retry);
   sessionId = null;
   usage = "";
   contextUsed = 0;
@@ -253,7 +270,7 @@ const reset = () => {
 
 $("new").addEventListener("click", async () => {
   if (running || opening) return;
-  saved.set(null);
+  saved.set(savedKey(), null);
   reset();
   await open();
 });
@@ -326,9 +343,11 @@ const send = async () => {
     });
   status("running · esc: interrupt");
 
+  const my = epoch;
   const done = await call("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
 
   clearInterval(timer);
+  if (my !== epoch) return;
   if (!reply.textContent) reply.remove();
   follow(() => {
     if (done.error) {
