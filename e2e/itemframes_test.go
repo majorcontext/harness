@@ -51,14 +51,20 @@ func (f *itemFeed) add(s string) {
 // watchItems subscribes to the event stream of a session before its first
 // input, and returns when the stream has sent its first frame. With late set,
 // it first waits until the earlier stream of the session has carried an
-// item.delta, so the new stream starts after an item began streaming.
+// item.delta, so the new stream starts after an item began streaming. With
+// past set as well, the new stream resumes after the head seq of the session,
+// which is past the start of the item. It does not wait for a first frame: the
+// stream has none to send before the item ends.
 type watchItems struct {
-	as   string
-	late bool
+	as         string
+	late, past bool
 }
 
-func feedKey(id string, late bool) string {
-	if late {
+func feedKey(id string, late, past bool) string {
+	switch {
+	case past:
+		return id + "#past"
+	case late:
 		return id + "#late"
 	}
 	return id
@@ -69,7 +75,7 @@ func (a watchItems) run(t *testing.T, r *run) {
 	d := r.drv.(*runtimeDriver)
 	id := r.id(t, a.as)
 	feed := newItemFeed()
-	if a.late {
+	if a.late || a.past {
 		itemFeedsMu.Lock()
 		early := itemFeeds[id]
 		itemFeedsMu.Unlock()
@@ -83,12 +89,16 @@ func (a watchItems) run(t *testing.T, r *run) {
 		}
 	}
 	itemFeedsMu.Lock()
-	itemFeeds[feedKey(id, a.late)] = feed
+	itemFeeds[feedKey(id, a.late, a.past)] = feed
 	itemFeedsMu.Unlock()
+	var after uint64
+	if a.past {
+		after = d.view(t, id).HeadSeq
+	}
 	subscribed := make(chan struct{})
 	go func() {
 		defer close(feed.done)
-		d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+		d.stream(t, id, after, false, func(_ string, ev protocol.Event) bool {
 			select {
 			case <-subscribed:
 			default:
@@ -110,6 +120,9 @@ func (a watchItems) run(t *testing.T, r *run) {
 			return false
 		})
 	}()
+	if a.past {
+		return
+	}
 	select {
 	case <-subscribed:
 	case <-feed.done:
@@ -120,22 +133,25 @@ func (a watchItems) run(t *testing.T, r *run) {
 // itemFrames waits for the end of the first turn on the stream that
 // watchItems opened, and records its item frames.
 type itemFrames struct {
-	as   string
-	late bool
+	as         string
+	late, past bool
 }
 
 func (a itemFrames) run(t *testing.T, r *run) {
 	t.Helper()
 	id := r.id(t, a.as)
 	itemFeedsMu.Lock()
-	feed := itemFeeds[feedKey(id, a.late)]
+	feed := itemFeeds[feedKey(id, a.late, a.past)]
 	itemFeedsMu.Unlock()
 	if feed == nil {
 		t.Fatalf("itemFrames before watchItems for %s", a.as)
 	}
 	<-feed.done
 	name := a.as
-	if a.late {
+	switch {
+	case a.past:
+		name += "_past"
+	case a.late:
 		name += "_late"
 	}
 	r.record(t, "item_frames", name, callResult{Status: http.StatusOK, Body: map[string]any{"frames": feed.steps}})

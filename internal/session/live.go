@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 const liveBuffer = 256
 
 // liveItemBytes bounds the item.delta data that live keeps for the item that
-// streams. Past it, a later subscriber misses further deltas of that item.
+// streams. At the first delta past it, live keeps no more frames of that
+// item, so the kept deltas are a prefix.
 const liveItemBytes = 256 << 10
 
 // live fans ephemeral frames out to the subscribers of Events. A send to a
@@ -26,22 +28,21 @@ type live struct {
 	itemID   string
 	item     []protocol.Event
 	itemSize int
+	full     bool
 }
 
-// subscribe registers a subscriber. Its channel already holds the frames of
-// the item that streams, in the order sent.
-func (l *live) subscribe() chan protocol.Event {
+// subscribe registers a subscriber. It also returns the frames of the item
+// that streams, in the order sent, which belong before every frame on the
+// channel.
+func (l *live) subscribe() (chan protocol.Event, []protocol.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ch := make(chan protocol.Event, liveBuffer+len(l.item))
-	for _, e := range l.item {
-		ch <- e
-	}
+	ch := make(chan protocol.Event, liveBuffer)
 	if l.subs == nil {
 		l.subs = map[chan protocol.Event]struct{}{}
 	}
 	l.subs[ch] = struct{}{}
-	return ch
+	return ch, slices.Clone(l.item)
 }
 
 func (l *live) unsubscribe(ch chan protocol.Event) {
@@ -71,16 +72,18 @@ func (l *live) remember(e protocol.Event, f protocol.ItemFrame) {
 			l.forget()
 			l.itemID = f.ItemID
 		}
-		if l.itemSize+len(e.Data) <= liveItemBytes {
-			l.item = append(l.item, e)
-			l.itemSize += len(e.Data)
+		if l.full || l.itemSize+len(e.Data) > liveItemBytes {
+			l.full = true
+			return
 		}
+		l.item = append(l.item, e)
+		l.itemSize += len(e.Data)
 	}
 }
 
 // forget drops the kept frames. It needs l.mu.
 func (l *live) forget() {
-	l.itemID, l.item, l.itemSize = "", nil, 0
+	l.itemID, l.item, l.itemSize, l.full = "", nil, 0, false
 }
 
 // settle drops the kept frames once the log holds the item that streamed, or

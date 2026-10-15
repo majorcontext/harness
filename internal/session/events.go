@@ -63,20 +63,24 @@ func subscriptionView(u *protocol.SubscriptionUsage) *protocol.SubscriptionUsage
 
 // Events yields the durable records after seq, then each record that the
 // actor appends, with the ephemeral frames of its turns between them. It
-// subscribes before it yields, and the subscription starts with the frames
-// of the item that streams. It loads the view before it drains the
+// subscribes before it yields. It first yields the frames of the item that
+// streams, all of them or none: none when the item started before after. It loads the view before it drains the
 // frames: a frame sent before an append is then never yielded after the
 // record. A full subscriber drops frames, never records. When the actor
 // stops, it waits for Done and ends with Err.
 func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return func(yield func(protocol.Event, error) bool) {
-		frames := a.live.subscribe()
+		frames, kept := a.live.subscribe()
 		defer a.live.unsubscribe(frames)
 		place := func(f protocol.Event) bool {
-			if f.Seq < after {
-				return true
-			}
 			return through(ctx, a.cfg.Store, &after, f.Seq, yield) && yield(f, nil)
+		}
+		if len(kept) > 0 && kept[0].Seq >= after {
+			for _, f := range kept {
+				if !place(f) {
+					return
+				}
+			}
 		}
 		for {
 			v := a.View()
