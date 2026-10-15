@@ -47,7 +47,8 @@ func (s *sessions) login(w http.ResponseWriter, r *http.Request, user string) {
 	s.mu.Lock()
 	s.m[id] = &session{user: user, csrf: randomHex(16)}
 	s.mu.Unlock()
-	s.save()
+	// A login that is not saved is lost at a restart, which only signs the user out.
+	_ = s.save()
 	c := &http.Cookie{Name: cookieName, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil}
 	if s.file != "" {
 		// The session outlives the server, so the cookie outlives the browser.
@@ -70,13 +71,24 @@ func (s *sessions) sessionOf(r *http.Request) (string, *session) {
 	return "", nil
 }
 
-// end deletes the session and clears the cookie.
-func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) {
+// end deletes the session and clears the cookie. When the session file cannot
+// be written, the session stays and end returns the error: the file still
+// holds the session, so a restart would bring the cookie back.
+func (s *sessions) end(w http.ResponseWriter, r *http.Request, id string) error {
 	s.mu.Lock()
+	sess := s.m[id]
 	delete(s.m, id)
 	s.mu.Unlock()
-	s.save()
+	if err := s.save(); err != nil {
+		s.mu.Lock()
+		if sess != nil && s.m[id] == nil {
+			s.m[id] = sess
+		}
+		s.mu.Unlock()
+		return err
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure || r.TLS != nil})
+	return nil
 }
 
 // alive reports whether the session id is still valid.

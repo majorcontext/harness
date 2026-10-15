@@ -54,16 +54,22 @@ func (s *server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	// Rotate: the old session id, if any, ends here.
 	if old, _ := s.sessions.sessionOf(r); old != "" {
-		s.endSession(w, r, old)
+		if err := s.endSession(w, r, old); err != nil {
+			http.Error(w, "the old session could not be ended; try again", http.StatusInternalServerError)
+			return
+		}
 	}
 	s.sessions.login(w, r, user)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // endSession ends the session and the sign-in flow that it started.
-func (s *server) endSession(w http.ResponseWriter, r *http.Request, id string) {
-	s.sessions.end(w, r, id)
+func (s *server) endSession(w http.ResponseWriter, r *http.Request, id string) error {
+	if err := s.sessions.end(w, r, id); err != nil {
+		return err
+	}
 	s.flows.drop(id)
+	return nil
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +78,10 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	s.endSession(w, r, id)
+	if err := s.endSession(w, r, id); err != nil {
+		http.Error(w, "the logout could not be saved; try again", http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

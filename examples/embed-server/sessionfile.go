@@ -42,9 +42,9 @@ func (s *sessions) load() error {
 }
 
 // save writes every session to the session file, readable by the owner only.
-func (s *sessions) save() {
+func (s *sessions) save() error {
 	if s.file == "" {
-		return
+		return nil
 	}
 	// saveMu covers the copy and the write, so an older copy never writes last.
 	s.saveMu.Lock()
@@ -58,5 +58,7 @@ func (s *sessions) save() {
 	b, _ := json.Marshal(saved)
 	if err := writePrivate(s.file, b); err != nil {
 		slog.Warn("the session file was not written", "file", s.file, "err", err)
+		return err
 	}
+	return nil
 }
