@@ -465,6 +465,29 @@ test("a redirect of the ChatGPT model endpoint does not get past the page fetch 
   }
 });
 
+test("a redirect that the page fetch followed itself fails the request", async () => {
+  const sink = await fakeIssuer();
+  const redirecting = await fakeIssuer({ redirectTo: sink.url });
+  const dir = tempDir();
+  seedLogin(dir, chatgptToken(3600));
+  // A real fetch that ignores init.redirect follows the 302 and returns the final answer.
+  const pageFetch = (url, init) => fetch(url, { method: init.method, headers: init.headers, body: init.body });
+  const h = await harness({
+    config: { model: "codex/gpt-5.6-sol", request_max_retries: 0, stream_max_retries: 0 },
+    proxy: { providerBaseURLs: { codex: redirecting.url + "/codex" } },
+    fetch: pageFetch,
+    store: { persist: true, dir },
+  });
+  try {
+    const c = acpClient(h);
+    await assert.rejects(c.prompt(await c.session(), "go"), /redirect/);
+  } finally {
+    await h.close();
+    sink.close();
+    redirecting.close();
+  }
+});
+
 test("a malformed proxy URL leaves no Worker and no held store", async () => {
   const dir = tempDir();
   const files = moduleFiles();
