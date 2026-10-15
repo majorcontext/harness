@@ -157,12 +157,14 @@ func (e *Entry) Cached() (State, bool) {
 	return Unknown, false
 }
 
-func (e *Entry) record(status int) State {
+// record keeps the answer of a probe. body is what a probe that answered 200 read in full for the catalog fetch, else nil.
+func (e *Entry) record(status int, body []byte) State {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.logins.Now()
-	if status != http.StatusOK {
-		e.body = nil
+	e.body, e.bodyAt = nil, now
+	if status == http.StatusOK {
+		e.body = body
 	}
 	switch status {
 	case http.StatusOK:
@@ -209,21 +211,15 @@ func (e *Entry) Probe(ctx context.Context, extra map[string]string) State {
 	}
 	var body []byte
 	if e.probe.Catalog && resp.StatusCode == http.StatusOK {
-		body, _ = io.ReadAll(io.LimitReader(resp.Body, maxCatalog+1))
-		if len(body) > maxCatalog {
+		var err error
+		if body, err = io.ReadAll(io.LimitReader(resp.Body, maxCatalog+1)); err != nil || len(body) > maxCatalog {
 			body = nil
 		}
 	} else {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
 	}
 	_ = resp.Body.Close()
-	state := e.record(resp.StatusCode)
-	if body != nil {
-		e.mu.Lock()
-		e.body, e.bodyAt = body, e.logins.Now()
-		e.mu.Unlock()
-	}
-	return state
+	return e.record(resp.StatusCode, body)
 }
 
 // takeBody returns the body that a probe kept while it stands, and forgets it.
@@ -278,7 +274,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if req.Method == http.MethodGet && req.URL.String() == t.entry.probe.URL {
-		t.entry.record(resp.StatusCode)
+		t.entry.record(resp.StatusCode, nil)
 		return resp, nil
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -294,6 +290,7 @@ func (e *Entry) rejection() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.logins.Now()
+	e.body = nil
 	if !e.okAt.IsZero() && now.Sub(e.okAt) < recentOK {
 		e.modelRejected = true
 		msg := "the server accepted the sign-in check but rejected the model call; "

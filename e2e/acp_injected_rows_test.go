@@ -322,10 +322,11 @@ var acpInjectedScenarios = []acpScenario{
 	{
 		name:  "new_session_on_a_catalog_entry_sends_one_model_list_request",
 		cite:  injectedCatalogCite,
-		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{}},
+		login: &acpLoginSpec{injected: &harnesstest.InjectedOptions{}, models: chatgptCatalog},
 		steps: []acpStep{
 			injectedInit,
 			acpNew{as: "a"},
+			acpCodexGroup("live-a", "live-b", "gpt-5.6-sol"),
 			acpCheck(func(t *testing.T, c *acpConn) {
 				if n := c.env.login.openai.ModelRequests(); n != 1 {
 					t.Errorf("model list requests = %d, want 1", n)

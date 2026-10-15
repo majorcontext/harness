@@ -117,6 +117,10 @@
                   "value": "off"
                 },
                 {
+                  "name": "Minimal",
+                  "value": "minimal"
+                },
+                {
                   "name": "Low",
                   "value": "low"
                 },
@@ -127,14 +131,6 @@
                 {
                   "name": "High",
                   "value": "high"
-                },
-                {
-                  "name": "XHigh",
-                  "value": "xhigh"
-                },
-                {
-                  "name": "Max",
-                  "value": "max"
                 }
               ],
               "type": "select"
