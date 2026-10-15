@@ -120,7 +120,7 @@ func (r *run) recordSearches(parts []protocol.LogPart, toolUseResult json.RawMes
 		delete(r.searches, p.CallID)
 		r.spoke = true
 		item := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{searchPart(p.CallID, query, p, structured)}}
-		if err := r.thread().Item(item); err != nil {
+		if err := r.out.Item(item); err != nil {
 			return nil, err
 		}
 		r.replay()

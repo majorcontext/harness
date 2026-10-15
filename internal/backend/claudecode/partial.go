@@ -47,7 +47,7 @@ func (r *run) streamEvent(env envelope) error {
 			}
 		}
 		if r.live != nil && r.live.streamed() {
-			r.thread().Drop()
+			r.out.Discard(r.live.id)
 		}
 		r.live = &liveMessage{id: ev.Message.ID, byIndex: map[int]*liveBlock{}}
 	case "message_stop":
@@ -92,7 +92,7 @@ func (r *run) streamEvent(env envelope) error {
 			return nil
 		}
 		b.text.WriteString(text)
-		r.thread().Delta(lm.id, turn.Delta{Type: b.typ, Text: text})
+		r.out.Delta(lm.id, turn.Delta{Type: b.typ, Text: text})
 	}
 	return nil
 }
@@ -137,20 +137,7 @@ func (r *run) replay() {
 	}
 	for _, b := range lm.blocks {
 		if !b.recorded && b.text.Len() > 0 {
-			r.thread().Delta(lm.id, turn.Delta{Type: b.typ, Text: b.text.String()})
+			r.out.Delta(lm.id, turn.Delta{Type: b.typ, Text: b.text.String()})
 		}
 	}
-}
-
-// flatThread is the thread of a sink that keeps one live item.
-type flatThread struct{ turn.Sink }
-
-func (flatThread) Drop() {}
-
-// thread returns the live item of the CLI output.
-func (r *run) thread() turn.Thread {
-	if t, ok := r.out.(turn.Threaded); ok {
-		return t.Thread("")
-	}
-	return flatThread{r.out}
 }

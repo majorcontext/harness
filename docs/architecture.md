@@ -1080,9 +1080,8 @@ The turn loop reports through one `Turn`, which the actor binds to the turn. No 
 ```go
 type Turn interface {
 	Sink
-	Started() string               // announces an item and returns its ID; the next Item records under it
-	Announce() string              // Started for a keyed thread; Item does not use the ID
-	ItemAs(id string, m protocol.LogMessage) error // records m under the ID that Announce returned
+	Started() string               // announces an item and returns its ID
+	ItemAs(id string, m protocol.LogMessage) error // records m under the ID that Started returned, or under a new ID when id is ""
 	Attach(mediaType string, data []byte) (protocol.LogPart, error) // stores a tool-result blob and returns its part
 	Settings() (string, protocol.Settings) // the model and settings that the session holds now; "" after the turn stops
 	Pin(ns []Notice, at int) []Pin // pins the notices that changed, on the actor goroutine, and returns every pin
@@ -1093,7 +1092,7 @@ type Turn interface {
 func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits)
 ```
 
-`Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The first delta of each model call calls `Started`, which gives the item a harness ID; the next `Item` records the message under it. An item that a failed call streamed gets no `Item`, and the next `Started` replaces it.
+`Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The first delta after an item calls `Started`, which gives the live item a harness ID; the next `Item` of an assistant message records it under that ID, and an `Item` of any other role takes a new ID and leaves the live item. `Discard` removes the live item and clears its ID. An item that a failed call streamed gets no `Item`, and the next delta starts a new item.
 
 - A model API backend runs one model call per `Run`. The loop runs the tools, then takes the queued steer inputs through `Sink.Steer`, appends them to the history, and calls the backend again. This item boundary comes after the tool results of each response, on a path that calls the backend again. A response that ends the turn, or fails it, takes no steer input: that input waits and runs as the next turn. A queued input joins no running turn. Every model API backend steers, because the loop does it, not the backend.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.

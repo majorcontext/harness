@@ -18,17 +18,10 @@ import (
 type turnRun struct {
 	a *Actor
 	r *running
-	// item is the ID that Started minted for the next Item. Only the turn
-	// goroutine reads it.
-	item string
 }
 
-// Item records m under the ID that Started minted for it, or a new ID.
-func (t *turnRun) Item(m protocol.LogMessage) error {
-	id := t.item
-	t.item = ""
-	return t.ItemAs(id, m)
-}
+// Item records m under a new ID.
+func (t *turnRun) Item(m protocol.LogMessage) error { return t.ItemAs("", m) }
 
 // ItemAs records m under id, or a new ID when id is "".
 func (t *turnRun) ItemAs(id string, m protocol.LogMessage) error {
@@ -47,14 +40,8 @@ func (t *turnRun) Attach(mediaType string, data []byte) (protocol.LogPart, error
 	return protocol.LogPart{Type: protocol.LogPartBlob, MediaType: mediaType, BlobKey: key, Bytes: len(data)}, nil
 }
 
-// Started announces a new item and makes it the item of the next Item.
+// Started announces a new item that only ItemAs records.
 func (t *turnRun) Started() string {
-	t.item = t.Announce()
-	return t.item
-}
-
-// Announce announces a new item that only ItemAs records.
-func (t *turnRun) Announce() string {
 	id := newID("item")
 	t.a.frame(protocol.KindItemStarted, protocol.ItemFrame{ItemID: id, TurnID: t.r.id})
 	return id
