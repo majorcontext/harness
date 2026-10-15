@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -102,10 +101,10 @@ func (r *router) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // precheck refuses a literal IP that is not public, and a host name with any
-// resolved address that is not public. A name that does not exist, or a host
-// with no DNS server, passes, because a host that has only proxy egress has no
-// DNS and the proxy then resolves the name. Any other lookup error, such as a
-// timeout, refuses the request.
+// resolved address that is not public. A name that the lookup reports as not
+// found (NXDOMAIN) passes, because the proxy may resolve names that this host
+// cannot. Any other lookup error, such as a refused connection or a timeout,
+// refuses the request.
 func precheck(ctx context.Context, host string, r resolver, loopback bool) error {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return checkAll([]netip.Addr{ip}, host, loopback)
@@ -120,11 +119,10 @@ func precheck(ctx context.Context, host string, r resolver, loopback bool) error
 	return checkAll(ips, host, loopback)
 }
 
-// noDNS reports a lookup that failed because the name does not exist or the
-// host has no DNS server to ask.
+// noDNS reports a lookup that answered that the name does not exist.
 func noDNS(err error) bool {
 	de, ok := errors.AsType[*net.DNSError](err)
-	return ok && !de.IsTimeout && !de.IsTemporary && (de.IsNotFound || strings.Contains(de.Err, "no servers"))
+	return ok && de.IsNotFound
 }
 
 func checkAll(ips []netip.Addr, host string, loopback bool) error {
