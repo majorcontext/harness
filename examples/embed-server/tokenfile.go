@@ -45,6 +45,10 @@ func (s *tokenStore) save() {
 	if s.file == "" {
 		return
 	}
+	// saveMu covers the copy and the write, so a save that copied older
+	// logins never writes after one that copied newer logins.
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	entries := make(map[string]*userTokens, len(s.m))
 	for user, e := range s.m {
@@ -58,9 +62,6 @@ func (s *tokenStore) save() {
 		e.mu.Unlock()
 	}
 	b, _ := json.Marshal(saved)
-
-	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
 	if err := writePrivate(s.file, b); err != nil {
 		slog.Warn("the token file was not written", "file", s.file, "err", err)
 	}
@@ -77,6 +78,10 @@ func writePrivate(path string, b []byte) error {
 		return err
 	}
 	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
 	}

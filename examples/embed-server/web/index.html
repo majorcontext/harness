@@ -131,9 +131,11 @@ await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
 // session/new and session/load fail; the page tries again when the tab gets
 // the focus back. The id of the session stays in localStorage, and
 // session/load replays its conversation into the scrollback.
+// A tab on a memory store neither reads nor writes the id: it would point the
+// tab that holds the store at a session that the store does not have.
 const saved = {
-  get: () => { try { return localStorage.getItem("harness.session"); } catch { return null; } },
-  set: (id) => { try { id ? localStorage.setItem("harness.session", id) : localStorage.removeItem("harness.session"); } catch {} },
+  get: () => { if (!persisted) return null; try { return localStorage.getItem("harness.session"); } catch { return null; } },
+  set: (id) => { if (!persisted) return; try { id ? localStorage.setItem("harness.session", id) : localStorage.removeItem("harness.session"); } catch {} },
 };
 let sessionId = null;
 let notice = null;
@@ -175,7 +177,7 @@ const fail = (err) => {
   status(err?.data?.code === "login_required" ? "no chatgpt login" : "error", "warn");
 };
 
-const open = async () => {
+const doOpen = async () => {
   if (sessionId) return;
   notice?.remove();
   notice = null;
@@ -190,7 +192,7 @@ const open = async () => {
       sessionId = id;
     } else {
       while (log.childElementCount > mark) log.lastElementChild.remove();
-      if (loaded.error?.data?.code === "login_required") return fail(loaded.error);
+      if (loaded.error?.code !== -32002) return fail(loaded.error);
       saved.set(null);
     }
   }
@@ -207,8 +209,12 @@ const open = async () => {
   input.focus();
 };
 
+// One open at a time: focus events and the new-session key share it.
+let opening = null;
+const open = () => (opening ??= doOpen().finally(() => (opening = null)));
+
 $("new").addEventListener("click", async () => {
-  if (running) return;
+  if (running || opening) return;
   saved.set(null);
   sessionId = null;
   usage = "";
@@ -248,12 +254,13 @@ const send = async () => {
 
   // ACP reports the context size, not the tokens of a turn: up is the context
   // that the newest model call sent, down is estimated from the streamed text.
-  const startUsed = contextUsed;
+  usage = "";
+  let measured = false;
   const t0 = performance.now();
   const kfmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   const counts = () => {
     const secs = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
-    const up = contextUsed > startUsed ? `↑ ${kfmt(contextUsed)}` : "↑ –";
+    const up = measured ? `↑ ${kfmt(contextUsed)}` : "↑ –";
     return [secs, up, `↓ ~${kfmt(Math.round(streamed / 4))}`];
   };
   const tick = () => {
@@ -265,6 +272,7 @@ const send = async () => {
 
   onUpdate = (u) =>
     follow(() => {
+      if (u.sessionUpdate === "usage_update") measured = true;
       if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {
         reply.textContent += u.content.text;
         streamed += u.content.text.length;
@@ -292,7 +300,6 @@ const send = async () => {
   running = false;
   input.disabled = false;
   input.focus();
-  window.__done = true;
 };
 
 $("form").addEventListener("submit", (e) => {

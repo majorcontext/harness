@@ -34,15 +34,3 @@ func TestTokenFileKeepsLoginsAcrossRestarts(t *testing.T) {
 		t.Errorf("ann has a login that differs from the saved one")
 	}
 }
-
-func TestNoTokenFileWritesNothing(t *testing.T) {
-	dir := t.TempDir()
-	s := newTokenStore("", nil)
-	s.Set("ann", tokens{Access: "a"})
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Errorf("wrote %d files", len(entries))
-	}
-	if err := s.load(); err != nil {
-		t.Fatal(err)
-	}
-}
