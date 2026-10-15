@@ -124,10 +124,69 @@ type hostedText struct {
 	}
 }
 
+// hostedCall calls a tool as the CLI does. A result that breaks the MCP
+// CallToolResult schema is an error result with the text of the CLI, which
+// reports such a result in place of the tool output.
 func hostedCall(name string, args obj, id string) hostedText {
 	var out hostedText
-	_ = json.Unmarshal([]byte(hostedRPC("tools/call", obj{"name": name, "arguments": args, "_meta": obj{toolUseMeta: id}})), &out)
+	body := hostedRPC("tools/call", obj{"name": name, "arguments": args, "_meta": obj{toolUseMeta: id}})
+	_ = json.Unmarshal([]byte(body), &out)
+	var msg struct{ Result json.RawMessage }
+	if json.Unmarshal([]byte(body), &msg) == nil && msg.Result != nil {
+		if err := checkCallResult(msg.Result); err != nil {
+			bad := hostedText{}
+			bad.Result.Content = []struct{ Text string }{{fmt.Sprintf(
+				"MCP server %q returned a malformed result that failed schema validation: Invalid result for tools/call: %v", "harness", err)}}
+			bad.Result.IsError = true
+			return bad
+		}
+	}
 	return out
+}
+
+// checkCallResult checks a tools/call result against the MCP schema: each
+// content item has the string fields that its type requires.
+func checkCallResult(raw json.RawMessage) error {
+	var res struct {
+		Content []map[string]json.RawMessage `json:"content"`
+		IsError json.RawMessage              `json:"isError"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return err
+	}
+	if res.IsError != nil && string(res.IsError) != "true" && string(res.IsError) != "false" {
+		return fmt.Errorf("path [\"isError\"]: expected boolean, received %s", res.IsError)
+	}
+	if res.Content == nil {
+		return fmt.Errorf("path [\"content\"]: expected array, received undefined")
+	}
+	required := map[string][]string{"text": {"text"}, "image": {"data", "mimeType"}, "audio": {"data", "mimeType"},
+		"resource_link": {"uri", "name"}}
+	isString := func(m map[string]json.RawMessage, k string) bool {
+		var s string
+		return m[k] != nil && string(m[k]) != "null" && json.Unmarshal(m[k], &s) == nil
+	}
+	for i, item := range res.Content {
+		var typ string
+		_ = json.Unmarshal(item["type"], &typ)
+		if typ == "resource" {
+			var r map[string]json.RawMessage
+			if json.Unmarshal(item["resource"], &r) != nil || !isString(r, "uri") || !isString(r, "text") && !isString(r, "blob") {
+				return fmt.Errorf("path [\"content\", %d, \"resource\"]: expected a resource with uri and text or blob", i)
+			}
+			continue
+		}
+		fields, ok := required[typ]
+		if !ok {
+			return fmt.Errorf("path [\"content\", %d, \"type\"]: unknown content type %q", i, typ)
+		}
+		for _, k := range fields {
+			if !isString(item, k) {
+				return fmt.Errorf("invalid_union ... path [\"%s\"]: expected string, received undefined (content item %d of type %s)", k, i, typ)
+			}
+		}
+	}
+	return nil
 }
 
 func (h hostedText) text() string {
