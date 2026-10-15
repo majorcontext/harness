@@ -55,7 +55,7 @@ const (
 // toolNamesOf returns the tool-name segment for the tools that the turn offers:
 // WebFetch maps to web_fetch only when the turn offers that tool.
 func toolNamesOf(tools []protocol.ToolSpec) string {
-	if slices.ContainsFunc(tools, func(t protocol.ToolSpec) bool { return t.Name == "web_fetch" }) {
+	if slices.ContainsFunc(tools, func(t protocol.ToolSpec) bool { return t.Name == turn.WebFetchTool }) {
 		return toolNames + mapWebFetch + readSkillDoc
 	}
 	return toolNames + noWebFetch + readSkillDoc

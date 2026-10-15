@@ -76,8 +76,8 @@ type Config struct {
 	// ModelTool false disables the `model` session tool. nil leaves it
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
-	// Web opts in to the web tools of a session with a WorkDir. A nil value
-	// leaves both off. A project value overrides the user value field by field.
+	// Web opts in to the web tools of a session with a WorkDir. Fetch is off
+	// when unset. A project Fetch overrides the user Fetch; an unset one inherits.
 	Web WebSpec `json:"web,omitzero"`
 	// Plugins lists the plugin processes to wire into every session's
 	// turn hooks. Order matters: sync hooks chain across plugins in this

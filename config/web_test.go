@@ -13,9 +13,11 @@ func TestWebSpec(t *testing.T) {
 		wantErr             string
 	}{
 		{name: "absent is off"},
+		{name: "project turns it on", project: `{"web":{"fetch":true}}`, wantFetch: true},
 		{name: "user on", user: `{"web":{"fetch":true}}`, wantFetch: true},
 		{name: "project false overrides user true", user: `{"web":{"fetch":true}}`, project: `{"web":{"fetch":false}}`},
 		{name: "an unset project field inherits", user: `{"web":{"fetch":true}}`, project: `{"web":{}}`, wantFetch: true},
+		{name: "a non-object is rejected", user: `{"web":true}`, wantErr: "web"},
 		{name: "an unknown key is rejected", user: `{"web":{"search":true}}`, wantErr: "search"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -27,9 +27,6 @@ type sessionTool interface {
 	Bind(id string, child bool, depth int) turn.Tool
 }
 
-// webToolName is the name of the web_fetch tool.
-const webToolName = "web_fetch"
-
 // known reports whether a session at model can have a tool named name: a
 // tool of Options.Tools, a started plugin tool, an MCP tool, a built-in tool
 // of the WorkDir that a harness loop runs, the history tool, or a built-in
@@ -52,7 +49,7 @@ func (r *Runtime) owns(name string) bool {
 // builtin reports whether name is a built-in tool of the WorkDir.
 func (r *Runtime) builtin(name string) bool {
 	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == selftool.SessionInfoName ||
-		r.web != nil && name == webToolName)
+		r.web != nil && name == turn.WebFetchTool)
 }
 
 // shadowable reports whether name is a file, search, or shell tool of the

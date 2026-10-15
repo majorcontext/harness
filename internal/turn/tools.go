@@ -16,6 +16,9 @@ const bannerKind = "engine"
 // the conversation that its own session lacks.
 const HistoryTool = "get_conversation_history"
 
+// WebFetchTool is the name of the web_fetch tool.
+const WebFetchTool = "web_fetch"
+
 // Toolset is the tools of one model call.
 type Toolset struct {
 	// Tools are described to the model.

@@ -27,7 +27,7 @@ import (
 )
 
 // Name is the name of the tool.
-const Name = "web_fetch"
+const Name = turn.WebFetchTool
 
 const (
 	timeout       = 30 * time.Second
