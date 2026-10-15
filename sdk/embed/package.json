@@ -13,6 +13,10 @@
       "types": "./src/shell.d.ts",
       "default": "./src/shell.mjs"
     },
+    "./webmcp": {
+      "types": "./src/webmcp.d.ts",
+      "default": "./src/webmcp.mjs"
+    },
     "./zlib-stub": {
       "default": "./src/zlib-stub.mjs"
     }

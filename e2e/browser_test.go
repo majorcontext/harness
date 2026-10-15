@@ -588,6 +588,7 @@ func TestBrowserRows(t *testing.T) {
 	k.storeRows()
 	k.fsRows()
 	k.shellRows()
+	k.webmcpRows()
 	specs := make([]map[string]any, len(k.rows))
 	for i, r := range k.rows {
 		specs[i] = r.spec

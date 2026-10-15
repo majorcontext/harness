@@ -102,7 +102,7 @@ async function runRow(browser, row) {
 
 let browser;
 try {
-  browser = await chromium.launch({ args: ["--enable-precise-memory-info"] });
+  browser = await chromium.launch({ args: ["--enable-precise-memory-info", "--enable-features=CDPScreenshotNewSurface,WebMCPTesting"] });
 } catch (err) {
   console.error(String(err.message));
   process.exit(/Executable doesn't exist/.test(err.message) ? 3 : 1);
