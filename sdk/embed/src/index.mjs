@@ -13,7 +13,7 @@ export { defaultBuiltinTools, subprocess, wasm };
  * is the allowed tool names of every session; absent, it is the default set of
  * the transport (defaultBuiltinTools for wasm, none for subprocess) and the
  * names of the page tools. fetch is an optional page fetch that carries the
- * model requests. proxy is {baseURL, headers, providerBaseURLs} of a same-origin proxy. store is
+ * model requests. proxy is {baseURL, headers, providers} of a same-origin proxy and of the servers that hold the credentials. store is
  * {persist, dir}: under Node, dir is an exclusive directory; in the browser,
  * persist keeps the sessions in the origin private file system below dir
  * (default /persist/sessions) under a lock that one page of the origin holds,

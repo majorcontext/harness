@@ -48,8 +48,6 @@ type Config struct {
 type RuntimeOptions struct {
 	// AskUserQuestion says that the client answers the question of a session.
 	AskUserQuestion bool
-	// Login says that the connection offers a login to its client.
-	Login bool
 }
 
 // Runtimes gives the adapter the Runtime of a work directory. The host builds

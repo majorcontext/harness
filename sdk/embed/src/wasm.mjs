@@ -22,6 +22,16 @@ function absolute(value) {
   return value;
 }
 
+// providerURLs resolves the baseURL and loginURL of proxy.providers[name] against the page. The sign-in URL of an
+// elicitation must be absolute.
+function providerURLs(name, p) {
+  if (p === null || typeof p !== "object") throw new Error(`proxy.providers.${name} must be an object`);
+  const out = {};
+  if (p.baseURL !== undefined) out.baseURL = absolute(p.baseURL);
+  if (p.loginURL !== undefined) out.loginURL = absolute(p.loginURL);
+  return out;
+}
+
 /**
  * defaultBuiltinTools is the tool set of a session when createHarness gets no
  * builtinTools: the file and search tools, read_tool_result, and session_info.
@@ -63,9 +73,8 @@ async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, bu
     proxy: {
       headers: proxy.headers,
       baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL),
-      providerBaseURLs: proxy.providerBaseURLs && Object.fromEntries(Object.entries(proxy.providerBaseURLs).map(([name, base]) => [name, absolute(base)])),
+      providers: proxy.providers && Object.fromEntries(Object.entries(proxy.providers).map(([name, p]) => [name, providerURLs(name, p)])),
     },
-    pageOrigin: typeof globalThis.location?.origin === "string" ? globalThis.location.origin : undefined,
     storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
     persist: !isNode && Boolean(store.persist),
     tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),

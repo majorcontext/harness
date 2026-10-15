@@ -44,12 +44,6 @@ func (o *LoginOptions) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}
 }
 
-// Client returns a client over rt that follows no redirect and gives up after 30 s. A host that has its own
-// transport, such as a WebAssembly host, sends the requests to the issuer through it.
-func Client(rt http.RoundTripper) *http.Client {
-	return &http.Client{Transport: rt, Timeout: 30 * time.Second, CheckRedirect: noRedirect}
-}
-
 // DeviceCode is a device sign-in that the issuer started and the user has not finished.
 type DeviceCode struct {
 	// UserCode is the one-time code that the user enters.

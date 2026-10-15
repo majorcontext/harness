@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
@@ -257,6 +258,21 @@ func TestContractCLILoginDeviceCodeWaitsUntilTheCodeIsEntered(t *testing.T) {
 	}
 	if issuer.Polls() != 2 || issuer.Exchanges() != 1 {
 		t.Errorf("polls %d, exchanges %d, want 2 polls (one pending, one grant) before the 1 exchange", issuer.Polls(), issuer.Exchanges())
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("login stored no file: %v", err)
+	}
+}
+
+func TestContractCLILoginDeviceCodeWaitsLongerAfterSlowDown(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h, issuer, file := loginHost(t, harnesstest.CodexIssuerOptions{SlowDown: 1})
+	if _, errOut, code := h.run("login", "codex", "--device"); code != 0 {
+		t.Fatalf("login = %d\n%s", code, errOut)
+	}
+	if gaps := issuer.PollGaps(); len(gaps) == 0 || gaps[0] < 5*time.Second {
+		t.Errorf("poll gaps = %v, want the first gap to be at least 5s after slow_down", gaps)
 	}
 	if _, err := os.Stat(file); err != nil {
 		t.Errorf("login stored no file: %v", err)

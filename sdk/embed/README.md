@@ -8,7 +8,7 @@ import { createHarness, wasm } from "@majorcontext/harness-embed";
 const h = await createHarness({
   transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
   config,                 // config.Config JSON; no keys
-  proxy: { baseURL: "/model-proxy", headers: {}, providerBaseURLs: {} },
+  proxy: { baseURL: "/model-proxy", headers: {}, providers: {} },
   fetch,                  // optional: a page fetch that carries the model requests
   tools: [{ name, description, schema, run: async (input, { signal }) => "text" }],
   builtinTools,           // allowed tool names; absent: defaultBuiltinTools and the names of tools. A list you pass is used as it is: page tools are not added
@@ -23,7 +23,7 @@ await h.close();
 - `wasm_exec.js` is the file of the same Go version as the module (`$(go env GOROOT)/lib/wasm/wasm_exec.js`).
 - Node 24 can deadlock in `process.exit` when V8 compiles baseline code (Sparkplug) on worker threads at the same time. The Node host of the harness (`cmd/harness-wasm/node/host.mjs`) turns this off with `v8.setFlagsFromString("--no-concurrent-sparkplug")`. If you build your own Node host for the module, set the same flag, either that way or with `node --no-concurrent-sparkplug`. `NODE_OPTIONS` cannot carry this flag: Node refuses it there.
 - `proxy.baseURL` sends all model traffic to a same-origin proxy: the module sets `base_url` of the native `anthropic` and `openai` providers and of each `config.providers` entry that sets none. The module fills `base_url` before it validates the config, so an `openai` entry that has no `base_url` is valid. Put no key in the page: the proxy holds it.
-- `proxy.providerBaseURLs` maps a provider name to the `base_url` of its entry, also of a native provider: `{ codex: "/codex" }` sends the ChatGPT backend traffic to that path (see "Log in with ChatGPT"). It is a pass-through path and holds no credential. In a browser, a request of a provider that uses the ChatGPT login to another origin than the page fails before it is sent, whatever option set the URL, because the token would go there. The `fetch` option carries model requests only: the sign-in and the refresh go to the ChatGPT issuer directly, and neither follows a redirect. A `fetch` callback must pass `init.redirect` on to the network: when it follows a redirect itself, the module cannot stop the request that the redirect makes.
+- `proxy.providers` maps a provider name to `{ baseURL, loginURL }`, which set `base_url` and `login_url` of its entry: `{ codex: { baseURL: "/codex", loginURL: "/settings/codex" } }` (see "Log in through your server"). Both fields are optional, except that a native provider such as `codex` that `config` does not define needs `baseURL`; the module then also sets `auth: "injected"`. Relative URLs resolve against the page. The module follows no redirect of a model request, so a server answers `401`, not a redirect to a sign-in page. A `fetch` callback must pass `init.redirect` on to the network: when it follows a redirect itself, the module cannot stop the request that the redirect makes.
 
 ## Files and a shell in the browser
 
@@ -59,20 +59,36 @@ The default `load` is `import("just-bash/browser")`. That build has dependencies
 
 Every page tool gets `fs`, and `fs` can write `/persist`, the session store of the harness. Give `fs` only to code that you trust, and do not pass it to code that takes input from the model. The shell tool mounts `/work` and `/tmp` only.
 
-## Log in with ChatGPT
+## Log in through your server
 
-The module signs in with the device code flow, and keeps the ChatGPT token in its store, so the login survives a reload. This holds the token of the user in the page: any script of the page can read it. Use it only when the page is the user's own, as in a demo. An application with many users keeps the proxy of the next section, which holds the credential on the server.
+The module holds no model credential, and signs in no user itself. A server holds the credential of each user and adds it to the request. The page marks a provider as `injected`, and the module sends no `Authorization`, `x-api-key`, `ChatGPT-Account-ID`, or `originator`, and no user identifier:
 
-1. Start the harness with a persistent store (`store: { persist: true }` in a browser, `store: { dir }` under Node). A store in memory has no login file, and the module then offers no login.
-2. Use an ACP client that advertises `clientCapabilities.elicitation.url` (`{}`). Without it the module offers no login. The module offers the method `chatgpt` in `authMethods`.
-3. Call `authenticate` with `{ methodId: "chatgpt" }`. The module sends `elicitation/create` with `mode: "url"`, `requestId` of the `authenticate` request, a `url` (the ChatGPT device page with the code filled in), and a `message` that names the code. Show the URL to the user and answer `{ action: "accept" }` when the user opens it, or `decline` or `cancel` to stop. The module polls the issuer, stores the login under `<store dir>/auth/codex.json` (in a browser, `/persist/sessions/auth/codex.json` by default), sends `elicitation/complete`, and answers `{}`. `$/cancel_request` for the `authenticate` stops the sign-in.
-4. Use a model such as `codex/gpt-5.6-sol`. `codex/*` models are listed when the module offers the login or a login file exists.
+```js
+const h = await createHarness({
+  transport: wasm({ module, wasmExec, worker: true }),
+  config: {
+    model: "codex/gpt-5.6-sol",
+    providers: { codex: { type: "openai", auth: "injected", models_from: "chatgpt", responses_path: "/responses",
+      omit_response_params: ["max_output_tokens", "temperature", "top_p", "metadata"], sanitize_tool_schemas: true } },
+  },
+  proxy: { providers: { codex: { baseURL: "/codex", loginURL: "/settings/codex" } } },
+});
+```
 
-`auth.openai.com` allows cross-origin calls, so the sign-in and the token refresh run in the browser. `https://chatgpt.com/backend-api/codex` does not, so a browser needs one pass-through path on the server of the page. Set `proxy: { providerBaseURLs: { codex: "/codex" } }`, and forward `/codex/<path>` to `https://chatgpt.com/backend-api/codex/<path>` unchanged: same method, body, and headers, a streamed response, and no credential added. The module sends `Authorization`, `ChatGPT-Account-ID`, and `originator` itself. Keep the route off the open internet for a multi-user application. Under Node there is no CORS, so the module calls the backend directly and needs no option.
+Without a `providers.codex` entry in `config`, `proxy.providers.codex` starts from the native `codex` entry and sets `auth: "injected"` too. Put the base URL on a path of the page origin: `fetch` then sends the cookies of the origin, and the server knows the user from its own session.
+
+The server contract:
+
+1. A request with no usable credential for the caller gets `401`, never a redirect to a sign-in page. The module maps `401` to the error `login_required`.
+2. `GET <base_url>/models` is the status probe of the entry, authorized exactly like a model call: the same session and no cache of its answer. A `200` is signed in and a `401` is signed out. A server that has no probe answers `404`, and only the `401` of a turn then ends the turn as `login_required`.
+3. The page at `loginURL` runs the sign-in on the server, binds it to the session of the user, and defends against cross-site requests on its start and finish routes. It never returns a token to the page.
+4. The server defends against cross-site requests to the model path: `SameSite` cookies, a check of `Sec-Fetch-Site`, or a custom header that the page sets with `proxy.headers`.
+
+For the user, use an ACP client that advertises `clientCapabilities.elicitation.url` (`{}`). The module then offers the method `injected-codex` in `authMethods`. `authenticate` with `{ methodId: "injected-codex" }` probes first and answers `{}` when the server accepts. Otherwise the module sends `elicitation/create` with `mode: "url"`, `requestId` of the `authenticate` request, the `loginURL` as `url`, and a `message`. Show the URL, and answer `{ action: "accept" }` when the user opens it, or `decline` or `cancel` to stop. The module then probes until the server accepts (for at most 10 minutes), sends `elicitation/complete`, and answers `{}`. `$/cancel_request` for the `authenticate` stops the sign-in. The module offers no ChatGPT method of its own and reads no login file.
 
 ## Reach a model
 
-Use a same-origin proxy. It serves the module and `wasm_exec.js`, and it forwards `/model-proxy/<path>` to the model backend. Same origin and CORS are not authorization: any HTTP client can call the proxy and spend the credential. The proxy must authenticate and authorize each request with the session of your application, before it removes page credentials such as the session cookie. It must also apply abuse controls: rate limits and a list of allowed paths. Then it removes `Origin`, `Referer`, `Cookie`, `Sec-*`, and any `Authorization` or `x-api-key` header of the page, and then adds the authentication headers of the backend. The page sets `proxy: { baseURL: "/model-proxy" }` and holds no credential. For a ChatGPT Codex backend, the config is `providers: { codex: { type: "openai", responses_path: "/responses" } }`, and the proxy forwards `/model-proxy/responses` and `/model-proxy/models`, with `Authorization`, `ChatGPT-Account-ID`, and `originator` set on the server. Use `httputil.ReverseProxy` with `FlushInterval: -1`, so the stream is not buffered.
+Use a same-origin proxy. It serves the module and `wasm_exec.js`, and it forwards `/model-proxy/<path>` to the model backend. Same origin and CORS are not authorization: any HTTP client can call the proxy and spend the credential. The proxy must authenticate and authorize each request with the session of your application, before it removes page credentials such as the session cookie. It must also apply abuse controls: rate limits and a list of allowed paths. Then it removes `Origin`, `Referer`, `Cookie`, `Sec-*`, and any `Authorization` or `x-api-key` header of the page, and then adds the authentication headers of the backend. The page sets `proxy: { baseURL: "/model-proxy" }` and holds no credential. For a provider whose credential belongs to each user, use `auth: "injected"` (see "Log in through your server"): the server then adds the credential of the user. Use `httputil.ReverseProxy` with `FlushInterval: -1`, so the stream is not buffered.
 
 Direct Anthropic access is for demonstration only. Anyone who loads the page can read the key. Set `extra_headers` on the `anthropic` entry. The first header makes Anthropic answer the preflight of the browser. The second carries the key, because `createHarness` gives the module no environment:
 

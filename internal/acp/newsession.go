@@ -131,7 +131,7 @@ func (a *agent) isClosed() bool {
 
 // runtimeOptions are the choices of the client for the runtimes of the connection.
 func (a *agent) runtimeOptions() RuntimeOptions {
-	return RuntimeOptions{AskUserQuestion: a.elicitation.Load(), Login: len(a.methods()) > 0}
+	return RuntimeOptions{AskUserQuestion: a.elicitation.Load()}
 }
 
 // elicitFunc returns how a held session sends a request to the client, or nil when the client takes no elicitation.

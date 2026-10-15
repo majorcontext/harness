@@ -28,8 +28,6 @@ type acpEnv struct {
 	defaultDir string
 	// login is the scripted login of the row. Nil: the host offers none.
 	login *acpLoginRun
-	// device is the scripted issuer of the device code login. Nil: none.
-	device *deviceRun
 	// logins and clock are the injected login state of the in-process host, and its clock. The binary host has its own.
 	logins *injectedauth.Logins
 	clock  *fakeClock
@@ -39,7 +37,7 @@ type acpEnv struct {
 	jsTool bool
 	// memoryStore marks a host whose sessions the test cannot read: the browser host keeps them in the Worker.
 	memoryStore bool
-	// wasm marks a wasm host, which offers a login only to a client with elicitation.url.
+	// wasm marks a wasm host, which offers a login only for an injected entry.
 	wasm bool
 }
 

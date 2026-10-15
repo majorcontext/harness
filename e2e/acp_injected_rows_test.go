@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"sync"
@@ -34,6 +35,32 @@ func (c *fakeClock) Advance(d time.Duration) {
 // acpInjectedAdvance moves the clock of the injected logins.
 func acpInjectedAdvance(d time.Duration) acpCheck {
 	return func(t *testing.T, c *acpConn) { c.env.clock.Advance(d) }
+}
+
+// declineCite is the sentence of the spec on a declined or cancelled elicitation.
+const declineCite = "`decline` ends the flow with `-32603`, \"The sign-in was declined\", and `cancel` ends it with `-32800`."
+
+// acpCompletionFirst checks that the agent sent elicitation/complete before the answer of authenticate id.
+func acpCompletionFirst(id string) acpCheck {
+	return func(t *testing.T, c *acpConn) {
+		t.Helper()
+		complete, response := -1, -1
+		for i, f := range c.wire {
+			var m map[string]any
+			if f.Dir != "agent" || json.Unmarshal(f.Frame, &m) != nil {
+				continue
+			}
+			if m["method"] == "elicitation/complete" && complete < 0 {
+				complete = i
+			}
+			if m["id"] == float64(c.pending[id]) && m["result"] != nil {
+				response = i
+			}
+		}
+		if complete < 0 || response < complete {
+			t.Errorf("the completion is at frame %d and the authenticate answer at %d, want the completion first", complete, response)
+		}
+	}
 }
 
 const injectedLoginURL = "https://console.example/settings/codex"
@@ -171,7 +198,7 @@ var acpInjectedScenarios = []acpScenario{
 			acpAnswerElicitation{as: "login", action: "accept"},
 			acpAuthDone{id: "auth"},
 			acpInjectedComplete{as: "login"},
-			acpCheck(acpDeviceCompletionFirst("auth")),
+			acpCheck(acpCompletionFirst("auth")),
 		},
 	},
 	{

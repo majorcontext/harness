@@ -29,9 +29,6 @@
         "jsonrpc": "2.0",
         "result": {
           "agentCapabilities": {
-            "auth": {
-              "logout": {}
-            },
             "loadSession": true,
             "mcpCapabilities": {
               "http": false,
@@ -52,13 +49,7 @@
             "title": "Harness",
             "version": "\u003cversion\u003e"
           },
-          "authMethods": [
-            {
-              "description": "Open your browser and sign in with your ChatGPT subscription.",
-              "id": "chatgpt",
-              "name": "Log in with ChatGPT"
-            }
-          ],
+          "authMethods": [],
           "protocolVersion": 1
         }
       }
@@ -77,36 +68,37 @@
     {
       "dir": "agent",
       "frame": {
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "elicitation/create",
-        "params": {
-          "elicitationId": "\u003celicitation:login\u003e",
-          "message": "Sign in with ChatGPT. Open the link and, if the page asks, enter the code ABCD-1234. Continue only if you started this sign-in.",
-          "mode": "url",
-          "requestId": 2,
-          "url": "\u003cissuer\u003e/codex/device?user_code=ABCD-1234"
-        }
+        "error": {
+          "code": -32601,
+          "data": {
+            "method": "authenticate"
+          },
+          "message": "Method not found"
+        },
+        "id": 2,
+        "jsonrpc": "2.0"
       }
     },
     {
       "dir": "client",
       "frame": {
-        "id": 1,
+        "id": 3,
         "jsonrpc": "2.0",
-        "result": {
-          "action": "cancel"
-        }
+        "method": "logout",
+        "params": {}
       }
     },
     {
       "dir": "agent",
       "frame": {
         "error": {
-          "code": -32800,
-          "message": "Request cancelled"
+          "code": -32601,
+          "data": {
+            "method": "logout"
+          },
+          "message": "Method not found"
         },
-        "id": 2,
+        "id": 3,
         "jsonrpc": "2.0"
       }
     }

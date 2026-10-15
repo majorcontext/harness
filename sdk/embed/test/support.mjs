@@ -113,38 +113,18 @@ export function bodyText(request) {
   return JSON.stringify(request.body);
 }
 
-const segment = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-
-/** A ChatGPT access token (an unsigned JWT) that ends in lifetimeSeconds from now. */
-export function chatgptToken(lifetimeSeconds) {
-  return [segment({ alg: "none" }), segment({ exp: Math.floor(Date.now() / 1000) + lifetimeSeconds, "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }), "sig"].join(".");
-}
-
-/** Writes the login file of a store directory. */
-export function seedLogin(dir, token) {
-  fs.mkdirSync(path.join(dir, "auth"), { mode: 0o700, recursive: true });
-  fs.writeFileSync(path.join(dir, "auth", "codex.json"), JSON.stringify({ access_token: token, refresh_token: "refresh-1", account_id: "acct-1" }), { mode: 0o600 });
-}
-
 /**
- * Starts a scripted ChatGPT issuer: the device code endpoints and the token endpoint. With redirectTo, every
- * request answers 307 to that URL. requests lists {method, path} of each request.
+ * Starts a server that answers every request with one status: 307 to redirectTo, or status (default 404) with
+ * a WWW-Authenticate header. requests lists {method, path} of each request.
  */
-export async function fakeIssuer({ redirectTo } = {}) {
+export async function fakeServer({ redirectTo, status = 404 } = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
     requests.push({ method: req.method, path: req.url });
     req.resume();
     req.on("end", () => {
-      if (redirectTo) {
-        res.writeHead(307, { location: redirectTo + req.url }).end();
-        return;
-      }
-      const json = (body) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
-      if (req.url === "/api/accounts/deviceauth/usercode") json({ device_auth_id: "d1", user_code: "ABCD-1234", interval: "1" });
-      else if (req.url === "/api/accounts/deviceauth/token") json({ authorization_code: "code-1", code_challenge: "c", code_verifier: "v" });
-      else if (req.url === "/oauth/token") json({ access_token: chatgptToken(3600), refresh_token: "refresh-2", id_token: chatgptToken(3600) });
-      else res.writeHead(404).end();
+      if (redirectTo) res.writeHead(307, { location: redirectTo + req.url }).end();
+      else res.writeHead(status, { "www-authenticate": 'Bearer realm="harness"' }).end();
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
