@@ -657,6 +657,7 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_login_malformed_refresh_answer_fails_the_turn_with_guidance":                  sameAsServe(),
 	"codex_http_5xx_is_retried_by_the_request":                                           sameAsServe(),
 	"compact_summary_is_retried_after_a_refusal":                                         sameAsServe(),
+	"retried_call_with_a_tool_call_alone_completes_under_a_new_item":                     sameAsServe(),
 	"max_tokens_cut_response_is_retried":                                                 sameAsServe(),
 	"stream_retries_stop_after_stream_max_retries":                                       reGolden(specView, specRetryable),
 	"settings_change_to_claude_code_mid_turn_fails_the_turn":                             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),

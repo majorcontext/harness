@@ -171,8 +171,8 @@ type Sink interface {
 	Item(m protocol.LogMessage) error
 	// Delta streams a piece of the item that the backend calls itemID.
 	Delta(itemID string, d Delta)
-	// Discard tells subscribers to remove the live item that the deltas of
-	// the backend item itemID built.
+	// Discard tells subscribers to remove the live item. A sink keeps one
+	// live item and does not use itemID.
 	Discard(itemID string)
 	// Alive reports model output that is not a delta yet, such as tool
 	// arguments that still stream.
@@ -437,8 +437,8 @@ func (s *sink) Delta(_ string, d Delta) {
 	s.Turn.Delta(s.item, d)
 }
 
-// Discard removes the live item that the deltas of the backend item itemID
-// built, and starts no new item. Nothing happens while no item is live.
+// Discard removes the live item and starts no new one. Nothing happens while
+// no item is live.
 func (s *sink) Discard(string) {
 	if s.item != "" {
 		s.Turn.Discard(s.item)
