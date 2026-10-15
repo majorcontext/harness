@@ -625,6 +625,23 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}}, expectSystem{req: 4, sameAs: 1}),
 		},
+		{
+			name:  "mcp_notice_and_history_prefix_stay_the_same_after_a_restart",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true}),
+			model: []harnesstest.Step{
+				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "1"}},
+				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "2"}},
+				{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "3"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				restart{},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectBannerStable{n: 2, at: 0},
+			},
+		},
 		{name: "mcp_notice_then_compaction_keeps_a_call_paired", setup: pinSetup, model: pinModel, actions: pinActions},
 		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
 	}...))

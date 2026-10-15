@@ -107,10 +107,19 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 	return h.model, h.set
 }
 
-// Pin pins ns on the actor, which owns the pins, and returns every pin.
+// Pin pins ns on the actor, which owns the pins, and returns every pin. The
+// first call of a process pins a status that has no place after the banner, as
+// the log alone fixes that place, so a new process pins the status of a server
+// that is down where the process before it did. A later change follows the
+// history of its call.
 func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 	pins, _ := call(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
+		first := !t.a.pinned
+		t.a.pinned = true
 		for _, n := range ns {
+			if first && n.At == 0 {
+				n.At = t.a.state.BannerAt()
+			}
 			t.a.pins.Set(n.Kind, n.Text, n.Cleared, cmp.Or(n.At, at))
 		}
 		reply(t.a.pins.Pinned(), nil)
