@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -190,5 +193,54 @@ func TestRunGivesAfterTheErrorResultOfACallThatWasCanceledAfterBefore(t *testing
 	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, hookedSource{noopTool{}, hooks}, &recorder{}, turn.Limits{})
 	if len(hooks.after) != 1 || !hooks.after[0].IsError || hooks.after[0].Text != context.Canceled.Error() {
 		t.Errorf("After saw %+v, want one error result with the cancel cause", hooks.after)
+	}
+}
+
+type joinHooks struct {
+	active, overlaps atomic.Int32
+}
+
+func (*joinHooks) Before(_ context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {
+	return c, ""
+}
+
+func (*joinHooks) After(_ context.Context, _ protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	return r
+}
+
+func (h *joinHooks) Join(_ context.Context, _ protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	if h.active.Add(1) > 1 {
+		h.overlaps.Add(1)
+	}
+	for range 50 {
+		runtime.Gosched()
+	}
+	h.active.Add(-1)
+	return r
+}
+
+type loopOwner struct{ model }
+
+func (*loopOwner) Capabilities(string) turn.Capabilities { return turn.Capabilities{OwnsLoop: true} }
+
+func (*loopOwner) Run(ctx context.Context, req turn.Request, _ turn.Sink) error {
+	var wg sync.WaitGroup
+	for i := range 100 {
+		wg.Add(2)
+		go func() { defer wg.Done(); req.Call(ctx, protocol.ToolCall{ID: fmt.Sprint("n", i), Name: "noop"}) }()
+		go func() {
+			defer wg.Done()
+			req.Ask(ctx, protocol.ToolCall{ID: fmt.Sprint("q", i), Name: turn.AskTool, Arguments: json.RawMessage(`{}`)})
+		}()
+	}
+	wg.Wait()
+	return nil
+}
+
+func TestRunJoinsTheResultsOfCallAndAskOneAtATime(t *testing.T) {
+	hooks := &joinHooks{}
+	turn.Run(context.Background(), context.Background(), &loopOwner{}, turn.Request{Model: "test/model"}, hookedSource{noopTool{}, hooks}, &recorder{}, turn.Limits{})
+	if n := hooks.overlaps.Load(); n != 0 {
+		t.Errorf("Join ran %d times beside another Join, want one at a time", n)
 	}
 }
