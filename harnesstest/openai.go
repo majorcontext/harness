@@ -1,6 +1,7 @@
 package harnesstest
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,11 +46,26 @@ type OpenAIOptions struct {
 	RedirectTo string
 	// Secret, when set, is a value that no request header may hold. SawSecret reports a request that did.
 	Secret string
+	// Injected makes the server a credential-injecting server in front of the backend: it expects no credential from the
+	// client, and records the credential headers of each request in the wire events.
+	Injected *InjectedOptions
 	// OnReject runs after the server rejects a bearer token, before it answers.
 	OnReject func()
 	// Models is the catalog that GET /backend-api/codex/models serves. ModelsStatus, when set, answers that request with this HTTP status instead.
 	Models       []CodexModel
 	ModelsStatus int
+}
+
+// InjectedOptions configures the server of an entry with auth "injected".
+type InjectedOptions struct {
+	// SignedOut makes the server deny every request until SignIn.
+	SignedOut bool
+	// DenyStatus is the status of a denied request, 401 when zero.
+	DenyStatus int
+	// WeakProbe answers the model list request with 200 while signed out, as a server does that authorizes the probe by a weaker check than a model call.
+	WeakProbe bool
+	// ProbeStatus, when set, answers the model list request with this status whatever the sign-in, so a probe is unknown. SetProbeStatus changes it.
+	ProbeStatus int
 }
 
 // CodexReply is what a Step reply can ask for beyond Reply.
@@ -122,6 +138,8 @@ type WireEvent struct {
 	AccountID string `json:"chatgpt_account_id,omitempty"`
 	// Originator is the originator header of the request.
 	Originator string `json:"originator,omitempty"`
+	// CredentialHeaders holds the credential headers of the request, by lower-case name, for an Injected server.
+	CredentialHeaders map[string]string `json:"credential_headers,omitempty"`
 	// SessionHeader reports a session-id header equal to the x-client-request-id header.
 	SessionHeader bool `json:"session_header,omitempty"`
 }
@@ -134,6 +152,16 @@ func (o *OpenAI) stamp(w WireEvent, r *http.Request) WireEvent {
 	}
 	w.AccountID = r.Header.Get("chatgpt-account-id")
 	w.Originator = r.Header.Get("originator")
+	if o.opts.Injected != nil {
+		for _, name := range []string{"authorization", "x-api-key", "chatgpt-account-id", "originator"} {
+			if v := r.Header.Get(name); v != "" {
+				if w.CredentialHeaders == nil {
+					w.CredentialHeaders = map[string]string{}
+				}
+				w.CredentialHeaders[name] = v
+			}
+		}
+	}
 	id := r.Header.Get("session-id")
 	w.SessionHeader = id != "" && id == r.Header.Get("x-client-request-id")
 	return w
@@ -166,6 +194,9 @@ type OpenAI struct {
 	faults        []string
 	held          bool // a prewarm took the hold of HoldPrewarm
 
+	injectedOut  bool // guarded by wmu
+	probeStatus  int  // guarded by wmu
+	denials      int  // guarded by wmu
 	secretSeen   bool
 	rejected     map[string]int // rejected bearer tokens by transport
 	redirectHits int            // requests to RedirectTo
@@ -195,6 +226,9 @@ func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
 		callNames: map[string]string{},
 		known:     map[string]bool{},
 		Server:    newServer(steps),
+	}
+	if opts.Injected != nil {
+		o.injectedOut, o.probeStatus = opts.Injected.SignedOut, opts.Injected.ProbeStatus
 	}
 	o.srv = httptest.NewServer(http.HandlerFunc(o.handle))
 	t.Cleanup(func() { o.cleanup(t) })
@@ -261,6 +295,47 @@ func (o *OpenAI) holdPrewarm(ctx context.Context, conn *websocket.Conn) bool {
 		o.mu.Unlock()
 	}
 	return true
+}
+
+// SignIn makes an Injected server accept requests again.
+func (o *OpenAI) SignIn() {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	o.injectedOut = false
+}
+
+// SetProbeStatus changes the status that an Injected server gives the model list request. Zero: the sign-in decides.
+func (o *OpenAI) SetProbeStatus(status int) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	o.probeStatus = status
+}
+
+// Denials counts the requests that an Injected server denied for want of a sign-in.
+func (o *OpenAI) Denials() int {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.denials
+}
+
+// injectedStatus returns the status that ProbeStatus sets for a model list request, and counts the request as a denial when it does.
+func (o *OpenAI) injectedStatus(r *http.Request, peek bool) int {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	if r.URL.Path != codexModelsPath || o.probeStatus == 0 {
+		return 0
+	}
+	if !peek {
+		o.denials++
+	}
+	return o.probeStatus
+}
+
+// injectedDenies reports whether an Injected server denies r.
+func (o *OpenAI) injectedDenies(r *http.Request) bool {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return o.injectedOut && (!o.opts.Injected.WeakProbe || r.URL.Path != codexModelsPath)
 }
 
 // Rejections counts the requests that Credentials rejected, over the websocket and over SSE.
@@ -343,6 +418,17 @@ func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path != codexPath && r.URL.Path != codexModelsPath:
 		o.fault("request path %q, want %q (from %s, user agent %q)", r.URL.Path, codexPath, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusNotFound, "harnesstest: unexpected path")
+	case o.opts.Injected != nil && o.injectedStatus(r, true) != 0:
+		writeError(w, o.injectedStatus(r, false), "harnesstest: model list unavailable")
+	case o.opts.Injected != nil && o.injectedDenies(r):
+		o.wmu.Lock()
+		o.denials++
+		o.wmu.Unlock()
+		status := cmp.Or(o.opts.Injected.DenyStatus, http.StatusUnauthorized)
+		if status == http.StatusUnauthorized {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="harness"`)
+		}
+		writeError(w, status, "harnesstest: no credential for this caller")
 	case o.opts.Credentials != nil && !accepted:
 		kind := "sse"
 		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
@@ -361,7 +447,7 @@ func (o *OpenAI) handle(w http.ResponseWriter, r *http.Request) {
 	case o.opts.AccountID != "" && (r.Header.Get("chatgpt-account-id") != o.opts.AccountID || r.Header.Get("originator") == ""):
 		o.fault("request without the expected chatgpt-account-id and originator headers")
 		writeError(w, http.StatusForbidden, "harnesstest: bad account headers")
-	case token == "" || (o.opts.Credentials == nil && o.opts.APIKey != "" && token != o.opts.APIKey):
+	case o.opts.Injected == nil && (token == "" || (o.opts.Credentials == nil && o.opts.APIKey != "" && token != o.opts.APIKey)):
 		o.fault("request without the expected bearer token")
 		writeError(w, http.StatusUnauthorized, "harnesstest: bad bearer token")
 	case r.URL.Path == codexModelsPath:

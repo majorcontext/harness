@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/modelmeta"
+	"github.com/majorcontext/harness/internal/provider"
 	responses "github.com/majorcontext/harness/internal/provider/openai"
 )
 
@@ -32,6 +33,8 @@ type catalogBackend struct {
 	log    *slog.Logger
 	// credential returns the access token of the login now, or empty. It reads no network.
 	credential func() string
+	// refusedRetry, when set, is how long a refused list keeps the static list before the next call tries again, whatever credential returns.
+	refusedRetry time.Duration
 
 	mu          sync.Mutex
 	models      []modelmeta.Model
@@ -48,7 +51,7 @@ func (b *catalogBackend) Models(ctx context.Context) []modelmeta.Model {
 	case b.models != nil:
 		defer b.mu.Unlock()
 		return b.models
-	case time.Now().Before(b.retryAt), b.refused && b.credential() == b.refusedWith:
+	case !b.refused && time.Now().Before(b.retryAt), b.refused && b.credential() == b.refusedWith && (b.refusedRetry == 0 || time.Now().Before(b.retryAt)):
 		b.mu.Unlock()
 		return b.static
 	}
@@ -85,10 +88,15 @@ func (b *catalogBackend) run(done chan struct{}) {
 	switch {
 	case rejected(err):
 		b.refused, b.refusedWith = true, credential
+		if b.refusedRetry > 0 {
+			b.retryAt = time.Now().Add(b.refusedRetry)
+		}
 	case err != nil:
+		b.refused = false
 		b.retryAt = time.Now().Add(catalogRetry)
 		b.log.Warn("model list fetch failed; using the static list", "provider", b.name, "error", err.Error())
 	case len(got) == 0:
+		b.refused = false
 		b.retryAt = time.Now().Add(catalogRetry)
 		b.log.Warn("model list is empty; using the static list", "provider", b.name)
 	default:
@@ -98,7 +106,7 @@ func (b *catalogBackend) run(done chan struct{}) {
 
 // rejected reports that the login was missing or refused.
 func rejected(err error) bool {
-	if codexauth.IsLoginRequired(err) {
+	if codexauth.IsLoginRequired(err) || provider.AsLoginRequired(err) {
 		return true
 	}
 	var status *responses.ModelsStatusError

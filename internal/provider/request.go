@@ -47,6 +47,18 @@ func AsLoginRequired(err error) bool {
 // DeclaresPermanent reports whether err, or an error it wraps, declares itself permanent.
 func DeclaresPermanent(err error) bool { return declaresPermanent(err) }
 
+// PermanentCause returns the error in the chain of err that declares itself permanent, so that the text of the error
+// does not carry the request line that a transport wrapper adds. It returns err when none declares it.
+func PermanentCause(err error) error {
+	var p permanentDeclarer
+	if errors.As(err, &p) && p.Permanent() {
+		if cause, ok := p.(error); ok {
+			return cause
+		}
+	}
+	return err
+}
+
 func declaresPermanent(err error) bool {
 	var p permanentDeclarer
 	return errors.As(err, &p) && p.Permanent()
@@ -67,7 +79,7 @@ func Do(ctx context.Context, hc *http.Client, req *http.Request, retries int) (*
 		case err != nil && ctx.Err() != nil:
 			return nil, err
 		case err != nil && declaresPermanent(err):
-			return nil, MarkPermanent(err)
+			return nil, MarkPermanent(PermanentCause(err))
 		case err != nil && n > retries:
 			return nil, MarkRetryable(err, RetryableConnectionFailed)
 		case err == nil && (resp.StatusCode < 500 || n > retries || advised(resp)):

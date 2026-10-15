@@ -160,7 +160,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		newConn, _, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
 		if err != nil {
 			if req.Permanent != nil && provider.DeclaresPermanent(err) {
-				*req.Permanent = err
+				*req.Permanent = provider.PermanentCause(err)
 			}
 			cmp.Or(req.Log, slog.Default()).Debug("openai: websocket dial failed; using HTTP", "error", err)
 			p.recordFailure(entry)

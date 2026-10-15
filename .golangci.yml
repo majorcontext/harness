@@ -80,6 +80,7 @@ linters:
             - github.com/majorcontext/harness/internal/acp/acpauth
             - github.com/majorcontext/harness/internal/claudeauth
             - github.com/majorcontext/harness/internal/codexauth
+            - github.com/majorcontext/harness/internal/injectedauth
             - github.com/majorcontext/harness/internal/process
         acp-rpc-leaf:
           files:
@@ -116,6 +117,7 @@ linters:
           files:
             - $all
             - "!**/internal/backend/**"
+            - "!**/internal/injectedauth/**"
             - "!**/provider/**"
             - "!**/e2e/**"
             - "!**/examples/**"

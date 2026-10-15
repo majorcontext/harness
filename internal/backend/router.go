@@ -15,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/codexauth"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/provider"
@@ -90,9 +91,16 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
-			if rc, ok := c.(*responses.Client); ok && p.Auth == config.AuthChatGPT {
-				backends[name] = &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return codex().AccessToken() }}
-				if env.NoLogin {
+			if rc, ok := c.(*responses.Client); ok && p.ModelsFrom == config.ModelsFromChatGPT {
+				cb := &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return "" }}
+				switch e := injectedauth.Of(name, p); {
+				case p.Auth == config.AuthChatGPT:
+					cb.credential = func() string { return codex().AccessToken() }
+				case e != nil:
+					cb.credential, cb.refusedRetry = e.Generation, catalogRetry
+				}
+				backends[name] = cb
+				if env.NoLogin && p.Auth == config.AuthChatGPT {
 					shown[name] = func() bool {
 						_, err := (codexauth.Store{Path: cfg.CodexAuthFile}).Load()
 						return !codexauth.IsLoginRequired(err)
@@ -125,6 +133,8 @@ func client(name string, p config.Provider, transport func(provider string) http
 	}
 	if p.Auth == config.AuthChatGPT {
 		hc = codexClient(hc, codex(), responses.ResponsesURL(p.BaseURL, p.ResponsesPath), responses.ModelsURL(p.BaseURL))
+	} else if e := injectedauth.Of(name, p); e != nil {
+		hc = e.Client(hc)
 	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
@@ -140,7 +150,10 @@ func client(name string, p config.Provider, transport func(provider string) http
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
-		key, reason := env.key(p.KeyEnv(name))
+		key, reason := "", "the entry uses the "+p.Auth+" login"
+		if p.Auth == "" {
+			key, reason = env.key(p.KeyEnv(name))
+		}
 		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}

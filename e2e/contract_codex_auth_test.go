@@ -127,6 +127,7 @@ func (a *codexAuthRun) configure(cfg map[string]any) {
 	entry := cfg["providers"].(map[string]any)["codex"].(map[string]any)
 	delete(entry, "api_key_env")
 	entry["auth"] = "chatgpt"
+	entry["models_from"] = "chatgpt"
 	cfg["codex_auth_file"] = a.path
 	cfg["codex_issuer"] = a.issuer.URL()
 }
