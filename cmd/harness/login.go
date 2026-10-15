@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/claudeauth"
 	"github.com/majorcontext/harness/internal/codexauth"
 )
 
@@ -107,23 +107,20 @@ func loginClaude(args []string) error {
 	if err := runClaude(cli...); err != nil {
 		return err
 	}
-	if claudeLoggedIn() {
+	if claudeLoggedIn(context.Background()) {
 		saveDefaultModel(config.SubscriptionClaudeModel)
 	}
 	return nil
 }
 
-// claudeLoggedIn asks `claude auth status --json` whether the sign-in holds. Any failure to ask means no.
-func claudeLoggedIn() bool {
+// claudeLoggedIn asks the CLI whether the sign-in holds. A CLI that gives no answer counts as not signed in.
+func claudeLoggedIn(ctx context.Context) bool {
 	bin, err := claudeBinary()
 	if err != nil {
 		return false
 	}
-	out, err := exec.Command(bin, "auth", "status", "--json").Output() //nolint:gosec // operator config
-	var st struct {
-		LoggedIn bool `json:"loggedIn"`
-	}
-	return err == nil && json.Unmarshal(out, &st) == nil && st.LoggedIn
+	ok, known := claudeauth.LoggedIn(ctx, bin, nil)
+	return ok && known
 }
 
 // saveDefaultModel makes ref the default model of the user config when that file sets none. It never fails the login:

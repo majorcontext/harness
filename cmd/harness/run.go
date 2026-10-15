@@ -51,7 +51,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs.StringVar(&opts.prompt, "p", "", "the prompt (required unless -goal is given)")
 	fs.StringVar(&opts.goal, "goal", "", "pursue a goal: run this condition as a turn, then run turns with evaluator feedback until an independent evaluator judges it met (requires config goal_evaluator_model)")
 	fs.IntVar(&opts.goalMaxTurns, "goal-max-turns", 0, "maximum turns for -goal (0 = unlimited)")
-	fs.StringVar(&opts.model, "model", "", "model ref (provider/model) or alias; overrides the persisted model when resuming; default from config, else "+config.DefaultModel)
+	fs.StringVar(&opts.model, "model", "", "model ref (provider/model) or alias; overrides the persisted model when resuming; default from config; with no model set, the subscription you are logged in to when ANTHROPIC_API_KEY is not set, else "+config.DefaultModel)
 	fs.StringVar(&opts.system, "system", "", "extra system prompt segment; appended after any config append_system_prompt segments")
 	fs.BoolVar(&opts.jsonOut, "json", false, "emit the event stream as JSON lines instead of text")
 	fs.BoolVar(&opts.noSave, "no-save", false, "disable session persistence")

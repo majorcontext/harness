@@ -76,7 +76,7 @@ func TestContractCLIRunDefaultsToTheCodexLoginWhenNoModelIsSet(t *testing.T) {
 	h := subscriptionHost(t, map[string]any{"providers": map[string]any{
 		"codex": map[string]any{"type": "openai", "auth": "chatgpt", "base_url": "http://127.0.0.1:1", "responses_path": "/responses"},
 	}})
-	h.env = map[string]string{"PATH": t.TempDir()}
+	h.env = map[string]string{"PATH": t.TempDir(), "ANTHROPIC_API_KEY": ""}
 	writeJSON(t, filepath.Join(filepath.Dir(h.config), "auth", "codex.json"), map[string]string{"account_id": "a"})
 	_, _, _ = h.run("run", "-p", "hi")
 	if log := sessionLog(t, h); !strings.Contains(log, "codex/gpt-") || strings.Contains(log, "anthropic/claude-fable-5") {
@@ -88,7 +88,7 @@ func TestContractCLIRunDefaultsToClaudeCodeWhenTheProgramIsOnPath(t *testing.T) 
 	skipShort(t)
 	t.Parallel()
 	h := subscriptionHost(t, nil)
-	h.env = map[string]string{}
+	h.env = map[string]string{"ANTHROPIC_API_KEY": ""}
 	claudeOnPath(t, h)
 	_, _, _ = h.run("run", "-p", "hi")
 	if log := sessionLog(t, h); !strings.Contains(log, "claude-code/sonnet") || strings.Contains(log, "anthropic/claude-fable-5") {
@@ -102,12 +102,28 @@ func TestContractCLIRunPrefersTheCodexLoginToClaudeCode(t *testing.T) {
 	h := subscriptionHost(t, map[string]any{"providers": map[string]any{
 		"codex": map[string]any{"type": "openai", "auth": "chatgpt", "base_url": "http://127.0.0.1:1", "responses_path": "/responses"},
 	}})
-	h.env = map[string]string{}
+	h.env = map[string]string{"ANTHROPIC_API_KEY": ""}
 	claudeOnPath(t, h)
 	writeJSON(t, filepath.Join(filepath.Dir(h.config), "auth", "codex.json"), map[string]string{"account_id": "a"})
 	_, _, _ = h.run("run", "-p", "hi")
 	if log := sessionLog(t, h); !strings.Contains(log, "codex/gpt-") || strings.Contains(log, "claude-code/sonnet") {
 		t.Errorf("the run did not prefer the codex model:\n%s", log)
+	}
+}
+
+func TestContractCLIRunKeepsTheAPIDefaultWhenAKeyIsSet(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	h := subscriptionHost(t, nil)
+	h.env = map[string]string{}
+	claudeOnPath(t, h)
+	writeJSON(t, filepath.Join(filepath.Dir(h.config), "auth", "codex.json"), map[string]string{"account_id": "a"})
+	out, errOut, code := h.run("run", "-p", "hi")
+	if code != 0 || out != "ok\n" {
+		t.Fatalf("run = %d %q %q, want 0 and ok", code, out, errOut)
+	}
+	if log := sessionLog(t, h); !strings.Contains(log, "anthropic/claude-fable-5") || strings.Contains(log, "claude-code/sonnet") || strings.Contains(log, "codex/gpt-") {
+		t.Errorf("a set ANTHROPIC_API_KEY did not keep the API default:\n%s", log)
 	}
 }
 

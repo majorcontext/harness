@@ -10,6 +10,7 @@ import (
 // pathWith puts a program named claude, or nothing, on a PATH of its own.
 func pathWith(t *testing.T, claude bool) {
 	t.Helper()
+	t.Setenv("ANTHROPIC_API_KEY", "")
 	dir := t.TempDir()
 	if claude {
 		if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -65,6 +66,24 @@ func TestDefaultModelFollowsTheSubscriptionInUse(t *testing.T) {
 				t.Errorf("ResolveModel(\"\") = %q, want %q", got, r.want)
 			}
 		})
+	}
+}
+
+func TestDefaultModelKeepsTheAPIDefaultWhenItsKeyIsSet(t *testing.T) {
+	pathWith(t, true)
+	cfg := Config{SubscriptionDefault: true, CodexAuthFile: loginFile(t, `{"a":1}`)}
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	if got := cfg.ResolveModel(""); got != DefaultModel {
+		t.Errorf("with ANTHROPIC_API_KEY = %q, want %q", got, DefaultModel)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	if got := cfg.ResolveModel(""); got != SubscriptionCodexModel {
+		t.Errorf("without ANTHROPIC_API_KEY = %q, want %q", got, SubscriptionCodexModel)
+	}
+	cfg.Providers = map[string]Provider{"anthropic": {APIKeyEnv: "WORK_KEY"}}
+	t.Setenv("WORK_KEY", "sk-work")
+	if got := cfg.ResolveModel(""); got != DefaultModel {
+		t.Errorf("with the api_key_env of the anthropic entry = %q, want %q", got, DefaultModel)
 	}
 }
 
@@ -177,5 +196,73 @@ func TestSetModelLeavesAFileThatDoesNotParse(t *testing.T) {
 				t.Errorf("file = %q, want it untouched", got)
 			}
 		})
+	}
+}
+
+func TestSetModelKeepsTheTextOfTheFile(t *testing.T) {
+	rows := []struct{ name, in, want string }{
+		{"indented", "{\n  \"max_tokens\": 1,\n  \"web\": {\"fetch\": true}\n}\n", "{\n  \"model\": \"M\",\n  \"max_tokens\": 1,\n  \"web\": {\"fetch\": true}\n}\n"},
+		{"one line", `{"max_tokens":1}`, `{"model": "M","max_tokens":1}`},
+		{"empty object", "{}\n", "{\"model\": \"M\"}\n"},
+		{"empty file", " \n", "{\n  \"model\": \"M\"\n}\n"},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(r.in), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if set, err := SetModel(path, "M"); err != nil || !set {
+				t.Fatalf("SetModel = %v, %v", set, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != r.want {
+				t.Errorf("file = %q, want %q", got, r.want)
+			}
+		})
+	}
+}
+
+func TestSetModelReplacesAnEmptyModelKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"model":"","aliases":{"a":"openai/x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := SetModel(path, SubscriptionClaudeModel); err != nil || !set {
+		t.Fatalf("SetModel = %v, %v", set, err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.Model != SubscriptionClaudeModel || cfg.Aliases["a"] != "openai/x" {
+		t.Errorf("config = %+v, %v", cfg, err)
+	}
+}
+
+func TestSetModelWritesThroughASymlinkAndRefusesADanglingOne(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.json")
+	if err := os.WriteFile(target, []byte(`{"web":{"fetch":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := SetModel(link, "M"); err != nil || !set {
+		t.Fatalf("SetModel through a link = %v, %v", set, err)
+	}
+	if info, _ := os.Lstat(link); info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the link became a regular file")
+	}
+	if cfg, _ := Load(target); cfg == nil || cfg.Model != "M" {
+		t.Errorf("target = %+v, want the model", cfg)
+	}
+	dangling := filepath.Join(dir, "dangling.json")
+	if err := os.Symlink(filepath.Join(dir, "missing.json"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := SetModel(dangling, "M"); err == nil || set {
+		t.Fatalf("SetModel on a dangling link = %v, %v, want an error", set, err)
+	}
+	if info, _ := os.Lstat(dangling); info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the dangling link became a regular file")
 	}
 }

@@ -1,0 +1,31 @@
+package e2e
+
+import (
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+)
+
+// loginFileWithContent is a non-empty Codex login file, which a default model that followed the subscription would pick.
+var loginFileWithContent = sync.OnceValue(func() string {
+	dir, err := os.MkdirTemp("", "e2e-codex-login")
+	if err != nil {
+		panic(err)
+	}
+	p := filepath.Join(dir, "codex.json")
+	if err := os.WriteFile(p, []byte(`{"access_token":"x","account_id":"a"}`), 0o600); err != nil {
+		panic(err)
+	}
+	return p
+})
+
+func TestContractModelsDefault(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:    "create_without_a_model_ignores_claude_on_path_and_a_codex_login",
+			config:  map[string]any{"model": "", "codex_auth_file": loginFileWithContent()},
+			actions: []action{tryCreate{model: ""}},
+		},
+	})
+}

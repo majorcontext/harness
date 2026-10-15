@@ -43,7 +43,7 @@ Add none of these without a new design decision:
 ## Startup rules
 - Keep `harness version` and the time to the `initialize` response of `harness acp` inside the budget of the `Startup budget` step in `.github/workflows/ci.yml`.
 - Keep stdout of `harness acp` for ACP frames only. Log to stderr.
-- Before first output, read only the user and project config files. For `harness run` and `harness acp` only (never `serve` or the Go API), the default model of a config with no `model` also stats the Codex login file that `codex_auth_file` names (state of the user, like the config) and looks up `claude` on `PATH`. It reads no content and starts no process.
+- Before first output, read only the user and project config files. For `harness run` and `harness acp` only (never `serve` or the Go API), the default model of a config with no `model` also checks the API key variable, stats the Codex login file that `codex_auth_file` names (state of the user, like the config) and looks up `claude` on `PATH`. It reads no content and starts no process.
 - Make no network call and start no subprocess before a command needs it.
 - Add no `init()` side effects. Keep production Go free of cgo.
 - Validate credentials on first use. Keep model catalogs static. The one exception is the model list of a provider with `auth` `chatgpt`: it is fetched on first use, cached, and falls back to the static list.
