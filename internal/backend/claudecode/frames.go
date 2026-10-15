@@ -192,11 +192,19 @@ func contentText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	if blocks := decodeBlocks(raw); blocks != nil {
+	var blocks []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ToolName string `json:"tool_name"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil && blocks != nil {
 		var texts []string
 		for _, b := range blocks {
-			if b.Text != "" {
+			switch {
+			case b.Text != "":
 				texts = append(texts, b.Text)
+			case b.Type == "tool_reference" && b.ToolName != "":
+				texts = append(texts, b.ToolName)
 			}
 		}
 		return strings.Join(texts, "\n")

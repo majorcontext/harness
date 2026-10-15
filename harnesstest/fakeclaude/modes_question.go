@@ -195,7 +195,7 @@ func continueInTool(f *fake, answer string) {
 // initFrame is the init frame of a CLI whose only tool is the bash tool of the harness MCP server.
 func initFrame(f *fake) obj {
 	tools := []string{}
-	if strings.HasPrefix(f.mode, "web_search") {
+	if strings.HasPrefix(f.mode, "web_search") || f.mode == "tool_search" {
 		tools = argTools()
 	}
 	return system("init", obj{"session_id": f.sessionID, "tools": tools})

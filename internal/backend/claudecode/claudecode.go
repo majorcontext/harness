@@ -86,6 +86,9 @@ var ErrToolsNotRestricted = errors.New("claudecode: the CLI did not apply the to
 // the hooks of the plugins see each call.
 var builtins = []string{askTool}
 
+// toolSearchTool is the CLI tool that loads the schema of a deferred MCP tool.
+const toolSearchTool = "ToolSearch"
+
 // mcpPrefix starts the CLI name of each harness tool.
 const mcpPrefix = "mcp__" + external.ToolServer + "__"
 
@@ -103,14 +106,17 @@ type Backend struct {
 	system  string
 	workDir string
 	servers map[string]config.MCPServerSpec
+	// toolLoading is the mcp_tool_loading mode of the config.
+	toolLoading string
 }
 
 // New returns the Backend of provider entry p. The CLI keeps only the last
 // --append-system-prompt, so the entries of system join into one value. The
 // CLI runs in workDir, or in the process directory when workDir is empty.
-// The CLI connects the MCP servers itself.
-func New(p config.Provider, system []string, workDir string, servers map[string]config.MCPServerSpec) *Backend {
-	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, servers: servers}
+// The CLI connects the MCP servers itself. toolLoading is mcp_tool_loading,
+// which sets ENABLE_TOOL_SEARCH of the CLI.
+func New(p config.Provider, system []string, workDir string, servers map[string]config.MCPServerSpec, toolLoading string) *Backend {
+	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, servers: servers, toolLoading: toolLoading}
 }
 
 // Capabilities reports that the CLI runs the loop with the harness tools,
@@ -168,14 +174,15 @@ func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mir
 	return b.checkLogin(ctx, cmd.Env, r.finish(ctx, err))
 }
 
-// restriction is the set of tools that the CLI may show: AskUserQuestion on a
-// run that may ask a question, WebSearch on a run that offers the search, and
-// each harness tool of req. The init frame
+// restriction is the set of tools that the CLI may show: ToolSearch, which
+// only loads the schema of an MCP tool and touches nothing on the machine,
+// AskUserQuestion on a run that may ask a question, WebSearch on a run that
+// offers the search, and each harness tool of req. The init frame
 // check keeps a CLI that does not apply it from running. req.Tools holds only
 // the allowed harness tools. A run that answers a parked question keeps
 // AskUserQuestion.
 func restriction(req turn.Request, questions, answers bool) map[string]bool {
-	allowed := map[string]bool{}
+	allowed := map[string]bool{toolSearchTool: true}
 	if questions && (answers || req.AllowedTools == nil || slices.Contains(req.AllowedTools, askTool)) {
 		allowed[askTool] = true
 	}
@@ -238,7 +245,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if req.Sent != nil {
 		req.Sent(system)
 	}
-	env := os.Environ()
+	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading))
 	if b.p.SessionMirror {
 		dir, err := scratch(r.mirror)
 		r.dir = dir
@@ -281,6 +288,19 @@ func scratch(m external.Mirror) (string, error) {
 		dir = real
 	}
 	return dir, m.Restore(dir)
+}
+
+// toolSearchEnv maps mcp_tool_loading to ENABLE_TOOL_SEARCH: the CLI defers
+// the schemas of MCP tools through ToolSearch when the value is "true", or
+// when it is "auto" and the schemas exceed a share of the context window.
+func toolSearchEnv(mode string) string {
+	switch mode {
+	case "eager":
+		return "false"
+	case "lazy":
+		return "true"
+	}
+	return "auto"
 }
 
 // mcpArgs returns the MCP flags of the run. An unrestricted run gives the

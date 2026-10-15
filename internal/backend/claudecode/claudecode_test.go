@@ -262,10 +262,10 @@ func TestClaudeCodeAppliesTheAllowedToolsOfASession(t *testing.T) {
 	}{
 		{name: "a restriction maps to the tool list", mode: "thinking", env: []string{toolsInit, `["mcp__harness__echo"]`}, allowed: []string{"echo"},
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", answered, "context.measured", "turn.ended completed"},
-			args: []string{"--tools", "", "--strict-mcp-config"}},
+			args: []string{"--tools", "ToolSearch", "--strict-mcp-config"}},
 		{name: "an empty restriction disables every built-in tool", mode: "thinking", env: []string{toolsInit, `[]`}, allowed: []string{},
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", answered, "context.measured", "turn.ended completed"},
-			args: []string{"--tools", "", "--strict-mcp-config"}},
+			args: []string{"--tools", "ToolSearch", "--strict-mcp-config"}},
 		{name: "a CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"echo"},
 			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
 		{name: "a CLI that lists a built-in tool fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash"]`},

@@ -71,7 +71,7 @@ type turnCall struct {
 
 // claudeLogs are the files where fakeclaude records what it received.
 type claudeLogs struct {
-	argvLog, stdinLog, mcpLog, toolLog, cwdLog, seenLog, signalLog, stateDir string
+	argvLog, stdinLog, mcpLog, toolLog, cwdLog, seenLog, signalLog, envLog, stateDir string
 }
 
 // fakeEnvArgs is the extra_args of a claude-code provider that set env in each
@@ -93,6 +93,7 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 		"FAKE_CLAUDE_STATE":          filepath.Join(l.stateDir, "parked"),
 		"FAKE_CLAUDE_CWD_LOG":        l.cwdLog,
 		"FAKE_CLAUDE_MIRROR_SEEN":    l.seenLog,
+		"FAKE_CLAUDE_ENV_LOG":        l.envLog,
 	}
 	if lane.signals {
 		env["FAKE_CLAUDE_SIGNAL_LOG"] = l.signalLog
@@ -146,7 +147,7 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	stateDir := t.TempDir()
 	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"), toolLog: filepath.Join(stateDir, "tool.jsonl"),
 		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl"),
-		cwdLog: filepath.Join(stateDir, "cwd"), seenLog: filepath.Join(stateDir, "seen.jsonl"), signalLog: filepath.Join(stateDir, "signals")}
+		cwdLog: filepath.Join(stateDir, "cwd"), seenLog: filepath.Join(stateDir, "seen.jsonl"), signalLog: filepath.Join(stateDir, "signals"), envLog: filepath.Join(stateDir, "env.json")}
 	var args []string
 	if l.ask {
 		args = append(args, "--ask-user-question")

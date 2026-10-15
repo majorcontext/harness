@@ -182,7 +182,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			if c := endedCall(t, echo, runs[0], argv); c.ID != "toolu_m" || c.Name != "echo" {
 				t.Errorf("call = %+v, want ID toolu_m and name echo", c)
 			}
-			for _, want := range [][]string{{"--tools", "", "--strict-mcp-config"}, {"--allowedTools", "mcp__harness"}} {
+			for _, want := range [][]string{{"--tools", "ToolSearch", "--strict-mcp-config"}, {"--allowedTools", "mcp__harness"}} {
 				if !hasArgs(argv, want...) {
 					t.Errorf("argv = %q, want %q in it", argv, want)
 				}

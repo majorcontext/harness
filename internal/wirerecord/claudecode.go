@@ -126,6 +126,12 @@ func bashServer(dir string) ([]string, func(), error) {
 			}
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: "text", Text: string(out)}}, IsError: err != nil}, nil
 		})
+	return serveRegistry(reg)
+}
+
+// serveRegistry serves reg to the CLI under a secret path and returns the
+// extra flags of a run that allows its tools and a stop function.
+func serveRegistry(reg *mcp.Registry) ([]string, func(), error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, nil, err
