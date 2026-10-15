@@ -12,10 +12,11 @@ import (
 )
 
 // SetModel writes model into the config file at path when the file sets none, and reports whether it wrote.
-// It creates a missing file, inserts the key into the text of an existing file and so keeps every other byte
-// and the mode, and replaces the file in one rename. A file that holds an empty "model" key, of any letter case, is the one case
-// that is written again with sorted keys. A file that does not parse, holds no object, or would not load back with the model is left as it is and is an error. A
-// symlink is written through, and a symlink to a missing file is an error.
+// It creates a missing file. In an existing file it replaces the value of each top-level key that spells
+// model in any letter case, or inserts the key, and so keeps every other byte and the mode. It replaces the
+// file in one rename. A file that does not parse, holds no object, or would not load back with the model
+// and every other key as before is left as it is and is an error. A symlink is written through, and a
+// symlink to a missing file is an error.
 func SetModel(path, model string) (bool, error) {
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		real, err := filepath.EvalSymlinks(path)
@@ -62,29 +63,18 @@ func withModel(path string, data, raw []byte) (string, error) {
 	if bytes.TrimSpace(data)[0] != '{' {
 		return "", fmt.Errorf("config: %s holds no JSON object", path)
 	}
-	doc := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return "", fmt.Errorf("config: parsing %s: %w", path, err)
-	}
 	var want string
 	_ = json.Unmarshal(raw, &want)
-	has := false
-	for k := range doc {
-		if strings.EqualFold(k, "model") {
-			delete(doc, k)
-			has = true
-		}
+	spans, err := modelSpans(data)
+	if err != nil {
+		return "", fmt.Errorf("config: parsing %s: %w", path, err)
 	}
-	var out string
-	if !has {
-		out = insertModel(string(data), raw)
-	} else {
-		doc["model"] = raw
-		b, err := json.MarshalIndent(doc, "", "  ")
-		if err != nil {
-			return "", err
+	out := insertModel(string(data), raw)
+	if len(spans) > 0 {
+		out = string(data)
+		for i := len(spans) - 1; i >= 0; i-- {
+			out = out[:spans[i][0]] + string(raw) + out[spans[i][1]:]
 		}
-		out = string(b) + "\n"
 	}
 	back, err := Parse(path, []byte(out))
 	if err == nil {
@@ -97,6 +87,29 @@ func withModel(path string, data, raw []byte) (string, error) {
 		return "", fmt.Errorf("config: cannot set model in %s without changing its other keys: %w", path, err)
 	}
 	return out, nil
+}
+
+// modelSpans returns the byte span of the value of each top-level key that spells model in any letter case.
+func modelSpans(data []byte) ([][2]int, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	var spans [][2]int
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		if end := int(dec.InputOffset()); strings.EqualFold(key.(string), "model") {
+			spans = append(spans, [2]int{end - len(v), end})
+		}
+	}
+	return spans, nil
 }
 
 func newDocument(raw []byte) string { return "{\n  \"model\": " + string(raw) + "\n}\n" }
