@@ -1,0 +1,312 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "find the release"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "find the release"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "current Go release",
+            "call_id": "srvtoolu_1",
+            "content": "Release History \u003chttps://go.dev/doc/devel/release\u003e\nGo 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          },
+          {
+            "type": "text",
+            "text": "Go 1.27.2 is current.",
+            "content": "cites Release History \u003chttps://go.dev/doc/devel/release\u003e\ncites Go 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "which source"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go.dev"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "and then"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "chat_requests": {
+      "status": 200,
+      "body": [
+        {
+          "messages": [
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "find the release"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "[web search: current Go release]\n- Release History \u003chttps://go.dev/doc/devel/release\u003e\n- Go 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\nGo 1.27.2 is current."
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "which source"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "go.dev"
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "and then"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "prompt_cache_key": "ses#1",
+          "system_has_goal_evaluator": false,
+          "tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "goal",
+            "grep",
+            "ls",
+            "model",
+            "process",
+            "read_file",
+            "read_tool_result",
+            "session_info",
+            "task",
+            "write_file"
+          ],
+          "user": "ses#1"
+        }
+      ]
+    },
+    "codex_requests": {
+      "status": 200,
+      "body": [
+        {
+          "messages": [
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "find the release"
+                },
+                {
+                  "kind": "text",
+                  "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "[web search: current Go release]\n- Release History \u003chttps://go.dev/doc/devel/release\u003e\n- Go 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e"
+                },
+                {
+                  "kind": "text",
+                  "text": "Go 1.27.2 is current."
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "parts": [
+                {
+                  "kind": "text",
+                  "text": "which source"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gpt-5.6-sol",
+          "system_has_goal_evaluator": false,
+          "tools": [
+            "bash",
+            "edit_file",
+            "glob",
+            "goal",
+            "grep",
+            "ls",
+            "model",
+            "process",
+            "read_file",
+            "read_tool_result",
+            "session_info",
+            "task",
+            "web_search",
+            "write_file"
+          ]
+        }
+      ]
+    },
+    "set_model.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 2229,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 8,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "codex/gpt-5.6-sol",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10750,
+          "output_tokens": 110,
+          "web_search_requests": 1
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "set_model.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 14,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "bifrost/gpt-test",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10755,
+          "output_tokens": 113,
+          "web_search_requests": 1
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

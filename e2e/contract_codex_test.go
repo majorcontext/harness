@@ -253,7 +253,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexNoToolCallRows(), codexPluginRows(t)))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses

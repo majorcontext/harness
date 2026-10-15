@@ -150,16 +150,21 @@ func textItem(text string) contentItem {
 	return contentItem{Type: "content", Content: textContent{Type: "text", Text: text}}
 }
 
-// toolCall sends the tool_call update of every tool_call part of a completed
-// assistant message, and records the ones that keep their diff.
+// toolCall sends the tool_call update of every tool_call and web_search part of
+// a completed assistant message, and records the ones that keep their diff.
 func (h *held) toolCall(msg protocol.LogMessage, st *pumpState) error {
 	for _, part := range msg.Parts {
-		if part.Type != protocol.LogPartToolCall {
+		var body toolCallBody
+		switch part.Type {
+		case protocol.LogPartToolCall:
+			body = describeCall(part, h.cwd)
+			if len(body.Content) > 0 {
+				st.diffs[part.CallID] = body.Content
+			}
+		case protocol.LogPartWebSearch:
+			body = describeSearch(part)
+		default:
 			continue
-		}
-		body := describeCall(part, h.cwd)
-		if len(body.Content) > 0 {
-			st.diffs[part.CallID] = body.Content
 		}
 		if err := h.send("session/update", map[string]any{"sessionId": h.id, "update": body}); err != nil {
 			return err

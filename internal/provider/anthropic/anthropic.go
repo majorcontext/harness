@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -79,11 +80,29 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if err != nil {
 		return nil, err
 	}
+	resp, err := c.send(ctx, wire, ttl)
+	if err != nil {
+		return nil, err
+	}
+	return &stream{
+		ctx:   ctx,
+		body:  resp.Body,
+		r:     bufio.NewReader(resp.Body),
+		model: req.Model,
+		resume: func(blocks []apiBlock) (*http.Response, error) {
+			next := *wire
+			next.Messages = append(slices.Clone(wire.Messages), apiMessage{Role: "assistant", Content: blocks})
+			return c.send(ctx, &next, ttl)
+		},
+	}, nil
+}
+
+// send posts one Messages request and returns its response, which has the status 200.
+func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.Response, error) {
 	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err
 	}
-
 	base := c.BaseURL
 	if base == "" {
 		base = defaultBaseURL
@@ -117,11 +136,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		defer resp.Body.Close()
 		return nil, apiError(resp)
 	}
-	return &stream{
-		body:  resp.Body,
-		r:     bufio.NewReader(resp.Body),
-		model: req.Model,
-	}, nil
+	return resp, nil
 }
 
 func apiError(resp *http.Response) error {
@@ -333,13 +348,15 @@ func parseUsageExhaustion(status int, message string) (recoverHint string, ok bo
 
 // assembledBlock accumulates one content block across SSE deltas.
 type assembledBlock struct {
-	kind      string // text | tool_use | thinking | redacted_thinking
+	kind      string // text | tool_use | thinking | redacted_thinking | server_tool_use | web_search_tool_result
 	text      bytes.Buffer
 	toolID    string
 	toolName  string
 	inputJSON bytes.Buffer
 	signature string
 	redacted  string
+	citations []message.Citation
+	result    json.RawMessage // the content of a web_search_tool_result
 }
 
 // stream implements provider.Stream over the Messages API SSE protocol. It
@@ -353,8 +370,18 @@ type stream struct {
 	msgID        string
 	msgCreatedAt time.Time
 	blocks       []*assembledBlock
-	usage        provider.Usage
-	stopReason   provider.StopReason
+	// prior holds the blocks of the legs that ended with pause_turn, carry their usage, and paused marks the leg that just ended that way.
+	prior  []*assembledBlock
+	carry  provider.Usage
+	paused bool
+	legs   int
+	ctx    context.Context // the caller's context; a resume that fails while it lives ends the call as paused
+	// prompt is the prompt size that message_start of the newest leg reported. The input of message_delta also counts the steps of the server tools.
+	prompt     int
+	firstID    string
+	resume     func(blocks []apiBlock) (*http.Response, error)
+	usage      provider.Usage
+	stopReason provider.StopReason
 
 	queue []provider.Event
 	done  bool
@@ -468,23 +495,25 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("anthropic: bad message_start: %w", err)
 		}
-		s.msgID = ev.Message.ID
-		s.msgCreatedAt = time.Now().UTC()
+		s.beginLeg(ev.Message.ID)
 		s.usage.InputTokens = ev.Message.Usage.InputTokens
 		s.usage.CacheWriteTokens = ev.Message.Usage.CacheCreationInputTokens
 		s.usage.CacheReadTokens = ev.Message.Usage.CacheReadInputTokens
+		s.prompt = s.usage.InputTokens + s.usage.CacheWriteTokens + s.usage.CacheReadTokens
 
 	case "content_block_start":
 		var ev struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
-				Type      string `json:"type"`
-				ID        string `json:"id"`
-				Name      string `json:"name"`
-				Text      string `json:"text"`
-				Thinking  string `json:"thinking"`
-				Data      string `json:"data"`
-				Signature string `json:"signature"`
+				Type      string          `json:"type"`
+				ID        string          `json:"id"`
+				Name      string          `json:"name"`
+				Text      string          `json:"text"`
+				Thinking  string          `json:"thinking"`
+				Data      string          `json:"data"`
+				Signature string          `json:"signature"`
+				ToolUseID string          `json:"tool_use_id"`
+				Content   json.RawMessage `json:"content"`
 			} `json:"content_block"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -494,9 +523,11 @@ func (s *stream) handle(name string, data []byte) error {
 		switch ev.ContentBlock.Type {
 		case "text":
 			b.text.WriteString(ev.ContentBlock.Text)
-		case "tool_use":
+		case "tool_use", "server_tool_use":
 			b.toolID = ev.ContentBlock.ID
 			b.toolName = ev.ContentBlock.Name
+		case "web_search_tool_result":
+			b.toolID, b.result = ev.ContentBlock.ToolUseID, ev.ContentBlock.Content
 		case "thinking":
 			b.text.WriteString(ev.ContentBlock.Thinking)
 			b.signature = ev.ContentBlock.Signature
@@ -514,6 +545,11 @@ func (s *stream) handle(name string, data []byte) error {
 				PartialJSON string `json:"partial_json"`
 				Thinking    string `json:"thinking"`
 				Signature   string `json:"signature"`
+				Citation    struct {
+					URL       string `json:"url"`
+					Title     string `json:"title"`
+					CitedText string `json:"cited_text"`
+				} `json:"citation"`
 			} `json:"delta"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -527,6 +563,9 @@ func (s *stream) handle(name string, data []byte) error {
 		case "text_delta":
 			b.text.WriteString(ev.Delta.Text)
 			s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta.Text, ID: s.msgID, CreatedAt: s.msgCreatedAt})
+		case "citations_delta":
+			c := ev.Delta.Citation
+			b.citations = append(b.citations, message.Citation{URL: c.URL, Title: c.Title, Quote: c.CitedText})
 		case "input_json_delta":
 			b.inputJSON.WriteString(ev.Delta.PartialJSON)
 		case "thinking_delta":
@@ -559,6 +598,9 @@ func (s *stream) handle(name string, data []byte) error {
 				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 				OutputTokens             int `json:"output_tokens"`
+				ServerToolUse            struct {
+					WebSearchRequests int `json:"web_search_requests"`
+				} `json:"server_tool_use"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -566,20 +608,16 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		if ev.Delta.StopReason != "" {
 			s.stopReason = mapStopReason(ev.Delta.StopReason)
+			s.paused = ev.Delta.StopReason == "pause_turn"
 		}
 		if ev.Usage.OutputTokens > 0 {
 			s.usage.OutputTokens = ev.Usage.OutputTokens
 		}
-		// Input/cache counts normally arrive in message_start and are zero
-		// here (real Anthropic omits them from message_delta) — but a
-		// Bedrock-translating gateway (bifrost's /anthropic route) emits
-		// message_start with ALL usage fields zero
-		// and delivers the real input/cache counts in message_delta
-		// instead, the Bedrock convention of usage-in-final-metadata.
-		// Nonzero values here win; zeros never clobber message_start's.
-		// Without this, every turn on such a route reported input_tokens=0,
-		// silently disarming auto-compaction (its threshold sums exactly
-		// these components).
+		s.usage.WebSearchRequests = ev.Usage.ServerToolUse.WebSearchRequests
+		// A Bedrock-style gateway (bifrost's /anthropic route) zeroes the
+		// usage of message_start and sends the real input and cache counts
+		// here. A nonzero value wins and a zero never clobbers one, or the
+		// auto-compaction threshold, which sums them, never fires.
 		if ev.Usage.InputTokens > 0 {
 			s.usage.InputTokens = ev.Usage.InputTokens
 		}
@@ -591,17 +629,7 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 
 	case "message_stop":
-		if s.msgCreatedAt.IsZero() {
-			s.msgCreatedAt = time.Now().UTC()
-		}
-		msg := s.assemble()
-		s.queue = append(s.queue, provider.Event{
-			Type:       provider.EventDone,
-			Message:    msg,
-			StopReason: s.stopReason,
-			Usage:      s.usage,
-		})
-		s.done = true
+		return s.stop()
 
 	case "error":
 		var ev struct {
@@ -614,21 +642,9 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("anthropic: stream error: %s", data)
 		}
 		err := fmt.Errorf("anthropic: %s (%s)", ev.Error.Message, ev.Error.Type)
-		// Mirror apiError's HTTP-path classification: an
-		// invalid_request_error naming a structurally malformed request —
-		// most notably an orphaned tool_use — fails identically on every
-		// retry, whether it arrives as an HTTP 400 before the stream ever
-		// starts or, as here, as a mid-stream "error" SSE event. Without
-		// this, a mid-stream invalid_request_error burned the full
-		// deterministic retry budget instead of failing fast on attempt 1.
-		// No context-overflow carve-out is needed here: an oversized
-		// request is rejected before any stream opens, never mid-stream.
-		//
-		// An account-level supply wall CAN arrive here, though: a long
-		// stream can outlive the moment the key's limit is reached.
-		// Classified first, on the message alone — a stream event carries
-		// no HTTP status, the same constraint classifyErrorType works
-		// under — so a mid-stream wall reads identically to an HTTP one.
+		// Classify like apiError. A mid-stream invalid_request_error fails
+		// at once, as an HTTP 400 does. An account-level supply wall can
+		// arrive here too, so the message alone is classified first.
 		if hint, ok := parseUsageExhaustion(0, ev.Error.Message); ok {
 			return provider.MarkPermanent(&provider.Error{
 				Kind:        provider.ErrKindProviderExhausted,
@@ -677,7 +693,11 @@ func (s *stream) assemble() *message.Message {
 		switch b.kind {
 		case "text":
 			if b.text.Len() > 0 {
-				msg.Parts = append(msg.Parts, &message.Text{Text: b.text.String()})
+				msg.Parts = append(msg.Parts, &message.Text{Text: b.text.String(), Citations: b.citations})
+			}
+		case "server_tool_use":
+			if w := s.webSearch(b); w != nil {
+				msg.Parts = append(msg.Parts, w)
 			}
 		case "tool_use":
 			msg.Parts = append(msg.Parts, b.toolCall())

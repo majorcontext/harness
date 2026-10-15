@@ -16,6 +16,7 @@ const (
 	MessagePartBlob          = "blob"
 	MessagePartTaskReport    = "task_report"
 	MessagePartEngineContext = "engine_context"
+	MessagePartWebSearch     = "web_search"
 )
 
 // MessagePart is one part of a Message. A tool result holds its text in Content; a blob part names its media type, size, and Key, which GET /sessions/{id}/blobs/{key} reads.
@@ -30,6 +31,10 @@ type MessagePart struct {
 	MediaType string          `json:"media_type,omitempty"`
 	Bytes     int             `json:"bytes,omitempty"`
 	Key       string          `json:"key,omitempty"`
+	Citations []Citation      `json:"citations,omitempty"`
+	// A web_search part holds its call ID in CallID, and the error code of a failed search in Text with IsError set.
+	Query   string         `json:"query,omitempty"`
+	Results []SearchResult `json:"results,omitempty"`
 }
 
 // Message is one message of the conversation that a reader sees: a compaction keeps the messages it folded, and its summary stands between them and the kept messages. Its ID derives from the log.

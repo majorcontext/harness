@@ -311,6 +311,23 @@ func TestAccessorsDoNotAliasState(t *testing.T) {
 	}
 }
 
+func TestSearchResultsAndCitationsDoNotAliasState(t *testing.T) {
+	item := protocol.ItemCompleted{ItemID: "i1", TurnID: "t1", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{
+		{Type: protocol.LogPartWebSearch, CallID: "ws1", Query: "q", Results: []protocol.SearchResult{{Title: "T", URL: "https://a.example"}}},
+		{Type: protocol.LogPartText, Text: "cited", Citations: []protocol.Citation{{URL: "https://a.example"}}},
+	}}}
+	events := with(base, admit("a"), start("t1", "a"), item, end("t1", protocol.StopCompleted, ""))
+	s := replay(t, events)
+	page := s.MessagePage(0, 10)
+	last := page.Messages[len(page.Messages)-1]
+	last.Parts[0].Results[0].URL, last.Parts[1].Citations[0].URL = "x", "x"
+	h := s.History()
+	h[len(h)-1].Parts[0].Results[0].URL, h[len(h)-1].Parts[1].Citations[0].URL = "y", "y"
+	if !reflect.DeepEqual(s, replay(t, events)) || !reflect.DeepEqual(s.MessagePage(0, 10), replay(t, events).MessagePage(0, 10)) {
+		t.Fatal("a caller changed the state through the results or citations of a page or of the history")
+	}
+}
+
 func TestRetainedIsACopy(t *testing.T) {
 	s := replay(t, []protocol.Payload{created(), protocol.ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "k"}})
 	s.Retained()[0].Handle = "x"

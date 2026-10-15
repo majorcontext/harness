@@ -89,6 +89,9 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 // Name returns the provider family key of this client.
 func (c *Client) Name() string { return c.family() }
 
+// NativeWebSearch reports that the Responses API runs a web search inside a model call.
+func (c *Client) NativeWebSearch() bool { return true }
+
 // EffortControl returns the effort control of a model id.
 func (c *Client) EffortControl(model string) (modelmeta.EffortControl, bool) {
 	ctl, ok := modelmeta.OpenAIEfforts(model)

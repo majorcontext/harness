@@ -410,7 +410,9 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 	wr := o.stamp(newWireEvent("sse", "request", 0, b), r)
 	wr.ContentEncoding = r.Header.Get("Content-Encoding")
 	o.logWire(wr)
-	step, ok := o.pick(o.request(b))
+	req := o.request(b)
+	req.raw = raw
+	step, ok := o.pick(req)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
 		return
@@ -516,7 +518,9 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 		o.markKnown(n, id)
 		return ok
 	}
-	step, ok := o.pick(o.request(b))
+	req := o.request(b)
+	req.raw = data
+	step, ok := o.pick(req)
 	if !ok {
 		return writeFrames(ctx, conn, newFrame("error", obj{"error": obj{"type": "server_error", "message": "harnesstest: no step matched"}}))
 	}

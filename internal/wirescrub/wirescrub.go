@@ -19,11 +19,11 @@ import (
 const Marker = "FIXTURE"
 
 var (
-	prefixedID      = regexp.MustCompile(`\b(msg|toolu|srvtoolu|req|resp|rs|fc|call|ws|chatcmpl|fp)([_-])([A-Za-z0-9]{12,})`)
+	prefixedID      = regexp.MustCompile(`\b(msg|toolu|srvtoolu|req|resp|rs|fc|call|ws|chatcmpl|fp|user)([_-])([A-Za-z0-9]{12,})`)
 	uuid            = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 	email           = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 	secret          = regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{8,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]*)?`)
-	opaque          = regexp.MustCompile(`"(signature|encrypted_content|obfuscation|accountUuid|organizationUuid|account_id|organization_id|email|user_id|userID|organizationName|displayName)"\s*:\s*"([^"\\]*)"`)
+	opaque          = regexp.MustCompile(`"(signature|encrypted_content|encrypted_index|safety_identifier|obfuscation|accountUuid|organizationUuid|account_id|organization_id|email|user_id|userID|organizationName|displayName)"\s*:\s*"([^"\\]*)"`)
 	worktree        = regexp.MustCompile(`/(?:Users|home)/[A-Za-z0-9._-]+`)
 	placeholderPath = regexp.MustCompile(`^/tmp/fixture/[0-9]+$`)
 	localPath       = regexp.MustCompile(`(?:/private)?/(?:tmp|var/folders|run/user)/[^\s"'\\]+|/[^\s"'\\]+\.(?:sock|pid)\b`)

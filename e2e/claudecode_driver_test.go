@@ -209,6 +209,11 @@ func argvFacts(argv []string) map[string]any {
 	if e := value("--effort"); e != nil {
 		facts["effort"] = e
 	}
+	tools, _ := value("--tools").(string)
+	allowed, _ := value("--allowedTools").(string)
+	if slices.Contains(strings.Split(tools, ","), "WebSearch") {
+		facts["web_search_offered"] = slices.Contains(strings.Split(allowed, ","), "WebSearch")
+	}
 	settings, _ := value("--settings").(string)
 	if strings.Contains(settings, "defer") {
 		facts["defer_hook"] = true

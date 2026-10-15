@@ -230,10 +230,10 @@ func reasoningOutputFloor(e modelref.Effort) int {
 }
 
 type apiToolDef struct {
-	Type        string          `json:"type"` // always "function"
-	Name        string          `json:"name"`
+	Type        string          `json:"type"` // "function", or "web_search" for the built-in search
+	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // apiMessageItem is an input item of type "message": a role plus a list of
@@ -386,6 +386,9 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 			Parameters:  params,
 		})
 	}
+	if req.WebSearch {
+		out.Tools = append(out.Tools, apiToolDef{Type: "web_search"})
+	}
 
 	// Orphaned-tool_use repair, same as the anthropic and openaicompat
 	// transcoders: a ToolCall with no matching ToolResult in the
@@ -511,6 +514,23 @@ func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([
 			// system prompt (cmd/harness) describes. An ordinary text content
 			// part on the wire — no new provider feature.
 			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: prompt.RenderEngineContext(v.Text)})
+
+		case *message.WebSearch:
+			if raw, ok := v.ProviderData.Get(family); ok {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+				items = append(items, append(json.RawMessage(nil), raw...))
+				continue
+			}
+			if pending == nil {
+				pending = &apiMessageItem{Type: "message", Role: role}
+			}
+			ct := "input_text"
+			if role == "assistant" {
+				ct = "output_text"
+			}
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: prompt.NeutralizeEngineContextSentinel(v.Summary())})
 
 		case *message.Blob:
 			part, err := transcodeBlob(v)

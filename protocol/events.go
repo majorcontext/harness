@@ -164,7 +164,21 @@ const (
 	LogPartBlob          = "blob"
 	LogPartTaskReport    = "task_report"
 	LogPartEngineContext = "engine_context"
+	LogPartWebSearch     = "web_search"
 )
+
+// Citation is a source that a provider cited for a text part, with the cited passage when the wire gives one.
+type Citation struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+	Quote string `json:"quote,omitempty"`
+}
+
+// SearchResult is one source that a web search found.
+type SearchResult struct {
+	Title string `json:"title,omitempty"`
+	URL   string `json:"url"`
+}
 
 // LogPart is one piece of message or input content in the log.
 type LogPart struct {
@@ -181,8 +195,12 @@ type LogPart struct {
 	Bytes     int       `json:"bytes,omitempty"`
 	Blobs     []LogPart `json:"blobs,omitempty"`
 	// ProviderData holds the opaque, provider-tagged payload of a reasoning
-	// part, which the provider replays on the next request.
+	// or web_search part, which the provider replays on the next request.
 	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`
+	Citations    []Citation                 `json:"citations,omitempty"`
+	// A web_search part holds its call ID in CallID, the error code of a failed search in Text with IsError set, and:
+	Query   string         `json:"query,omitempty"`
+	Results []SearchResult `json:"results,omitempty"`
 }
 
 // Message roles.
@@ -480,5 +498,5 @@ func (ToolResultRetained) Kind() string { return KindToolResultRetained }
 // Add returns the sum of u and v.
 func (u Usage) Add(v Usage) Usage {
 	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
-		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
+		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens, u.WebSearchRequests + v.WebSearchRequests}
 }

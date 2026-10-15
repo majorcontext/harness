@@ -1,0 +1,156 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "find the release"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "find the release"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "web_search",
+              "text": "query srvtoolu_1",
+              "tool_name": "web_search",
+              "tool_use_id": "srvtoolu_1"
+            },
+            {
+              "kind": "web_search_result",
+              "text": "https://example.com/srvtoolu_1",
+              "tool_use_id": "srvtoolu_1"
+            },
+            {
+              "kind": "text",
+              "text": "Leg srvtoolu_1."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "find the release"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "query srvtoolu_1",
+            "call_id": "srvtoolu_1",
+            "content": "Source srvtoolu_1 \u003chttps://example.com/srvtoolu_1\u003e\n"
+          },
+          {
+            "type": "text",
+            "text": "Leg srvtoolu_1.",
+            "content": "cites Source srvtoolu_1 \u003chttps://example.com/srvtoolu_1\u003e\n"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 2273,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 7,
+        "id": "ses:a",
+        "last_turn": {
+          "error": "incomplete response returned, reason: pause_turn",
+          "stop_reason": "failed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 333606,
+          "output_tokens": 100,
+          "web_search_requests": 1
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

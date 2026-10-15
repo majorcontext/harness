@@ -49,7 +49,27 @@ type Reply struct {
 	// ErrorCode is the error.code of an HTTPStatus reply, for example
 	// "context_length_exceeded". Only NewChat sends it.
 	ErrorCode string
+	// WebSearch is a search that the provider runs inside the model call. The
+	// Anthropic and Responses servers stream it before Text, and Text cites each
+	// source of the search. The chat-completions server has no search.
+	WebSearch *WebSearch
 }
+
+// WebSearch is a server-side web search in a Reply.
+type WebSearch struct {
+	ID      string // the call ID; default "srvtoolu_1" on the Anthropic wire, "ws_1" on the Responses wire
+	Query   string
+	Sources []Source
+	// Error is the error code of a failed search. Only the Anthropic server sends it.
+	Error string
+	// StepInput is the input tokens of the search steps. The usage of message_delta counts them with the prompt, as the real API does. Only the Anthropic server sends it.
+	StepInput int
+	// Pending streams the search call and no result, as a paused response ends. Only the Anthropic server sends it.
+	Pending bool
+}
+
+// Source is a page that a WebSearch found and the reply cites.
+type Source struct{ Title, URL string }
 
 // ContextOverflowMessage is the error message Anthropic sends for a prompt
 // over the context window. Use it as Reply.ErrorMessage with HTTPStatus 400.
@@ -90,6 +110,8 @@ type Request struct {
 	ToolSpecs map[string]ToolSpec
 	// Header holds the HTTP request headers. Only NewChat fills it.
 	Header http.Header
+	// raw is the body of the request, after the removal of any content encoding. RawRequests reads it.
+	raw []byte
 	// Chat-completions requests only.
 	ReasoningEffort string // top-level reasoning_effort
 	User            string // top-level user
@@ -107,7 +129,7 @@ type Message struct {
 
 // Part is one content block of a Message.
 type Part struct {
-	Kind      string // "text" | "thinking" | "tool_use" | "tool_result" | "image" | "document" (Text is its URL or data URI)
+	Kind      string // "text" | "thinking" | "tool_use" | "tool_result" | "web_search" (Text is the query) | "web_search_result" (Text is the source URLs) | "image" | "document" (Text is its URL or data URI)
 	Text      string
 	ToolName  string
 	ToolInput map[string]any
@@ -253,7 +275,22 @@ func (s *Server) URL() string { return s.srv.URL }
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Request(nil), s.requests...)
+	out := append([]Request(nil), s.requests...)
+	for i := range out {
+		out[i].raw = nil
+	}
+	return out
+}
+
+// RawRequests returns the body of each request, in arrival order, after the removal of any content encoding.
+func (s *Server) RawRequests() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]byte, len(s.requests))
+	for i, r := range s.requests {
+		out[i] = r.raw
+	}
+	return out
 }
 
 // Release lets the named Block step finish. A Release before the request arrives still counts.
@@ -400,6 +437,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, err := s.wire().decode(body, r.Header)
+	req.raw = body
 	if err != nil {
 		s.mu.Lock()
 		s.undecoded = append(s.undecoded, fmt.Sprintf("%v (body prefix %q)", err, body[:min(len(body), 80)]))

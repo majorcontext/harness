@@ -62,10 +62,11 @@ type ToolResult struct {
 
 // Usage counts tokens.
 type Usage struct {
-	InputTokens      int64 `json:"input_tokens"`
-	OutputTokens     int64 `json:"output_tokens"`
-	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	InputTokens       int64 `json:"input_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
+	CacheReadTokens   int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens  int64 `json:"cache_write_tokens,omitempty"`
+	WebSearchRequests int64 `json:"web_search_requests,omitempty"`
 }
 
 // Context is the context gauge of a session: the prompt size of the newest

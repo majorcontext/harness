@@ -199,7 +199,7 @@ func (t taskTool) status(ctx context.Context, id string, up []string) (any, erro
 		FailKind   string         `json:"fail_kind,omitempty"`
 		Usage      protocol.Usage `json:"usage"`
 	}{id, up[0], len(up), k.status, k.children, k.agent, k.result, k.reason, k.kind,
-		protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens}}, nil
+		protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens, WebSearchRequests: u.WebSearchRequests}}, nil
 }
 
 func (t taskTool) send(ctx context.Context, in taskToolArgs, up []string) (any, error) {

@@ -528,6 +528,16 @@ key from `providers`.
 
 Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, which reads public http and https pages. It is off by default.
 
+### Web search
+
+Set `web` to `{"search": true}` to let the model use the web search of its provider. It is off by default and works with `anthropic`, `openai`, `codex`, and `claude-code` models; an `openai-compat` model ignores it.
+
+```json
+{ "web": { "search": true } }
+```
+
+The provider runs the search itself, so a plugin hook cannot block it. A session that lists `allowed_tools` without `web_search` gets no search.
+
 ### OpenAI-compatible endpoints
 
 Ollama, vLLM, LM Studio, and other chat-completions endpoints take one

@@ -18,7 +18,7 @@ func TestWebSpec(t *testing.T) {
 		{name: "project false overrides user true", user: `{"web":{"fetch":true}}`, project: `{"web":{"fetch":false}}`},
 		{name: "an unset project field inherits", user: `{"web":{"fetch":true}}`, project: `{"web":{}}`, wantFetch: true},
 		{name: "a non-object is rejected", user: `{"web":true}`, wantErr: "web"},
-		{name: "an unknown key is rejected", user: `{"web":{"search":true}}`, wantErr: "search"},
+		{name: "an unknown key is rejected", user: `{"web":{"crawl":true}}`, wantErr: "crawl"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			user, err := Parse("user.json", []byte(cmp.Or(tc.user, "{}")))

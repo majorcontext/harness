@@ -42,6 +42,12 @@ export interface ChildSpawned {
   agent?: string;
 }
 
+export interface Citation {
+  url: string;
+  title?: string;
+  quote?: string;
+}
+
 export interface CommandArg {
   name: string;
   type: string;
@@ -267,6 +273,9 @@ export interface LogPart {
   bytes?: number;
   blobs?: LogPart[];
   provider_data?: Record<string, unknown>;
+  citations?: Citation[];
+  query?: string;
+  results?: SearchResult[];
 }
 
 export interface Message {
@@ -314,6 +323,9 @@ export interface MessagePart {
   media_type?: string;
   bytes?: number;
   key?: string;
+  citations?: Citation[];
+  query?: string;
+  results?: SearchResult[];
 }
 
 export interface Model {
@@ -425,6 +437,11 @@ export interface Resolution {
 export interface Resolved {
   seq: number;
   status: string;
+}
+
+export interface SearchResult {
+  title?: string;
+  url: string;
 }
 
 export interface Session {
@@ -565,6 +582,7 @@ export interface Usage {
   output_tokens: number;
   cache_read_tokens?: number;
   cache_write_tokens?: number;
+  web_search_requests?: number;
 }
 
 export interface WorkspaceChanges {

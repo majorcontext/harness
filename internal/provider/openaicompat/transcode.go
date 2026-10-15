@@ -424,6 +424,9 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 			if v.Text != "" {
 				writeBody(prompt.RenderEngineContext(v.Text))
 			}
+		case *message.WebSearch:
+			// The chat-completions wire has no search item, so a search goes back as text.
+			writeBody(prompt.NeutralizeEngineContextSentinel(v.Summary()))
 		case *message.ToolCall:
 			args := string(v.Arguments)
 			if args == "" {
@@ -438,20 +441,7 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 				},
 			})
 		case *message.Reasoning:
-			if _, ok := v.ProviderData.Get(family); !ok {
-				// Foreign-provider reasoning, or a present-but-empty entry
-				// (see message.ProviderData.Get): dropped per the
-				// canonical format's crossing rule.
-				continue
-			}
-			// The generic chat-completions wire has no field to replay
-			// opaque/signed reasoning into (unlike Anthropic's thinking
-			// blocks or OpenAI Responses' encrypted reasoning items), and
-			// this adapter's own stream assembly never populates
-			// ProviderData[family] in the first place (see stream.go) — so
-			// this branch is unreachable in practice. Reasoning is
-			// therefore always dropped when replaying history to a
-			// compat-wire server: there is no signed-reasoning replay here.
+			// This wire has no field for signed reasoning, and the stream of this adapter stores none in ProviderData[family]. Reasoning is always dropped.
 			continue
 		default:
 			return nil, fmt.Errorf("unsupported part type %T in assistant message", p)

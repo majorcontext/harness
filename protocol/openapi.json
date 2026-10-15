@@ -132,6 +132,23 @@
           "child_id"
         ]
       },
+      "Citation": {
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ]
+      },
       "CommandArg": {
         "properties": {
           "name": {
@@ -927,6 +944,21 @@
           "provider_data": {
             "additionalProperties": true,
             "type": "object"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array"
+          },
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array"
           }
         },
         "type": "object",
@@ -1084,6 +1116,21 @@
           },
           "key": {
             "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array"
+          },
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array"
           }
         },
         "type": "object",
@@ -1473,6 +1520,20 @@
         "required": [
           "seq",
           "status"
+        ]
+      },
+      "SearchResult": {
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
         ]
       },
       "Session": {
@@ -1970,6 +2031,9 @@
             "type": "integer"
           },
           "cache_write_tokens": {
+            "type": "integer"
+          },
+          "web_search_requests": {
             "type": "integer"
           }
         },

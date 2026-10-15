@@ -204,9 +204,11 @@ func genParts(t *rapid.T, label string, pool *[]string) Parts {
 
 // genPart draws one of the five concrete Part types PartType enumerates
 // (message.go: PartText, PartBlob, PartToolCall, PartToolResult,
-// PartReasoning) — every part type this package defines.
+// PartReasoning, PartWebSearch) — every part type this package defines.
 func genPart(t *rapid.T, label string, pool *[]string) Part {
-	switch rapid.IntRange(0, 4).Draw(t, label+"Kind") {
+	switch rapid.IntRange(0, 5).Draw(t, label+"Kind") {
+	case 5:
+		return genWebSearch(t, label)
 	case 0:
 		return genText(t, label)
 	case 1:
@@ -222,6 +224,15 @@ func genPart(t *rapid.T, label string, pool *[]string) Part {
 
 func genText(t *rapid.T, label string) *Text {
 	return &Text{Text: rapid.String().Draw(t, label+"Text")}
+}
+
+func genWebSearch(t *rapid.T, label string) *WebSearch {
+	w := &WebSearch{ID: rapid.StringN(0, 12, -1).Draw(t, label+"SearchID"), Query: rapid.String().Draw(t, label+"Query"),
+		Error: rapid.StringN(0, 8, -1).Draw(t, label+"SearchError"), ProviderData: genProviderData(t, label+"Search")}
+	for i := range rapid.IntRange(0, 2).Draw(t, label+"Results") {
+		w.Results = append(w.Results, SearchResult{Title: rapid.String().Draw(t, label+"Title"), URL: rapid.String().Draw(t, fmt.Sprint(label, "URL", i))})
+	}
+	return w
 }
 
 // genBlob draws MediaType plus, per Blob's doc ("Data ... Mutually

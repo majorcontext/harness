@@ -1,0 +1,103 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "current Go release",
+            "call_id": "toolu#1",
+            "content": "Release History \u003chttps://go.dev/doc/devel/release\u003e\nGo 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Go 1.27.2 is the current release (https://go.dev/doc/devel/release)."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "current Go release",
+            "call_id": "toolu#1",
+            "content": "Release History \u003chttps://go.dev/doc/devel/release\u003e\nGo 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Go 1.27.2 is the current release (https://go.dev/doc/devel/release)."
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "current Go release",
+            "call_id": "toolu#1",
+            "content": "Release History \u003chttps://go.dev/doc/devel/release\u003e\nGo 1.26 Release Notes \u003chttps://go.dev/doc/go1.26\u003e\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Go 1.27.2 is the current release (https://go.dev/doc/devel/release)."
+          }
+        ]
+      }
+    ]
+  }
+}
