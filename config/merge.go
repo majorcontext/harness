@@ -176,6 +176,12 @@ func overlayProvider(ex, v Provider) Provider {
 	if v.Auth != "" {
 		ex.Auth = v.Auth
 	}
+	if v.LoginURL != "" {
+		ex.LoginURL = v.LoginURL
+	}
+	if v.ModelsFrom != "" {
+		ex.ModelsFrom = v.ModelsFrom
+	}
 	if v.BaseURL != "" {
 		ex.BaseURL = v.BaseURL
 	}

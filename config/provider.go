@@ -42,6 +42,7 @@ func nativeProviderEntries() map[string]Provider {
 		"codex": {
 			Type:                TypeOpenAI,
 			Auth:                AuthChatGPT,
+			ModelsFrom:          ModelsFromChatGPT,
 			BaseURL:             codexBaseURL,
 			ResponsesPath:       "/responses",
 			OmitResponseParams:  omitResponseParams(),
@@ -105,8 +106,12 @@ type Provider struct {
 	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
-	// Auth names the credential source of the entry instead of an API key: AuthChatGPT, the ChatGPT subscription login of `harness login codex`. Valid only on an entry that builds the OpenAI Responses adapter, and not with APIKeyEnv.
+	// Auth names the credential source of the entry instead of an API key: AuthChatGPT, the ChatGPT subscription login of `harness login codex`, valid only on an entry that builds the OpenAI Responses adapter; or AuthInjected, a server in front of the endpoint that adds the credential, valid on that entry and on the native anthropic entry. Not valid with APIKeyEnv.
 	Auth string `json:"auth,omitempty"`
+	// LoginURL is the page where the user signs in to an AuthInjected entry. It is absolute, https or http on a loopback host, and holds no secret.
+	LoginURL string `json:"login_url,omitempty"`
+	// ModelsFrom names where the model list of the entry comes from when Models is unset: ModelsFromChatGPT, the model list of the ChatGPT backend. Valid only on an entry that builds the OpenAI Responses adapter.
+	ModelsFrom string `json:"models_from,omitempty"`
 	// BaseURL overrides the provider's default API base URL when non-empty.
 	BaseURL string `json:"base_url,omitempty"`
 	// Family overrides the ProviderData tag / wire-quirk key the openaicompat adapter uses (some
@@ -158,6 +163,9 @@ func claudeCodePermissionModes() []string {
 // UsesChatGPTLogin says that the entry signs in with the ChatGPT login of `harness login codex`.
 func (p Provider) UsesChatGPTLogin() bool { return p.Auth == AuthChatGPT }
 
+// UsesInjectedAuth says that a server in front of the endpoint of the entry adds the credential, so the adapter sends none.
+func (p Provider) UsesInjectedAuth() bool { return p.Auth == AuthInjected }
+
 // UsesClaudeCLI says that the entry runs the Claude Code CLI.
 func (p Provider) UsesClaudeCLI() bool { return p.Type == TypeClaudeCodeCLI }
 
@@ -188,6 +196,33 @@ func (p Provider) CLIBinary() string {
 
 // AuthChatGPT is the value of Provider.Auth for the ChatGPT subscription login of `harness login codex`.
 const AuthChatGPT = "chatgpt"
+
+// AuthInjected is the value of Provider.Auth for an entry whose credential a server in front of the endpoint adds.
+const AuthInjected = "injected"
+
+// ModelsFromChatGPT is the value of Provider.ModelsFrom for the model list of the ChatGPT backend.
+const ModelsFromChatGPT = "chatgpt"
+
+// Wire names the request format that an entry speaks.
+type Wire string
+
+// The wires that WireOf returns.
+const (
+	WireNone      Wire = ""
+	WireResponses Wire = "responses"
+	WireAnthropic Wire = "anthropic"
+)
+
+// WireOf returns the wire of the model API that the entry name builds, or WireNone for an entry of another adapter.
+func WireOf(name string, p Provider) Wire {
+	switch {
+	case buildsResponsesAdapter(name, p):
+		return WireResponses
+	case p.Type == "" && name == "anthropic":
+		return WireAnthropic
+	}
+	return WireNone
+}
 
 // Cache TTL values accepted by Provider.CacheTTL.
 const (
@@ -240,6 +275,9 @@ func validateProviders(providers map[string]Provider) error {
 			return fmt.Errorf("providers.%s: no_prompt_cache_key is only valid on a %q entry (only the openaicompat adapter reads it)", name, TypeOpenAICompat)
 		}
 		if err := validateAuth(name, p); err != nil {
+			return err
+		}
+		if err := validateLoginFields(name, p); err != nil {
 			return err
 		}
 		if err := validateResponsesPath(name, p); err != nil {
@@ -312,22 +350,50 @@ func buildsResponsesAdapter(name string, p Provider) bool {
 	return p.Type == "" && name == "openai"
 }
 
-// validateAuth rejects an unknown auth, auth on an entry that does not build the Responses adapter,
+// validateAuth rejects an unknown auth, auth on an entry that does not build the adapter that reads it,
 // auth with api_key_env, and a base_url that would send the login over plain HTTP to a remote host.
 func validateAuth(name string, p Provider) error {
-	if p.Auth == "" {
+	switch p.Auth {
+	case "":
 		return nil
+	case AuthChatGPT, AuthInjected:
+	default:
+		return fmt.Errorf("providers.%s: unknown auth %q (valid values: %q, %q)", name, p.Auth, AuthChatGPT, AuthInjected)
 	}
+	wire := WireOf(name, p)
 	switch {
-	case p.Auth != AuthChatGPT:
-		return fmt.Errorf("providers.%s: unknown auth %q (valid value: %q)", name, p.Auth, AuthChatGPT)
-	case !buildsResponsesAdapter(name, p):
-		return fmt.Errorf("providers.%s: auth is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
+	case p.Auth == AuthChatGPT && wire != WireResponses:
+		return fmt.Errorf("providers.%s: auth %q is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, p.Auth, "openai", TypeOpenAI)
+	case p.Auth == AuthInjected && wire == WireNone:
+		return fmt.Errorf("providers.%s: auth %q is only valid on an entry that builds the OpenAI Responses adapter or the Anthropic adapter (map key %q or %q with no type, or any key with type %q)", name, p.Auth, "openai", "anthropic", TypeOpenAI)
 	case p.APIKeyEnv != "":
 		return fmt.Errorf("providers.%s: auth and api_key_env are mutually exclusive", name)
+	case p.Auth == AuthInjected:
+		return nil
 	}
 	if err := validateSecureURL(p.BaseURL); err != nil {
 		return fmt.Errorf("providers.%s: base_url with auth %q: %w", name, p.Auth, err)
+	}
+	return nil
+}
+
+// validateLoginFields rejects login_url on an entry that is not injected, a login_url that is not an absolute https
+// URL (or http on a loopback host), and an unknown or misplaced models_from.
+func validateLoginFields(name string, p Provider) error {
+	if p.LoginURL != "" {
+		if p.Auth != AuthInjected {
+			return fmt.Errorf("providers.%s: login_url is only valid with auth %q", name, AuthInjected)
+		}
+		if err := validateSecureURL(p.LoginURL); err != nil {
+			return fmt.Errorf("providers.%s: login_url: %w", name, err)
+		}
+	}
+	switch {
+	case p.ModelsFrom == "":
+	case p.ModelsFrom != ModelsFromChatGPT:
+		return fmt.Errorf("providers.%s: unknown models_from %q (valid value: %q)", name, p.ModelsFrom, ModelsFromChatGPT)
+	case WireOf(name, p) != WireResponses:
+		return fmt.Errorf("providers.%s: models_from is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q)", name, "openai", TypeOpenAI)
 	}
 	return nil
 }
