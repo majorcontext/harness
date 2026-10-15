@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/acpauth"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/internal/jshost"
@@ -29,7 +30,7 @@ import (
 // options is what a host passes to harnessConnect.
 type options struct {
 	// logins owns the login state of the injected provider entries, for the runtimes and the login of the connection.
-	logins       *harness.Logins
+	logins       *injectedauth.Logins
 	user         *config.Config
 	err          error
 	storeDir     string
@@ -156,15 +157,12 @@ func (o *options) modelTransport(name string) http.RoundTripper {
 }
 
 // loginState returns the owner of the injected logins of the connection.
-func (o *options) loginState() *harness.Logins {
+func (o *options) loginState() *injectedauth.Logins {
 	if o.logins == nil {
-		o.logins = harness.NewLogins()
+		o.logins = injectedauth.New(injectedauth.Options{Transport: o.modelTransport, Probe: backend.ProbeOf})
 	}
 	return o.logins
 }
-
-// loginOwner is the owner of the injected logins for the ACP login of the connection. The runtimes set its model transport.
-func (o *options) loginOwner() *injectedauth.Logins { return o.loginState().Owner() }
 
 // proxyOrigin is the scheme and host of proxy.baseURL, or empty when there is none.
 func (o *options) proxyOrigin() string {
@@ -210,7 +208,7 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 // login is the ChatGPT login of the connection: the device code flow, shown to a client that takes an elicitation in URL mode.
 func (o *options) login() acp.Auth {
 	return acpauth.New(acpauth.Options{
-		Logins: o.loginOwner(),
+		Logins: o.loginState(),
 		Config: func(cwd string) (*config.Config, error) {
 			if cwd == "" {
 				cwd = o.defaultDir

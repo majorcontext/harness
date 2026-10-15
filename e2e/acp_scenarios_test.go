@@ -11,6 +11,8 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/backend"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -345,8 +347,7 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 					env.login = startACPLogin(t, *sc.login, sc.model)
 					if sc.login.injected != nil {
 						env.clock = newFakeClock()
-						env.logins = harness.NewLogins()
-						env.logins.Owner().SetNow(env.clock.Now)
+						env.logins = injectedauth.New(injectedauth.Options{Probe: backend.ProbeOf, Now: env.clock.Now})
 					}
 					fake = env.login.fake
 					env.configPath = writeGoalConfigWith(t, "", env.login.config())

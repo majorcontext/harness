@@ -1,33 +1,16 @@
 package harness
 
-import (
-	"net/http"
+import "github.com/majorcontext/harness/internal/injectedauth"
 
-	"github.com/majorcontext/harness/internal/backend"
-	"github.com/majorcontext/harness/internal/injectedauth"
-)
-
-// Logins holds the sign-in state of the injected providers. One value can be shared by runtimes that serve one client.
+// Logins holds the sign-in state of the injected providers of a host. Only the hosts of this module make one; nil makes each runtime build its own.
 type Logins struct{ l *injectedauth.Logins }
 
-// NewLogins returns an empty Logins. A runtime that gets it in Options.Logins supplies its ModelTransport to the probes.
-func NewLogins() *Logins {
-	return &Logins{l: injectedauth.New(injectedauth.Options{Probe: backend.ProbeOf})}
-}
+// InjectedLogins wraps the sign-in state that a host shares between its runtimes and its ACP logins.
+func InjectedLogins(l *injectedauth.Logins) *Logins { return &Logins{l: l} }
 
-// Owner returns the state itself, for the packages of this module that run the login of a connection.
-func (l *Logins) Owner() *injectedauth.Logins {
+func (l *Logins) owner() *injectedauth.Logins {
 	if l == nil {
 		return nil
 	}
-	return l.l
-}
-
-// owner returns the state for a runtime that uses transport, or nil when l is nil.
-func (l *Logins) owner(transport func(provider string) http.RoundTripper) *injectedauth.Logins {
-	if l == nil {
-		return nil
-	}
-	l.l.SetTransport(transport)
 	return l.l
 }

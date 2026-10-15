@@ -90,7 +90,7 @@ type Options struct {
 	Getenv func(key string) string
 	// IssuerTransport carries the ChatGPT login requests to the issuer. nil: the default transport. ModelTransport never carries them.
 	IssuerTransport http.RoundTripper
-	// Logins holds the sign-in state of the injected providers. Runtimes that serve one client share one value. nil: the runtime makes its own.
+	// Logins holds the sign-in state of the injected providers. The hosts of this module set it; nil: the runtime makes its own from ModelTransport.
 	Logins *Logins
 	// Host says what the host cannot do. The zero value is a host that can do everything.
 	Host HostLimits
@@ -261,7 +261,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, Logins: opts.Logins.owner(opts.ModelTransport), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, IssuerTransport: opts.IssuerTransport, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)

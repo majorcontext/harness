@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/store"
 )
 
@@ -30,7 +31,7 @@ type acpEnv struct {
 	// device is the scripted issuer of the device code login. Nil: none.
 	device *deviceRun
 	// logins and clock are the injected login state of the in-process host, and its clock. The binary host has its own.
-	logins *harness.Logins
+	logins *injectedauth.Logins
 	clock  *fakeClock
 	// injectedElicitations maps a step name to the elicitationId of the URL elicitation of an injected sign-in.
 	injectedElicitations map[string]string

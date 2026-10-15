@@ -232,7 +232,7 @@ func (l *acpLoginRun) auth(env acpEnv) acp.Auth {
 		budget = l.spec.budget
 	}
 	return acpauth.New(acpauth.Options{
-		Logins:      env.logins.Owner(),
+		Logins:      env.logins,
 		LoginBudget: budget,
 		LookPath:    l.lookPath,
 		Config: func(cwd string) (*config.Config, error) {

@@ -14,6 +14,8 @@ import (
 	"github.com/majorcontext/harness/internal/acp"
 	"github.com/majorcontext/harness/internal/acp/acpauth"
 	"github.com/majorcontext/harness/internal/acp/cwdruntimes"
+	"github.com/majorcontext/harness/internal/backend"
+	"github.com/majorcontext/harness/internal/injectedauth"
 	"github.com/majorcontext/harness/store"
 )
 
@@ -35,7 +37,7 @@ func acpCmd(args []string) error {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	logins := harness.NewLogins()
+	logins := injectedauth.New(injectedauth.Options{Probe: backend.ProbeOf})
 	err := acp.Serve(ctx, acpRuntimes(logger, logins), os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger, MCP: true, List: acpDir() != "", Auth: acpLogin(logins)})
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		return nil
@@ -44,9 +46,9 @@ func acpCmd(args []string) error {
 }
 
 // acpLogin offers the logins of the user config through ACP. The sign-in text goes to stderr: stdout holds ACP frames only.
-func acpLogin(logins *harness.Logins) acp.Auth {
+func acpLogin(logins *injectedauth.Logins) acp.Auth {
 	return acpauth.New(acpauth.Options{
-		Logins: logins.Owner(),
+		Logins: logins,
 		Config: func(cwd string) (*config.Config, error) {
 			var cfg *config.Config
 			var err error
@@ -72,7 +74,7 @@ func acpLogin(logins *harness.Logins) acp.Auth {
 // acpRuntimes wires the real config loading, session directory, and owner into
 // the runtimes of the acp command. The first work directory decides the session
 // directory and the owner epoch.
-func acpRuntimes(logger *slog.Logger, logins *harness.Logins) *cwdruntimes.Runtimes {
+func acpRuntimes(logger *slog.Logger, logins *injectedauth.Logins) *cwdruntimes.Runtimes {
 	dir := acpDir()
 	return cwdruntimes.New(cwdruntimes.Options{
 		Config: func(cwd string) (*config.Config, error) {

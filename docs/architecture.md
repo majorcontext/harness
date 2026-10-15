@@ -122,7 +122,7 @@ type Options struct {
 	Owner  Owner         // nil: NewLocalOwner(1)
 	Sync   Sync          // nil: no replication
 	Config config.Config // New checks it with Validate; it reads neither owner_epoch nor sync
-	Logins *Logins       // the sign-in state of injected providers, shared by runtimes that serve one client; nil: each runtime makes its own
+	Logins *Logins       // the sign-in state of injected providers; the hosts of this module set it, embedders leave it nil, and each runtime then makes its own from ModelTransport
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
@@ -272,9 +272,6 @@ func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq
 
 // NewLocalOwner grants every session to this process at epoch, one grant at a time.
 func NewLocalOwner(epoch uint64) Owner
-
-// NewLogins returns the sign-in state of injected providers, which Options.Logins shares among runtimes. The runtime supplies its ModelTransport to the probes.
-func NewLogins() *Logins
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
 	// Deliver returns the receiver's head on success and on a seq mismatch;
