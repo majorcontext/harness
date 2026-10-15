@@ -2,8 +2,15 @@
 // another. History is provider-neutral, so the second model sees the whole
 // conversation with no migration.
 //
-//	ANTHROPIC_API_KEY=... go run ./examples/switch-model
-//	ANTHROPIC_API_KEY=... OPENAI_API_KEY=... go run ./examples/switch-model -then openai/gpt-5
+//	go run ./examples/switch-model
+//	go run ./examples/switch-model -first codex/gpt-6.1-sol -then claude-code/sonnet
+//
+// With no flags, the first model is the default of the machine: the API
+// default when ANTHROPIC_API_KEY is set, else the ChatGPT login of "harness
+// login codex", else the claude program on PATH. The second model is the first
+// other model that can run: the Codex login, the claude program, or the API
+// haiku model with ANTHROPIC_API_KEY. When there is none, the example says so
+// and exits.
 package main
 
 import (
@@ -15,18 +22,18 @@ import (
 	"os"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/examples/internal/login"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
 
 func main() {
-	first := flag.String("first", config.DefaultModel, "model for the first prompt")
-	then := flag.String("then", "anthropic/claude-haiku-4-5-20251001", "model for the second prompt")
+	first := flag.String("first", "", "model for the first prompt; empty selects the default")
+	then := flag.String("then", "", "model for the second prompt; empty selects another model that can run")
 	flag.Parse()
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: login.Config(), Getenv: os.Getenv})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -36,7 +43,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("[%s]\n", s.Snapshot().Model)
+	current := s.Snapshot().Model
+	if *then == "" {
+		alts := login.Alternatives(current)
+		if len(alts) == 0 {
+			fmt.Printf("Only %s can run here, so there is no model to switch to. Run \"harness login codex\", install claude, or set ANTHROPIC_API_KEY.\n", current)
+			return
+		}
+		*then = alts[0]
+	}
+	fmt.Printf("[%s]\n", current)
 	say(ctx, s, "first", "Pick a random animal. Reply with only its name.")
 
 	if _, err := s.Update(ctx, protocol.SettingsPatch{Model: then}); err != nil {
