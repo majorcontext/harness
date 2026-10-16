@@ -33,6 +33,7 @@ func (a *agent) closeNow(ctx context.Context, params json.RawMessage) (any, erro
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
 	defer cancel()
 	h.idle(bg)
+	h.awaitStop(bg)
 	h.flush(bg, h.sess.Snapshot().HeadSeq)
 	h.close()
 	if err := h.sess.Release(bg); err != nil && !errors.Is(err, harness.ErrSessionNotOwned) {

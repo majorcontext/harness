@@ -75,3 +75,33 @@ func TestACPCancelStopsTheAutomaticTurnAfterTheUsageLimitResets(t *testing.T) {
 		acpAwaitUpdate{kind: "session_info_update"}.run(t, c)
 	})
 }
+
+func TestACPPromptAfterAnIdleCancelRunsToCompletion(t *testing.T) {
+	steps := []harnesstest.Step{{Name: "limit", Reply: codexLimit(time.Hour)}, {Name: "ok", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}}
+	runACPContinue(t, steps, func(t *testing.T, c *acpConn, _ *harnesstest.OpenAI, _ func() protocol.Session) {
+		acpPromptStart{as: "a", text: "go"}.run(t, c)
+		c.response(c.pending["a"])
+		for i := range 20 {
+			acpCancel{as: "a"}.run(t, c)
+			id := "again" + string(rune('a'+i))
+			acpPromptStart{as: "a", id: id, text: "again"}.run(t, c)
+			acpResult{id: id, stop: "end_turn"}.run(t, c)
+		}
+		acpAwaitUpdate{kind: "session_info_update"}.run(t, c)
+	})
+}
+
+func TestACPCloseCancelsThePendingContinue(t *testing.T) {
+	runACPContinue(t, []harnesstest.Step{{Name: "limit", Reply: codexLimit(time.Hour)}},
+		func(t *testing.T, c *acpConn, _ *harnesstest.OpenAI, snap func() protocol.Session) {
+			acpPromptStart{as: "a", text: "go"}.run(t, c)
+			c.response(c.pending["a"])
+			if snap().ContinueAt == 0 {
+				t.Fatal("no pending continue after the usage limit")
+			}
+			c.mustBeResult(c.response(c.request("session/close", map[string]any{"sessionId": c.session("a")})), "CloseSessionResponse")
+			if at := snap().ContinueAt; at != 0 {
+				t.Fatalf("continue_at after session/close = %d, want none, so a later load runs no continue", at)
+			}
+		})
+}

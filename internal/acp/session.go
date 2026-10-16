@@ -37,6 +37,8 @@ type held struct {
 	ended   bool
 	wake    chan struct{}
 	prompts map[*prompt]struct{}
+	// idleStop closes when the newest interrupt of an idle session/cancel has returned. A prompt and a close wait for it.
+	idleStop chan struct{}
 	// elicits are the elicitations that wait for an answer, by request ID. answers waits for the goroutines that read them.
 	elicits map[string]*rpc.Pending
 	answers sync.WaitGroup
@@ -397,7 +399,37 @@ func (h *held) cancel(ctx context.Context) {
 		go h.cancelTurn(ctx, t)
 	}
 	if idle {
-		go h.interruptSession(ctx)
+		h.stopIdle(ctx)
+	}
+}
+
+// stopIdle interrupts the session in the order of the cancels, without blocking the caller.
+func (h *held) stopIdle(ctx context.Context) {
+	done := make(chan struct{})
+	h.mu.Lock()
+	prev := h.idleStop
+	h.idleStop = done
+	h.mu.Unlock()
+	go func() {
+		defer close(done)
+		if prev != nil {
+			<-prev
+		}
+		h.interruptSession(ctx)
+	}()
+}
+
+// awaitStop waits until every interrupt of an idle session/cancel that arrived before now has returned, or ctx ends.
+func (h *held) awaitStop(ctx context.Context) {
+	h.mu.Lock()
+	done := h.idleStop
+	h.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 
