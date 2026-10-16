@@ -69,7 +69,7 @@ func TestCodecRejects(t *testing.T) {
 
 func everyKind() []protocol.Payload {
 	return []protocol.Payload{
-		protocol.SessionCreated{ParentID: "p", Model: "openai/gpt-5", Settings: protocol.Settings{Effort: "high"}, Origin: "cli"},
+		protocol.SessionCreated{Model: "openai/gpt-5", Settings: protocol.Settings{Effort: "high"}, Origin: "cli"},
 		protocol.OwnerAcquired{Epoch: 7, Owner: "box-1"},
 		protocol.SettingsChanged{ServiceTier: new("flex")},
 		protocol.GoalSet{Condition: "tests pass", MaxTurns: 3},
@@ -91,6 +91,8 @@ func everyKind() []protocol.Payload {
 		goal(protocol.GoalAchieved),
 		protocol.ChildSettled{ChildID: "k", Outcome: protocol.OutcomeDone, ResultRef: "blob/k"},
 		admit("b"), withdraw("b"),
+		admit("d"), start("t2", "d"), protocol.TurnEnded{TurnID: "t2", StopReason: protocol.StopFailed, Cause: protocol.CauseProviderExhausted, ResetsAt: 1},
+		protocol.ContinueCancelled{ContinueAt: 1},
 		protocol.CommandRecorded{InputID: "c", Line: "/thinking high", Name: "thinking", Args: map[string]any{"effort": "high"},
 			Status: "succeeded", Text: "/thinking succeeded", Result: json.RawMessage(`{"effort":"high"}`)},
 	}
@@ -132,8 +134,8 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 	if !reflect.DeepEqual(&replayed, &live) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
-	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
-		HeadSeq: 27, CreatedAt: t0, UpdatedAt: t0.Add(26 * time.Second)}
+	want := Summary{Origin: "cli", Model: "openai/gpt-5", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
+		HeadSeq: 31, CreatedAt: t0, UpdatedAt: t0.Add(30 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

@@ -234,3 +234,11 @@ func (s *State) isOpen(id string) bool {
 	_, ok := s.requests[id]
 	return ok
 }
+
+func (s *State) applyContinueCancelled(e protocol.ContinueCancelled) error {
+	if s.continueAt.IsZero() || s.continueAt.Unix() != e.ContinueAt {
+		return illegal("continue.cancelled names %d, and the pending continue is %v", e.ContinueAt, s.continueAt)
+	}
+	s.continueAt = time.Time{}
+	return nil
+}

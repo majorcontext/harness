@@ -235,10 +235,9 @@ type Actor struct {
 	retryStop  context.CancelFunc
 	retryAt    time.Time
 	// contStop stops the timer of the pending continue, and contArmed is the
-	// time it waits for. contOff is the continue that an interrupt canceled.
+	// time it waits for.
 	contStop  context.CancelFunc
 	contArmed time.Time
-	contOff   time.Time
 	// pins holds the engine context that the model reads inside the history.
 	pins turn.Pins
 	// pinned is true once a model call of this process has pinned.
@@ -558,9 +557,6 @@ func (a *Actor) publish(stopped bool, appended ...protocol.Payload) {
 	caps := a.cfg.Backend.Capabilities(a.state.Model())
 	next := &View{Session: Describe(a.cfg.ID, a.state, caps.ContextWindow, caps.WindowEstimated), Unsettled: a.state.Unsettled(),
 		Stopped: stopped, changed: make(chan struct{})}
-	if _, ok := a.pendingContinue(); !ok {
-		next.Session.ContinueAt = 0
-	}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	a.live.settle(appended)

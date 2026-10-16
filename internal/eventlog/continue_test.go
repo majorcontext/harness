@@ -39,7 +39,10 @@ func TestContinueAtFollowsAUsageLimitWithAResetTime(t *testing.T) {
 		{"a turn that completes arms nothing", with(running, end("t1", protocol.StopCompleted, "")), time.Time{}},
 		{"a live goal arms nothing", with(base, setGoal, admit("a"), start("t1", "a"), exhausted("t1", reset)), time.Time{}},
 		{"an input cancels the continue", with(limited(reset), admit("b")), time.Time{}},
-		{"a goal set after the limit takes the continue away", with(limited(reset), setGoal), time.Time{}},
+		{"a goal set after the limit takes the continue away for good", with(limited(reset), setGoal, goal(protocol.GoalCleared)), time.Time{}},
+		{"a withdrawn input cancels the continue", with(running, admit("w"), exhausted("t1", reset), withdraw("w")), time.Time{}},
+		{"a cancel record clears the continue", with(limited(reset), protocol.ContinueCancelled{ContinueAt: reset.Unix()}), time.Time{}},
+		{"a limit after a cancel arms again", with(limited(reset), protocol.ContinueCancelled{ContinueAt: reset.Unix()}, admit("b"), start("t2", "b"), exhausted("t2", reset)), reset},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := replay(t, tc.events).ContinueAt()
@@ -121,5 +124,24 @@ func TestLastTurnCarriesTheResetTime(t *testing.T) {
 	reset := t0.Add(time.Hour)
 	if got := replay(t, limited(reset)).Progress().LastTurn.ResetsAt; got != reset.Unix() {
 		t.Fatalf("LastTurn.ResetsAt = %d, want %d", got, reset.Unix())
+	}
+}
+
+func TestACancelNamesThePendingContinue(t *testing.T) {
+	reset := t0.Add(time.Hour)
+	for name, events := range map[string][]protocol.Payload{
+		"no continue is pending":      with(running, protocol.ContinueCancelled{ContinueAt: reset.Unix()}),
+		"another continue is pending": with(limited(reset), protocol.ContinueCancelled{ContinueAt: reset.Unix() + 1}),
+	} {
+		var s State
+		var err error
+		for _, e := range events {
+			if err = s.Apply(record(t, s.Head()+1, e)); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			t.Errorf("%s: continue.cancelled applied, want an illegal transition", name)
+		}
 	}
 }

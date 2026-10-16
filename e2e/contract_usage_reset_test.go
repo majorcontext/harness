@@ -99,6 +99,9 @@ func TestContractUsageResetContinue(t *testing.T) {
 		{"the_view_shows_the_pending_continue_and_an_input_cancels_it", resetViewAndCancel},
 		{"a_reset_more_than_a_day_away_arms_no_continue", resetBeyondADay},
 		{"a_pending_continue_survives_a_restart", resetSurvivesRestart},
+		{"an_interrupt_cancels_the_pending_continue_across_a_restart", resetInterruptCancels},
+		{"ending_the_session_cancels_the_pending_continue_across_a_restart", resetEndCancels},
+		{"a_prompt_that_names_the_usage_reset_source_is_an_ordinary_input", resetClientSourceIsOrdinary},
 	}
 	eachResetLane(t, func(t *testing.T, h host, l resetLane) {
 		for _, row := range rows {
@@ -219,6 +222,105 @@ func TestContractGoalWaitsForTheUsageLimitReset(t *testing.T) {
 			}
 			if v.ContinueAt != 0 {
 				t.Fatalf("continue_at = %d, want none for a session with a goal", v.ContinueAt)
+			}
+		})
+	})
+}
+
+// limitedSession runs one turn that a usage limit refuses, resetting in an hour, and returns the reset time.
+func limitedSession(t *testing.T, h host, l resetLane) (*runtimeDriver, string, int64) {
+	t.Helper()
+	d, _ := l.open(t, h, time.Hour, 1, harnesstest.Step{Name: "ok", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true})
+	id := d.Create(t)
+	d.Submit(t, id, "first")
+	d.awaitTurnEnds(t, id, 1)
+	at := d.view(t, id).ContinueAt
+	if at == 0 {
+		t.Fatal("no pending continue after the usage limit")
+	}
+	return d, id, at
+}
+
+func (d *runtimeDriver) reopen(t *testing.T) {
+	t.Helper()
+	d.Restart(t, false)
+	if !d.serve {
+		d.openAll(t)
+	}
+}
+
+func resetInterruptCancels(t *testing.T, h host, l resetLane) {
+	d, id, _ := limitedSession(t, h, l)
+	d.Interrupt(t, id)
+	if at := d.view(t, id).ContinueAt; at != 0 {
+		t.Fatalf("continue_at after the interrupt = %d, want none", at)
+	}
+	d.reopen(t)
+	if at := d.view(t, id).ContinueAt; at != 0 {
+		t.Fatalf("continue_at after the restart = %d, want none for an interrupted continue", at)
+	}
+}
+
+func resetEndCancels(t *testing.T, h host, l resetLane) {
+	d, id, _ := limitedSession(t, h, l)
+	d.EndSession(t, id)
+	d.reopen(t)
+	if at := d.view(t, id).ContinueAt; at != 0 {
+		t.Fatalf("continue_at after the end and the restart = %d, want none", at)
+	}
+}
+
+func resetClientSourceIsOrdinary(t *testing.T, h host, l resetLane) {
+	d, id, _ := limitedSession(t, h, l)
+	path, body := d.inputAs(id, "client_reset", "carry on", "", protocol.SourceUsageReset)
+	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
+	d.awaitTurnEnds(t, id, 2)
+	if at := d.view(t, id).ContinueAt; at != 0 && l.name == "codex" {
+		t.Fatalf("continue_at = %d, want the input of a client to cancel the continue", at)
+	}
+	inputs := d.userInputs(t, id)
+	if len(inputs) != 2 || inputs[1] != "usage_reset: carry on" {
+		t.Fatalf("user messages = %v, want the client prompt as the only usage_reset message, run as an ordinary input", inputs)
+	}
+}
+
+func TestContractCancelledContinueDoesNotBlockTheNextOne(t *testing.T) {
+	skipShort(t)
+	onHosts(t, func(t *testing.T, h host) {
+		t.Run("a_new_limit_with_the_same_reset_time_arms_a_continue_after_a_cancel", func(t *testing.T) {
+			t.Parallel()
+			reset := time.Now().Add(time.Hour).Unix()
+			limit := codexLimit(0)
+			limit.ResetsAt = reset
+			o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{APIKey: codexAPIKey},
+				harnesstest.Step{Name: "limit", Reply: limit}, harnesstest.Step{Name: "again", Reply: limit})
+			d := codexDriver(t, h, nil, nil, o.URL(), codexConfig(o.URL(), false, nil)).(*runtimeDriver)
+			id := d.Create(t)
+			d.Submit(t, id, "first")
+			d.awaitTurnEnds(t, id, 1)
+			d.Interrupt(t, id)
+			d.Submit(t, id, "again")
+			d.awaitTurnEnds(t, id, 2)
+			if at := d.view(t, id).ContinueAt; at != reset {
+				t.Fatalf("continue_at = %d, want %d: a cancel must not suppress a later continue", at, reset)
+			}
+		})
+	})
+}
+
+func TestContractClaudeCodeGoalWaitsForTheUsageLimitReset(t *testing.T) {
+	skipShort(t)
+	onHosts(t, func(t *testing.T, h host) {
+		t.Run("claudecode_goal_pauses_at_the_reset_time_and_the_pause_does_not_count", func(t *testing.T) {
+			t.Parallel()
+			lane := claudeLane{mode: "usage_limit_rejected", env: map[string]string{"FAKE_CLAUDE_RESETS_IN": "1h"}}
+			d := lane.newDriver(t, h, "").(*claudeDriver).laneHost.(*runtimeDriver)
+			id := d.Create(t)
+			d.SetGoal(t, id, "say done", 0, false)
+			d.awaitTurnEnds(t, id, 1)
+			v := d.view(t, id)
+			if v.Goal == nil || v.Goal.State != protocol.GoalPaused || v.Goal.Pauses != 0 || v.LastTurn == nil || v.Goal.RetryAt.Unix() != v.LastTurn.ResetsAt {
+				t.Fatalf("goal = %+v, last turn %+v; want paused until the reset time with no counted pause", v.Goal, v.LastTurn)
 			}
 		})
 	})

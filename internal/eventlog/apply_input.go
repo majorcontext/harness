@@ -69,6 +69,7 @@ func (s *State) applyWithdrawn(e protocol.InputWithdrawn) error {
 		return err
 	}
 	s.takeInput(e.InputID, inputWithdrawn)
+	s.continueAt = time.Time{}
 	return nil
 }
 

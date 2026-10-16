@@ -408,6 +408,17 @@
           "source"
         ]
       },
+      "ContinueCancelled": {
+        "properties": {
+          "continue_at": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "continue_at"
+        ]
+      },
       "CreateSession": {
         "properties": {
           "id": {

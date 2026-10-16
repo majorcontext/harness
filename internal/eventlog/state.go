@@ -299,13 +299,9 @@ func (s *State) Held() bool {
 }
 
 // ContinueAt returns the time at which the session continues after a usage
-// limit reset, and whether a continue is pending. A goal that is live
-// continues by its own rules, so it has no pending continue.
+// limit reset, and whether a continue is pending.
 func (s *State) ContinueAt() (time.Time, bool) {
-	if s.continueAt.IsZero() || liveGoal(s.goalState()) {
-		return time.Time{}, false
-	}
-	return s.continueAt, true
+	return s.continueAt, !s.continueAt.IsZero()
 }
 
 func liveGoal(g protocol.GoalState) bool {
@@ -487,6 +483,8 @@ func (s *State) step(env Envelope) error {
 		return s.applyBackendState(e)
 	case protocol.ToolResultRetained:
 		return s.applyRetained(e)
+	case protocol.ContinueCancelled:
+		return s.applyContinueCancelled(e)
 	}
 	return fmt.Errorf("%w: %T", ErrUnknownKind, env.Event)
 }

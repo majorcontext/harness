@@ -13,13 +13,10 @@ const usageResetText = "[usage limit: The usage limit of the provider has reset.
 
 // pendingContinue returns the time at which this actor continues the session
 // after a usage limit reset. It reports none when the runtime does not serve
-// continues, and for a continue that an interrupt canceled.
+// continues; the state alone says what is pending.
 func (a *Actor) pendingContinue() (time.Time, bool) {
 	at, ok := a.state.ContinueAt()
-	if !ok || !a.cfg.ContinueOnReset || at.Equal(a.contOff) {
-		return time.Time{}, false
-	}
-	return at, true
+	return at, ok && a.cfg.ContinueOnReset
 }
 
 // continueLater arms the timer of the pending continue. It replaces the timer
@@ -61,14 +58,13 @@ func (a *Actor) rearmContinue() {
 	}
 }
 
-// cancelContinue cancels the pending continue of this owner. The log holds no
-// record of it, so the next Open derives the continue again.
-func (a *Actor) cancelContinue() {
-	if at, ok := a.pendingContinue(); ok {
-		a.contOff = at
-		a.stopContinue()
-		a.publish(false)
+// cancelContinue appends the cancel of the pending continue, if the state has one.
+func (a *Actor) cancelContinue() error {
+	at, ok := a.state.ContinueAt()
+	if !ok {
+		return nil
 	}
+	return a.append(protocol.ContinueCancelled{ContinueAt: at.Unix()})
 }
 
 // continueNow admits the usage_reset input at the front of the queue, and

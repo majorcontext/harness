@@ -87,9 +87,13 @@ func TestAPendingContinueRunsAtTheResetTimeBeforeTheHeldInput(t *testing.T) {
 
 func TestARuntimeThatDoesNotServeTheSessionFiresNoContinue(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
 		a, b := openLimited(t, false)
-		if !quiet(b, 48*time.Hour) || a.View().Session.ContinueAt != 0 {
-			t.Fatal("a runtime with ContinueOnReset false fired a continue or showed one")
+		if !quiet(b, 48*time.Hour) {
+			t.Fatal("a runtime with ContinueOnReset false fired a continue")
+		}
+		if at := a.View().Session.ContinueAt; at != start.Add(time.Hour).Unix() {
+			t.Fatalf("continue_at = %d, want the pending continue that the log holds", at)
 		}
 	})
 }
@@ -146,4 +150,41 @@ func TestOpenContinuesAtOnceWhenTheResetTimeHasPassed(t *testing.T) {
 			t.Fatalf("first turn took %+v after %s, want the usage reset text at once", first, time.Since(start))
 		}
 	})
+}
+
+func TestACancelledContinueStaysCancelledAfterOpen(t *testing.T) {
+	for name, stop := range map[string]func(*Actor) error{
+		"interrupt": func(a *Actor) error {
+			if err := a.Interrupt(context.Background(), ""); err != nil {
+				return err
+			}
+			return a.Release(context.Background())
+		},
+		"end": func(a *Actor) error { return a.End(context.Background()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				log := limitedLog(t)
+				b := &inputBackend{runs: make(chan protocol.LogPart)}
+				cfg := actorConfig(t, log, owned{}, b)
+				cfg.ContinueOnReset = true
+				a, err := Open(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.Run()
+				if err := stop(a); err != nil {
+					t.Fatal(err)
+				}
+				next, err := Open(context.Background(), actorConfig(t, log, owned{}, b))
+				if err != nil {
+					t.Fatal(err)
+				}
+				next.Run()
+				if at := next.View().Session.ContinueAt; at != 0 || !quiet(b, 48*time.Hour) {
+					t.Fatalf("continue_at %d after the new Open, or a continue ran; want none", at)
+				}
+			})
+		})
+	}
 }

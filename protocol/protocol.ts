@@ -127,6 +127,10 @@ export interface ContextMeasured {
   cost_usd?: number;
 }
 
+export interface ContinueCancelled {
+  continue_at: number;
+}
+
 export interface CreateSession {
   id?: string;
   model?: string;
