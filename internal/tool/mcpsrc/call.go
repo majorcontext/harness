@@ -16,8 +16,8 @@ import (
 // with IsError; a failed connect or transport returns an error without the
 // endpoint.
 func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMessage) (protocol.ToolResult, error) {
-	owner, e := s.find(server)
-	if e == nil {
+	owner := s.owner(server)
+	if owner == nil {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not configured", server)
 	}
 	var in any
@@ -29,18 +29,18 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 	if !s.wait(ctx) {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q: %w", server, context.Cause(ctx))
 	}
-	if !owner.connected(e) {
-		if err := owner.redial(ctx, e); err != nil {
+	if sv, _ := owner.serverNow(server); !sv.up() {
+		if err := owner.redial(ctx, server); err != nil {
 			return protocol.ToolResult{}, err
 		}
 	}
-	sv := owner.serverOf(e)
+	sv, life := owner.serverNow(server)
 	if !sv.up() {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not connected", server)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	defer context.AfterFunc(e.ctx, cancel)()
+	defer context.AfterFunc(life, cancel)()
 	res, err := sv.client.CallTool(ctx, tool, in)
 	if err != nil {
 		return protocol.ToolResult{}, hide(server, err)
@@ -49,21 +49,12 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 	return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
 }
 
-func (s *Source) serverOf(e *entry) *server {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return e.sv
-}
-
-// redial dials a server that dropped after it connected. A server that is
-// retrying or parked returns the reason of its last failed connect instead.
-func (s *Source) redial(ctx context.Context, e *entry) error {
-	s.mu.Lock()
-	h := e.health
-	s.mu.Unlock()
-	server := e.name
+// redial dials a server that nothing has tried. A server that is retrying or parked returns the reason of its
+// last failed connect instead.
+func (s *Source) redial(ctx context.Context, server string) error {
+	h := s.snap.Load().health[server]
 	if h.reason == "" {
-		if _, err := s.connect(ctx, e); err != nil {
+		if _, err := s.connectNow(ctx, server); err != nil {
 			if ctx.Err() != nil {
 				return fmt.Errorf("mcp: server %q: %w", server, context.Cause(ctx))
 			}

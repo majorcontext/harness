@@ -41,9 +41,9 @@ func (r *Runtime) SetMCPServers(ctx context.Context, servers map[string]config.M
 			}
 		}
 	}
-	finish := r.mcp.Replace(servers)
+	status := r.mcp.Set(servers)
 	r.mu.Unlock()
-	return finish(), nil
+	return status, nil
 }
 
 // mcpClash reports a name of session servers that a runtime server has. The caller holds r.mu.

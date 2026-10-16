@@ -31,6 +31,8 @@ type memServer struct {
 	// before the list itself. After that answer is built, the server lists notifyTools.
 	notify      *gate
 	notifyTools []string
+	// notifyCall makes the next tools/call answer start with a list_changed notification.
+	notifyCall bool
 }
 
 func newMemServer(tools ...string) *memServer {
@@ -44,6 +46,13 @@ func (m *memServer) holdNext(method string) *gate {
 	m.gates[method] = append(m.gates[method], g)
 	m.mu.Unlock()
 	return g
+}
+
+// notifyOnNextCall makes the answer to the next tools/call carry a list_changed notification.
+func (m *memServer) notifyOnNextCall() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifyCall = true
 }
 
 // failNext makes the next request of method answer with HTTP 500.
@@ -119,6 +128,7 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	var result any = map[string]any{}
 	var special *gate
+	var notifyNow bool
 	switch method {
 	case "initialize":
 		result = map[string]any{"protocolVersion": mcp.LatestProtocolVersion, "serverInfo": map[string]any{"name": "mem", "version": "1"},
@@ -131,6 +141,12 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 		result = map[string]any{"tools": tools}
 		if special, m.notify = m.notify, nil; special != nil {
 			m.tools = m.notifyTools
+		}
+	case "tools/call":
+		result = map[string]any{"content": []map[string]any{{"type": "text", "text": "ok"}}}
+		if m.notifyCall {
+			m.notifyCall = false
+			notifyNow = true
 		}
 	case "resources/read":
 		result = map[string]any{"contents": []map[string]any{{"uri": "doc://x", "text": "body"}}}
@@ -156,6 +172,10 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	default:
 		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 		resp.Body = io.NopCloser(bytes.NewReader(b))
+		if notifyNow {
+			resp.Header.Set("Content-Type", "text/event-stream")
+			resp.Body = io.NopCloser(bytes.NewReader(append([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\nevent: message\ndata: "), append(b, "\n\n"...)...)))
+		}
 		if special != nil {
 			resp.Header.Set("Content-Type", "text/event-stream")
 			resp.Body = &notifyBody{head: []byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n"),
@@ -184,6 +204,15 @@ func toolNamesOf(s *Source, server string) []string {
 	return out
 }
 
+// trigger makes the server send a list_changed notification in the answer to a call, and waits for the call.
+func trigger(t *testing.T, s *Source, m *memServer) {
+	t.Helper()
+	m.notifyOnNextCall()
+	if _, err := s.Call(context.Background(), "w", "a", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReplacementConnectsOnlyAfterTheOldClientClosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newMemServer("a")
@@ -195,8 +224,7 @@ func TestReplacementConnectsOnlyAfterTheOldClientClosed(t *testing.T) {
 		defer release()
 		changed := memSpec()
 		changed.ConnectTimeoutS = 20
-		fin := s.Replace(map[string]config.MCPServerSpec{"w": changed})
-		go fin()
+		s.Set(map[string]config.MCPServerSpec{"w": changed})
 		<-del.held
 		synctest.Wait()
 		if got := m.count("initialize"); got != 1 {
@@ -210,76 +238,28 @@ func TestReplacementConnectsOnlyAfterTheOldClientClosed(t *testing.T) {
 	})
 }
 
-func TestEmptySetStartsNoFirstConnect(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m := newMemServer("a")
-		s := memSource(m, nil)
-		defer s.Close()
-		s.Replace(map[string]config.MCPServerSpec{})()
-		synctest.Wait()
-		s.Replace(map[string]config.MCPServerSpec{"w": memSpec()})()
-		synctest.Wait()
-		if ts := s.Toolset(context.Background(), nil, nil, ""); len(ts.Deferred) != 0 || !slices.ContainsFunc(ts.Tools, func(t turn.Tool) bool { return t.Spec().Name == "mcp__w__a" }) {
-			t.Errorf("tools %d, deferred %d, want the tool eager as a tool of the first connect", len(ts.Tools), len(ts.Deferred))
-		}
-	})
-}
-
-func TestOlderToolListAnswerNeverReplacesANewerOne(t *testing.T) {
+func TestNextClientOfANameWaitsForEveryEarlierClientToClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newMemServer("a")
 		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
 		defer s.Close()
 		s.Toolset(context.Background(), nil, nil, "")
-		_, e := s.find("w")
-		c := s.view().live["w"].client
-		older := m.holdNext("tools/list")
-		s.listChanged(e, c)
-		<-older.held
-		m.setTools("a", "b")
-		s.listChanged(e, c)
+		del := m.holdNext("DELETE")
+		release := sync.OnceFunc(func() { close(del.release) })
+		defer release()
+		second, third := memSpec(), memSpec()
+		second.ConnectTimeoutS, third.ConnectTimeoutS = 20, 30
+		s.Set(map[string]config.MCPServerSpec{"w": second})
+		<-del.held
+		s.Set(map[string]config.MCPServerSpec{"w": third})
 		synctest.Wait()
-		if got := toolNamesOf(s, "w"); !slices.Equal(got, []string{"a", "b"}) {
-			t.Fatalf("tools after the newer read = %v, want [a b]", got)
+		if got := m.count("initialize"); got != 1 {
+			t.Fatalf("initialize requests while the first client closes = %d, want 1", got)
 		}
-		close(older.release)
+		release()
 		synctest.Wait()
-		if got := toolNamesOf(s, "w"); !slices.Equal(got, []string{"a", "b"}) {
-			t.Errorf("tools after the older answer = %v, want [a b]", got)
-		}
-	})
-}
-
-func TestResourceReadEndsWhenItsServerGoes(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m := newMemServer("a")
-		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
-		defer s.Close()
-		s.Toolset(context.Background(), nil, nil, "")
-		read := m.holdNext("resources/read")
-		defer func() {
-			select {
-			case <-read.release:
-			default:
-				close(read.release)
-			}
-		}()
-		var err error
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_, err = reader{s}.Run(context.Background(), protocol.ToolCall{Arguments: json.RawMessage(`{"server":"w","uri":"doc://x"}`)})
-		}()
-		<-read.held
-		s.Replace(map[string]config.MCPServerSpec{})()
-		synctest.Wait()
-		select {
-		case <-done:
-			if err == nil {
-				t.Error("the read of a removed server returned no error")
-			}
-		default:
-			t.Error("the read of a removed server is still in flight")
+		if got := m.count("initialize"); got != 2 {
+			t.Errorf("initialize requests after the first client closed = %d, want 2", got)
 		}
 	})
 }
@@ -295,39 +275,130 @@ func TestReplacementRemovedWhileItWaitsNeverDials(t *testing.T) {
 		defer release()
 		changed := memSpec()
 		changed.ConnectTimeoutS = 20
-		fin := s.Replace(map[string]config.MCPServerSpec{"w": changed})
-		go fin()
+		s.Set(map[string]config.MCPServerSpec{"w": changed})
 		<-del.held
-		_, waiting := s.find("w")
-		s.Replace(map[string]config.MCPServerSpec{})()
+		s.Set(map[string]config.MCPServerSpec{})
 		release()
 		synctest.Wait()
-		if got := waiting.health.attempts; got != 0 {
-			t.Errorf("attempts of the replacement that a later call removed = %d, want 0", got)
+		if got := m.count("initialize"); got != 1 {
+			t.Errorf("initialize requests = %d, want 1: the replacement that a later call removed must not dial", got)
 		}
 	})
 }
 
-func TestOlderReadIsDroppedWhenTheNewerReadFailed(t *testing.T) {
+func TestEmptySetStartsNoFirstConnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		s := memSource(m, nil)
+		defer s.Close()
+		s.Set(map[string]config.MCPServerSpec{})
+		synctest.Wait()
+		s.Set(map[string]config.MCPServerSpec{"w": memSpec()})
+		synctest.Wait()
+		if ts := s.Toolset(context.Background(), nil, nil, ""); len(ts.Deferred) != 0 || !slices.ContainsFunc(ts.Tools, func(t turn.Tool) bool { return t.Spec().Name == "mcp__w__a" }) {
+			t.Errorf("tools %d, deferred %d, want the tool eager as a tool of the first connect", len(ts.Tools), len(ts.Deferred))
+		}
+	})
+}
+
+func TestOverlappingNotificationsEndWithTheNewestList(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newMemServer("a")
 		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
 		defer s.Close()
 		s.Toolset(context.Background(), nil, nil, "")
-		_, e := s.find("w")
-		c := s.view().live["w"].client
 		older := m.holdNext("tools/list")
-		m.setTools("a", "b")
-		s.listChanged(e, c)
+		trigger(t, s, m)
 		<-older.held
-		m.failNext("tools/list")
-		s.listChanged(e, c)
-		synctest.Wait()
-		close(older.release)
+		m.setTools("a", "b")
+		trigger(t, s, m)
 		synctest.Wait()
 		if got := toolNamesOf(s, "w"); !slices.Equal(got, []string{"a"}) {
-			t.Errorf("tools = %v, want [a]: the answer of a read that is not the newest started is dropped", got)
+			t.Fatalf("tools while the older read runs = %v, want [a]", got)
 		}
+		close(older.release)
+		synctest.Wait()
+		if got := toolNamesOf(s, "w"); !slices.Equal(got, []string{"a", "b"}) {
+			t.Errorf("tools after both reads = %v, want [a b]", got)
+		}
+	})
+}
+
+func TestFailedRereadKeepsTheLastGoodList(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
+		defer s.Close()
+		s.Toolset(context.Background(), nil, nil, "")
+		older := m.holdNext("tools/list")
+		m.setTools("a", "b")
+		trigger(t, s, m)
+		<-older.held
+		m.failNext("tools/list")
+		trigger(t, s, m)
+		close(older.release)
+		synctest.Wait()
+		if got := toolNamesOf(s, "w"); !slices.Equal(got, []string{"a", "b"}) {
+			t.Errorf("tools = %v, want [a b]: the failed second read must keep the list of the first", got)
+		}
+	})
+}
+
+func TestModelCallWaitsAcrossOverlappingRefreshes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
+		defer s.Close()
+		s.Toolset(context.Background(), nil, nil, "")
+		first, second := m.holdNext("tools/list"), m.holdNext("tools/list")
+		trigger(t, s, m)
+		<-first.held
+		done := make(chan turn.Toolset)
+		go func() { done <- s.Toolset(context.Background(), nil, nil, "") }()
+		synctest.Wait()
+		m.setTools("a", "b")
+		trigger(t, s, m)
+		close(first.release)
+		<-second.held
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("the model call returned while a refresh is in flight")
+		default:
+		}
+		close(second.release)
+		synctest.Wait()
+		ts := <-done
+		if !slices.ContainsFunc(ts.Deferred, func(t turn.Tool) bool { return t.Spec().Name == "mcp__w__b" }) {
+			t.Errorf("deferred has %d tools, want the tool of the second refresh", len(ts.Deferred))
+		}
+	})
+}
+
+func TestCallToAToolThatARefreshWithdrewReadsNoSuchTool(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a", "b")
+		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
+		defer s.Close()
+		ts := s.Toolset(context.Background(), nil, nil, "")
+		m.setTools("a")
+		trigger(t, s, m)
+		synctest.Wait()
+		for _, tool := range ts.Tools {
+			if tool.Spec().Name != "mcp__w__b" {
+				continue
+			}
+			before := m.count("tools/call")
+			res, err := tool.Run(context.Background(), protocol.ToolCall{Name: "mcp__w__b"})
+			if err != nil || !res.IsError || res.Text != "no such tool available: mcp__w__b" {
+				t.Errorf("Run = %+v, %v, want the no such tool answer", res, err)
+			}
+			if m.count("tools/call") != before {
+				t.Errorf("the server received a call to a tool that it withdrew")
+			}
+			return
+		}
+		t.Fatal("tool b is not in the tools")
 	})
 }
 
@@ -353,6 +424,40 @@ func TestRefreshDuringTheFirstListWinsAndIsAToolOfTheFirstConnect(t *testing.T) 
 			if n.Kind == addedKind && n.Text != "" {
 				t.Errorf("added notice %q names a tool that the first connect froze", n.Text)
 			}
+		}
+	})
+}
+
+func TestResourceReadEndsWhenItsServerGoes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		s := memSource(m, map[string]config.MCPServerSpec{"w": memSpec()})
+		defer s.Close()
+		s.Toolset(context.Background(), nil, nil, "")
+		read := m.holdNext("resources/read")
+		defer func() {
+			select {
+			case <-read.release:
+			default:
+				close(read.release)
+			}
+		}()
+		var err error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, err = reader{s}.Run(context.Background(), protocol.ToolCall{Arguments: json.RawMessage(`{"server":"w","uri":"doc://x"}`)})
+		}()
+		<-read.held
+		s.Set(map[string]config.MCPServerSpec{})
+		synctest.Wait()
+		select {
+		case <-done:
+			if err == nil {
+				t.Error("the read of a removed server returned no error")
+			}
+		default:
+			t.Error("the read of a removed server is still in flight")
 		}
 	})
 }

@@ -54,7 +54,7 @@ func (v view) added(ok func(string) bool) string {
 		m := v.mem[name]
 		var late []remote
 		for _, r := range v.remotes(name, ok) {
-			if r.client != nil && !m.base[r.name] {
+			if r.listed && !m.base[r.name] {
 				late = append(late, r)
 			}
 		}

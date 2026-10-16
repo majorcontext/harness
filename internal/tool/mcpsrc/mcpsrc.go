@@ -46,10 +46,12 @@ func Reserved(name string) bool {
 // down. After maxRetries failed retries it stays down until the model asks
 // the mcp tool to connect it.
 //
-// The servers of a Source are a live set: SetServers adds, replaces, and
-// removes them. The tools that the first connect reached are the tools of
-// the request prefix of each session. A tool that arrives later is deferred,
-// and a tool that a session sent stays in its definitions.
+// The servers of a Source are a live set: Set adds, replaces, and removes
+// them. One actor goroutine owns every server entry (see actor.go). Every
+// other goroutine sends it a message or reads the snapshot that it publishes
+// after each change. The tools that the first connect reached are the tools
+// of the request prefix of each session. A tool that arrives later is
+// deferred, and a tool that a session sent stays in its definitions.
 type Source struct {
 	log       *slog.Logger
 	parent    *Source
@@ -58,44 +60,16 @@ type Source struct {
 	// httpClient is the client of the HTTP servers; nil is the default client. A test sets it.
 	httpClient *http.Client
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	start  sync.Once
-	ready  chan struct{}
-	group  sync.WaitGroup
-
-	mu      sync.Mutex
-	closed  bool
-	started bool
-	entries map[string]*entry
-	mem     map[string]*memory
-	// reached holds the servers that the first connect reached. Only they
-	// give instructions, so each prompt stays stable.
-	reached []string
-	// refreshing counts the tool lists that a list_changed notification
-	// reads again. idle is closed when it is zero.
-	refreshing int
-	idle       chan struct{}
-}
-
-// entry is one connected-or-connecting server. Source.mu guards every field but the immutable ones.
-type entry struct {
-	name    string
-	spec    config.MCPServerSpec
-	ctx     context.Context
-	cancel  context.CancelFunc
-	dialing chan struct{}
-	health  health
-	sv      *server
-	// gen counts the reads of the tool list that a notification started. Only the answer of the newest one counts.
-	gen int
-	// pending is the answer of the newest read when it ends before the first list of its client is installed.
-	pending *pendingList
-}
-
-type pendingList struct {
-	client *mcp.Client
-	tools  []mcp.Tool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	inbox     chan msg
+	quit      chan struct{}
+	done      chan struct{}
+	ready     chan struct{}
+	snap      atomic.Pointer[snapshot]
+	workers   sync.WaitGroup
+	startOnce sync.Once
+	closeOnce sync.Once
 }
 
 // memory is what the runtime keeps of a server name for the whole process, so a session that sent a tool
@@ -128,17 +102,25 @@ func newServer(c *mcp.Client, tools []mcp.Tool) *server {
 
 func (s *server) up() bool { return s != nil && s.client != nil }
 
+// clientOf returns the client of s, or nil.
+func (s *server) clientOf() *mcp.Client {
+	if s == nil {
+		return nil
+	}
+	return s.client
+}
+
 func (s *server) resources() bool { return s.up() && s.client.ServerCapabilities().Resources != nil }
 
 func (s *server) has(tool string) bool { return s.up() && s.index[tool] }
 
-// New returns the Source of cfg.MCPServers. It does no I/O. A nil log is slog.Default().
+// New returns the Source of cfg.MCPServers. It dials nothing. A nil log is slog.Default(). Close ends its goroutine.
 func New(cfg config.Config, log *slog.Logger) *Source {
 	return build(cfg, nil, cfg.MCPServers, log)
 }
 
 // NewSession returns the Source of one session: the servers in specs beside the servers of parent, which
-// may be nil. It connects only the servers in specs, and Close stops only them. It does no I/O. A name
+// may be nil. It connects only the servers in specs, and Close stops only them. It dials nothing. A name
 // in specs must not be a name of parent.
 func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, log *slog.Logger) *Source {
 	return build(cfg, parent, specs, log)
@@ -147,219 +129,26 @@ func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPSe
 func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, log *slog.Logger) *Source {
 	s := &Source{log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
 		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold),
-		ready:     make(chan struct{}), entries: map[string]*entry{}, mem: map[string]*memory{}}
+		inbox:     make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
+	a := newActor(s)
 	for name, spec := range specs {
-		s.add(name, spec)
+		a.add(name, spec)
 	}
+	a.publish()
+	go a.run()
 	return s
 }
 
-// add makes the entry of a server. The caller holds s.mu, or owns s alone.
-func (s *Source) add(name string, spec config.MCPServerSpec) *entry {
-	e := &entry{name: name, spec: cloneSpec(spec), dialing: make(chan struct{}, 1)}
-	e.ctx, e.cancel = context.WithCancel(s.ctx)
-	s.entries[name] = e
-	loading := cmp.Or(spec.ToolLoading, s.mode, "eager")
-	switch m := s.mem[name]; {
-	case m == nil:
-		s.mem[name] = &memory{loading: loading, seen: map[string]mcp.Tool{}, base: map[string]bool{}}
-	case len(m.base) == 0 && m.loading != loading:
-		c := *m
-		c.loading = loading
-		s.mem[name] = &c
-	}
-	return e
-}
-
-// Active reports whether s ever had a server.
-func (s *Source) Active() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.mem) > 0 || s.parent.Active()
-}
-
-// find returns the Source that owns server and its entry, or nil for a name that no server has.
-func (s *Source) find(name string) (*Source, *entry) {
-	if s == nil {
-		return nil, nil
-	}
-	s.mu.Lock()
-	e := s.entries[name]
-	s.mu.Unlock()
-	if e != nil {
-		return s, e
-	}
-	return s.parent.find(name)
-}
-
-// Close closes every connection and stops every stdio server. A nil Source has none.
-func (s *Source) Close() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.closed = true
-	s.mu.Unlock()
-	s.cancel()
-	s.start.Do(func() { close(s.ready) })
-	s.group.Wait()
-	s.mu.Lock()
-	var clients []*mcp.Client
-	for _, e := range s.entries {
-		if e.sv.up() {
-			clients = append(clients, e.sv.client)
-		}
-		e.sv = nil
-	}
-	s.mu.Unlock()
-	var wg sync.WaitGroup
-	for _, c := range clients {
-		wg.Go(func() { _ = c.Close() })
-	}
-	wg.Wait()
-}
-
-// spawn runs f in the group of s unless s is closed.
-func (s *Source) spawn(f func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.closed {
-		s.group.Go(f)
-	}
-}
-
-// wait connects every server once and reports whether that ended before ctx.
-func (s *Source) wait(ctx context.Context) bool {
-	s.start.Do(func() { s.group.Go(s.firstConnect) })
-	if s.parent != nil && !s.parent.wait(ctx) {
-		return false
-	}
-	select {
-	case <-s.ready:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-// firstConnect connects the servers that s has when it starts, in parallel. The tools that it reaches
-// are the eager tools of every session.
-func (s *Source) firstConnect() {
-	s.mu.Lock()
-	s.started = true
-	set := slices.Collect(maps.Values(s.entries))
-	s.mu.Unlock()
-	var wg sync.WaitGroup
-	var okMu sync.Mutex
-	first := map[string]bool{}
-	for _, e := range set {
-		wg.Go(func() {
-			if _, err := s.connect(s.ctx, e); err != nil {
-				s.log.Warn("mcp: server did not connect", "server", e.name, "err", hide(e.name, err))
-				s.spawn(func() { s.retry(e) })
-				return
-			}
-			okMu.Lock()
-			first[e.name] = true
-			okMu.Unlock()
-		})
-	}
-	wg.Wait()
-	s.mu.Lock()
-	for _, e := range set {
-		if first[e.name] && s.entries[e.name] == e && e.sv.up() {
-			s.reached = append(s.reached, e.name)
-			s.freeze(e)
-		}
-	}
-	slices.Sort(s.reached)
-	s.mu.Unlock()
-	close(s.ready)
-}
-
-// freeze records what the first connect reached of e. The caller holds s.mu.
-func (s *Source) freeze(e *entry) {
-	m := *s.mem[e.name]
-	m.base = map[string]bool{}
-	for _, t := range e.sv.tools {
-		m.base[t.Name] = true
-	}
-	m.inst, m.resources = e.sv.client.Instructions(), e.sv.resources()
-	s.mem[e.name] = &m
-}
-
-// remember adds the tools of sv to what the runtime read of the server. The caller holds s.mu.
-func (s *Source) remember(name string, sv *server) {
-	m := *s.mem[name]
-	m.up, m.seen = true, maps.Clone(m.seen)
-	for _, t := range sv.tools {
-		if _, ok := m.seen[t.Name]; !ok {
-			m.seen[t.Name] = t
-		}
-	}
-	s.mem[name] = &m
-}
-
-// connect dials e unless it is connected, and reports whether it dialed. It ends when ctx or the entry ends.
-func (s *Source) connect(ctx context.Context, e *entry) (bool, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer context.AfterFunc(e.ctx, cancel)()
-	select {
-	case e.dialing <- struct{}{}:
-		defer func() { <-e.dialing }()
-	case <-ctx.Done():
-		return false, context.Cause(ctx)
-	}
-	return s.dialHeld(ctx, e)
-}
-
-// dialHeld is connect for a caller that holds e.dialing.
-func (s *Source) dialHeld(ctx context.Context, e *entry) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, context.Cause(ctx)
-	}
-	if s.connected(e) {
-		return false, nil
-	}
-	sv, err := dial(ctx, e.spec, s.httpClient, func(c *mcp.Client) { s.listChanged(e, c) })
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e.health.attempts++
-	switch {
-	case err != nil:
-		e.health.reason = connectReason(err)
-		return true, err
-	case s.closed || s.entries[e.name] != e:
-		_ = sv.client.Close()
-		return true, errors.New("mcp: closed")
-	}
-	if p := e.pending; p != nil && p.client == sv.client {
-		sv = newServer(sv.client, p.tools)
-	}
-	e.pending = nil
-	e.sv, e.health.reason, e.health.parked = sv, "", false
-	s.remember(e.name, sv)
-	return true, nil
-}
-
-func (s *Source) connected(e *entry) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return e.sv.up()
-}
-
+// dial connects to the server of spec and reads its tools. changed receives the client when the server says that
+// its tool list changed.
 func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, changed func(*mcp.Client)) (*server, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, context.Cause(ctx)
+	}
 	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: hc}
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, context.Cause(ctx)
 	}
 	var client atomic.Pointer[mcp.Client]
 	c, err := mcp.NewClient(tr, mcp.Options{OnNotification: func(method string, _ json.RawMessage) {
@@ -388,39 +177,6 @@ func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, chang
 	return newServer(c, tools), nil
 }
 
-// view is what one model call reads of the servers.
-type view struct {
-	// names are the servers that exist now, sorted.
-	names  []string
-	live   map[string]*server
-	life   map[string]context.Context
-	health map[string]health
-	// mem holds every server name that the runtime read, also a removed one.
-	mem     map[string]*memory
-	reached []string
-}
-
-// view returns the servers of s and of its parent.
-func (s *Source) view() view {
-	v := view{live: map[string]*server{}, life: map[string]context.Context{}, health: map[string]health{}, mem: map[string]*memory{}}
-	if s.parent != nil {
-		v = s.parent.view()
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for name, e := range s.entries {
-		v.names = append(v.names, name)
-		v.health[name] = e.health
-		if e.sv.up() {
-			v.live[name], v.life[name] = e.sv, e.ctx
-		}
-	}
-	slices.Sort(v.names)
-	maps.Copy(v.mem, s.mem)
-	v.reached = slices.Concat(v.reached, s.reached)
-	return v
-}
-
 // Toolset returns the mcp tool, the resource tools when a server that the
 // first connect reached serves resources, and the tools of each server. A
 // tool that defers is in Deferred, and the prompt lists it when the first
@@ -445,14 +201,14 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		deferred := m.loading == "lazy" || m.loading == "auto" && autoDefer
 		for _, r := range v.remotes(name, ok) {
 			base := m.base[r.name]
-			if r.client != nil {
+			if r.listed {
 				ctl.all = append(ctl.all, r)
 			}
 			switch {
 			case loaded[r.spec.Name] || base && !deferred:
 				ctl.loaded[r.spec.Name] = true
 				ts.Tools = append(ts.Tools, r)
-			case r.client != nil:
+			case r.listed:
 				ts.Deferred = append(ts.Deferred, r)
 				if base {
 					listed = append(listed, r)
@@ -480,7 +236,7 @@ func (v view) liveAll(ok func(string) bool) []remote {
 	var out []remote
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
 		for _, r := range v.remotes(name, ok) {
-			if r.client != nil {
+			if r.listed {
 				out = append(out, r)
 			}
 		}
@@ -512,11 +268,7 @@ func (v view) remotes(name string, ok func(string) bool) []remote {
 		if !ok(spec.Name) {
 			continue
 		}
-		r := remote{server: name, name: tn, spec: spec}
-		if sv.has(tn) {
-			r.client, r.life = sv.client, v.life[name]
-		}
-		out = append(out, r)
+		out = append(out, remote{src: v.src, server: name, name: tn, spec: spec, listed: sv.has(tn)})
 	}
 	return out
 }
@@ -542,19 +294,21 @@ func selected(history []protocol.LogMessage) map[string]bool {
 	return out
 }
 
-// remote is one tool of a server. It has no client when its server is gone or does not list it, and a
-// call then reads no such tool available. life ends when the server goes.
+// remote is one tool of a server. A call reads the current snapshot of its server first, and answers no such tool
+// available when the server is gone or does not list the tool now, also when the tool was listed when the model
+// call began.
 type remote struct {
+	src          *Source
 	server, name string
-	client       *mcp.Client
-	life         context.Context
 	spec         protocol.ToolSpec
+	listed       bool
 }
 
 func (r remote) Spec() protocol.ToolSpec { return r.spec }
 
 func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
-	if r.client == nil {
+	sv, life := r.src.serverNow(r.server)
+	if !r.listed || !sv.has(r.name) {
 		return protocol.ToolResult{Text: "no such tool available: " + call.Name, IsError: true}, nil
 	}
 	var in any
@@ -565,10 +319,10 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	defer context.AfterFunc(r.life, cancel)()
-	res, err := r.client.CallTool(ctx, r.name, in)
+	defer context.AfterFunc(life, cancel)()
+	res, err := sv.client.CallTool(ctx, r.name, in)
 	if err != nil {
-		if r.life.Err() != nil {
+		if life.Err() != nil {
 			return protocol.ToolResult{}, fmt.Errorf("mcp: server %q: call failed: server removed", r.server)
 		}
 		return protocol.ToolResult{}, hide(r.server, err)

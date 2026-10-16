@@ -113,14 +113,11 @@ func (c control) connect(ctx context.Context, name string) (any, error) {
 	if name == "" {
 		return nil, fmt.Errorf(`mcp: connect requires a "server" argument`)
 	}
-	owner, e := c.s.find(name)
-	if e == nil {
+	owner := c.s.owner(name)
+	if owner == nil {
 		return nil, fmt.Errorf("mcp: unknown server %q (configured: %s)", name, strings.Join(c.s.view().names, ", "))
 	}
-	if owner.connected(e) {
-		return connected{name, true, "already connected"}, nil
-	}
-	dialed, err := owner.connect(ctx, e)
+	dialed, err := owner.connectNow(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: connect for %q failed: %s", name, connectReason(err))
 	}
