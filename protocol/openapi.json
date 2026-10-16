@@ -408,6 +408,17 @@
           "source"
         ]
       },
+      "ContinueCancelled": {
+        "properties": {
+          "continue_at": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "continue_at"
+        ]
+      },
       "CreateSession": {
         "properties": {
           "id": {
@@ -569,6 +580,9 @@
           "retry_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "usage_limit": {
+            "type": "boolean"
           }
         },
         "type": "object",
@@ -879,6 +893,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "resets_at": {
+            "type": "integer"
           }
         },
         "type": "object",
@@ -1588,6 +1605,9 @@
           },
           "last_turn": {
             "$ref": "#/components/schemas/LastTurn"
+          },
+          "continue_at": {
+            "type": "integer"
           },
           "compaction_count": {
             "type": "integer"

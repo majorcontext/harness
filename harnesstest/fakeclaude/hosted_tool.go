@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +10,11 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 const toolUseMeta = "claudecode/toolUseId"
@@ -69,8 +73,26 @@ func hangAfterListing(f *fake) {
 
 // hostedPost sends one JSON-RPC request to srv and returns the response body.
 func hostedPost(srv hostedEntry, method string, params obj) ([]byte, error) {
-	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	return hostedPostCtx(context.Background(), srv, 1, method, params)
+}
+
+// hostedPostContext is hostedPost on the harness server of --mcp-config; it
+// drops the request when ctx ends.
+func hostedPostContext(ctx context.Context, id any, method string, params obj) ([]byte, error) {
+	srv, ok := hostedServer()
+	if !ok {
+		return nil, fmt.Errorf("no harness server in --mcp-config")
+	}
+	return hostedPostCtx(ctx, srv, id, method, params)
+}
+
+func hostedPostCtx(ctx context.Context, srv hostedEntry, id any, method string, params obj) ([]byte, error) {
+	msg := obj{"jsonrpc": "2.0", "method": method, "params": params}
+	if id != nil {
+		msg["id"] = id
+	}
+	body, _ := json.Marshal(msg)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -249,4 +271,82 @@ func turnCalls(f *fake) {
 		}
 		last = results[0].text()
 	}
+}
+
+// abandonTool runs a slow harness tool call and gives it up, as the CLI does
+// when its tool timeout ends. The call is a bash command that writes its pid
+// to abandon.pid in its working directory and then sleeps. Once the file
+// exists, the mode "abandon_tool" sends notifications/cancelled for the
+// request and leaves the request open, as the MCP SDK of the CLI does, and
+// "drop_tool" closes the connection of the request. The file abandon.reply
+// gets "reply" when the host answers the request and "no reply" when the
+// request ends with no answer. Both wait for the process
+// to be gone, so the turn ends only if the host stopped the call. They then
+// print the error result of the timeout and a success result. The mode
+// "hold_tool" keeps the request and hangs instead, so that an interrupt of
+// the turn ends the call.
+func abandonTool(f *fake) {
+	const pidfile, replyFile, requestID = "abandon.pid", "abandon.reply", 7
+	_ = os.Remove(pidfile)
+	cmd := "echo $$ > " + pidfile + ".tmp && mv " + pidfile + ".tmp " + pidfile + " && exec sleep 600"
+	args := obj{"command": cmd}
+	f.emit(say("Let me check that."), assistant(toolUse("toolu_slow", "mcp__harness__bash", args)))
+	ctx, drop := context.WithCancel(context.Background())
+	defer drop()
+	_ = os.Remove(replyFile)
+	posted, answered := make(chan struct{}), make(chan bool, 1)
+	go func() {
+		defer close(posted)
+		out, err := hostedPostContext(ctx, requestID, "tools/call", obj{"name": "bash", "arguments": args, "_meta": obj{toolUseMeta: "toolu_slow"}})
+		answered <- err == nil && len(out) > 0
+	}()
+	pid := awaitPid(pidfile)
+	switch f.mode {
+	case "hold_tool":
+		hang(f)
+	case "drop_tool":
+		drop()
+	default:
+		srv, _ := hostedServer()
+		_, _ = hostedPostCtx(context.Background(), srv, nil, "notifications/cancelled", obj{"requestId": requestID, "reason": "Request timed out"})
+	}
+	awaitGone(pid)
+	verdict := "no reply"
+	select {
+	case <-posted:
+		if <-answered {
+			verdict = "reply"
+		}
+	case <-time.After(replyWait):
+	}
+	appendFile(replyFile, verdict+"\n")
+	f.emit(user(toolResult("toolu_slow", "MCP error -32001: Request timed out", true)), say("Done."), success("Done.", 0, 0))
+}
+
+// replyWait is how long the mode waits for an answer to a request that it gave up.
+const replyWait = time.Second
+
+// awaitPid returns the pid that the file holds, once the file exists.
+func awaitPid(path string) int {
+	for deadline := time.Now().Add(gateWait); time.Now().Before(deadline); time.Sleep(gatePoll) {
+		if data, err := os.ReadFile(path); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				return pid
+			}
+		}
+	}
+	fmt.Fprintln(os.Stderr, "fakeclaude: the tool call never started")
+	os.Exit(1)
+	return 0
+}
+
+// awaitGone waits until the process pid is gone.
+func awaitGone(pid int) {
+	for deadline := time.Now().Add(gateWait); time.Now().Before(deadline); time.Sleep(gatePoll) {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+	}
+	fmt.Fprintln(os.Stderr, "fakeclaude: the tool call is still running after its request was given up")
+	os.Exit(1)
 }

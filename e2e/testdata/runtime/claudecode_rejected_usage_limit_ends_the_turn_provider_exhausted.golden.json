@@ -21,6 +21,46 @@
             "text": "You've hit your limit · resets 3pm (UTC)"
           }
         ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "engine_context",
+            "text": "[usage limit: The usage limit of the provider has reset. Continue the task from the point where it stopped.]"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "You've hit your limit · resets 3pm (UTC)"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "engine_context",
+            "text": "[usage limit: The usage limit of the provider has reset. Continue the task from the point where it stopped.]"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "You've hit your limit · resets 3pm (UTC)"
+          }
+        ]
       }
     ]
   },
@@ -37,6 +77,26 @@
           "strict_mcp_config": true,
           "thinking_display": "summarized",
           "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
         }
       ]
     },
@@ -48,11 +108,12 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 8,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "cause": "provider_exhausted",
           "error": "claudecode: the turn failed (success): You've hit your limit · resets 3pm (UTC)",
+          "resets_at": 1792050000,
           "stop_reason": "failed",
           "turn_id": "turn#1"
         },
@@ -96,6 +157,22 @@
     "turn_ends.a": {
       "status": 200,
       "body": [
+        {
+          "cause": "provider_exhausted",
+          "error": "claudecode: the turn failed (success): You've hit your limit · resets 3pm (UTC)",
+          "recover_hint": "2026-10-15 07:40 UTC",
+          "resets_at": 1792050000,
+          "stop_reason": "failed",
+          "turn_id": "turn#2"
+        },
+        {
+          "cause": "provider_exhausted",
+          "error": "claudecode: the turn failed (success): You've hit your limit · resets 3pm (UTC)",
+          "recover_hint": "2026-10-15 07:40 UTC",
+          "resets_at": 1792050000,
+          "stop_reason": "failed",
+          "turn_id": "turn#3"
+        },
         {
           "cause": "provider_exhausted",
           "error": "claudecode: the turn failed (success): You've hit your limit · resets 3pm (UTC)",

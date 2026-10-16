@@ -26,7 +26,11 @@ func advance(p protocol.Progress, seq uint64, ev protocol.Payload) (protocol.Pro
 	p.Seq = seq
 	switch e := ev.(type) {
 	case protocol.InputAdmitted:
-		p.Queued = append(slices.Clip(p.Queued), e.InputID)
+		if IsUsageReset(e) {
+			p.Queued = append([]string{e.InputID}, p.Queued...)
+		} else {
+			p.Queued = append(slices.Clip(p.Queued), e.InputID)
+		}
 	case protocol.InputPromoted:
 		p.Queued = without(p.Queued, e.InputID)
 	case protocol.InputWithdrawn:
@@ -40,7 +44,7 @@ func advance(p protocol.Progress, seq uint64, ev protocol.Payload) (protocol.Pro
 		p.TurnID = e.TurnID
 	case protocol.TurnEnded:
 		p.TurnID = ""
-		p.LastTurn = &protocol.LastTurn{TurnID: e.TurnID, StopReason: e.StopReason, Cause: e.Cause, Error: e.Error}
+		p.LastTurn = &protocol.LastTurn{TurnID: e.TurnID, StopReason: e.StopReason, Cause: e.Cause, Error: e.Error, ResetsAt: e.ResetsAt}
 	case protocol.RequestOpened:
 		p.Requests = append(slices.Clip(p.Requests), e.RequestID)
 	case protocol.RequestResolved:
@@ -59,7 +63,7 @@ func advance(p protocol.Progress, seq uint64, ev protocol.Payload) (protocol.Pro
 		if p.Goal != nil {
 			g := *p.Goal
 			g.State, g.Reason, g.RetryAt = e.State, e.Reason, e.RetryAt
-			if e.State == protocol.GoalPaused {
+			if e.State == protocol.GoalPaused && !e.UsageLimit {
 				g.Pauses++
 			}
 			p.Goal = &g

@@ -125,6 +125,10 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
+	// ContinueOnReset lets the actor admit a usage_reset input when the usage
+	// limit of the provider resets. false: a runtime that does not serve the
+	// session fires nothing.
+	ContinueOnReset bool
 	// AskUserQuestion lets a session ask the user a question; the embedder
 	// answers with Resolve.
 	AskUserQuestion bool
@@ -230,6 +234,10 @@ type Actor struct {
 	releaseErr error
 	retryStop  context.CancelFunc
 	retryAt    time.Time
+	// contStop stops the timer of the pending continue, and contArmed is the
+	// time it waits for.
+	contStop  context.CancelFunc
+	contArmed time.Time
 	// pins holds the engine context that the model reads inside the history.
 	pins turn.Pins
 	// pinned is true once a model call of this process has pinned.
@@ -326,21 +334,16 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 		if err == nil {
 			err = a.settle(true)
 		}
-	case !a.waitsForInput():
+	case !s.Held():
 		err = a.settle(true)
+	}
+	if err == nil {
+		err = a.continueIfDue()
 	}
 	if err == nil {
 		err = a.blockUndriven()
 	}
 	return a, err
-}
-
-// waitsForInput reports whether the last turn failed at a usage limit of
-// the provider. Its queued inputs then wait for the next input, live and
-// after a restart.
-func (a *Actor) waitsForInput() bool {
-	last := a.state.LastEnded()
-	return last.Cause == protocol.CauseProviderExhausted
 }
 
 // fence appends owner.acquired at the head. An append of an earlier owner
@@ -402,6 +405,7 @@ func Load(ctx context.Context, id string, log Log) (*eventlog.State, error) {
 func (a *Actor) loop() {
 	defer a.finish()
 	a.retryLater()
+	a.continueLater()
 	for !a.stopped {
 		select {
 		case f := <-a.mail:
@@ -638,6 +642,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	}
 	if g, _ := a.state.Goal(); g.State != protocol.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
 		a.stopRetry()
+	}
+	if a.launched {
+		a.rearmContinue()
 	}
 	if a.cfg.Appended != nil {
 		a.cfg.Appended(events, a.state)

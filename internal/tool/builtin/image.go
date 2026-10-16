@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"  // register the GIF decoder for image.DecodeConfig
@@ -30,9 +31,34 @@ type content struct {
 	width, height int
 }
 
-// readCapped reads path whole, or fails with errTooLarge.
+var errNotRegular = errors.New("not a regular file")
+
+// openRegular opens path for reading and fails with errNotRegular for an
+// entry that is not a regular file after symlinks. The open does not wait for
+// a writer of a named pipe, the type check is on the open file, and an entry
+// that the system refuses to open, such as a socket, is classified by its
+// type.
+func openRegular(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|nonblock, 0)
+	if err != nil {
+		if info, serr := os.Stat(path); serr == nil && !info.Mode().IsRegular() && !info.IsDir() {
+			return nil, errNotRegular
+		}
+		return nil, err
+	}
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		if err == nil {
+			err = errNotRegular
+		}
+		return nil, err
+	}
+	return f, nil
+}
+
+// readCapped reads path whole, or fails with errTooLarge or errNotRegular.
 func readCapped(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openRegular(path)
 	if err != nil {
 		return nil, err
 	}

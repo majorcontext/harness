@@ -2,6 +2,7 @@ package eventlog
 
 import (
 	"slices"
+	"time"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -21,6 +22,7 @@ func (s *State) applyGoalSet(e protocol.GoalSet) error {
 		return illegal("goal.set needs a condition, max_turns >= 0, and turns below max_turns")
 	}
 	s.evaluated = s.lastEnded.TurnID
+	s.continueAt = time.Time{}
 	return nil
 }
 

@@ -54,6 +54,8 @@ type Reply struct {
 	// ErrorCode is the error.code of an HTTPStatus reply, for example
 	// "context_length_exceeded". Only NewChat sends it.
 	ErrorCode string
+	// ResetsAt is the error.resets_at of an HTTPStatus reply, in Unix seconds, as the ChatGPT Codex backend sends it with a spent usage limit. Only the Responses server and NewChat send it.
+	ResetsAt int64
 	// WebSearch is a search that the provider runs inside the model call. The
 	// Anthropic and Responses servers stream it before Text, and Text cites each
 	// source of the search. The chat-completions server has no search.
