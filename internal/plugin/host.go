@@ -335,7 +335,9 @@ func (h *Host) StartTool(ctx context.Context, tool string) (func(context.Context
 	for _, inst := range h.instances {
 		for _, def := range inst.spec.Manifest.Tools {
 			if def.Name == tool {
-				c, err := inst.start(ctx)
+				sctx, cancel := context.WithTimeout(ctx, startTimeout)
+				defer cancel()
+				c, err := inst.start(sctx)
 				if err != nil {
 					return nil, err
 				}
@@ -483,6 +485,9 @@ func (inst *instance) runEventSender(h *Host, ch chan *pub.EventBatch, stop chan
 		}
 	}
 }
+
+// startTimeout bounds a start that a tool call triggers.
+const startTimeout = 30 * time.Second
 
 // errInstanceStopped is returned by start once the instance has been (or is
 // being) stopped, so a start racing a stop gets a definitive error instead

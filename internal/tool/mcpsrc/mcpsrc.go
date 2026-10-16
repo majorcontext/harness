@@ -35,6 +35,7 @@ const (
 	// requestMargin keeps the request bound of the client after the tool
 	// limit, so the limit ends a tool call first.
 	requestMargin = time.Second
+	requestBound  = 30 * time.Second
 )
 
 // Reserved reports whether name belongs to the tools of a Source.
@@ -243,7 +244,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec) (*server, error) {
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}
-	c, err := mcp.NewClient(tr, mcp.Options{RequestTimeout: spec.ToolTimeout() + requestMargin})
+	c, err := mcp.NewClient(tr, mcp.Options{RequestTimeout: max(requestBound, spec.ToolTimeout()+requestMargin)})
 	if err != nil {
 		return nil, err
 	}
