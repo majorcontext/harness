@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -321,6 +322,71 @@ func TestContractClaudeCodeGoalWaitsForTheUsageLimitReset(t *testing.T) {
 			v := d.view(t, id)
 			if v.Goal == nil || v.Goal.State != protocol.GoalPaused || v.Goal.Pauses != 0 || v.LastTurn == nil || v.Goal.RetryAt.Unix() != v.LastTurn.ResetsAt {
 				t.Fatalf("goal = %+v, last turn %+v; want paused until the reset time with no counted pause", v.Goal, v.LastTurn)
+			}
+		})
+	})
+}
+
+func TestContractInterruptByCompactionIDCancelsTheContinue(t *testing.T) {
+	skipShort(t)
+	onHosts(t, func(t *testing.T, h host) {
+		t.Run("an_interrupt_with_the_id_of_a_running_compaction_cancels_the_pending_continue", func(t *testing.T) {
+			t.Parallel()
+			ok := func(user string) harnesstest.Step {
+				return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "re " + user}}
+			}
+			o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{APIKey: codexAPIKey},
+				ok("one"), ok("two"),
+				harnesstest.Step{Name: "limit", Match: harnesstest.LastUserText("three"), Reply: codexLimit(time.Hour)},
+				harnesstest.Step{Name: "slow_summary", Match: harnesstest.SystemContains("You are summarizing a prefix"),
+					Reply: harnesstest.Reply{HTTPStatus: 429, RetryAfter: "1", ErrorMessage: "slow down"}, Repeat: true})
+			d := codexDriver(t, h, nil, nil, o.URL(), codexConfig(o.URL(), false, nil)).(*runtimeDriver)
+			id := d.Create(t)
+			for _, text := range []string{"one", "two", "three"} {
+				d.Submit(t, id, text)
+				d.awaitTurnEnds(t, id, map[string]int{"one": 1, "two": 2, "three": 3}[text])
+			}
+			if d.view(t, id).ContinueAt == 0 {
+				t.Fatal("no pending continue after the usage limit")
+			}
+			head := d.view(t, id).HeadSeq
+			base, client := d.endpoint()
+			go func() {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/sessions/"+id+"/compact", strings.NewReader("{}"))
+				if err != nil {
+					return
+				}
+				req.Header.Set("Content-Type", "application/json")
+				d.authorize(req)
+				if resp, err := client.Do(req); err == nil {
+					_ = resp.Body.Close()
+				}
+			}()
+			var compaction string
+			d.stream(t, id, head, false, func(_ string, ev protocol.Event) bool {
+				var f protocol.StatusFrame
+				if ev.Kind == protocol.KindStatus && json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusCompacting {
+					compaction = f.TurnID
+				}
+				return compaction != ""
+			})
+			if status, _ := d.do(t, http.MethodPost, "/sessions/"+id+"/interrupt", map[string]any{"turn_id": "other"}); status != http.StatusConflict {
+				t.Fatalf("interrupt with another ID = %d, want 409", status)
+			}
+			if d.view(t, id).ContinueAt == 0 {
+				t.Fatal("an interrupt with another ID cancelled the continue")
+			}
+			d.expect(t, http.StatusNoContent, http.MethodPost, "/sessions/"+id+"/interrupt", map[string]any{"turn_id": compaction}, nil)
+			if at := d.view(t, id).ContinueAt; at != 0 {
+				t.Fatalf("continue_at after the interrupt of the compaction = %d, want none", at)
+			}
+			cancelled := false
+			d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+				cancelled = cancelled || ev.Kind == protocol.KindContinueCancelled
+				return cancelled || ev.Seq >= d.view(t, id).HeadSeq
+			})
+			if !cancelled {
+				t.Fatal("the log holds no continue.cancelled")
 			}
 		})
 	})

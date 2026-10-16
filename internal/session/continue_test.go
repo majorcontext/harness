@@ -2,14 +2,12 @@ package session
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness/protocol"
 
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -189,59 +187,4 @@ func TestACancelledContinueStaysCancelledAfterOpen(t *testing.T) {
 			})
 		})
 	}
-}
-
-// holdSummary blocks a summary call until its context ends.
-type holdSummary struct{}
-
-func (holdSummary) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
-
-func (holdSummary) Run(ctx context.Context, _ turn.Request, _ turn.Sink) error {
-	<-ctx.Done()
-	return context.Cause(ctx)
-}
-
-func completedTurn(n string) []protocol.Payload {
-	in := protocol.InputAdmitted{InputID: "in" + n, Delivery: protocol.DeliveryQueue, Source: "user", Parts: text("q" + n)}
-	return []protocol.Payload{in, protocol.TurnStarted{TurnID: "turn" + n, InputIDs: []string{in.InputID}},
-		protocol.ItemCompleted{ItemID: "item" + n, TurnID: "turn" + n, Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: text("a" + n)}},
-		protocol.TurnEnded{TurnID: "turn" + n, StopReason: protocol.StopCompleted}}
-}
-
-func TestAnInterruptByCompactionIDCancelsThePendingContinue(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		events := []protocol.Payload{protocol.SessionCreated{Model: "m/m"}, protocol.OwnerAcquired{Epoch: 1}}
-		for _, n := range []string{"1", "2", "3"} {
-			events = append(events, completedTurn(n)...)
-		}
-		in := protocol.InputAdmitted{InputID: "in4", Delivery: protocol.DeliveryQueue, Source: "user", Parts: text("q4")}
-		events = append(events, in, protocol.TurnStarted{TurnID: "turn4", InputIDs: []string{"in4"}},
-			protocol.TurnEnded{TurnID: "turn4", StopReason: protocol.StopFailed, Cause: protocol.CauseProviderExhausted, ResetsAt: time.Now().Add(time.Hour).Unix()})
-		cfg := actorConfig(t, encode(t, events...), owned{}, holdSummary{})
-		cfg.ContinueOnReset = true
-		a, err := Open(context.Background(), cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		a.Run()
-		go func() { _, _, _ = a.Compact(context.Background(), 1) }()
-		synctest.Wait()
-		var id string
-		var pending bool
-		if err := a.Read(context.Background(), func(s *eventlog.State) { id = a.run.id; _, pending = s.ContinueAt() }); err != nil || id == "" || !pending {
-			t.Fatalf("run %q, pending %v, err %v; want a running compaction and a pending continue", id, pending, err)
-		}
-		if err := a.Interrupt(context.Background(), "other"); !errors.Is(err, ErrTurnMismatch) {
-			t.Fatalf("Interrupt with another ID = %v, want ErrTurnMismatch", err)
-		}
-		if err := a.Read(context.Background(), func(s *eventlog.State) { _, pending = s.ContinueAt() }); err != nil || !pending {
-			t.Fatalf("pending %v, err %v after an Interrupt with another ID, want the continue kept", pending, err)
-		}
-		if err := a.Interrupt(context.Background(), id); err != nil {
-			t.Fatal(err)
-		}
-		if at := a.View().Session.ContinueAt; at != 0 {
-			t.Fatalf("continue_at after the interrupt of the compaction = %d, want none", at)
-		}
-	})
 }
