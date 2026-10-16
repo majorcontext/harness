@@ -455,7 +455,7 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	if r != nil && r.kind == kindJudge && !a.goalStopped(why) {
 		r = nil
 	}
-	if turnID == "" {
+	if turnID == "" || a.run != nil && turnID == a.run.id {
 		if err := a.cancelContinue(); err != nil {
 			reply(struct{}{}, err)
 			return
