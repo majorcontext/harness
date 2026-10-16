@@ -339,20 +339,19 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// mechanism and the additive/transcode-only split.
 	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 
-	for i := range messages {
-		m := &messages[i]
+	add := func(m *message.Message) error {
 		role := "user"
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
 		blocks, err := transcodeParts(m.Parts, thinksOnWire(out.Thinking, req.ThinksByDefault), true)
 		if err != nil {
-			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
+			return fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
 		if len(blocks) == 0 {
 			// A message can transcode to nothing — e.g. an assistant turn
 			// whose only content was another provider's reasoning.
-			continue
+			return nil
 		}
 		// The API requires strict user/assistant alternation; merge
 		// adjacent same-role messages.
@@ -361,12 +360,23 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		} else {
 			out.Messages = append(out.Messages, apiMessage{Role: role, Content: blocks})
 		}
+		return nil
+	}
+	for i := range messages {
+		if err := add(&messages[i]); err != nil {
+			return nil, err
+		}
 	}
 	if len(out.Messages) == 0 {
 		return nil, fmt.Errorf("anthropic: request has no transcodable messages")
 	}
 	last := &out.Messages[len(out.Messages)-1]
 	last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
+	for i := range req.Tail {
+		if err := add(&req.Tail[i]); err != nil {
+			return nil, err
+		}
+	}
 
 	return out, nil
 }

@@ -48,7 +48,7 @@ func (v view) unavailable() string {
 // added renders the notice of the tools that arrived after the first connect, with the instructions of a
 // server that the first connect did not reach, and the notice of the servers that went. It is "" when there
 // is neither. The text follows the live state, so a later model call renders it again.
-func (v view) added(ok func(string) bool) string {
+func (v view) added(ok func(string) bool, late []Late) string {
 	var servers, blocks []string
 	for _, name := range v.names {
 		m := v.mem[name]
@@ -72,6 +72,9 @@ func (v view) added(ok func(string) bool) string {
 	var out []string
 	if len(servers) > 0 {
 		out = append(out, fmt.Sprintf(addedHeader, strings.Join(servers, ", "))+"\n"+strings.Join(blocks, "\n"))
+	}
+	if text := addedPlugins(late); text != "" {
+		out = append(out, text)
 	}
 	var removed []string
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
@@ -127,4 +130,27 @@ func (v view) instructions(ok func(string) bool) string {
 		return ""
 	}
 	return "<mcp_instructions>" + b.String() + "\n</mcp_instructions>"
+}
+
+const pluginsHeader = "[plugins: tools added after the first tool read — %s. They are deferred: to use one you MUST first load it with " +
+	`mcp(action="select", tools=["tool_name"]), or find one with mcp(action="search", query="...").]`
+
+// addedPlugins renders the notice of the live plugin tools that the first tool read did not reach, one block for
+// each plugin in name order, or "" when there is none.
+func addedPlugins(late []Late) string {
+	byPlugin := map[string][]remote{}
+	for _, l := range late {
+		if l.Live {
+			byPlugin[l.Plugin] = append(byPlugin[l.Plugin], remote{spec: l.Tool.Spec()})
+		}
+	}
+	names := slices.Sorted(maps.Keys(byPlugin))
+	if len(names) == 0 {
+		return ""
+	}
+	blocks := make([]string, len(names))
+	for i, n := range names {
+		blocks[i] = fmt.Sprintf(`<plugin name="%s">%s`, attr(n), toolLines(byPlugin[n])) + "\n</plugin>"
+	}
+	return fmt.Sprintf(pluginsHeader, strings.Join(names, ", ")) + "\n" + strings.Join(blocks, "\n")
 }

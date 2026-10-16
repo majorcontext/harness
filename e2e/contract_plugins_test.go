@@ -86,7 +86,7 @@ func attachmentsSegment() string {
 }
 
 func requestHasSegment(want bool) harnesstest.Matcher {
-	return func(r harnesstest.Request) bool { return strings.Contains(r.System, fixtureSegment) == want }
+	return func(r harnesstest.Request) bool { return harnesstest.TailContains(fixtureSegment)(r) == want }
 }
 
 func matchAll(ms ...harnesstest.Matcher) harnesstest.Matcher {
@@ -142,8 +142,8 @@ func TestContractPluginTools(t *testing.T) {
 			name:   "plugin_system_transform_reads_session_messages",
 			config: pluginConfig(t, map[string]any{"recall": true}),
 			model: []harnesstest.Step{
-				{Name: "first", Match: matchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("LAST-USER: first")), Reply: harnesstest.Reply{Text: "ok1"}},
-				{Name: "second", Match: matchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("LAST-USER: second")), Reply: harnesstest.Reply{Text: "ok2"}},
+				{Name: "first", Match: matchAll(harnesstest.LastUserText("first"), harnesstest.TailContains("LAST-USER: first")), Reply: harnesstest.Reply{Text: "ok1"}},
+				{Name: "second", Match: matchAll(harnesstest.LastUserText("second"), harnesstest.TailContains("LAST-USER: second")), Reply: harnesstest.Reply{Text: "ok2"}},
 			},
 			actions: []action{
 				create{as: "a"},
@@ -156,7 +156,7 @@ func TestContractPluginTools(t *testing.T) {
 		{
 			name:   "plugin_session_messages_carry_attachments",
 			config: pluginConfig(t, map[string]any{"recall_blobs": true}),
-			model:  []harnesstest.Step{{Name: "seen", Match: harnesstest.SystemContains(attachmentsSegment()), Reply: harnesstest.Reply{Text: "ok"}}},
+			model:  []harnesstest.Step{{Name: "seen", Match: harnesstest.TailContains(attachmentsSegment()), Reply: harnesstest.Reply{Text: "ok"}}},
 			actions: []action{
 				create{as: "a"},
 				submitAttachments{as: "a", text: "look"},
@@ -179,8 +179,8 @@ func TestContractPluginSession(t *testing.T) {
 			name:   "plugin_sees_the_model_of_each_call",
 			config: pluginConfig(t, map[string]any{"model": true}),
 			model: []harnesstest.Step{
-				{Name: "first", Match: matchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("MODEL: anthropic/claude-fable-5")), Reply: harnesstest.Reply{Text: "ok1"}},
-				{Name: "second", Match: matchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("MODEL: anthropic/claude-haiku-4-5")), Reply: harnesstest.Reply{Text: "ok2"}},
+				{Name: "first", Match: matchAll(harnesstest.LastUserText("first"), harnesstest.TailContains("MODEL: anthropic/claude-fable-5")), Reply: harnesstest.Reply{Text: "ok1"}},
+				{Name: "second", Match: matchAll(harnesstest.LastUserText("second"), harnesstest.TailContains("MODEL: anthropic/claude-haiku-4-5")), Reply: harnesstest.Reply{Text: "ok2"}},
 			},
 			actions: []action{
 				create{as: "a"},

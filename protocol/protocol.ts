@@ -390,6 +390,23 @@ export interface Plugin {
   hooks: string[];
 }
 
+export interface PluginSet {
+  plugins: PluginSpec[];
+}
+
+export interface PluginSpec {
+  name: string;
+  command: string[];
+  env?: string[];
+  dir?: string;
+  config?: unknown;
+  tool_timeout_s?: number;
+}
+
+export interface Plugins {
+  plugins: Plugin[];
+}
+
 export interface ProcessInfo {
   name: string;
   origin: string;
@@ -651,6 +668,7 @@ export interface Operations {
   processLogs: { query: { tail?: number }; request: void; response: ProcessLogs };
   workspaceChanges: { query: { scope?: string; dir?: string }; request: void; response: WorkspaceChanges };
   setMCPServers: { query: Record<string, never>; request: MCPServerSet; response: MCPServers };
+  setPlugins: { query: Record<string, never>; request: PluginSet; response: Plugins };
   health: { query: Record<string, never>; request: void; response: Health };
 }
 
@@ -683,5 +701,6 @@ export const routes = [
   { name: "processLogs", method: "GET", path: "/processes/{name}/logs", status: 200, stream: false },
   { name: "workspaceChanges", method: "GET", path: "/workspace/changes", status: 200, stream: false },
   { name: "setMCPServers", method: "PUT", path: "/mcp/servers", status: 200, stream: false },
+  { name: "setPlugins", method: "PUT", path: "/plugins", status: 200, stream: false },
   { name: "health", method: "GET", path: "/health", status: 200, stream: false },
 ] as const;

@@ -302,7 +302,7 @@ func codexNoToolCallRows() []codexScenario {
 func codexPluginRows(t *testing.T) []codexScenario {
 	return []codexScenario{{
 		scenario: scenario{
-			name:    "codex_ws_prewarm_carries_the_plugin_system_segment",
+			name:    "codex_ws_prewarm_leaves_the_plugin_segment_to_the_tail_of_the_request",
 			config:  pluginConfig(t, nil),
 			model:   codexHi,
 			actions: codexSession(codexTurn("a", "hello"), []action{recordPrewarmHas{contains: fixtureSegment}, recordWire{}}),

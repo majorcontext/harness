@@ -61,6 +61,7 @@ type Runtime[S Session] interface {
 	Models(ctx context.Context) []protocol.Model
 	Commands(ctx context.Context) (protocol.Commands, error)
 	SetMCPServers(ctx context.Context, servers map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error)
+	SetPlugins(ctx context.Context, plugins []config.PluginSpec) ([]protocol.Plugin, error)
 }
 
 // Processes runs the processes of the box.
@@ -130,6 +131,7 @@ func (h *handler[S]) handlers() map[string]http.HandlerFunc {
 		}),
 		"listCommands":  h.serve(h.commands),
 		"setMCPServers": h.serve(h.setMCPServers),
+		"setPlugins":    h.serve(h.setPlugins),
 		"health": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 			reply(w, http.StatusOK, h.health)
 			return nil
@@ -164,6 +166,22 @@ func (h *handler[S]) setMCPServers(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	reply(w, http.StatusOK, protocol.MCPServers{Servers: servers})
+	return nil
+}
+
+func (h *handler[S]) setPlugins(w http.ResponseWriter, r *http.Request) error {
+	var req protocol.PluginSet
+	if err := decode(w, r, &req, maxBody); err != nil {
+		return err
+	}
+	if req.Plugins == nil {
+		return fmt.Errorf("%w: plugins is required", errInvalid)
+	}
+	plugins, err := h.rt.SetPlugins(r.Context(), req.Plugins)
+	if err != nil {
+		return err
+	}
+	reply(w, http.StatusOK, protocol.Plugins{Plugins: plugins})
 	return nil
 }
 

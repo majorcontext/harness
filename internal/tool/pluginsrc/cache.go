@@ -183,6 +183,9 @@ func scriptsHash(files []fileStat) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// entryName returns the plugin name of a cache key, which is the name, "@", and a 64-digit hex digest.
+func entryName(key string) string { return key[:max(len(key)-65, 0)] }
+
 // manifest returns the manifest of ps from the cache when the plugin has not
 // changed, else from a new probe, which it stores in c. changed reports a write
 // to c. With refresh, it always probes.
@@ -246,6 +249,11 @@ func (c *cache) manifest(probe probeFunc, ps config.PluginSpec, refresh bool) (m
 	}
 	if m.Name != ps.Name {
 		return m, false, fmt.Errorf("manifest name %q does not match the config", m.Name)
+	}
+	for k := range c.Entries {
+		if entryName(k) == ps.Name {
+			delete(c.Entries, k)
+		}
 	}
 	c.Entries[key] = cacheEntry{BinaryHash: bh, Size: fi.Size(), ModTimeNS: fi.ModTime().UnixNano(), ScriptFiles: files, ScriptHash: sh, Manifest: m}
 	return m, true, nil

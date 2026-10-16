@@ -414,8 +414,8 @@ func rowPluginGetsServeUrlAndRunTokenFromOptions(t *testing.T) {
 	}
 	awaitIdle(t, s)
 	reqs := fake.Requests()
-	if len(reqs) == 0 || !strings.Contains(reqs[0].System, "SERVE: http://127.0.0.1:4242 TOKEN: run-token-1") {
-		t.Errorf("the system prompt lacks the serve url and the run token of the plugin")
+	if len(reqs) == 0 || !harnesstest.TailContains("SERVE: http://127.0.0.1:4242 TOKEN: run-token-1")(reqs[0]) {
+		t.Errorf("the tail lacks the serve url and the run token of the plugin")
 	}
 }
 

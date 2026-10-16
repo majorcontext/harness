@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -89,6 +90,8 @@ type Options struct {
 type Host struct {
 	opts      Options
 	instances []*instance
+	// base is the Host with no instances that every instance points to, so a carried instance pins no old Host.
+	base *Host
 }
 
 // NewHost creates a Host from cached manifests. Nothing is spawned.
@@ -99,26 +102,57 @@ func NewHost(opts Options, specs ...Spec) (*Host, error) {
 	if opts.EventQueueSize <= 0 {
 		opts.EventQueueSize = defaultEventQueueSize
 	}
-	h := &Host{opts: opts}
+	h, _, err := (&Host{opts: opts}).Replace(specs, nil)
+	return h, err
+}
+
+// Replace returns a Host of specs, in chain order. When keep reports the name of a spec and h has a plugin of that
+// name, the new Host carries over that instance as it is, and the spec is not read. Every other spec starts a new
+// instance. h stays usable: a tool call that holds it finishes on its own instances. The returned func stops the
+// instances of h that the new Host lacks. Nothing is spawned.
+func (h *Host) Replace(specs []Spec, keep func(name string) bool) (*Host, func(), error) {
+	base := cmp.Or(h.base, h)
+	n := &Host{opts: h.opts, base: base}
 	seen := make(map[string]bool)
+	carried := make(map[*instance]bool)
 	for _, spec := range specs {
-		if spec.Manifest.Name == "" {
-			return nil, fmt.Errorf("plugin: spec missing manifest (run Probe at install time)")
+		name := spec.Manifest.Name
+		if seen[name] {
+			return nil, nil, fmt.Errorf("plugin %s: duplicate name", name)
+		}
+		seen[name] = true
+		if old := h.instance(name); old != nil && keep != nil && keep(name) {
+			carried[old] = true
+			n.instances = append(n.instances, old)
+			continue
+		}
+		if name == "" {
+			return nil, nil, fmt.Errorf("plugin: spec missing manifest (run Probe at install time)")
 		}
 		if spec.Manifest.ProtocolVersion != pub.ProtocolVersion {
-			return nil, fmt.Errorf("plugin %s: protocol version %d, harness speaks %d",
-				spec.Manifest.Name, spec.Manifest.ProtocolVersion, pub.ProtocolVersion)
+			return nil, nil, fmt.Errorf("plugin %s: protocol version %d, harness speaks %d", name, spec.Manifest.ProtocolVersion, pub.ProtocolVersion)
 		}
 		if err := validateManifest(spec.Manifest); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if seen[spec.Manifest.Name] {
-			return nil, fmt.Errorf("plugin %s: duplicate name", spec.Manifest.Name)
-		}
-		seen[spec.Manifest.Name] = true
-		h.instances = append(h.instances, &instance{host: h, spec: spec})
+		n.instances = append(n.instances, &instance{host: base, spec: spec})
 	}
-	return h, nil
+	return n, func() {
+		for _, inst := range h.instances {
+			if !carried[inst] {
+				inst.stop()
+			}
+		}
+	}, nil
+}
+
+func (h *Host) instance(name string) *instance {
+	for _, inst := range h.instances {
+		if inst.spec.Manifest.Name == name {
+			return inst
+		}
+	}
+	return nil
 }
 
 // Tools returns all plugin-provided tool definitions, for the model's tool
@@ -330,6 +364,9 @@ func (h *Host) ShellEnv(ctx context.Context, req *pub.ShellEnvRequest) map[strin
 	return env
 }
 
+// ErrNoTool says that no plugin of the Host provides the tool.
+var ErrNoTool = errors.New("plugin: no plugin provides tool")
+
 // StartTool starts the plugin of tool and returns the sender of its tool/execute request, so a deadline can cover the request only.
 func (h *Host) StartTool(ctx context.Context, tool string) (func(context.Context, *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error), error) {
 	for _, inst := range h.instances {
@@ -351,7 +388,7 @@ func (h *Host) StartTool(ctx context.Context, tool string) (func(context.Context
 			}
 		}
 	}
-	return nil, fmt.Errorf("plugin: no plugin provides tool %q", tool)
+	return nil, fmt.Errorf("%w %q", ErrNoTool, tool)
 }
 
 // reportedState is instance.state's value space: the spawn lifecycle a

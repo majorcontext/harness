@@ -188,18 +188,55 @@ func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, chang
 // tool that defers is in Deferred, and the prompt lists it when the first
 // connect reached it, until history selects or calls it. A tool that arrives
 // later is deferred and a notice lists it.
-func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
+func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
+	return s.toolset(ctx, history, allowed, nil)
+}
+
+// Late is a plugin tool that the first tool read of a session did not reach. Loaded says that the history
+// selected or called it, and Live that the live set of plugins has it.
+type Late struct {
+	Plugin       string
+	Tool         turn.Tool
+	Loaded, Live bool
+}
+
+// Plugins gives the plugin tools that a session loads with the mcp tool.
+type Plugins interface {
+	// Present reports whether the session had a plugin at its first tool read.
+	Present() bool
+	// Late returns the late tools that allowed keeps, in name order.
+	Late(history []protocol.LogMessage, allowed []string) []Late
+}
+
+// With returns s as a turn.Source that also defers the late tools of pl and loads them with the mcp tool.
+func (s *Source) With(pl Plugins) turn.Source { return withPlugins{s, pl} }
+
+type withPlugins struct {
+	s  *Source
+	pl Plugins
+}
+
+func (w withPlugins) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
+	return w.s.toolset(ctx, history, allowed, w.pl)
+}
+
+func (s *Source) toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, pl Plugins) turn.Toolset {
 	if !s.wait(ctx) || !s.settle(ctx) {
 		return turn.Toolset{}
 	}
 	v := s.view()
-	if len(v.mem) == 0 {
+	if len(v.mem) == 0 && (pl == nil || !pl.Present()) {
 		return turn.Toolset{}
 	}
 	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
 	autoDefer := v.baseCount(ok) > s.threshold
-	loaded := selected(history)
+	loaded := Selected(history)
 	ctl := control{s: s, loaded: map[string]bool{}, v: v, ok: ok}
+	var late []Late
+	if pl != nil {
+		late = pl.Late(history, allowed)
+		ctl.late = func() []Late { return pl.Late(history, allowed) }
+	}
 	var ts turn.Toolset
 	var listed []remote
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
@@ -224,6 +261,15 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 			}
 		}
 	}
+	for _, l := range late {
+		switch {
+		case l.Loaded:
+			ctl.loaded[l.Tool.Spec().Name] = true
+			ts.Tools = append(ts.Tools, l.Tool)
+		case l.Live:
+			ts.Deferred = append(ts.Deferred, l.Tool)
+		}
+	}
 	var head []turn.Tool
 	if ok(controlName) {
 		head = append(head, ctl)
@@ -233,7 +279,7 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	}
 	ts.Tools = append(head, ts.Tools...)
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), catalog(listed)}, func(p string) bool { return p == "" }), "\n\n")
-	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok)}}
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok, late)}}
 	return ts
 }
 
@@ -279,21 +325,21 @@ func (v view) remotes(name string, ok func(string) bool) []remote {
 	return out
 }
 
-// selected returns the tool names that history selects with the mcp tool
+// Selected returns the tool names that history selects with the mcp tool
 // or calls. The log holds them, so a replay loads the same tools.
-func selected(history []protocol.LogMessage) map[string]bool {
+func Selected(history []protocol.LogMessage) map[string]bool {
 	out := map[string]bool{}
 	for _, m := range history {
 		for _, p := range m.Parts {
 			var in args
 			switch {
 			case p.Type != protocol.LogPartToolCall:
-			case strings.HasPrefix(p.Name, prefix):
-				out[p.Name] = true
 			case p.Name == controlName && json.Unmarshal(p.Arguments, &in) == nil && in.Action == "select":
 				for _, n := range in.Tools {
 					out[n] = true
 				}
+			default:
+				out[p.Name] = true
 			}
 		}
 	}

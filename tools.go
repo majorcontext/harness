@@ -37,7 +37,7 @@ func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name,
 func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
 	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || name == turn.AskTool || caps.WebSearch && name == turn.WebSearchTool ||
-		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || r.owns(name)
+		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || name == "mcp" && (r.mcp.Populated() || r.plugins.Configured()) || r.owns(name)
 }
 
 // owns reports whether name is a tool of Options.Tools or of a started plugin.
@@ -127,10 +127,13 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {
-			if !r.mcpSurface(id, mcp.Populated) || allowed == nil && c.OwnsMCP {
+			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) || allowed == nil && c.OwnsMCP {
 				return nil
 			}
-			return mcp
+			if plug == nil || c.OwnsLoop {
+				return mcp
+			}
+			return mcp.With(plug)
 		}})
 	}
 	if plug != nil {

@@ -40,7 +40,7 @@ type SystemTransformRequest struct {
 
 // SystemTransformResponse is the response of the system.transform hook.
 type SystemTransformResponse struct {
-	Segments []string `json:"segments,omitempty"` // added to the end of the system prompt
+	Segments []string `json:"segments,omitempty"` // sent after the last message of the call
 }
 
 // ShellEnvRequest is the request of the shell.env hook.

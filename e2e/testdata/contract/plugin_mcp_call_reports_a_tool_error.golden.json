@@ -42,6 +42,10 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\nFIXTURE-SYSTEM-SEGMENT\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -114,6 +118,10 @@
               "text": "{\"content\":[{\"type\":\"text\",\"text\":\"upstream timeout\"}],\"is_error\":true}",
               "tool_name": "fixture_mcp",
               "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\nFIXTURE-SYSTEM-SEGMENT\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
