@@ -23,6 +23,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/mcp"
+	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -33,6 +34,10 @@ const (
 	listName       = "list_mcp_resources"
 	readName       = "read_mcp_resource"
 	connectTimeout = 15 * time.Second
+	// requestMargin keeps the request bound of the client after the tool
+	// limit, so the limit ends a tool call first.
+	requestMargin = time.Second
+	requestBound  = 30 * time.Second
 )
 
 // Reserved reports whether name belongs to the tools of a Source.
@@ -90,10 +95,11 @@ type server struct {
 	client *mcp.Client
 	tools  []mcp.Tool
 	index  map[string]bool
+	limit  time.Duration
 }
 
-func newServer(c *mcp.Client, tools []mcp.Tool) *server {
-	sv := &server{client: c, tools: tools, index: make(map[string]bool, len(tools))}
+func newServer(c *mcp.Client, tools []mcp.Tool, limit time.Duration) *server {
+	sv := &server{client: c, tools: tools, index: make(map[string]bool, len(tools)), limit: limit}
 	for _, t := range tools {
 		sv.index[t.Name] = true
 	}
@@ -151,7 +157,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, chang
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}
 	var client atomic.Pointer[mcp.Client]
-	c, err := mcp.NewClient(tr, mcp.Options{OnNotification: func(method string, _ json.RawMessage) {
+	c, err := mcp.NewClient(tr, mcp.Options{RequestTimeout: max(requestBound, spec.ToolTimeout()+requestMargin), OnNotification: func(method string, _ json.RawMessage) {
 		if cl := client.Load(); method == mcp.NotificationToolsListChanged && cl != nil {
 			if t := cl.ServerCapabilities().Tools; t != nil && t.ListChanged {
 				changed(cl)
@@ -174,7 +180,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, chang
 		return nil, err
 	}
 	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
-	return newServer(c, tools), nil
+	return newServer(c, tools, spec.ToolTimeout()), nil
 }
 
 // Toolset returns the mcp tool, the resource tools when a server that the
@@ -320,15 +326,17 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(life, cancel)()
-	res, err := sv.client.CallTool(ctx, r.name, in)
-	if err != nil {
-		if life.Err() != nil {
-			return protocol.ToolResult{}, fmt.Errorf("mcp: server %q: call failed: server removed", r.server)
+	return toolresult.Limit(ctx, call.Name, sv.limit, func(ctx context.Context) (protocol.ToolResult, error) {
+		res, err := sv.client.CallTool(ctx, r.name, in)
+		if err != nil {
+			if life.Err() != nil {
+				return protocol.ToolResult{}, fmt.Errorf("mcp: server %q: call failed: server removed", r.server)
+			}
+			return protocol.ToolResult{}, hide(r.server, err)
 		}
-		return protocol.ToolResult{}, hide(r.server, err)
-	}
-	text, blobs := render(res.Content)
-	return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
+		text, blobs := render(res.Content)
+		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
+	})
 }
 
 // hide replaces every error but a server's own RPC error with a reason. A

@@ -330,25 +330,28 @@ func (h *Host) ShellEnv(ctx context.Context, req *pub.ShellEnvRequest) map[strin
 	return env
 }
 
-// ExecuteTool routes a plugin-provided tool call to the plugin that declares
-// it in its manifest.
-func (h *Host) ExecuteTool(ctx context.Context, req *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error) {
+// StartTool starts the plugin of tool and returns the sender of its tool/execute request, so a deadline can cover the request only.
+func (h *Host) StartTool(ctx context.Context, tool string) (func(context.Context, *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error), error) {
 	for _, inst := range h.instances {
 		for _, def := range inst.spec.Manifest.Tools {
-			if def.Name == req.Tool {
-				c, err := inst.start(ctx)
+			if def.Name == tool {
+				sctx, cancel := context.WithTimeout(ctx, startTimeout)
+				defer cancel()
+				c, err := inst.start(sctx)
 				if err != nil {
 					return nil, err
 				}
-				var resp toolExecuteResponse
-				if err := c.Call(ctx, wire.MethodToolExecute, req, &resp); err != nil {
-					return nil, err
-				}
-				return &resp.ToolExecuteResponse, nil
+				return func(ctx context.Context, req *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error) {
+					var resp toolExecuteResponse
+					if err := c.Call(ctx, wire.MethodToolExecute, req, &resp); err != nil {
+						return nil, err
+					}
+					return &resp.ToolExecuteResponse, nil
+				}, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("plugin: no plugin provides tool %q", req.Tool)
+	return nil, fmt.Errorf("plugin: no plugin provides tool %q", tool)
 }
 
 // reportedState is instance.state's value space: the spawn lifecycle a
@@ -482,6 +485,9 @@ func (inst *instance) runEventSender(h *Host, ch chan *pub.EventBatch, stop chan
 		}
 	}
 }
+
+// startTimeout bounds a start that a tool call triggers.
+const startTimeout = 30 * time.Second
 
 // errInstanceStopped is returned by start once the instance has been (or is
 // being) stopped, so a start racing a stop gets a definitive error instead

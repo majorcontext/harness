@@ -31,6 +31,7 @@ type mcpServerDef struct {
 	holdRetry   bool // the first initialize fails and every later one blocks, so no background retry ends
 	dir         bool // a stdio server starts in a directory named "stubdir"
 	toolLoading string
+	toolTimeout int  // tool_timeout_s of the entry; zero leaves it out
 	unlisted    bool // the fixture exists, and the config leaves it out
 }
 
@@ -68,6 +69,9 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 			}
 			if d.toolLoading != "" {
 				entry["tool_loading"] = d.toolLoading
+			}
+			if d.toolTimeout != 0 {
+				entry["tool_timeout_s"] = d.toolTimeout
 			}
 			if !d.unlisted {
 				servers[d.name] = entry
@@ -674,6 +678,12 @@ func TestContractMCPRuntime(t *testing.T) {
 				submit{as: "a", text: "again"},
 				waitIdle{as: "a"},
 			},
+		},
+		{
+			name:    "mcp_tool_call_past_tool_timeout_s_is_an_error_result_and_the_turn_continues",
+			setup:   mcpSetup(nil, mcpServerDef{name: gateServer.name, spec: gateServer.spec, toolTimeout: 1}),
+			model:   toolChain(holdCall("slow")),
+			actions: append(append([]action{}, oneTurn...), awaitAbandoned{server: "gate", n: 1}),
 		},
 		{
 			name: "mcp_status_reports_connected_and_unavailable_servers",

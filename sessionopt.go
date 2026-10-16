@@ -26,6 +26,9 @@ func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption {
 	own := make(map[string]config.MCPServerSpec, len(servers))
 	for name, sp := range servers {
 		sp.Command, sp.Env, sp.Headers = slices.Clone(sp.Command), slices.Clone(sp.Env), maps.Clone(sp.Headers)
+		if sp.ToolTimeoutS != nil {
+			sp.ToolTimeoutS = &[]int{*sp.ToolTimeoutS}[0]
+		}
 		own[name] = sp
 	}
 	return func(o *sessionOptions) { o.mcp = own }

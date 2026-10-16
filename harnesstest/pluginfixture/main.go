@@ -120,6 +120,12 @@ var config struct {
 	HostCalls bool `json:"host_calls"`
 	// PidFile receives the process ID before each host call, so a scenario can kill the plugin.
 	PidFile string `json:"pid_file"`
+	// NoHooks empties the hook list of the manifest, so the first tool call starts the plugin.
+	NoHooks bool `json:"no_hooks"`
+	// InitDelayMS makes initialize wait this many milliseconds before it answers.
+	InitDelayMS int `json:"init_delay_ms"`
+	// EchoHang makes fixture_echo leave its request unanswered.
+	EchoHang bool `json:"echo_hang"`
 	// Serve adds a system segment with the serve_url and run_token of initialize.
 	Serve bool `json:"serve"`
 }
@@ -201,6 +207,7 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		serveInfo.URL, serveInfo.Token = init.ServeURL, init.RunToken
 		rawConfig = init.Config
 		_ = json.Unmarshal(init.Config, &config)
+		time.Sleep(time.Duration(config.InitDelayMS) * time.Millisecond)
 		m := maps.Clone(manifest)
 		if config.Name != "" {
 			m["name"] = config.Name
@@ -213,6 +220,9 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		}
 		if config.HostCalls {
 			m["tools"] = withHostCallTools(m["tools"].([]toolSpec))
+		}
+		if config.NoHooks {
+			m["hooks"] = []string{}
 		}
 		if config.ShellEnv != "" {
 			m["hooks"] = append(slices.Clone(manifest["hooks"].([]string)), "shell.env")
@@ -476,6 +486,9 @@ func execute(params json.RawMessage) any {
 		}
 		return report(req.SessionID, req.Args.Edits, req.Args.Process)
 	case "fixture_echo":
+		if config.EchoHang {
+			return noReply
+		}
 		return map[string]any{"output": []part{{Type: "text", Text: "echo: " + req.Args.Text}}}
 	case "fixture_fail":
 		return map[string]any{"output": []part{{Type: "text", Text: "fixture failure"}}, "is_error": true}

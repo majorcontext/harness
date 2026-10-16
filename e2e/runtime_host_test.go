@@ -124,7 +124,7 @@ func onHost[S any](t *testing.T, h host, table []S, key func(S) string, run func
 		for _, sc := range table {
 			name := key(sc)
 			t.Run(name, func(t *testing.T) {
-				row, ok := runtimeRows[name]
+				row, ok := rowDisposition(name)
 				if !ok {
 					t.Fatalf("row %s has no runtime disposition", name)
 				}
@@ -348,11 +348,11 @@ func TestRuntimeRows(t *testing.T) {
 	serve, runtime := goldenNames(t, "contract"), goldenNames(t, "runtime")
 	scenarios := testStringLiterals(t)
 	for _, name := range serve {
-		if _, ok := runtimeRows[name]; !ok {
+		if _, ok := rowDisposition(name); !ok {
 			t.Errorf("golden %s has no runtime disposition", name)
 		}
 	}
-	for name, row := range runtimeRows {
+	for name, row := range allRowDispositions() {
 		if _, ok := scenarios[name]; !ok {
 			t.Errorf("row %s names no scenario", name)
 		}
@@ -383,7 +383,7 @@ func TestRuntimeRows(t *testing.T) {
 		}
 	}
 	for _, name := range runtime {
-		if _, ok := runtimeRows[name]; !ok {
+		if _, ok := rowDisposition(name); !ok {
 			t.Errorf("runtime golden %s has no disposition", name)
 		}
 	}

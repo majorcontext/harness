@@ -117,7 +117,7 @@ func TestHostConcurrentToolHooksStayIndependent(t *testing.T) {
 }
 
 // TestHostConcurrentExecuteToolStaysIndependent is the same proof for
-// Host.ExecuteTool: two plugin TOOL calls in flight at once over one
+// Host.StartTool: two plugin TOOL calls in flight at once over one
 // connection, each getting its own output.
 func TestHostConcurrentExecuteToolStaysIndependent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestHostConcurrentExecuteToolStaysIndependent(t *testing.T) {
 		done := make(chan outcome, 2)
 		for _, want := range []string{"alpha", "beta"} {
 			go func() {
-				resp, err := h.ExecuteTool(context.Background(), &pub.ToolExecuteRequest{
+				resp, err := executeTool(h, &pub.ToolExecuteRequest{
 					SessionID: "s1", CallID: want, Tool: "echo",
 					Args: json.RawMessage(fmt.Sprintf(`{"want":%q}`, want)),
 				})

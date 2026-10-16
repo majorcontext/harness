@@ -121,11 +121,16 @@ func (a *actor) spawn(f func()) {
 
 func sameSpec(x, y config.MCPServerSpec) bool {
 	return slices.Equal(x.Command, y.Command) && slices.Equal(x.Env, y.Env) && x.Dir == y.Dir && x.URL == y.URL &&
-		maps.Equal(x.Headers, y.Headers) && x.ConnectTimeoutS == y.ConnectTimeoutS && x.ToolLoading == y.ToolLoading
+		maps.Equal(x.Headers, y.Headers) && x.ConnectTimeoutS == y.ConnectTimeoutS && x.ToolLoading == y.ToolLoading &&
+		x.ToolTimeout() == y.ToolTimeout()
 }
 
 func cloneSpec(sp config.MCPServerSpec) config.MCPServerSpec {
 	sp.Command, sp.Env, sp.Headers = slices.Clone(sp.Command), slices.Clone(sp.Env), maps.Clone(sp.Headers)
+	if sp.ToolTimeoutS != nil {
+		t := *sp.ToolTimeoutS
+		sp.ToolTimeoutS = &t
+	}
 	return sp
 }
 
@@ -514,7 +519,7 @@ func (m listedMsg) handle(a *actor) {
 	}
 	e.readBusy = false
 	if m.err == nil {
-		e.sv = newServer(m.client, m.tools)
+		e.sv = newServer(m.client, m.tools, e.spec.ToolTimeout())
 		a.remember(e.name, e.sv)
 	} else if e.ctx.Err() == nil {
 		a.s.log.Warn("mcp: tool list did not refresh", "server", e.name, "err", hide(e.name, m.err))
