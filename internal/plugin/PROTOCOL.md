@@ -170,7 +170,7 @@ plugin's mutations.
 - `chat.params`, `chat.message`: a response with a `params` (`message`) key
   replaces the request value for the next plugin; a response without the key
   changes nothing.
-- `system.transform`: additive — segments append; nothing is replaced.
+- `system.transform`: additive — segments append after the last message of the call; nothing is replaced.
 - `shell.env`: maps merge; later plugins win on key conflicts.
 - `tool.execute.before`: non-nil `args` replaces; non-empty `deny` blocks the
   tool call, returns the message to the model as an error result, and stops

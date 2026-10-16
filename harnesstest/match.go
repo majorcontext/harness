@@ -15,6 +15,17 @@ func SystemContains(substr string) Matcher {
 	return func(r Request) bool { return strings.Contains(r.System, substr) }
 }
 
+// TailContains matches a request whose last content block holds substr, as the tail of a model call does.
+func TailContains(substr string) Matcher {
+	return func(r Request) bool {
+		if len(r.Messages) == 0 {
+			return false
+		}
+		parts := r.Messages[len(r.Messages)-1].Parts
+		return len(parts) > 0 && strings.Contains(parts[len(parts)-1].Text, substr)
+	}
+}
+
 // LastToolResult matches a request whose last message holds a result for the named tool.
 func LastToolResult(toolName string) Matcher {
 	return func(r Request) bool {

@@ -127,10 +127,13 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {
-			if !r.mcpSurface(id, mcp.Populated) || allowed == nil && c.OwnsMCP {
+			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) || allowed == nil && c.OwnsMCP {
 				return nil
 			}
-			return mcp
+			if plug == nil {
+				return mcp
+			}
+			return mcp.With(plug)
 		}})
 	}
 	if plug != nil {

@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ import (
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/plugin"
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	pub "github.com/majorcontext/harness/plugin"
@@ -35,25 +38,39 @@ type History func(ctx context.Context, sessionID string) ([]protocol.LogMessage,
 // Blob opens the bytes that a session stores under key.
 type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error)
 
-// Plugins starts the configured plugins once for each runtime.
+// Plugins owns the live set of plugins of a runtime: the plugins of the config, which Set replaces, and the
+// in-process plugins, which never change. All methods are safe for concurrent use.
 type Plugins struct {
 	log       *slog.Logger
-	specs     []config.PluginSpec
+	start     []config.PluginSpec
 	inproc    []*pub.Plugin
 	opts      plugin.Options
 	workDir   string
 	cachePath string
-	// limits holds the tool_timeout_s of each config plugin tool, set before host.
-	limits map[string]time.Duration
 
-	// host is set once, by the first successful Start.
-	host   atomic.Pointer[plugin.Host]
+	// live is the set that sessions read. A Start or a Set replaces it whole.
+	live   atomic.Pointer[live]
 	mu     sync.Mutex
 	closed bool
+
+	// dmu guards seen and base. seen holds the first definition that the runtime read of each tool, and base
+	// the tools that a session sent at its first tool read, both for the life of the process.
+	dmu  sync.Mutex
+	seen map[string]pub.ToolDef
+	base map[string]firstRead
 
 	serving sync.WaitGroup
 	smu     sync.Mutex
 	stopped bool
+}
+
+// live is one immutable plugin set.
+type live struct {
+	host *plugin.Host
+	// specs are the config plugins of host.
+	specs []config.PluginSpec
+	// limits holds the tool_timeout_s of each config plugin tool.
+	limits map[string]time.Duration
 }
 
 func (p *Plugins) spawn(fn func()) error {
@@ -66,12 +83,8 @@ func (p *Plugins) spawn(fn func()) error {
 	return nil
 }
 
-// New returns the Plugins of cfg.Plugins and inproc, or nil when both are
-// empty. It does no I/O.
+// New returns the Plugins of cfg.Plugins and inproc. It does no I/O.
 func New(cfg config.Config, inproc []*pub.Plugin, workDir string, calls Calls, serveURL, runToken string, log *slog.Logger) *Plugins {
-	if len(cfg.Plugins) == 0 && len(inproc) == 0 {
-		return nil
-	}
 	log = cmp.Or(log, slog.Default())
 	onError := func(name string, hook pub.Hook, err error) {
 		if errors.Is(err, context.Canceled) {
@@ -79,7 +92,8 @@ func New(cfg config.Config, inproc []*pub.Plugin, workDir string, calls Calls, s
 		}
 		log.Warn("plugin: hook failed", "plugin", name, "hook", string(hook), "error", plugin.SanitizeSessionError(toolresult.Mask(err.Error())))
 	}
-	return &Plugins{log: log, specs: cfg.Plugins, inproc: inproc, workDir: workDir, cachePath: cfg.PluginCache,
+	return &Plugins{log: log, start: cfg.Plugins, inproc: inproc, workDir: workDir, cachePath: cfg.PluginCache,
+		seen: map[string]pub.ToolDef{}, base: map[string]firstRead{},
 		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{calls}, Log: log,
 			ServeURL: serveURL, RunToken: runToken, OnError: onError}}
 }
@@ -89,15 +103,39 @@ func New(cfg config.Config, inproc []*pub.Plugin, workDir string, calls Calls, s
 // bounded probe. With refresh, it always probes. The in-process plugins follow
 // the configured ones; they have no probe and no cache entry. The warm process
 // of a plugin starts on its first hook or tool call. taken reports a tool name
-// that another tool has. After an error, the next call tries again.
+// that another tool has. After an error, the next call tries again. Start does
+// nothing when a Set made the live set first.
 func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.host.Load() != nil {
+	if p.live.Load() != nil {
 		return nil
 	}
+	return p.swap(ctx, p.start, taken, refresh)
+}
+
+// Set makes specs the config plugins of the live set. A plugin whose spec is the same as before keeps its
+// instance, a new or changed plugin gets a new instance that starts on its next use, and a plugin that specs
+// leaves out stops. Set validates the manifests and the names first, and changes nothing when anything fails.
+// It returns the plugins of the new set.
+func (p *Plugins) Set(ctx context.Context, specs []config.PluginSpec, taken func(string) bool) ([]protocol.Plugin, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, errors.New("plugins are closed")
+	}
+	if err := p.swap(ctx, specs, taken, false); err != nil {
+		return nil, err
+	}
+	return append([]protocol.Plugin{}, p.Info()...), nil
+}
+
+// swap makes specs and the in-process plugins the live set. The caller holds p.mu.
+func (p *Plugins) swap(ctx context.Context, specs []config.PluginSpec, taken func(string) bool, refresh bool) error {
+	cur := p.live.Load()
+	before, have, own := p.current(cur)
 	c := newCache()
-	if p.cachePath != "" {
+	if p.cachePath != "" && slices.ContainsFunc(specs, func(ps config.PluginSpec) bool { return !reflect.DeepEqual(before[ps.Name], ps) }) {
 		var err error
 		if c, err = loadCache(p.cachePath, p.log); err != nil {
 			return fmt.Errorf("plugin cache: %w", err)
@@ -108,36 +146,54 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 		defer cancel()
 		return plugin.ProbeSpec(pctx, spec)
 	}
-	specs := make([]plugin.Spec, len(p.specs), len(p.specs)+len(p.inproc))
-	limits := map[string]time.Duration{}
 	names := map[string]bool{}
+	hostSpecs := make([]plugin.Spec, 0, len(specs)+len(p.inproc))
+	keep := map[string]bool{}
+	limits := map[string]time.Duration{}
 	dirty := false
-	for i, ps := range p.specs {
-		m, changed, err := c.manifest(probe, ps, refresh)
-		if err != nil {
-			return fmt.Errorf("plugin %s: %w", ps.Name, err)
+	for _, ps := range specs {
+		if slices.ContainsFunc(p.inproc, func(ip *pub.Plugin) bool { return ip.Name == ps.Name }) {
+			return fmt.Errorf("plugin %s: the name is the name of an in-process plugin", ps.Name)
 		}
-		dirty = dirty || changed
-		for _, d := range m.Tools {
-			if d.Name == "" || names[d.Name] || taken(d.Name) {
-				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ps.Name, d.Name)
+		spec, toolNames := plugin.Spec{Manifest: pub.Manifest{Name: ps.Name}}, have[ps.Name]
+		if reflect.DeepEqual(before[ps.Name], ps) {
+			keep[ps.Name] = true
+		} else {
+			m, changed, err := c.manifest(probe, ps, refresh)
+			if err != nil {
+				return fmt.Errorf("plugin %s: %w", ps.Name, err)
 			}
-			names[d.Name] = true
-			limits[d.Name] = ps.ToolTimeout()
+			dirty = dirty || changed
+			spec = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config, Manifest: m}
+			toolNames = nil
+			for _, d := range m.Tools {
+				toolNames = append(toolNames, d.Name)
+			}
 		}
-		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config, Manifest: m}
+		for _, t := range toolNames {
+			if t == "" || names[t] || taken(t) && !own[t] {
+				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ps.Name, t)
+			}
+			names[t] = true
+			limits[t] = ps.ToolTimeout()
+		}
+		hostSpecs = append(hostSpecs, spec)
 	}
 	for _, ip := range p.inproc {
-		spec := plugin.InProcess(ip, p.spawn)
-		for _, d := range spec.Manifest.Tools {
-			if d.Name == "" || names[d.Name] || taken(d.Name) {
+		spec := plugin.Spec{Manifest: pub.Manifest{Name: ip.Name}}
+		for _, d := range ip.Manifest().Tools {
+			if d.Name == "" || names[d.Name] || cur == nil && taken(d.Name) {
 				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ip.Name, d.Name)
 			}
 			names[d.Name] = true
 		}
-		specs = append(specs, spec)
+		if cur == nil {
+			spec = plugin.InProcess(ip, p.spawn)
+		}
+		keep[ip.Name] = true
+		hostSpecs = append(hostSpecs, spec)
 	}
-	host, err := plugin.NewHost(p.opts, specs...)
+	host, stop, err := p.replace(cur, hostSpecs, keep)
 	if err != nil {
 		return err
 	}
@@ -146,25 +202,66 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 			return fmt.Errorf("plugin cache: %w", err)
 		}
 	}
-	p.limits = limits
-	p.host.Store(host)
+	p.remember(host.Tools())
+	p.live.Store(&live{host: host, specs: specs, limits: limits})
+	stop()
 	return nil
+}
+
+// current describes the live set cur: the config spec and the tool names of each config plugin, and the set of
+// those tool names. A nil cur is empty.
+func (p *Plugins) current(cur *live) (before map[string]config.PluginSpec, have map[string][]string, own map[string]bool) {
+	before, have, own = map[string]config.PluginSpec{}, map[string][]string{}, map[string]bool{}
+	if cur == nil {
+		return
+	}
+	for _, ps := range cur.specs {
+		before[ps.Name] = ps
+	}
+	for _, i := range cur.host.Plugins() {
+		if _, ok := before[i.Name]; ok {
+			have[i.Name] = i.Tools
+			for _, t := range i.Tools {
+				own[t] = true
+			}
+		}
+	}
+	return
+}
+
+// replace builds the Host of hostSpecs from cur. It returns the func that stops what the new Host drops.
+func (p *Plugins) replace(cur *live, hostSpecs []plugin.Spec, keep map[string]bool) (*plugin.Host, func(), error) {
+	if cur == nil {
+		h, err := plugin.NewHost(p.opts, hostSpecs...)
+		return h, func() {}, err
+	}
+	return cur.host.Replace(hostSpecs, func(n string) bool { return keep[n] })
+}
+
+// remember keeps the first definition of each tool.
+func (p *Plugins) remember(defs []pub.ToolDef) {
+	p.dmu.Lock()
+	defer p.dmu.Unlock()
+	for _, d := range defs {
+		if _, ok := p.seen[d.Name]; !ok {
+			p.seen[d.Name] = d
+		}
+	}
 }
 
 // Has reports whether a started plugin has a tool named name.
 func (p *Plugins) Has(name string) bool {
-	h := p.host.Load()
-	return h != nil && slices.ContainsFunc(h.Tools(), func(d pub.ToolDef) bool { return d.Name == name })
+	l := p.live.Load()
+	return l != nil && slices.ContainsFunc(l.host.Tools(), func(d pub.ToolDef) bool { return d.Name == name })
 }
 
 // Names returns the tool names of the started plugins. A nil Plugins has none.
 func (p *Plugins) Names() []string {
-	if p == nil || p.host.Load() == nil {
+	if p == nil || p.live.Load() == nil {
 		return nil
 	}
-	h := p.host.Load()
 	var out []string
-	for _, d := range h.Tools() {
+	for _, d := range p.live.Load().host.Tools() {
 		out = append(out, d.Name)
 	}
 	return out
@@ -172,22 +269,17 @@ func (p *Plugins) Names() []string {
 
 // Session returns the plugins of session id. Call it after Start.
 func (p *Plugins) Session(id string) *Session {
-	host := p.host.Load()
-	s := &Session{id: id, host: host, workDir: p.workDir}
-	for _, d := range host.Tools() {
-		s.tools = append(s.tools, tool{s, d, cmp.Or(p.limits[d.Name], config.DefaultToolTimeout)})
-	}
-	return s
+	return &Session{id: id, p: p}
 }
 
 // Info returns the state of each started plugin, or nil before Start.
 func (p *Plugins) Info() []protocol.Plugin {
-	h := p.host.Load()
-	if h == nil {
+	l := p.live.Load()
+	if l == nil {
 		return nil
 	}
 	var out []protocol.Plugin
-	for _, i := range h.Plugins() {
+	for _, i := range l.host.Plugins() {
 		out = append(out, protocol.Plugin{Name: i.Name, State: i.State, Tools: i.Tools, Hooks: i.Hooks})
 	}
 	return out
@@ -201,27 +293,97 @@ func (p *Plugins) Close() {
 	p.smu.Lock()
 	p.stopped = true
 	p.smu.Unlock()
-	if h := p.host.Load(); h != nil && !p.closed {
-		h.Close()
+	if l := p.live.Load(); l != nil && !p.closed {
+		l.host.Close()
 	}
 	p.closed = true
 	p.serving.Wait()
 }
 
-// Session is a turn.Source and turn.Hooks for one session.
+// Session is a turn.Source and turn.Hooks for one session. Every dispatch reads the live set; a tool call
+// keeps the Host that its before hook ran on for its after hook and its events.
 type Session struct {
-	id      string
-	host    *plugin.Host
-	workDir string
-	tools   []turn.Tool
+	id    string
+	p     *Plugins
+	calls sync.Map // call ID to *plugin.Host
 }
 
-// Toolset gives the plugin tools that allowed keeps, and the system.transform
-// segments of this model call as its prompt.
+// firstRead is what a session found at its first tool read: the names of the plugin tools that it sends, and
+// whether the live set had a config plugin.
+type firstRead struct {
+	names   []string
+	present bool
+}
+
+// Present reports whether the live set had a config plugin at the first tool read of the session. The first call
+// decides it, and the runtime keeps the answer for the life of the process.
+func (s *Session) Present() bool { return s.first().present }
+
+func (s *Session) first() firstRead {
+	l := s.p.live.Load()
+	s.p.dmu.Lock()
+	defer s.p.dmu.Unlock()
+	f, ok := s.p.base[s.id]
+	if !ok {
+		f.present = len(l.specs) > 0
+		for _, d := range l.host.Tools() {
+			f.names = append(f.names, d.Name)
+		}
+		s.p.base[s.id] = f
+	}
+	return f
+}
+
+// toolOf returns the tool name with its first definition.
+func (s *Session) toolOf(name string) turn.Tool {
+	s.p.dmu.Lock()
+	defer s.p.dmu.Unlock()
+	return tool{s, s.p.seen[name]}
+}
+
+// Toolset gives the plugin tools that the session sent at its first tool read and allowed keeps, and the
+// system.transform segments of this model call as its tail.
 func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
+	h := s.p.live.Load().host
 	ref, _ := modelref.ParseModelRef(model)
-	segs := s.host.SystemTransform(ctx, &pub.SystemTransformRequest{SessionID: s.id, Model: ref.String()})
-	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
+	segs := h.SystemTransform(ctx, &pub.SystemTransformRequest{SessionID: s.id, Model: ref.String()})
+	var tools []turn.Tool
+	for _, n := range s.first().names {
+		tools = append(tools, s.toolOf(n))
+	}
+	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Tail: strings.Join(segs, "\n\n"), Hooks: s}
+}
+
+// Late returns the plugin tools that the first tool read of the session did not reach, in name order: the tools
+// of the live set, and the tools that history loaded and the live set lost.
+func (s *Session) Late(history []protocol.LogMessage, allowed []string) []mcpsrc.Late {
+	h := s.p.live.Load().host
+	base := s.first().names
+	loaded := mcpsrc.Selected(history)
+	owner := map[string]string{}
+	for _, i := range h.Plugins() {
+		for _, t := range i.Tools {
+			owner[t] = i.Name
+		}
+	}
+	s.p.dmu.Lock()
+	names := slices.Collect(maps.Keys(owner))
+	for n := range loaded {
+		if _, ok := s.p.seen[n]; ok {
+			names = append(names, n)
+		}
+	}
+	s.p.dmu.Unlock()
+	slices.Sort(names)
+	var out []mcpsrc.Late
+	for _, n := range slices.Compact(names) {
+		if slices.Contains(base, n) || allowed != nil && !slices.Contains(allowed, n) {
+			continue
+		}
+		_, isLive := owner[n]
+		out = append(out, mcpsrc.Late{Plugin: owner[n], Tool: s.toolOf(n), Loaded: loaded[n], Live: isLive})
+	}
+	return out
 }
 
 // ChatParams runs the chat.params chain for one model call. An empty model in
@@ -233,7 +395,7 @@ func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallPa
 	}
 	ref, _ := modelref.ParseModelRef(p.Model)
 	in.Model = ref.String()
-	out := s.host.ChatParams(ctx, &pub.ChatParamsRequest{SessionID: s.id, Params: in})
+	out := s.p.live.Load().host.ChatParams(ctx, &pub.ChatParamsRequest{SessionID: s.id, Params: in})
 	if out.Model != "" {
 		p.Model = out.Model
 	}
@@ -246,7 +408,7 @@ func (s *Session) ChatParams(ctx context.Context, p turn.CallParams) turn.CallPa
 
 // ShellEnv returns the variables that the shell.env hooks add to a bash command.
 func (s *Session) ShellEnv(ctx context.Context, command string) map[string]string {
-	return s.host.ShellEnv(ctx, &pub.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.workDir})
+	return s.p.live.Load().host.ShellEnv(ctx, &pub.ShellEnvRequest{SessionID: s.id, Tool: "bash", Command: command, Dir: s.p.workDir})
 }
 
 // Untransformed returns s as a Source that runs no system.transform, for a
@@ -256,16 +418,22 @@ func (s *Session) Untransformed() turn.Source { return untransformed{s} }
 type untransformed struct{ s *Session }
 
 func (u untransformed) Toolset(_ context.Context, _ []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
-	return turn.Toolset{Tools: turn.Restrict(u.s.tools, allowed), Hooks: u.s}
+	var tools []turn.Tool
+	for _, d := range u.s.p.live.Load().host.Tools() {
+		tools = append(tools, tool{u.s, d})
+	}
+	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Hooks: u.s}
 }
 
 // Before runs the tool.execute.before chain and announces a call that the
 // chain did not deny. After announces its end, also when ctx ended.
 func (s *Session) Before(ctx context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {
-	args, deny := s.host.ToolExecuteBefore(ctx, &pub.ToolExecuteBeforeRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
+	h := s.p.live.Load().host
+	args, deny := h.ToolExecuteBefore(ctx, &pub.ToolExecuteBeforeRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
 	if deny == "" {
 		c.Arguments = args
-		s.emit(pub.EventToolExecuteStart, pub.ToolExecuteStartProperties{Tool: c.Name, CallID: c.ID})
+		s.calls.Store(c.ID, h)
+		emit(h, s.id, pub.EventToolExecuteStart, pub.ToolExecuteStartProperties{Tool: c.Name, CallID: c.ID})
 	}
 	return c, deny
 }
@@ -273,50 +441,54 @@ func (s *Session) Before(ctx context.Context, c protocol.ToolCall) (protocol.Too
 // After announces the end of a call and runs the tool.execute.after chain.
 // A successful write_file or edit_file call also announces file.edited.
 func (s *Session) After(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
-	s.emit(pub.EventToolExecuteEnd, pub.ToolExecuteEndProperties{Tool: c.Name, CallID: c.ID, OK: !r.IsError})
+	h := s.p.live.Load().host
+	if v, ok := s.calls.LoadAndDelete(c.ID); ok {
+		h = v.(*plugin.Host)
+	}
+	emit(h, s.id, pub.EventToolExecuteEnd, pub.ToolExecuteEndProperties{Tool: c.Name, CallID: c.ID, OK: !r.IsError})
 	var edit struct{ Path string }
 	if (c.Name == "write_file" || c.Name == "edit_file") && !r.IsError && json.Unmarshal(c.Arguments, &edit) == nil && edit.Path != "" {
 		if !filepath.IsAbs(edit.Path) {
-			edit.Path = filepath.Join(s.workDir, edit.Path)
+			edit.Path = filepath.Join(s.p.workDir, edit.Path)
 		}
 		if abs, err := filepath.Abs(edit.Path); err == nil {
-			s.emit(pub.EventFileEdited, pub.FileEditedProperties{Path: abs})
+			emit(h, s.id, pub.EventFileEdited, pub.FileEditedProperties{Path: abs})
 		}
 	}
 	if ctx.Err() != nil {
 		return r
 	}
-	out := s.host.ToolExecuteAfter(ctx, &pub.ToolExecuteAfterRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments,
+	out := h.ToolExecuteAfter(ctx, &pub.ToolExecuteAfterRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments,
 		Output: []pub.Part{pub.TextPart(r.Text)}})
 	return protocol.ToolResult{Text: partsText(out), IsError: r.IsError, Blobs: r.Blobs}
 }
 
 // Appended announces the start and the end of each turn in events.
 func (s *Session) Appended(events []protocol.Payload) {
+	h := s.p.live.Load().host
 	for _, e := range events {
 		switch e := e.(type) {
 		case protocol.TurnStarted, protocol.TurnResumed:
-			s.emit(pub.EventSessionStatus, map[string]string{"status": "busy"})
+			emit(h, s.id, pub.EventSessionStatus, map[string]string{"status": "busy"})
 		case protocol.TurnSuspended:
-			s.emit(pub.EventSessionStatus, map[string]string{"status": "idle"})
+			emit(h, s.id, pub.EventSessionStatus, map[string]string{"status": "idle"})
 		case protocol.TurnEnded:
 			if e.StopReason == protocol.StopFailed {
-				s.emit(pub.EventSessionError, pub.SessionErrorProperties{Message: plugin.SanitizeSessionError(e.Error)})
+				emit(h, s.id, pub.EventSessionError, pub.SessionErrorProperties{Message: plugin.SanitizeSessionError(e.Error)})
 			}
-			s.emit(pub.EventSessionStatus, map[string]string{"status": "idle"})
+			emit(h, s.id, pub.EventSessionStatus, map[string]string{"status": "idle"})
 		}
 	}
 }
 
-func (s *Session) emit(typ string, props any) {
+func emit(h *plugin.Host, id, typ string, props any) {
 	b, _ := json.Marshal(props)
-	s.host.Emit([]pub.Event{{Type: typ, SessionID: s.id, Properties: b}})
+	h.Emit([]pub.Event{{Type: typ, SessionID: id, Properties: b}})
 }
 
 type tool struct {
-	s     *Session
-	def   pub.ToolDef
-	limit time.Duration
+	s   *Session
+	def pub.ToolDef
 }
 
 func (t tool) Spec() protocol.ToolSpec {
@@ -324,11 +496,15 @@ func (t tool) Spec() protocol.ToolSpec {
 }
 
 func (t tool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	run, err := t.s.host.StartTool(ctx, c.Name)
+	l := t.s.p.live.Load()
+	run, err := l.host.StartTool(ctx, c.Name)
+	if errors.Is(err, plugin.ErrNoTool) {
+		return protocol.ToolResult{Text: "no such tool available: " + c.Name, IsError: true}, nil
+	}
 	if err != nil {
 		return protocol.ToolResult{}, err
 	}
-	return toolresult.Limit(ctx, c.Name, t.limit, func(ctx context.Context) (protocol.ToolResult, error) {
+	return toolresult.Limit(ctx, c.Name, cmp.Or(l.limits[c.Name], config.DefaultToolTimeout), func(ctx context.Context) (protocol.ToolResult, error) {
 		resp, err := run(ctx, &pub.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
 		if err != nil {
 			return protocol.ToolResult{}, err

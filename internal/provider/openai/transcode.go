@@ -402,7 +402,7 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 	// exactly as the anthropic transcoder does; imageLimits.RecurseToolResults
 	// is false because tool-result images are omitted on the wire (see
 	// toolResultOutput), so clamping them would be wasted work.
-	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
+	messages := imageclamp.Clamp(message.NormalizeForWire(req.WithTail()), imageLimits)
 	for i := range messages {
 		m := &messages[i]
 		items, err := transcodeMessage(m, stripReasoning, family)

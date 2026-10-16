@@ -36,8 +36,8 @@ createPlugin({
   version: '0.1.0',
 
   hooks: {
-    // Additive: segments from every subscribed plugin are appended to the
-    // system prompt, in config order.
+    // Additive: segments from every subscribed plugin go after the last
+    // message of the model call, in config order.
     systemTransform: async () => ({
       segments: ['Secrets in tool output are redacted automatically.'],
     }),
@@ -131,7 +131,7 @@ behalf. Request/response field names match the wire protocol exactly
 | `onEvent(ctx, events)` | async, fire-and-forget event stream | (nothing; no response) |
 | `chatParams(ctx, req)` | before a model request | `{ params }` |
 | `chatMessage(ctx, req)` | before a message enters the session log | `{ message }` |
-| `systemTransform(ctx, req)` | system prompt assembly (additive) | `{ segments: [...] }` |
+| `systemTransform(ctx, req)` | model call tail (additive) | `{ segments: [...] }` |
 | `shellEnv(ctx, req)` | before a shell command runs | `{ env: {...} }` |
 | `toolExecuteBefore(ctx, req)` | before any tool call | `{ args }` to rewrite, or `{ deny: "..." }` to block |
 | `toolExecuteAfter(ctx, req)` | after any tool call | `{ output }` (canonical `message.Parts`) |

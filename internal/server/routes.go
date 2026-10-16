@@ -76,6 +76,7 @@ var Table = []Route{
 	{Name: "processLogs", Method: "GET", Path: "/processes/{name}/logs", Query: []Param{{Name: "tail", Integer: true}}, Response: protocol.ProcessLogs{}, Status: 200},
 	{Name: "workspaceChanges", Method: "GET", Path: "/workspace/changes", Query: []Param{{Name: "scope"}, {Name: "dir"}}, Response: protocol.WorkspaceChanges{}, Status: 200, WorkDir: true},
 	{Name: "setMCPServers", Method: "PUT", Path: "/mcp/servers", Request: protocol.MCPServerSet{}, Response: protocol.MCPServers{}, Status: 200},
+	{Name: "setPlugins", Method: "PUT", Path: "/plugins", Request: protocol.PluginSet{}, Response: protocol.Plugins{}, Status: 200},
 	{Name: "health", Method: "GET", Path: "/health", Response: protocol.Health{}, Status: 200},
 }
 

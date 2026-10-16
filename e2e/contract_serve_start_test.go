@@ -213,7 +213,7 @@ func TestContractServeAddrPortZeroReportsTheBoundPort(t *testing.T) {
 	}
 	runTurn(t, d, "go")
 	want := "SERVE: http://" + p.addr + " TOKEN: " + p.token
-	if reqs := fake.Requests(); len(reqs) == 0 || !strings.Contains(reqs[0].System, want) {
-		t.Errorf("the plugin system segment lacks %q: the plugin serve_url is not the bound address", want)
+	if reqs := fake.Requests(); len(reqs) == 0 || !harnesstest.TailContains(want)(reqs[0]) {
+		t.Errorf("the plugin tail lacks %q: the plugin serve_url is not the bound address", want)
 	}
 }

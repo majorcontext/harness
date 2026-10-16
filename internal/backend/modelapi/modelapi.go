@@ -254,6 +254,9 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	if req.Instructions != "" {
 		preq.System = []string{req.Instructions}
 	}
+	if req.Tail != "" {
+		preq.Tail = []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: req.Tail}}}}
+	}
 	return preq, nil
 }
 

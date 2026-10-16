@@ -58,6 +58,8 @@ type control struct {
 	v      view
 	// ok is the allowed-tools filter of the model call.
 	ok func(string) bool
+	// late returns the plugin tools that the mcp tool loads too. nil: none.
+	late func() []Late
 }
 
 func (c control) Spec() protocol.ToolSpec {
@@ -81,6 +83,13 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 	if in.Action == "search" || in.Action == "select" {
 		c.v = c.s.view()
 		c.all = c.v.liveAll(c.ok)
+		if c.late != nil {
+			for _, l := range c.late() {
+				if l.Live {
+					c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
+				}
+			}
+		}
 	}
 	var out any
 	var err error

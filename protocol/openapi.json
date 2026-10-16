@@ -1375,6 +1375,67 @@
           "hooks"
         ]
       },
+      "PluginSet": {
+        "properties": {
+          "plugins": {
+            "items": {
+              "$ref": "#/components/schemas/PluginSpec"
+            },
+            "type": "array"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "plugins"
+        ]
+      },
+      "PluginSpec": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "env": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "config": true,
+          "tool_timeout_s": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "command"
+        ]
+      },
+      "Plugins": {
+        "properties": {
+          "plugins": {
+            "items": {
+              "$ref": "#/components/schemas/Plugin"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plugins"
+        ]
+      },
       "ProcessInfo": {
         "properties": {
           "name": {
@@ -2316,6 +2377,43 @@
                     "$ref": "#/components/schemas/Model"
                   },
                   "type": "array"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/plugins": {
+      "put": {
+        "operationId": "setPlugins",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginSet"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plugins"
                 }
               }
             },

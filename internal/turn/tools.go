@@ -27,6 +27,8 @@ type Toolset struct {
 	Deferred []Tool
 	// Prompt follows the system prompt.
 	Prompt string
+	// Tail is engine context for this call alone, after the last message and outside any cached prefix.
+	Tail string
 	// Notices are statuses that the model reads inside the conversation, and
 	// not in the system prompt, so that the system prompt stays stable.
 	Notices []Notice
@@ -85,7 +87,7 @@ type Sources []Source
 // Toolset implements Source.
 func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) Toolset {
 	var out Toolset
-	var prompts []string
+	var prompts, tails []string
 	var hooks chain
 	for _, src := range s {
 		ts := src.Toolset(ctx, history, allowed, model)
@@ -93,12 +95,15 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		if ts.Prompt != "" {
 			prompts = append(prompts, ts.Prompt)
 		}
+		if ts.Tail != "" {
+			tails = append(tails, ts.Tail)
+		}
 		out.Notices = append(out.Notices, ts.Notices...)
 		if ts.Hooks != nil {
 			hooks = append(hooks, ts.Hooks)
 		}
 	}
-	out.Prompt = strings.Join(prompts, "\n\n")
+	out.Prompt, out.Tail = strings.Join(prompts, "\n\n"), strings.Join(tails, "\n\n")
 	switch len(hooks) {
 	case 0:
 	case 1:
@@ -222,6 +227,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
 	}
+	call.Tail = ts.Tail
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}

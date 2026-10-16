@@ -70,8 +70,8 @@
 //     Model takes a provider/model reference, not an alias; the host skips a
 //     response with an alias. A model of another kind of backend fails the
 //     turn.
-//   - SystemTransform runs before each model call. The host adds the segments
-//     of each plugin to the end of the system prompt, in chain order.
+//   - SystemTransform runs before each model call. The host sends the segments
+//     of each plugin after the last message of that call, in chain order.
 //   - ShellEnv runs before each bash command. The host adds the variables to
 //     the command environment, in chain order, so a later plugin wins.
 //   - Event gets the runtime events in batches. The host sends each batch to

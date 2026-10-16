@@ -229,6 +229,9 @@ func (stub) Commands(context.Context) (protocol.Commands, error) { return protoc
 func (stub) SetMCPServers(context.Context, map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error) {
 	return nil, nil
 }
+func (stub) SetPlugins(context.Context, []config.PluginSpec) ([]protocol.Plugin, error) {
+	return nil, nil
+}
 func (s stub) Withdraw(context.Context, string) error            { return nil }
 func (stub) Snapshot() protocol.Session                          { return protocol.Session{} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
