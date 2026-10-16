@@ -98,12 +98,19 @@ func rateLimitTurn() mode {
 // usageLimitRejected is a run that the plan limit refuses: the CLI reports
 // the rejected limit, then its API error message, then fails the run with
 // the text of that message.
+//
+// FAKE_CLAUDE_RESETS_IN, a duration such as "1h" or "-1m", sets the reset time
+// relative to the run; without it the reset time is fixed.
 func usageLimitRejected(f *fake) {
+	resets := int64(1792050000)
+	if in, err := time.ParseDuration(os.Getenv("FAKE_CLAUDE_RESETS_IN")); err == nil {
+		resets = time.Now().Add(in).Unix()
+	}
 	info := obj{
-		"status": "rejected", "resetsAt": 1792050000, "rateLimitType": "five_hour",
+		"status": "rejected", "resetsAt": resets, "rateLimitType": "five_hour",
 		"overageStatus": "rejected", "overageDisabledReason": "org_level_disabled", "isUsingOverage": false,
 		"unifiedWindows": obj{
-			"five_hour": obj{"utilization": 1, "resetsAt": 1792050000},
+			"five_hour": obj{"utilization": 1, "resetsAt": resets},
 			"seven_day": obj{"utilization": 0.4, "resetsAt": 1792260000},
 		},
 	}

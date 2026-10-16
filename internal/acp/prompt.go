@@ -139,6 +139,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if h.cancelled(pr) {
 		return map[string]string{"stopReason": "cancelled"}, nil
 	}
+	h.awaitStop(ctx)
 	if err := a.requireLogin(ctx, h.cwd, h.sess.Snapshot().Model, CheckCacheOnly); err != nil {
 		return nil, err
 	}
