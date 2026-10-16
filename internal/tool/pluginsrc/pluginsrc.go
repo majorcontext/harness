@@ -182,7 +182,7 @@ func (p *Plugins) swap(ctx context.Context, specs []config.PluginSpec, taken fun
 	for _, ip := range p.inproc {
 		spec := plugin.Spec{Manifest: pub.Manifest{Name: ip.Name}}
 		for _, d := range ip.Manifest().Tools {
-			if d.Name == "" || names[d.Name] || cur == nil && taken(d.Name) {
+			if d.Name == "" || d.Name == "mcp" && len(specs) > 0 || names[d.Name] || cur == nil && taken(d.Name) {
 				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ip.Name, d.Name)
 			}
 			names[d.Name] = true
