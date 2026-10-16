@@ -1031,6 +1031,9 @@
           "connect_timeout_s": {
             "type": "integer"
           },
+          "tool_timeout_s": {
+            "type": "integer"
+          },
           "tool_loading": {
             "type": "string"
           }

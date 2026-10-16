@@ -294,6 +294,7 @@ export interface MCPServerSpec {
   url?: string;
   headers?: Record<string, string>;
   connect_timeout_s?: number;
+  tool_timeout_s?: number;
   tool_loading?: string;
 }
 
