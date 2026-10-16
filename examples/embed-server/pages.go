@@ -89,9 +89,13 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *server) whoami(w http.ResponseWriter, r *http.Request) {
 	_, sess := s.sessions.sessionOf(r)
 	out := struct {
-		User  *string `json:"user"`
-		Codex bool    `json:"codex"`
-	}{}
+		User  *string  `json:"user"`
+		Codex bool     `json:"codex"`
+		MCP   []string `json:"mcp"`
+	}{MCP: []string{}}
+	for _, m := range s.cfg.MCP {
+		out.MCP = append(out.MCP, m.Name)
+	}
 	if sess != nil {
 		out.User, out.Codex = &sess.user, s.store.Has(sess.user)
 	}
