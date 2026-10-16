@@ -13,7 +13,7 @@ Read the root AGENTS.md.
 - Preserve text, image, audio, resource-link, embedded-resource, and `isError` fields.
 - Never collapse structured content into text here.
 - Server (`Registry`): a tool that needs a harness type is registered by its caller.
-- Server scope: initialize, notifications/initialized, tools/list, tools/call. Add no prompts, resources, roots, sampling, elicitation, or resumable streams.
+- Server scope: initialize, notifications/initialized, notifications/cancelled (it cancels the running request with that id), tools/list, tools/call. Add no prompts, resources, roots, sampling, elicitation, or resumable streams.
 - Every server response is one JSON object. Add no `text/event-stream` path. Issue and enforce no `Mcp-Session-Id`.
 - `ServeHTTP` validates `Origin` before parsing the body. Absent or loopback passes. Reject cross-origin with 403. Never relax this.
 - Return `RPCError` for protocol failures. Return a successful `CallToolResult` with `IsError` for a handler failure.

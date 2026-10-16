@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"sync"
 )
 
 // callToolRequest is the tools/call request payload.
@@ -37,6 +40,11 @@ type Registry struct {
 
 	tools    []Tool
 	handlers map[string]ToolHandler
+
+	// mu guards inflight, the cancel function of each running request by its
+	// JSON-RPC id.
+	mu       sync.Mutex
+	inflight map[string]context.CancelFunc
 }
 
 // NewRegistry returns an empty registry with the given server information.
@@ -45,6 +53,7 @@ func NewRegistry(name, version string) *Registry {
 	return &Registry{
 		serverInfo: Implementation{Name: name, Version: version},
 		handlers:   make(map[string]ToolHandler),
+		inflight:   make(map[string]context.CancelFunc),
 	}
 }
 
@@ -80,6 +89,9 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if msg.isNotification() {
+		if msg.Method == notificationCancelled {
+			reg.cancel(msg.Params)
+		}
 		// JSON-RPC notifications have no response body.
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -90,12 +102,55 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, rerr := reg.dispatch(r.Context(), msg.Method, msg.Params)
+	// Draining the body lets the server notice a client that closes the
+	// connection while the request runs.
+	_, _ = io.Copy(io.Discard, r.Body)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	key := requestKey(msg.ID)
+	reg.mu.Lock()
+	reg.inflight[key] = cancel
+	reg.mu.Unlock()
+	defer func() {
+		reg.mu.Lock()
+		delete(reg.inflight, key)
+		reg.mu.Unlock()
+	}()
+	result, rerr := reg.dispatch(ctx, msg.Method, msg.Params)
 	if rerr != nil {
 		reg.writeError(w, msg.ID, rerr.Code, rerr.Message)
 		return
 	}
 	reg.writeResult(w, msg.ID, result)
+}
+
+// requestKey is the key of a JSON-RPC id in inflight: a string id and a number
+// id never share a key, and equal numbers share one however they are spelled.
+func requestKey(id json.RawMessage) string {
+	var str string
+	if json.Unmarshal(id, &str) == nil {
+		return "s:" + str
+	}
+	var num float64
+	if json.Unmarshal(id, &num) == nil {
+		return "n:" + strconv.FormatFloat(num, 'g', -1, 64)
+	}
+	return "r:" + string(id)
+}
+
+// cancel ends the running request that a notifications/cancelled payload
+// names. An unknown or finished request is ignored.
+func (reg *Registry) cancel(params json.RawMessage) {
+	var p cancelledParams
+	if json.Unmarshal(params, &p) != nil || len(p.RequestID) == 0 {
+		return
+	}
+	reg.mu.Lock()
+	cancel := reg.inflight[requestKey(p.RequestID)]
+	reg.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // validOrigin reports whether Origin is absent or names a loopback host.

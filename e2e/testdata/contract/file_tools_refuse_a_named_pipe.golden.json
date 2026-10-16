@@ -1,0 +1,2388 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"proj/sock\")'"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"proj/sock\")'"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"proj/sock\")'"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"proj/sock\")'"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:1:needle",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "*"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\npipe",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/pipe"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"proj/sock\")'"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/sock"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/sock is not a regular file",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#10",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj/sock",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no matches)",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "mkdir proj \u0026\u0026 mkfifo proj/pipe \u0026\u0026 printf 'needle\\n' \u003e proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "(no output)"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "grep",
+            "arguments": {
+              "path": "proj",
+              "pattern": "needle"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "a.txt:1:needle"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "glob",
+            "arguments": {
+              "path": "proj",
+              "pattern": "*"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "a.txt\npipe"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/pipe"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "read_file: \u003cworkdir\u003e/proj/pipe is not a regular file"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "b",
+              "old_string": "a",
+              "path": "proj/pipe"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "is_error": true,
+            "content": "edit_file: \u003cworkdir\u003e/proj/pipe is not a regular file"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "write_file",
+            "arguments": {
+              "content": "x",
+              "path": "proj/pipe"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "is_error": true,
+            "content": "write_file: \u003cworkdir\u003e/proj/pipe is not a regular file"
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#7",
+            "name": "bash",
+            "arguments": {
+              "command": "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"proj/sock\")'"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#7",
+            "content": "(no output)"
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/sock"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "is_error": true,
+            "content": "read_file: \u003cworkdir\u003e/proj/sock is not a regular file"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#9",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "b",
+              "old_string": "a",
+              "path": "proj/sock"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#9",
+            "is_error": true,
+            "content": "edit_file: \u003cworkdir\u003e/proj/sock is not a regular file"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#10",
+            "name": "write_file",
+            "arguments": {
+              "content": "x",
+              "path": "proj/sock"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#21",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#10",
+            "is_error": true,
+            "content": "write_file: \u003cworkdir\u003e/proj/sock is not a regular file"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#11",
+            "name": "grep",
+            "arguments": {
+              "path": "proj/sock",
+              "pattern": "needle"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#23",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#11",
+            "content": "(no matches)"
+          }
+        ]
+      },
+      {
+        "id": "msg#24",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

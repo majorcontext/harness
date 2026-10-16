@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -170,4 +172,23 @@ func TestGrepMarksTruncationOnlyWhenAMatchIsDropped(t *testing.T) {
 	dir := t.TempDir()
 	got, _ := chain(t, dir, config.Config{}, calls)
 	check(t, dir, calls, got)
+}
+
+func TestSearchToolsStopWhenTheirContextEnded(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/a.txt", []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(bg)
+	cancel()
+	for _, tl := range builtin.Tools(dir, nil) {
+		name := tl.Spec().Name
+		if name != "glob" && name != "grep" && name != "ls" {
+			continue
+		}
+		args, _ := json.Marshal(map[string]any{"pattern": "needle", "path": "."})
+		if _, err := tl.Run(ctx, protocol.ToolCall{ID: "c", Name: name, Arguments: args}); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s with an ended context: error = %v, want context.Canceled", name, err)
+		}
+	}
 }
