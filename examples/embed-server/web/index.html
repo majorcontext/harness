@@ -76,6 +76,7 @@ const options = {
   transport: wasm({ module: "/harness.wasm", wasmExec: "/wasm_exec.js", worker: true }),
   config: {
     model,
+    append_system_prompt: ["This terminal shows your reply as is, in a monospace font, and keeps line breaks and spaces. It does not render Markdown, so use no Markdown syntax: no #, **, tables, or ``` fences. Write code as plain lines with normal indentation."],
     providers: {
       codex: {
         type: "openai", auth: "injected", responses_path: "/responses", models_from: "chatgpt",
