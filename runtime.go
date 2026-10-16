@@ -157,10 +157,9 @@ type Runtime struct {
 	aliases map[string]string
 	tree    *tree.Tree
 	// procs is nil without a WorkDir.
-	procs *process.Manager
-	// mcp is the live set of runtime MCP servers. mcpCfg is the config of the runtime source.
-	mcp    *mcpsrc.Source
-	mcpCfg config.Config
+	procs  *process.Manager
+	mcp    *mcpsrc.Source // the live set of runtime MCP servers
+	mcpCfg config.Config  // the config of the runtime source
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
@@ -196,8 +195,7 @@ type Runtime struct {
 	// syncStopped is set once a Sync rejects a batch for good.
 	syncStopped atomic.Bool
 	sessions    map[string]*entry
-	// surfaces holds, for each session ID, whether the session has MCP tools. See mcpSurface.
-	surfaces map[string]bool
+	surfaces    map[string]bool // per session ID: whether the session has MCP tools (see mcpSurface)
 	// catching holds the sessions that CatchUp replicates.
 	catching  map[string]*catchGrant
 	catchSlot chan struct{}
