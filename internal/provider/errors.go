@@ -38,7 +38,7 @@ type Error struct {
 	PromptTokens int
 	TokenLimit   int
 
-	// RecoverHint is provider text that states when exhausted access may return.
+	// RecoverHint states when exhausted access may return: the provider text, or the reset time when the provider gives no text.
 	RecoverHint string
 
 	// ResetsAt is the Unix second at which exhausted access returns, or 0 when unknown.

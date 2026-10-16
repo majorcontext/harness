@@ -282,7 +282,7 @@ func TestStreamInlineError(t *testing.T) {
 }
 
 func TestStreamErrorWithoutCodeOmitsEmptyParentheses(t *testing.T) {
-	if got := streamError("", "boom").Error(); got != "openai: boom" {
+	if got := streamError("", "boom", "").Error(); got != "openai: boom" {
 		t.Fatalf("streamError = %q, want %q", got, "openai: boom")
 	}
 }

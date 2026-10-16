@@ -275,7 +275,7 @@ func isInvalidPreviousResponseMessage(message string) bool {
 	return strings.Contains(message, "previous_response_id")
 }
 
-func streamError(code, message string, types ...string) error {
+func streamError(code, message, typ string) error {
 	if isNotFoundErrorCode(code) || isInvalidPreviousResponseMessage(message) {
 		if message == "" {
 			message = "previous response not found"
@@ -286,7 +286,7 @@ func streamError(code, message string, types ...string) error {
 	if code != "" {
 		msg = fmt.Sprintf("openai: %s (%s)", message, code)
 	}
-	if hint, ok := parseUsageExhaustion(0, message, append(types, code)...); ok {
+	if hint, ok := parseUsageExhaustion(0, message, typ, code); ok {
 		return provider.MarkPermanent(&provider.Error{
 			Kind:        provider.ErrKindProviderExhausted,
 			Raw:         msg,
@@ -595,17 +595,17 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		switch {
 		case isNotFoundErrorCode(ev.Response.Error.Code):
-			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message, "")
 		case isNotFoundErrorCode(ev.Error.Code):
-			return streamError(ev.Error.Code, ev.Error.Message)
+			return streamError(ev.Error.Code, ev.Error.Message, "")
 		case isNotFoundErrorCode(ev.Code):
-			return streamError(ev.Code, ev.Message)
+			return streamError(ev.Code, ev.Message, "")
 		case ev.Response.Error.Message != "" || ev.Response.Error.Code != "":
-			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message, "")
 		case ev.Error.Message != "" || ev.Error.Code != "" || ev.Error.Type != "":
-			return withReset(streamError(ev.Error.Code, cmp.Or(ev.Error.Message, ev.Error.Type), ev.Error.Type), ev.Error.ResetsAt)
+			return withReset(streamError(cmp.Or(ev.Error.Code, ev.Code), cmp.Or(ev.Error.Message, ev.Message, ev.Error.Type), ev.Error.Type), ev.Error.ResetsAt)
 		case ev.Message != "" || ev.Code != "":
-			return streamError(ev.Code, ev.Message)
+			return streamError(ev.Code, ev.Message, "")
 		default:
 			return fmt.Errorf("openai: stream error: %s", data)
 		}
