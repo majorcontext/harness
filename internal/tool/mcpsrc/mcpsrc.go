@@ -84,6 +84,8 @@ type entry struct {
 	dialing chan struct{}
 	health  health
 	sv      *server
+	// gen counts the reads of the tool list that a notification started, and applied is the newest one that took effect.
+	gen, applied int
 }
 
 // memory is what the runtime keeps of a server name for the whole process, so a session that sent a tool
@@ -148,8 +150,14 @@ func (s *Source) add(name string, spec config.MCPServerSpec) *entry {
 	e := &entry{name: name, spec: cloneSpec(spec), dialing: make(chan struct{}, 1)}
 	e.ctx, e.cancel = context.WithCancel(s.ctx)
 	s.entries[name] = e
-	if s.mem[name] == nil {
-		s.mem[name] = &memory{loading: cmp.Or(spec.ToolLoading, s.mode, "eager"), seen: map[string]mcp.Tool{}, base: map[string]bool{}}
+	loading := cmp.Or(spec.ToolLoading, s.mode, "eager")
+	switch m := s.mem[name]; {
+	case m == nil:
+		s.mem[name] = &memory{loading: loading, seen: map[string]mcp.Tool{}, base: map[string]bool{}}
+	case len(m.base) == 0 && m.loading != loading:
+		c := *m
+		c.loading = loading
+		s.mem[name] = &c
 	}
 	return e
 }

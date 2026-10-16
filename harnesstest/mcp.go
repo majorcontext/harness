@@ -367,6 +367,7 @@ type MCPServer struct {
 	ready    bool
 	notify   bool
 
+	requests  []string
 	gates     map[string]chan struct{}
 	inflight  atomic.Int64
 	held      chan struct{}
@@ -576,8 +577,23 @@ func (s *MCPServer) Calls() []MCPCall {
 	return append([]MCPCall(nil), s.h.calls...)
 }
 
+// Requests returns the HTTP method of each DELETE and the JSON-RPC method of each other request the server
+// received, in order.
+func (s *MCPServer) Requests() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.requests)
+}
+
+func (s *MCPServer) note(what string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requests = append(s.requests, what)
+}
+
 func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
+		s.note(http.MethodDelete)
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -587,6 +603,7 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	var req mcpRequest
 	_ = json.Unmarshal(body, &req)
+	s.note(req.Method)
 	if status, msg := s.reject(r, req.Method); status != 0 {
 		http.Error(w, msg, status)
 		return

@@ -84,10 +84,12 @@ func (l lister) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 
 // list returns the resources of server, at most maxResources, and whether it cut the list.
 func (s *Source) list(ctx context.Context, name string) ([]mcp.Resource, bool, error) {
-	c, err := s.resourceClient(name)
+	c, life, err := s.resourceClient(name)
 	if err != nil {
 		return nil, false, err
 	}
+	ctx, stop := bindLife(ctx, life)
+	defer stop()
 	var all []mcp.Resource
 	seen := map[string]bool{}
 	for cursor := ""; ; {
@@ -108,18 +110,25 @@ func (s *Source) list(ctx context.Context, name string) ([]mcp.Resource, bool, e
 	}
 }
 
-func (s *Source) resourceClient(name string) (*mcp.Client, error) {
+func (s *Source) resourceClient(name string) (*mcp.Client, context.Context, error) {
 	v := s.view()
 	sv := v.live[name]
 	switch {
 	case !slices.Contains(v.names, name):
-		return nil, fmt.Errorf("mcp: server %q is not configured", name)
+		return nil, nil, fmt.Errorf("mcp: server %q is not configured", name)
 	case !sv.up():
-		return nil, fmt.Errorf("mcp: server %q is not connected", name)
+		return nil, nil, fmt.Errorf("mcp: server %q is not connected", name)
 	case !sv.resources():
-		return nil, fmt.Errorf("mcp: server %q does not serve resources", name)
+		return nil, nil, fmt.Errorf("mcp: server %q does not serve resources", name)
 	}
-	return sv.client, nil
+	return sv.client, v.life[name], nil
+}
+
+// bindLife returns ctx ended also when life ends, which is when the server goes.
+func bindLife(ctx, life context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(life, cancel)
+	return ctx, func() { stop(); cancel() }
 }
 
 func (r reader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
@@ -130,10 +139,12 @@ func (r reader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	if in.Server == "" || in.URI == "" {
 		return protocol.ToolResult{}, fmt.Errorf(`%s: requires "server" and "uri" arguments`, readName)
 	}
-	c, err := r.s.resourceClient(in.Server)
+	c, life, err := r.s.resourceClient(in.Server)
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, err)
 	}
+	ctx, stop := bindLife(ctx, life)
+	defer stop()
 	res, err := c.ReadResource(ctx, in.URI)
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, hide(in.Server, err))

@@ -33,7 +33,12 @@ func sameSpec(a, b config.MCPServerSpec) bool {
 // specs. Replace does no I/O. The returned function closes the clients that went and returns the status of the servers.
 func (s *Source) Replace(servers map[string]config.MCPServerSpec) func() []protocol.MCPServerStatus {
 	var gone, fresh []*entry
-	var clients []*mcp.Client
+	type closing struct {
+		c    *mcp.Client
+		done chan struct{}
+	}
+	var clients []closing
+	gates := map[string]chan struct{}{}
 	s.mu.Lock()
 	if !s.closed {
 		for name, e := range s.entries {
@@ -50,24 +55,29 @@ func (s *Source) Replace(servers map[string]config.MCPServerSpec) func() []proto
 		for _, e := range gone {
 			e.cancel()
 			if e.sv.up() {
-				clients = append(clients, e.sv.client)
+				gates[e.name] = make(chan struct{})
+				clients = append(clients, closing{e.sv.client, gates[e.name]})
 			}
 			e.sv = nil
 		}
-		if !s.started {
-			s.start.Do(func() { s.group.Go(s.firstConnect) })
-		} else {
+		switch {
+		case s.started:
 			for _, e := range fresh {
 				e.dialing <- struct{}{}
-				s.group.Go(func() { s.bring(e) })
+				s.group.Go(func() { s.bring(e, gates[e.name]) })
 			}
+		case len(s.entries) > 0:
+			s.start.Do(func() { s.group.Go(s.firstConnect) })
 		}
 	}
 	s.mu.Unlock()
 	return func() []protocol.MCPServerStatus {
 		var wg sync.WaitGroup
 		for _, c := range clients {
-			wg.Go(func() { _ = c.Close() })
+			wg.Go(func() {
+				_ = c.c.Close()
+				close(c.done)
+			})
 		}
 		wg.Wait()
 		return s.status()
@@ -80,9 +90,15 @@ func (s *Source) Has(name string) bool {
 	return e != nil
 }
 
-// bring makes the first connect of e, which holds e.dialing, and retries in the background when that fails. The
+// bring makes the first connect of e, which holds e.dialing, after closed ends (the close of the client that e replaces), and retries in the background when that fails. The
 // slot is held from Replace on, so a connect that the model asks for after the call waits for this one.
-func (s *Source) bring(e *entry) {
+func (s *Source) bring(e *entry, closed <-chan struct{}) {
+	if closed != nil {
+		select {
+		case <-closed:
+		case <-e.ctx.Done():
+		}
+	}
 	ctx, cancel := context.WithCancel(e.ctx)
 	_, err := s.dialHeld(ctx, e)
 	cancel()
@@ -105,9 +121,11 @@ func (s *Source) listChanged(e *entry, c *mcp.Client) {
 		s.idle = make(chan struct{})
 	}
 	s.refreshing++
+	e.gen++
+	gen := e.gen
 	s.group.Go(func() {
 		defer s.refreshed()
-		s.refresh(e, c)
+		s.refresh(e, c, gen)
 	})
 }
 
@@ -119,7 +137,7 @@ func (s *Source) refreshed() {
 	}
 }
 
-func (s *Source) refresh(e *entry, c *mcp.Client) {
+func (s *Source) refresh(e *entry, c *mcp.Client, gen int) {
 	ctx, cancel := context.WithTimeout(e.ctx, refreshTimeout)
 	defer cancel()
 	tools, err := c.ListAllTools(ctx)
@@ -132,9 +150,10 @@ func (s *Source) refresh(e *entry, c *mcp.Client) {
 	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.entries[e.name] != e || !e.sv.up() || e.sv.client != c {
+	if s.entries[e.name] != e || !e.sv.up() || e.sv.client != c || gen < e.applied {
 		return
 	}
+	e.applied = gen
 	e.sv = newServer(c, tools)
 	s.remember(e.name, e.sv)
 }

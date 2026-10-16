@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -231,5 +233,42 @@ func TestCallDialsAServerThatNothingHasTried(t *testing.T) {
 	}
 	if got := attemptsOf(t, s, "weather"); got != 1 {
 		t.Errorf("attempts = %d, want 1", got)
+	}
+}
+
+func TestReplacementConnectsAfterTheOldClientClosed(t *testing.T) {
+	s, srv := source(t, nil)
+	s.Toolset(bg, nil, nil, "")
+	same := config.MCPServerSpec{URL: srv["docs"].URL()}
+	s.Replace(map[string]config.MCPServerSpec{"docs": same, "weather": {URL: srv["weather"].URL(), ConnectTimeoutS: 20}})()
+	if _, err := s.Call(bg, "weather", "forecast", nil); err != nil {
+		t.Fatal(err)
+	}
+	reqs := srv["weather"].Requests()
+	first := slices.Index(reqs, "initialize")
+	second := slices.Index(reqs[first+1:], "initialize") + first + 1
+	if del := slices.Index(reqs, "DELETE"); first < 0 || second <= first || del < 0 || del > second {
+		t.Errorf("requests %v: the old client must close (DELETE) before the replacement initializes", reqs)
+	}
+}
+
+func TestReplacementBeforeTheFirstConnectTakesTheNewToolLoading(t *testing.T) {
+	s, srv := source(t, nil)
+	s.Replace(map[string]config.MCPServerSpec{"weather": {URL: srv["weather"].URL(), ToolLoading: "lazy"}})()
+	ts := s.Toolset(bg, nil, nil, "")
+	if got := names(ts.Tools); strings.Contains(got, "mcp__weather__") || !strings.Contains(names(ts.Deferred), "mcp__weather__forecast") {
+		t.Errorf("tools = %q, deferred = %q, want the weather tools deferred", got, names(ts.Deferred))
+	}
+}
+
+func TestEmptySetDoesNotRunTheFirstConnect(t *testing.T) {
+	s, srv := source(t, nil)
+	s.Replace(map[string]config.MCPServerSpec{})()
+	for range 1000 {
+		runtime.Gosched()
+	}
+	s.Replace(map[string]config.MCPServerSpec{"weather": {URL: srv["weather"].URL()}})()
+	if ts := s.Toolset(bg, nil, nil, ""); !strings.Contains(names(ts.Tools), "mcp__weather__forecast") {
+		t.Errorf("tools = %q, want the weather tools eager as tools of the first connect", names(ts.Tools))
 	}
 }
