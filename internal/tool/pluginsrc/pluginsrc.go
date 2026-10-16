@@ -171,7 +171,7 @@ func (p *Plugins) swap(ctx context.Context, specs []config.PluginSpec, taken fun
 			}
 		}
 		for _, t := range toolNames {
-			if t == "" || names[t] || taken(t) && !own[t] {
+			if t == "" || t == "mcp" || names[t] || taken(t) && !own[t] {
 				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ps.Name, t)
 			}
 			names[t] = true
@@ -247,6 +247,14 @@ func (p *Plugins) remember(defs []pub.ToolDef) {
 			p.seen[d.Name] = d
 		}
 	}
+}
+
+// Configured reports whether the live set, or the start set before the first Start, has a config plugin.
+func (p *Plugins) Configured() bool {
+	if l := p.live.Load(); l != nil {
+		return len(l.specs) > 0
+	}
+	return len(p.start) > 0
 }
 
 // Has reports whether a started plugin has a tool named name.

@@ -168,6 +168,12 @@ func TestContractPluginLiveSet(t *testing.T) {
 			actions: liveTurns(putPlugins{plugins: []map[string]any{wrong}, status: http.StatusBadRequest}),
 		},
 		{
+			name:    "plugin_put_with_a_tool_named_mcp_is_invalid_because_the_loader_has_that_name",
+			config:  pluginConfig(t, nil),
+			model:   afterFirstTurn(),
+			actions: liveTurns(putPlugins{plugins: []map[string]any{pluginEntry(t, "fixture", map[string]any{"extra_tool": "mcp"})}, status: http.StatusBadRequest}),
+		},
+		{
 			name:   "plugin_put_mid_session_moves_the_system_transform_segment_to_the_tail_of_the_next_call",
 			config: pluginConfig(t, map[string]any{"segment": "SEG-A"}),
 			model:  afterFirstTurn(),
@@ -205,6 +211,7 @@ func TestContractPluginLiveSet(t *testing.T) {
 var pluginLiveRows = map[string]runtimeRow{
 	"plugin_put_adds_a_plugin_and_its_before_hook_runs_on_the_next_tool_call":                sameAsServe(),
 	"plugin_put_with_one_bad_manifest_is_invalid_and_the_old_set_still_guards":               sameAsServe(),
+	"plugin_put_with_a_tool_named_mcp_is_invalid_because_the_loader_has_that_name":           sameAsServe(),
 	"plugin_put_mid_session_moves_the_system_transform_segment_to_the_tail_of_the_next_call": sameAsServe(),
 	"plugin_put_adds_a_tool_that_is_deferred_named_in_the_notice_and_loaded_with_mcp_select": sameAsServe(),
 	"plugin_put_removes_a_plugin_and_its_tool_answers_no_such_tool_available":                sameAsServe(),

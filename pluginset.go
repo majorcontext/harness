@@ -28,6 +28,9 @@ func (r *Runtime) SetPlugins(ctx context.Context, plugins []config.PluginSpec) (
 	if err := (&config.Config{Plugins: plugins}).Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
+	if len(plugins) > 0 && r.owns("mcp") {
+		return nil, fmt.Errorf("%w: a tool is named \"mcp\", the name of the loader of a runtime with plugins", ErrInvalidRequest)
+	}
 	info, err := r.plugins.Set(ctx, plugins, func(name string) bool { return r.known("", name) })
 	switch {
 	case err == nil:

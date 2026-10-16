@@ -37,7 +37,7 @@ func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name,
 func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
 	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || name == turn.AskTool || caps.WebSearch && name == turn.WebSearchTool ||
-		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || r.owns(name)
+		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || name == "mcp" && (r.mcp.Populated() || r.plugins.Configured()) || r.owns(name)
 }
 
 // owns reports whether name is a tool of Options.Tools or of a started plugin.
