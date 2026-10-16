@@ -226,6 +226,9 @@ func (s stub) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, er
 }
 func (stub) Models(context.Context) []protocol.Model             { return nil }
 func (stub) Commands(context.Context) (protocol.Commands, error) { return protocol.Commands{}, nil }
+func (stub) SetMCPServers(context.Context, map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error) {
+	return nil, nil
+}
 func (s stub) Withdraw(context.Context, string) error            { return nil }
 func (stub) Snapshot() protocol.Session                          { return protocol.Session{} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -59,6 +60,7 @@ type Runtime[S Session] interface {
 	End(ctx context.Context, id string) error
 	Models(ctx context.Context) []protocol.Model
 	Commands(ctx context.Context) (protocol.Commands, error)
+	SetMCPServers(ctx context.Context, servers map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error)
 }
 
 // Processes runs the processes of the box.
@@ -126,7 +128,8 @@ func (h *handler[S]) handlers() map[string]http.HandlerFunc {
 			reply(w, http.StatusOK, h.rt.Models(r.Context()))
 			return nil
 		}),
-		"listCommands": h.serve(h.commands),
+		"listCommands":  h.serve(h.commands),
+		"setMCPServers": h.serve(h.setMCPServers),
 		"health": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 			reply(w, http.StatusOK, h.health)
 			return nil
@@ -146,6 +149,22 @@ func (h *handler[S]) readHandlers() map[string]http.HandlerFunc {
 		}
 		return s.Events(ctx, after), nil
 	}))
+}
+
+func (h *handler[S]) setMCPServers(w http.ResponseWriter, r *http.Request) error {
+	var req protocol.MCPServerSet
+	if err := decode(w, r, &req, maxBody); err != nil {
+		return err
+	}
+	if req.MCPServers == nil {
+		return fmt.Errorf("%w: mcp_servers is required", errInvalid)
+	}
+	servers, err := h.rt.SetMCPServers(r.Context(), req.MCPServers)
+	if err != nil {
+		return err
+	}
+	reply(w, http.StatusOK, protocol.MCPServers{Servers: servers})
+	return nil
 }
 
 func (h *handler[S]) commands(w http.ResponseWriter, r *http.Request) error {

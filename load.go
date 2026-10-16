@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 )
 
 type entry struct {
 	ready chan struct{}
+	// mcp holds the names of the session MCP servers.
+	mcp []string
 	// create is set when the load creates the session.
 	create bool
 	s      *Session
@@ -23,7 +27,11 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 		}
 		e := r.sessions[id]
 		if e == nil {
-			e = &entry{ready: make(chan struct{}), create: l.created != nil}
+			if name, clash := r.mcpClash(l.mcp); clash {
+				r.mu.Unlock()
+				return nil, fmt.Errorf("%w: session MCP server %q has the name of a runtime server", ErrInvalidRequest, name)
+			}
+			e = &entry{ready: make(chan struct{}), create: l.created != nil, mcp: slices.Sorted(maps.Keys(l.mcp))}
 			r.sessions[id] = e
 			r.group.Add(1)
 			r.mu.Unlock()

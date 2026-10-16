@@ -157,10 +157,9 @@ type Runtime struct {
 	aliases map[string]string
 	tree    *tree.Tree
 	// procs is nil without a WorkDir.
-	procs *process.Manager
-	// mcp is nil without MCP servers. mcpCfg is the config of the runtime source.
-	mcp    *mcpsrc.Source
-	mcpCfg config.Config
+	procs  *process.Manager
+	mcp    *mcpsrc.Source // the live set of runtime MCP servers
+	mcpCfg config.Config  // the config of the runtime source
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
@@ -196,6 +195,7 @@ type Runtime struct {
 	// syncStopped is set once a Sync rejects a batch for good.
 	syncStopped atomic.Bool
 	sessions    map[string]*entry
+	surfaces    map[string]bool // per session ID: whether the session has MCP tools (see mcpSurface)
 	// catching holds the sessions that CatchUp replicates.
 	catching  map[string]*catchGrant
 	catchSlot chan struct{}
@@ -221,7 +221,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
-		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
+		sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
@@ -261,14 +261,16 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{MCPServers: r.mcp.Specs, Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
+			r.mcp.Close()
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
 	}
 	if err := r.checkPlugins(opts.Config.Plugins, opts.Plugins); err != nil {
+		r.mcp.Close()
 		return nil, err
 	}
 	if r.owner == nil {
@@ -728,9 +730,7 @@ func (r *Runtime) closeTools(ctx context.Context) bool {
 	if r.plugins != nil {
 		clean = closeBy(ctx, r.plugins.Close) && clean
 	}
-	if r.mcp != nil {
-		clean = closeBy(ctx, r.mcp.Close) && clean
-	}
+	clean = closeBy(ctx, r.mcp.Close) && clean
 	return clean
 }
 

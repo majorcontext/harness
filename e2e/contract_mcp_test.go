@@ -31,6 +31,7 @@ type mcpServerDef struct {
 	holdRetry   bool // the first initialize fails and every later one blocks, so no background retry ends
 	dir         bool // a stdio server starts in a directory named "stubdir"
 	toolLoading string
+	unlisted    bool // the fixture exists, and the config leaves it out
 }
 
 func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[string]any) map[string]any {
@@ -68,7 +69,9 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 			if d.toolLoading != "" {
 				entry["tool_loading"] = d.toolLoading
 			}
-			servers[d.name] = entry
+			if !d.unlisted {
+				servers[d.name] = entry
+			}
 		}
 		cfg := map[string]any{"mcp_servers": servers}
 		maps.Copy(cfg, global)
