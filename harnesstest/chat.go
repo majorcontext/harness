@@ -184,10 +184,6 @@ func writeChatError(w http.ResponseWriter, status int, msg string) {
 }
 
 func writeChatErrorCode(w http.ResponseWriter, status int, msg, code string) {
-	writeChatErrorBody(w, status, msg, code, 0)
-}
-
-func writeChatErrorBody(w http.ResponseWriter, status int, msg, code string, resetsAt int64) {
 	typ, ok := chatErrorTypes[status]
 	if !ok {
 		typ = "server_error"
@@ -196,11 +192,7 @@ func writeChatErrorBody(w http.ResponseWriter, status int, msg, code string, res
 	if code != "" {
 		wireCode = code
 	}
-	e := obj{"message": msg, "type": typ, "code": wireCode}
-	if resetsAt != 0 {
-		e["resets_at"] = resetsAt
-	}
-	body, _ := json.Marshal(obj{"error": e})
+	body, _ := json.Marshal(obj{"error": obj{"message": msg, "type": typ, "code": wireCode}})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
@@ -214,7 +206,7 @@ func writeChatReplyError(w http.ResponseWriter, rep Reply) {
 	if msg == "" {
 		msg = "harnesstest: scripted error"
 	}
-	writeChatErrorBody(w, rep.HTTPStatus, msg, rep.ErrorCode, rep.ResetsAt)
+	writeChatErrorCode(w, rep.HTTPStatus, msg, rep.ErrorCode)
 }
 
 var chatFinishReasons = map[string]string{"end_turn": "stop", "tool_use": "tool_calls", "max_tokens": "length"}

@@ -80,13 +80,12 @@ type Context struct {
 }
 
 // LastTurn is the outcome of the newest turn that ended: the stop reason, typed
-// cause, masked error message, and usage limit reset time (Unix seconds) of its turn.ended record.
+// cause, and masked error message of its turn.ended record.
 type LastTurn struct {
 	TurnID     string     `json:"turn_id"`
 	StopReason StopReason `json:"stop_reason"`
 	Cause      Cause      `json:"cause,omitempty"`
 	Error      string     `json:"error,omitempty"`
-	ResetsAt   int64      `json:"resets_at,omitempty"`
 }
 
 // SubscriptionUsage is the subscription limit snapshot that a provider
@@ -117,7 +116,7 @@ type SubscriptionOverage struct {
 }
 
 // Session is a view of one session at HeadSeq. Usage sums every model and
-// summary call, but no goal evaluator call. ContinueAt is the Unix second at which a pending continue after a usage limit reset runs. SubscriptionUsage is null until a
+// summary call, but no goal evaluator call. SubscriptionUsage is null until a
 // call carries a snapshot. Plugins lists each configured plugin as the runtime
 // that serves the view knows it; the log does not hold it. Agent is the agent
 // profile that a task child was spawned with; a root session has none.
@@ -137,7 +136,6 @@ type Session struct {
 	Usage             Usage              `json:"usage"`
 	Context           Context            `json:"context"`
 	LastTurn          *LastTurn          `json:"last_turn,omitempty"`
-	ContinueAt        int64              `json:"continue_at,omitempty"`
 	CompactionCount   int                `json:"compaction_count,omitempty"`
 	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage"`
 	Plugins           []Plugin           `json:"plugins,omitempty"`

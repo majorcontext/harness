@@ -37,8 +37,6 @@ type held struct {
 	ended   bool
 	wake    chan struct{}
 	prompts map[*prompt]struct{}
-	// idleStop closes when the newest interrupt of an idle session/cancel has returned. A prompt and a close wait for it.
-	idleStop chan struct{}
 	// elicits are the elicitations that wait for an answer, by request ID. answers waits for the goroutines that read them.
 	elicits map[string]*rpc.Pending
 	answers sync.WaitGroup
@@ -382,11 +380,9 @@ func (h *held) idle(ctx context.Context) {
 }
 
 // cancel marks every prompt in flight as cancelled and cancels the turns that
-// are admitted. With no prompt in flight, it interrupts the session, which
-// stops an automatic turn and cancels a pending continue. It does not block.
+// are admitted. It does not block.
 func (h *held) cancel(ctx context.Context) {
 	h.mu.Lock()
-	idle := len(h.prompts) == 0
 	var turns []*harness.Turn
 	for p := range h.prompts {
 		p.cancelled = true
@@ -397,47 +393,6 @@ func (h *held) cancel(ctx context.Context) {
 	h.mu.Unlock()
 	for _, t := range turns {
 		go h.cancelTurn(ctx, t)
-	}
-	if idle {
-		h.stopIdle(ctx)
-	}
-}
-
-// stopIdle interrupts the session in the order of the cancels, without blocking the caller.
-func (h *held) stopIdle(ctx context.Context) {
-	done := make(chan struct{})
-	h.mu.Lock()
-	prev := h.idleStop
-	h.idleStop = done
-	h.mu.Unlock()
-	go func() {
-		defer close(done)
-		if prev != nil {
-			<-prev
-		}
-		h.interruptSession(ctx)
-	}()
-}
-
-// awaitStop waits until every interrupt of an idle session/cancel that arrived before now has returned, or ctx ends.
-func (h *held) awaitStop(ctx context.Context) {
-	h.mu.Lock()
-	done := h.idleStop
-	h.mu.Unlock()
-	if done == nil {
-		return
-	}
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
-}
-
-func (h *held) interruptSession(ctx context.Context) {
-	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptBudget)
-	defer cancel()
-	if err := h.sess.Interrupt(bg, protocol.Interrupt{}); err != nil && ctx.Err() == nil {
-		h.log.Warn("acp: interrupt failed", "session", h.id, "error", err.Error())
 	}
 }
 

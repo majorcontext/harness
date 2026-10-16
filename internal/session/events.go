@@ -31,9 +31,6 @@ func Describe(id string, s *eventlog.State, window int, estimated bool) protocol
 		Goal: p.Goal, LastTurn: p.LastTurn, Usage: s.Usage(),
 		HeadSeq: sum.HeadSeq, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
-	if at, ok := s.ContinueAt(); ok {
-		v.ContinueAt = at.Unix()
-	}
 	c := s.Context()
 	if c.Tokens == 0 && c.Source == "" {
 		c = protocol.ContextMeasured{}

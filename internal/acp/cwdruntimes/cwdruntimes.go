@@ -90,20 +90,15 @@ func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (
 			return nil, err
 		}
 	}
-	rt, err := harness.New(r.harnessOptions(cfg, cwd, opts))
+	rt, err := harness.New(harness.Options{Host: r.opts.Host, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
+		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
+		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
 	if err != nil {
 		return nil, err
 	}
 	r.rts[cwd] = rt
 	r.order = append(r.order, cwd)
 	return rt, nil
-}
-
-// harnessOptions returns the options of the Runtime of cwd. A session of acp continues on its own when a usage limit resets.
-func (r *Runtimes) harnessOptions(cfg *config.Config, cwd string, opts acp.RuntimeOptions) harness.Options {
-	return harness.Options{Host: r.opts.Host, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
-		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
-		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion, ContinueOnReset: true}
 }
 
 // Default returns the Runtime that For built first, else the one of DefaultDir, else nil.

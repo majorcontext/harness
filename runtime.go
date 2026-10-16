@@ -113,8 +113,6 @@ type Options struct {
 	// without it no turn may ask. A child session and a session with an
 	// active goal never ask.
 	AskUserQuestion bool
-	// ContinueOnReset admits an input at the reset time of a usage limit that stopped a session, which tells the model to continue.
-	ContinueOnReset bool
 	// WebTest is a test seam of web_fetch: loopback, resolver, proxy, and root CAs. Production code leaves it zero.
 	WebTest WebTestSeam
 	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
@@ -167,8 +165,8 @@ type Runtime struct {
 	health  protocol.Health
 	// version is the build version that the engine banner names; empty: no banner.
 	version string
-	// questions lets a backend ask the user a question, and continueOnReset a session continue after a usage limit reset.
-	questions, continueOnReset bool
+	// questions lets a backend ask the user a question.
+	questions bool
 	// webSearch is Config.Web.Search: models whose backend has a native web search get it.
 	webSearch bool
 	// commandDirs are the prompt-command dirs, and agentDirs the agent profile
@@ -280,7 +278,7 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
-	r.version, r.questions, r.webSearch, r.continueOnReset = opts.Version, opts.AskUserQuestion, opts.Config.WebSearchEnabled(), opts.ContinueOnReset
+	r.version, r.questions, r.webSearch = opts.Version, opts.AskUserQuestion, opts.Config.WebSearchEnabled()
 	return r, nil
 }
 
@@ -391,7 +389,6 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Backend:         r.models,
 		Version:         r.version,
 		AskUserQuestion: r.questions,
-		ContinueOnReset: r.continueOnReset,
 		WebSearch:       r.webSearch,
 		Evaluator:       r.evaluator,
 		MCPServers:      l.mcp,
