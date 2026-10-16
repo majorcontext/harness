@@ -305,9 +305,8 @@ $("new").addEventListener("click", async () => {
 });
 
 // The tabs of the demo share one channel. "use here" asks the holder of the
-// store for it; the holder lets go after its turn and answers "released".
+// store for it; the holder lets go after its turn.
 const channel = new BroadcastChannel("harness-demo");
-let wanted = false;
 let handoff = false;
 const giveUp = async () => {
   handoff = false;
@@ -319,42 +318,37 @@ const giveUp = async () => {
   await old.close();
   $("here").hidden = false;
   status("this session moved to another tab · use here", "warn");
-  channel.postMessage("released");
 };
-// take leaves the current harness and tries the persistent store. It falls
-// back to a memory store while another tab holds the store.
+// take leaves the current harness and asks for the store until it gets it:
+// each try waits for the lock, so a holder that closes meanwhile also ends it.
 const take = async () => {
   await opening?.catch(() => {});
   reset();
-  await h?.close();
+  const old = h;
   h = null;
-  try {
-    await connect(true);
-    return true;
-  } catch (err) {
-    if (err?.code !== "store_in_use") throw err;
-    await connect(false);
-    return false;
+  await old?.close();
+  status("waiting for the other tab", "warn");
+  for (;;) {
+    try {
+      return await connect(true);
+    } catch (err) {
+      if (err?.code !== "store_in_use") throw err;
+      channel.postMessage("use-here");
+    }
   }
 };
 channel.onmessage = async ({ data }) => {
   if (data === "use-here" && persisted) {
     handoff = true;
     if (!running) await giveUp();
-  } else if (data === "released" && wanted) {
-    wanted = false;
-    await take();
-    open();
   }
 };
 let taking = false;
 $("here").addEventListener("click", async () => {
   if (running || taking) return;
   taking = true;
-  wanted = true;
   try {
-    if (await take()) wanted = false;
-    else channel.postMessage("use-here");
+    await take();
   } finally {
     taking = false;
   }
