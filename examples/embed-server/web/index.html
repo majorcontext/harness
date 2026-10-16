@@ -53,6 +53,7 @@ const follow = (fn) => {
 
 // user is the signed-in user of the app. refreshWho reports whether it changed.
 let user = null;
+let mcpNames = [];
 const refreshWho = async () => {
   const who = await (await fetch("/whoami")).json();
   $("who").textContent = who.user ?? "not signed in";
@@ -60,6 +61,7 @@ const refreshWho = async () => {
   $("logout").hidden = !who.user;
   const changed = (who.user ?? null) !== user;
   user = who.user ?? null;
+  mcpNames = who.mcp;
   return changed;
 };
 await refreshWho();
@@ -86,6 +88,9 @@ const options = {
   tools: [],
   builtinTools: [],
 };
+options.config.mcp_servers = Object.fromEntries(
+  mcpNames.map((name) => [name, { url: `${location.origin}/mcp-proxy/mcp/${name}` }]),
+);
 let h;
 let persisted = true;
 try {

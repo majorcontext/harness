@@ -581,3 +581,53 @@ func TestPagesLabelTheirFields(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPProxyInjectsTheTokenAndReachesOnlyConfiguredServers(t *testing.T) {
+	var got atomic.Pointer[http.Request]
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		got.Store(q)
+		w.Header().Set("Mcp-Session-Id", "s2")
+	}))
+	defer up.Close()
+	srv, err := newServer(config{Upstream: up.URL, MCP: []mcpServer{{Name: "docs", URL: up.URL + "/mcp", Header: "X-Token", Token: "real"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := httptest.NewServer(srv.handler())
+	defer front.Close()
+	rg := &rig{srv: srv}
+	c := rg.signIn("ann")
+	do := func(path string, c *http.Cookie) *http.Response {
+		req, _ := http.NewRequest("POST", front.URL+path, strings.NewReader(`{}`))
+		if c != nil {
+			req.AddCookie(c)
+		}
+		req.Header.Set("X-Token", "forged")
+		req.Header.Set("Mcp-Session-Id", "s1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp
+	}
+
+	resp := do("/mcp-proxy/mcp/docs/x?q=1", c)
+	q := got.Load()
+	if resp.StatusCode != 200 || q == nil || q.URL.Path != "/mcp/x" || q.URL.RawQuery != "q=1" || q.Header.Get("X-Token") != "real" || q.Header.Get("Mcp-Session-Id") != "s1" || q.Header.Get("Cookie") != "" {
+		t.Errorf("status %d, request %+v", resp.StatusCode, q)
+	}
+	if resp.Header.Get("Mcp-Session-Id") != "s2" {
+		t.Errorf("response Mcp-Session-Id %q, want s2", resp.Header.Get("Mcp-Session-Id"))
+	}
+	got.Store(nil)
+	if s := do("/mcp-proxy/mcp/other", c).StatusCode; s != 404 {
+		t.Errorf("unknown name: status %d, want 404", s)
+	}
+	if s := do("/mcp-proxy/mcp/docs", nil).StatusCode; s != 401 {
+		t.Errorf("no cookie: status %d, want 401", s)
+	}
+	if got.Load() != nil {
+		t.Error("a refused request reached the upstream")
+	}
+}

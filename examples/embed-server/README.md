@@ -32,11 +32,22 @@ Test: `go test -race ./...` in this directory. The test drives the middleware wi
 | `/`, `/harness.wasm`, `/wasm_exec.js`, `/embed/` | The page, the module, and `sdk/embed`. |
 | `/login`, `/logout`, `/whoami` | The stand-in session. Login rotates the session id. |
 | `/settings/codex` | The `login_url`. It runs the device code flow against `auth.openai.com` on the server, shows the code and the link, and keeps the tokens of the user in memory. |
-| `/model-proxy/` | The only door to the gatekeeper relay (`/relay/codex/`). |
+| `/model-proxy/` | The door to the gatekeeper model relay (`/relay/codex/`). |
+| `/mcp-proxy/` | The door to the gatekeeper MCP relay (`/mcp/{name}`) of the configured MCP servers. |
 
 The middleware on `/model-proxy/` checks the session cookie and the `Sec-Fetch-Site` header, allows only `/relay/codex/...`, and answers `401` itself when the store holds no usable login for the user. It then removes `Cookie`, `Origin`, `Referer`, `Sec-*`, and every credential header, and sets `X-App-User`. The resolver for `chatgpt.com` reads that header, removes it, and returns `Authorization` and `ChatGPT-Account-ID` from the store.
 
 A token is refreshed when it ends within five minutes. When the backend answers `401`, `403`, or `429`, gatekeeper calls `Invalidate`, and the next request refreshes (at most once a minute). When the issuer rejects the refresh token, the login is dropped and the user gets `401`, which the module maps to `login_required`. No code logs or returns a token.
+
+## MCP servers
+
+`-mcp name=url` (repeatable) lets the page use a remote MCP server through the gatekeeper MCP relay on the origin of the demo. `/whoami` lists the names, and the page adds each one to `mcp_servers` with the url `/mcp-proxy/mcp/<name>`. The door checks the session cookie and the path like `/model-proxy/`, and `Mcp-Session-Id` passes both ways.
+
+```bash
+go run . -wasm /tmp/harness.wasm -wasm-exec /tmp/wasm_exec.js -mcp deepwiki=https://mcp.deepwiki.com/mcp
+```
+
+A server that needs a credential takes `,header=<Name>,env=<VAR>`, for example `-mcp docs=https://example.com/mcp,header=Authorization,env=DOCS_TOKEN`. The relay sets the header to the value of `$DOCS_TOKEN` and replaces any value from the page. The token never reaches the page.
 
 ## Stand-ins
 
