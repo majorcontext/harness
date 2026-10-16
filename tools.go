@@ -130,7 +130,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) || allowed == nil && c.OwnsMCP {
 				return nil
 			}
-			if plug == nil {
+			if plug == nil || c.OwnsLoop {
 				return mcp
 			}
 			return mcp.With(plug)

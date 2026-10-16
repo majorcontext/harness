@@ -132,6 +132,7 @@ func (p *Plugins) Set(ctx context.Context, specs []config.PluginSpec, taken func
 
 // swap makes specs and the in-process plugins the live set. The caller holds p.mu.
 func (p *Plugins) swap(ctx context.Context, specs []config.PluginSpec, taken func(string) bool, refresh bool) error {
+	specs = cloneSpecs(specs)
 	cur := p.live.Load()
 	before, have, own := p.current(cur)
 	c := newCache()
@@ -206,6 +207,20 @@ func (p *Plugins) swap(ctx context.Context, specs []config.PluginSpec, taken fun
 	p.live.Store(&live{host: host, specs: specs, limits: limits})
 	stop()
 	return nil
+}
+
+// cloneSpecs copies specs deeply, so a caller that changes its slice later changes nothing here.
+func cloneSpecs(specs []config.PluginSpec) []config.PluginSpec {
+	out := make([]config.PluginSpec, len(specs))
+	for i, ps := range specs {
+		ps.Command, ps.Env, ps.Config = slices.Clone(ps.Command), slices.Clone(ps.Env), slices.Clone(ps.Config)
+		if ps.ToolTimeoutS != nil {
+			v := *ps.ToolTimeoutS
+			ps.ToolTimeoutS = &v
+		}
+		out[i] = ps
+	}
+	return out
 }
 
 // current describes the live set cur: the config spec and the tool names of each config plugin, and the set of

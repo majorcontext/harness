@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -89,6 +90,8 @@ type Options struct {
 type Host struct {
 	opts      Options
 	instances []*instance
+	// base is the Host with no instances that every instance points to, so a carried instance pins no old Host.
+	base *Host
 }
 
 // NewHost creates a Host from cached manifests. Nothing is spawned.
@@ -108,7 +111,8 @@ func NewHost(opts Options, specs ...Spec) (*Host, error) {
 // instance. h stays usable: a tool call that holds it finishes on its own instances. The returned func stops the
 // instances of h that the new Host lacks. Nothing is spawned.
 func (h *Host) Replace(specs []Spec, keep func(name string) bool) (*Host, func(), error) {
-	n := &Host{opts: h.opts}
+	base := cmp.Or(h.base, h)
+	n := &Host{opts: h.opts, base: base}
 	seen := make(map[string]bool)
 	carried := make(map[*instance]bool)
 	for _, spec := range specs {
@@ -131,7 +135,7 @@ func (h *Host) Replace(specs []Spec, keep func(name string) bool) (*Host, func()
 		if err := validateManifest(spec.Manifest); err != nil {
 			return nil, nil, err
 		}
-		n.instances = append(n.instances, &instance{host: n, spec: spec})
+		n.instances = append(n.instances, &instance{host: base, spec: spec})
 	}
 	return n, func() {
 		for _, inst := range h.instances {
