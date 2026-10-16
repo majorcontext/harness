@@ -37,7 +37,7 @@ func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name,
 func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
 	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || name == turn.AskTool || caps.WebSearch && name == turn.WebSearchTool ||
-		(r.mcp != nil || session) && mcpsrc.Reserved(name) || r.owns(name)
+		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || r.owns(name)
 }
 
 // owns reports whether name is a tool of Options.Tools or of a started plugin.
@@ -127,7 +127,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {
-			if allowed == nil && c.OwnsMCP {
+			if !r.mcpSurface(id, mcp.Populated) || allowed == nil && c.OwnsMCP {
 				return nil
 			}
 			return mcp
@@ -211,4 +211,17 @@ func checkHookTimeouts(p *plugin.Plugin) error {
 		}
 	}
 	return nil
+}
+
+// mcpSurface reports whether session id has MCP tools. The first read of the session in this runtime decides it from
+// populated, and the answer holds for the life of the runtime, also after a release and an open.
+func (r *Runtime) mcpSurface(id string, populated func() bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	on, ok := r.surfaces[id]
+	if !ok {
+		on = populated()
+		r.surfaces[id] = on
+	}
+	return on
 }

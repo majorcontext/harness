@@ -84,6 +84,8 @@ type driver interface {
 	ProcessAction(t *testing.T, name, action string) callResult
 	ProcessLogs(t *testing.T, name string, tail int) callResult
 	WorkspaceChanges(t *testing.T, scope, dir string) callResult
+	// PutMCPServers sends the body of PUT /mcp/servers.
+	PutMCPServers(t *testing.T, body any) callResult
 }
 
 // attachment is a file of a prompt.

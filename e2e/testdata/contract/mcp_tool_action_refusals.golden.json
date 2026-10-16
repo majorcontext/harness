@@ -105,10 +105,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: unknown action \"search\" (want \"status\" or \"connect\")",
+              "text": "{\"matches\":[{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":true}],\"total\":1,\"truncated\":false}",
               "tool_name": "mcp",
-              "tool_use_id": "toolu#1",
-              "is_error": true
+              "tool_use_id": "toolu#1"
             }
           ]
         }
@@ -175,10 +174,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: unknown action \"search\" (want \"status\" or \"connect\")",
+              "text": "{\"matches\":[{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":true}],\"total\":1,\"truncated\":false}",
               "tool_name": "mcp",
-              "tool_use_id": "toolu#1",
-              "is_error": true
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -270,10 +268,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: unknown action \"search\" (want \"status\" or \"connect\")",
+              "text": "{\"matches\":[{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":true}],\"total\":1,\"truncated\":false}",
               "tool_name": "mcp",
-              "tool_use_id": "toolu#1",
-              "is_error": true
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -365,8 +362,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "is_error": true,
-            "content": "mcp: unknown action \"search\" (want \"status\" or \"connect\")"
+            "content": "{\"matches\":[{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":true}],\"total\":1,\"truncated\":false}"
           }
         ]
       },

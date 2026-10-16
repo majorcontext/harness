@@ -13,15 +13,8 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-const connectDescription = "Inspect or reconnect this session's configured MCP servers. Actions: " +
-	"status() reports every configured server's live connection state — connected, still retrying in the background, " +
-	"or parked (background retries exhausted); " +
-	"connect(server) makes ONE bounded, synchronous connect attempt for a server that is not yet connected — " +
-	"the only way to bring a parked server back once its automatic background retries have given up. " +
-	"Already-connected is a friendly no-op; an unknown server name errors listing the configured names."
-
 const deferDescription = "Inspect this session's configured MCP servers, and load the schemas of deferred MCP tools. " +
-	"Some MCP tools are DEFERRED: the system prompt lists their names and one-line descriptions, " +
+	"Some MCP tools are DEFERRED: the system prompt or an [mcp: ...] notice in the conversation lists their names and one-line descriptions, " +
 	"but their input schemas are not loaded and you cannot call them yet. Actions: " +
 	"search(query) ranks deferred and loaded tools by keyword over their names and descriptions, " +
 	"and reports whether each is already loaded; " +
@@ -59,17 +52,15 @@ type args struct {
 
 // control is the mcp tool of one model call.
 type control struct {
-	s       *Source
-	all     []remote
-	loaded  map[string]bool
-	servers map[string]*server
+	s      *Source
+	all    []remote
+	loaded map[string]bool
+	v      view
+	// ok is the allowed-tools filter of the model call.
+	ok func(string) bool
 }
 
 func (c control) Spec() protocol.ToolSpec {
-	if !c.s.defers {
-		return protocol.ToolSpec{Name: controlName, Description: connectDescription, InputSchema: json.RawMessage(`{"type":"object",` +
-			`"properties":{"action":{"type":"string","enum":["status","connect"],"description":"The operation to perform"},"server":{"type":"string","description":"The configured server name (required for connect)"}},"required":["action"]}`)}
-	}
 	return protocol.ToolSpec{Name: controlName, Description: deferDescription, InputSchema: json.RawMessage(`{"type":"object","properties":{` +
 		`"action":{"type":"string","enum":["status","connect","search","select"],"description":"The operation to perform"},` +
 		`"server":{"type":"string","description":"The configured server name (required for connect)"},` +
@@ -87,23 +78,23 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: invalid arguments: %w", err)
 	}
+	if in.Action == "search" || in.Action == "select" {
+		c.v = c.s.view()
+		c.all = c.v.liveAll(c.ok)
+	}
 	var out any
 	var err error
 	switch {
 	case in.Action == "status":
-		out = struct {
-			Servers []serverStatus `json:"servers"`
-		}{c.s.status()}
+		out = protocol.MCPServers{Servers: c.s.status()}
 	case in.Action == "connect":
 		out, err = c.connect(ctx, in.Server)
-	case in.Action == "search" && c.s.defers:
+	case in.Action == "search":
 		out, err = c.search(in.Query, in.Limit)
-	case in.Action == "select" && c.s.defers:
+	case in.Action == "select":
 		out, err = c.choose(in.Tools)
-	case c.s.defers:
-		err = fmt.Errorf(`mcp: unknown action %q (want "status", "connect", "search" or "select")`, in.Action)
 	default:
-		err = fmt.Errorf(`mcp: unknown action %q (want "status" or "connect")`, in.Action)
+		err = fmt.Errorf(`mcp: unknown action %q (want "status", "connect", "search" or "select")`, in.Action)
 	}
 	if err != nil {
 		return protocol.ToolResult{}, err
@@ -119,16 +110,19 @@ type connected struct {
 }
 
 func (c control) connect(ctx context.Context, name string) (any, error) {
-	switch {
-	case name == "":
+	if name == "" {
 		return nil, fmt.Errorf(`mcp: connect requires a "server" argument`)
-	case !slices.Contains(c.s.names, name):
-		return nil, fmt.Errorf("mcp: unknown server %q (configured: %s)", name, strings.Join(c.s.names, ", "))
-	case c.s.server(name).up():
-		return connected{name, true, "already connected"}, nil
 	}
-	if err := c.s.connect(ctx, name); err != nil {
+	owner := c.s.owner(name)
+	if owner == nil {
+		return nil, fmt.Errorf("mcp: unknown server %q (configured: %s)", name, strings.Join(c.s.view().names, ", "))
+	}
+	dialed, err := owner.connectNow(ctx, name)
+	if err != nil {
 		return nil, fmt.Errorf("mcp: connect for %q failed: %s", name, connectReason(err))
+	}
+	if !dialed {
+		return connected{name, true, "already connected"}, nil
 	}
 	return connected{name, true, "connected"}, nil
 }
@@ -212,7 +206,7 @@ func (c control) choose(names []string) (any, error) {
 			out.Already = append(out.Already, n)
 		case slices.ContainsFunc(c.all, func(r remote) bool { return r.spec.Name == n }):
 			out.Selected = append(out.Selected, n)
-		case strings.HasPrefix(n, prefix) && slices.Contains(c.s.names, server) && !c.servers[server].up():
+		case strings.HasPrefix(n, prefix) && slices.Contains(c.v.names, server) && !c.v.live[server].up():
 			out.Pending = append(out.Pending, n)
 		default:
 			out.Missing = append(out.Missing, n)
@@ -238,9 +232,13 @@ func catalog(deferred []remote) string {
 	if len(deferred) == 0 {
 		return ""
 	}
+	return catalogHeader + "\n" + toolLines(deferred)
+}
+
+// toolLines lists the first catalogMax tools, one on each line, and counts the rest.
+func toolLines(deferred []remote) string {
 	shown := deferred[:min(len(deferred), catalogMax)]
 	var b strings.Builder
-	b.WriteString(catalogHeader + "\n")
 	for _, r := range shown {
 		b.WriteString("\n" + r.spec.Name)
 		if d := line(r.spec.Description); d != "" {
@@ -265,36 +263,6 @@ func line(d string) string {
 		d = d[:len(d)-1]
 	}
 	return d + "..."
-}
-
-// instructions is the segment of the reached servers: each one's own
-// instructions with its allowed tool names, and a line about the resource tools.
-func (s *Source) instructions(servers map[string]*server, reached []string, ok func(string) bool) string {
-	tag := strings.NewReplacer("<mcp_instructions>", "(mcp_instructions)", "</mcp_instructions>", "(/mcp_instructions)",
-		"<server", "(server", "</server>", "(/server)")
-	attr := func(v string) string { return strings.ReplaceAll(tag.Replace(v), `"`, "'") }
-	var b strings.Builder
-	for _, name := range reached {
-		sv := servers[name]
-		text := cutRunes(strings.TrimSpace(sv.client.Instructions()), instructionsMax)
-		if text == "" {
-			continue
-		}
-		var tools []string
-		for _, t := range sv.tools {
-			if n := prefix + name + "__" + t.Name; ok(n) {
-				tools = append(tools, attr(n))
-			}
-		}
-		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), listNames(tools), tag.Replace(text))
-	}
-	if slices.ContainsFunc(reached, func(n string) bool { return servers[n].resources() }) {
-		return "<mcp_instructions>\n" + resourcesLine + b.String() + "\n</mcp_instructions>"
-	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return "<mcp_instructions>" + b.String() + "\n</mcp_instructions>"
 }
 
 // cutRunes cuts s to at most n runes and marks a cut.

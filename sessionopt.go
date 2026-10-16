@@ -48,7 +48,7 @@ func (r *Runtime) sessionOptions(opts []SessionOption) (sessionOptions, error) {
 		return so, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	for name := range so.mcp {
-		if _, ok := r.mcpCfg.MCPServers[name]; ok {
+		if r.mcp.Has(name) {
 			return so, fmt.Errorf("%w: session MCP server %q has the name of a runtime server", ErrInvalidRequest, name)
 		}
 	}

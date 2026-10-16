@@ -77,8 +77,11 @@ func elapse(d time.Duration) {
 }
 
 // mcpNotice returns the newest MCP notice that req pins.
-func mcpNotice(req turn.Request) string {
-	pins := slices.DeleteFunc(req.Pins, func(p turn.Pin) bool { return p.Kind != "mcp" })
+func mcpNotice(req turn.Request) string { return pinned(req, "mcp") }
+
+// pinned returns the newest notice of kind that req pins.
+func pinned(req turn.Request, kind string) string {
+	pins := slices.DeleteFunc(slices.Clone(req.Pins), func(p turn.Pin) bool { return p.Kind != kind })
 	if len(pins) == 0 {
 		return ""
 	}
@@ -109,9 +112,12 @@ func TestMCPServerDownAtBootComesUpAfterARetry(t *testing.T) {
 		elapse(time.Second)
 		submit(t, s, text("b", "second"))
 		req, _ = f.last("s1", "second")
-		want := []string{"mcp__docs__search", "mcp__weather__forecast"}
+		want := []string{"mcp__docs__search"}
 		if got := slices.DeleteFunc(toolNames(req), func(n string) bool { return !strings.HasPrefix(n, "mcp__") }); !slices.Equal(got, want) || mcpNotice(req) != mcpRecovered || req.Instructions != prompt {
 			t.Errorf("second call tools %v, notice %q; want %v, the recovery line, and the prompt of the first call", got, mcpNotice(req), want)
+		}
+		if got := pinned(req, "mcp-set"); !strings.Contains(got, "mcp__weather__forecast") {
+			t.Errorf("added notice %q; want the deferred tool of the late server", got)
 		}
 		closeRuntime(t, r)
 	})
@@ -154,8 +160,8 @@ func TestMCPServerThatStaysDownParksUntilTheModelConnects(t *testing.T) {
 		weather.SetAvailable(true)
 		ask("connect")
 		req := ask("after")
-		if mcpNotice(req) != mcpRecovered || !slices.Contains(toolNames(req), "mcp__weather__forecast") {
-			t.Errorf("call after connect has tools %v, notice %q; want the tool and the recovery line", toolNames(req), mcpNotice(req))
+		if mcpNotice(req) != mcpRecovered || slices.Contains(toolNames(req), "mcp__weather__forecast") || !strings.Contains(pinned(req, "mcp-set"), "mcp__weather__forecast") {
+			t.Errorf("call after connect has tools %v, notice %q; want the recovery line and the tool deferred and announced", toolNames(req), mcpNotice(req))
 		}
 		closeRuntime(t, r)
 	})

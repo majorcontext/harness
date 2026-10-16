@@ -147,6 +147,14 @@ type mcpHandler struct {
 	spec  MCPSpec
 	mu    sync.Mutex
 	calls []MCPCall
+	inits int
+}
+
+// tools returns the tools the server serves now.
+func (h *mcpHandler) tools() []MCPTool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.spec.Tools)
 }
 
 type mcpRequest struct {
@@ -187,6 +195,9 @@ func encodeMCP(r mcpResponse) []byte {
 func (h *mcpHandler) dispatch(req mcpRequest, auth string) (any, *mcp.RPCError) {
 	switch req.Method {
 	case "initialize":
+		h.mu.Lock()
+		h.inits++
+		h.mu.Unlock()
 		return h.initialize(), nil
 	case "ping":
 		return map[string]any{}, nil
@@ -203,7 +214,7 @@ func (h *mcpHandler) dispatch(req mcpRequest, auth string) (any, *mcp.RPCError) 
 }
 
 func (h *mcpHandler) initialize() any {
-	caps := map[string]any{"tools": map[string]any{}}
+	caps := map[string]any{"tools": map[string]any{"listChanged": true}}
 	if len(h.spec.Resources) > 0 {
 		caps["resources"] = map[string]any{}
 	}
@@ -233,9 +244,10 @@ func (h *mcpHandler) page(params json.RawMessage, n int) (start, end int, next s
 }
 
 func (h *mcpHandler) listTools(params json.RawMessage) any {
-	start, end, next := h.page(params, len(h.spec.Tools))
+	all := h.tools()
+	start, end, next := h.page(params, len(all))
 	tools := make([]mcp.Tool, 0, end-start)
-	for _, t := range h.spec.Tools[start:end] {
+	for _, t := range all[start:end] {
 		def := mcp.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 		if len(def.InputSchema) == 0 {
 			def.InputSchema = json.RawMessage(`{"type":"object"}`)
@@ -267,7 +279,7 @@ func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RP
 		_ = json.Unmarshal(p.Arguments, &args)
 	}
 	h.record("tools/call", p.Name, args, auth)
-	for _, t := range h.spec.Tools {
+	for _, t := range h.tools() {
 		if t.Name != p.Name {
 			continue
 		}
@@ -353,6 +365,7 @@ type MCPServer struct {
 	sse      bool
 	wantAuth string
 	ready    bool
+	notify   bool
 
 	gates     map[string]chan struct{}
 	inflight  atomic.Int64
@@ -515,7 +528,7 @@ func (s *MCPServer) hold(ctx context.Context, params json.RawMessage) bool {
 			ID string `json:"id"`
 		} `json:"arguments"`
 	}
-	if json.Unmarshal(params, &p) != nil || !slices.ContainsFunc(s.h.spec.Tools, func(t MCPTool) bool { return t.Name == p.Name && t.Gated }) {
+	if json.Unmarshal(params, &p) != nil || !slices.ContainsFunc(s.h.tools(), func(t MCPTool) bool { return t.Name == p.Name && t.Gated }) {
 		return true
 	}
 	s.mu.Lock()
@@ -531,6 +544,28 @@ func (s *MCPServer) hold(ctx context.Context, params json.RawMessage) bool {
 		s.abandoned <- struct{}{}
 		return false
 	}
+}
+
+// SetTools replaces the tools that the server serves. It tells no client; NotifyToolsChanged does.
+func (s *MCPServer) SetTools(tools []MCPTool) {
+	s.h.mu.Lock()
+	defer s.h.mu.Unlock()
+	s.h.spec.Tools = slices.Clone(tools)
+}
+
+// NotifyToolsChanged makes the answer to the next tools/call carry a notifications/tools/list_changed
+// message, in the event stream of that answer. It has an effect after UseSSE only.
+func (s *MCPServer) NotifyToolsChanged() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notify = true
+}
+
+// Initializes returns the number of initialize requests that the server answered.
+func (s *MCPServer) Initializes() int {
+	s.h.mu.Lock()
+	defer s.h.mu.Unlock()
+	return s.h.inits
 }
 
 // Calls returns every tools/call and resources/read served, in order. A gated
@@ -572,10 +607,16 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	sse := s.sse
+	sse, notify := s.sse, s.notify && req.Method == "tools/call"
+	if notify {
+		s.notify = false
+	}
 	s.mu.Unlock()
 	if sse {
 		w.Header().Set("Content-Type", "text/event-stream")
+		if notify {
+			_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", `{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`)
+		}
 		_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", resp)
 		return
 	}
