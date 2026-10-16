@@ -324,8 +324,12 @@ func (t tool) Spec() protocol.ToolSpec {
 }
 
 func (t tool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
+	run, err := t.s.host.StartTool(ctx, c.Name)
+	if err != nil {
+		return protocol.ToolResult{}, err
+	}
 	return toolresult.Limit(ctx, c.Name, t.limit, func(ctx context.Context) (protocol.ToolResult, error) {
-		resp, err := t.s.host.ExecuteTool(ctx, &pub.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
+		resp, err := run(ctx, &pub.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
 		if err != nil {
 			return protocol.ToolResult{}, err
 		}

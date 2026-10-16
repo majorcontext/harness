@@ -191,8 +191,6 @@ func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending,
 
 // runtimeRows is the disposition of each contract row on the runtime host.
 var runtimeRows = map[string]runtimeRow{
-	"mcp_tool_call_past_tool_timeout_s_is_an_error_result_and_the_turn_continues":                              sameAsServe(),
-	"plugin_tool_call_past_tool_timeout_s_is_an_error_result_and_the_turn_continues":                           sameAsServe(),
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -784,17 +782,19 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_placeholder_result_before_the_turn_is_skipped":                    sameAsServe(),
 	"claudecode_interrupt_of_a_cli_that_exits_with_no_frame":                      reGolden(specView, specStopped, specClaudeGauge),
 
-	"claudecode_runs_in_the_work_dir":                                            sameAsServe(),
-	"claudecode_append_system_prompt_reaches_the_cli_as_one_value":               sameAsServe(),
-	"claudecode_compact_result_with_no_local_command_ends_the_turn":              reGolden(specView, specCompactOwned, specClaudeGauge, specClaudeCompactPostTokens),
-	"claudecode_queued_notification_result_does_not_end_the_turn":                reGolden(specView, specClaudeGauge),
-	"claudecode_compact_refuses_keep_turns":                                      reGolden(specView, specKeepOwned, specErrors, specClaudeGauge),
-	"claudecode_cli_compaction_is_logged":                                        reGolden(specView, specCompactOwned, specClaudeGauge),
-	"process_http_lifecycle":                                                     sameAsServe(),
-	"process_http_unknown_name_is_404":                                           reGolden(specProcessUnknown, specNoRoute, specErrors),
+	"claudecode_runs_in_the_work_dir":                               sameAsServe(),
+	"claudecode_append_system_prompt_reaches_the_cli_as_one_value":  sameAsServe(),
+	"claudecode_compact_result_with_no_local_command_ends_the_turn": reGolden(specView, specCompactOwned, specClaudeGauge, specClaudeCompactPostTokens),
+	"claudecode_queued_notification_result_does_not_end_the_turn":   reGolden(specView, specClaudeGauge),
+	"claudecode_compact_refuses_keep_turns":                         reGolden(specView, specKeepOwned, specErrors, specClaudeGauge),
+	"claudecode_cli_compaction_is_logged":                           reGolden(specView, specCompactOwned, specClaudeGauge),
+
+	"process_http_lifecycle":           sameAsServe(),
+	"process_http_unknown_name_is_404": reGolden(specProcessUnknown, specNoRoute, specErrors),
 	"git_changes_uncommitted_scope_reports_modified_deleted_and_untracked_files": sameAsServe(),
 	"git_changes_branch_scope_diffs_the_work_tree_against_the_default_branch":    sameAsServe(),
 	"git_changes_uncommitted_scope_on_an_unborn_repo_reports_files_as_added":     sameAsServe(),
-	"git_changes_refusals":                                                       reGolden(specGitOracle, specErrors, specInvalidReason),
-	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor":             reGolden(specCmdMenuRoutes, specCmdUnsupport),
+	"git_changes_refusals": reGolden(specGitOracle, specErrors, specInvalidReason),
+
+	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor": reGolden(specCmdMenuRoutes, specCmdUnsupport),
 }

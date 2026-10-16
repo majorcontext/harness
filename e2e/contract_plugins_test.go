@@ -296,6 +296,22 @@ func TestContractPluginToolTimeout(t *testing.T) {
 	})
 }
 
+func TestContractPluginToolTimeoutSlowStart(t *testing.T) {
+	cfg := pluginConfig(t, map[string]any{"init_delay_ms": 1500, "no_hooks": true})
+	cfg["plugins"].([]any)[0].(map[string]any)["tool_timeout_s"] = 1
+	runScenarios(t, []scenario{
+		{
+			name:   "plugin_that_starts_slower_than_tool_timeout_s_is_not_left_failed",
+			config: cfg,
+			model: toolChain(
+				ftTool("fixture_echo", ftArgs("text", "first")),
+				ftTool("fixture_echo", ftArgs("text", "second")),
+			),
+			actions: oneTurn,
+		},
+	})
+}
+
 // pluginEntry is one fixture plugin entry under name, with conf as its config block.
 func pluginEntry(t *testing.T, name string, conf map[string]any) map[string]any {
 	t.Helper()
