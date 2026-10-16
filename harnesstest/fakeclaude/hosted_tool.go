@@ -278,21 +278,27 @@ func turnCalls(f *fake) {
 // to abandon.pid in its working directory and then sleeps. Once the file
 // exists, the mode "abandon_tool" sends notifications/cancelled for the
 // request and leaves the request open, as the MCP SDK of the CLI does, and
-// "drop_tool" closes the connection of the request. Both wait for the process
+// "drop_tool" closes the connection of the request. The file abandon.reply
+// gets "reply" when the host answers the request and "no reply" when the
+// request ends with no answer. Both wait for the process
 // to be gone, so the turn ends only if the host stopped the call. They then
 // print the error result of the timeout and a success result. The mode
 // "hold_tool" keeps the request and hangs instead, so that an interrupt of
 // the turn ends the call.
 func abandonTool(f *fake) {
-	const pidfile, requestID = "abandon.pid", 7
+	const pidfile, replyFile, requestID = "abandon.pid", "abandon.reply", 7
 	_ = os.Remove(pidfile)
 	cmd := "echo $$ > " + pidfile + ".tmp && mv " + pidfile + ".tmp " + pidfile + " && exec sleep 600"
 	args := obj{"command": cmd}
 	f.emit(say("Let me check that."), assistant(toolUse("toolu_slow", "mcp__harness__bash", args)))
 	ctx, drop := context.WithCancel(context.Background())
 	defer drop()
+	_ = os.Remove(replyFile)
+	posted, answered := make(chan struct{}), make(chan bool, 1)
 	go func() {
-		_, _ = hostedPostContext(ctx, requestID, "tools/call", obj{"name": "bash", "arguments": args, "_meta": obj{toolUseMeta: "toolu_slow"}})
+		defer close(posted)
+		out, err := hostedPostContext(ctx, requestID, "tools/call", obj{"name": "bash", "arguments": args, "_meta": obj{toolUseMeta: "toolu_slow"}})
+		answered <- err == nil && len(out) > 0
 	}()
 	pid := awaitPid(pidfile)
 	switch f.mode {
@@ -305,8 +311,20 @@ func abandonTool(f *fake) {
 		_, _ = hostedPostCtx(context.Background(), srv, nil, "notifications/cancelled", obj{"requestId": requestID, "reason": "Request timed out"})
 	}
 	awaitGone(pid)
+	verdict := "no reply"
+	select {
+	case <-posted:
+		if <-answered {
+			verdict = "reply"
+		}
+	case <-time.After(replyWait):
+	}
+	appendFile(replyFile, verdict+"\n")
 	f.emit(user(toolResult("toolu_slow", "MCP error -32001: Request timed out", true)), say("Done."), success("Done.", 0, 0))
 }
+
+// replyWait is how long the mode waits for an answer to a request that it gave up.
+const replyWait = time.Second
 
 // awaitPid returns the pid that the file holds, once the file exists.
 func awaitPid(path string) int {

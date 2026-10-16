@@ -23,6 +23,8 @@ const (
 	maxGrepBytes = 20 * 1024 * 1024
 	// linesPerCtxCheck is the count of lines that grep scans between two checks of its context.
 	linesPerCtxCheck = 4096
+	// readChunk is the count of bytes that grep reads between two checks of its context.
+	readChunk = 1 << 20
 	// binarySniff is the prefix in which a NUL marks a file as binary.
 	binarySniff = 64 * 1024
 )
@@ -209,6 +211,9 @@ func (d dir) grep() tool {
 			if err != nil && err != errStop {
 				return "", err
 			}
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			if len(g.results) == 0 {
 				return "(no matches)", nil
 			}
@@ -236,15 +241,15 @@ func (g *grepper) file(ctx context.Context, path, rel string) error {
 	if g.include != nil && !g.include.MatchString(rel) {
 		return nil
 	}
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		return nil
-	}
-	f, err := os.Open(path)
+	f, err := openRegular(path)
 	if err != nil {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxGrepBytes+1))
+	data, err := readCtx(ctx, f, maxGrepBytes+1)
 	_ = f.Close()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil || len(data) > maxGrepBytes || slices.Contains(data[:min(len(data), binarySniff)], 0) {
 		return nil
 	}
@@ -262,6 +267,26 @@ func (g *grepper) file(ctx context.Context, path, rel string) error {
 		g.results = append(g.results, fmt.Sprintf("%s:%d:%s", rel, i+1, cutLine(line)))
 	}
 	return nil
+}
+
+// readCtx reads at most limit bytes of r, in chunks, and stops when ctx ends.
+func readCtx(ctx context.Context, r io.Reader, limit int) ([]byte, error) {
+	var data []byte
+	buf := make([]byte, readChunk)
+	for len(data) < limit {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, err := r.Read(buf[:min(readChunk, limit-len(data))])
+		data = append(data, buf[:n]...)
+		if err == io.EOF {
+			return data, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
 }
 
 const lsSchema = `{
