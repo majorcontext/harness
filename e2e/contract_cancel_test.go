@@ -7,7 +7,7 @@ var cancelRows = map[string]runtimeRow{
 	"claudecode_cli_that_drops_a_tool_request_stops_the_call": sameAsServe(),
 	"claudecode_interrupt_stops_a_running_tool_call":          sameAsServe(),
 	"interrupt_stops_a_running_bash_call":                     sameAsServe(),
-	"file_tools_search_skips_a_named_pipe":                    sameAsServe(),
+	"file_tools_refuse_a_named_pipe":                    sameAsServe(),
 }
 
 func joinRows(base, more map[string]runtimeRow) map[string]runtimeRow {

@@ -149,11 +149,14 @@ func TestContractFileToolsEdges(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name: "file_tools_search_skips_a_named_pipe",
+			name: "file_tools_refuse_a_named_pipe",
 			model: toolChain(
 				ftBash("mkdir proj && mkfifo proj/pipe && printf 'needle\\n' > proj/a.txt"),
 				ftTool("grep", ftArgs("pattern", "needle", "path", "proj")),
 				ftTool("glob", ftArgs("pattern", "*", "path", "proj")),
+				ftRead(ftArgs("path", "proj/pipe")),
+				ftEdit("proj/pipe", "a", "b"),
+				ftWrite("proj/pipe", "x"),
 			),
 			actions: oneTurn,
 		},
