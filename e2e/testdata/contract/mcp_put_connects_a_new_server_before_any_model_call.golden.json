@@ -1,0 +1,12 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "put_mcp_servers": {
+      "status": 200,
+      "body": [
+        "docs"
+      ]
+    }
+  }
+}

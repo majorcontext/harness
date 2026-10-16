@@ -134,6 +134,7 @@ func liveTurns(between ...action) []action {
 
 // mcpLiveRows is the disposition of the rows of the live MCP server set.
 var mcpLiveRows = map[string]runtimeRow{
+	"mcp_put_connects_a_new_server_before_any_model_call":                 sameAsServe(),
 	"mcp_put_adds_a_server_whose_tools_arrive_deferred":                   sameAsServe(),
 	"mcp_put_removes_a_server_and_a_sent_tool_stays_in_the_definitions":   sameAsServe(),
 	"mcp_put_with_a_changed_spec_connects_again":                          sameAsServe(),
@@ -250,6 +251,18 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 				putMCP{body: map[string]any{"mcp_servers": map[string]any{"a__b": map[string]any{"url": "http://127.0.0.1:1"}}}, status: http.StatusBadRequest},
 				putMCP{body: map[string]any{"mcp_servers": map[string]any{"weather": map[string]any{"url": "http://127.0.0.1:1", "tool_loading": "auto"}}}, status: http.StatusBadRequest},
 			),
+		},
+	})
+}
+
+func TestContractMCPPutBeforeAnyCall(t *testing.T) {
+	docs := mcpServerDef{name: "docs", spec: mcpDocs(), unlisted: true}
+	add := putMCP{servers: []string{"docs"}}
+	runScenarios(t, []scenario{
+		{
+			name:    "mcp_put_connects_a_new_server_before_any_model_call",
+			setup:   mcpSetup(nil, docs),
+			actions: []action{add, awaitMCPConnected{put: add}, expectMCPInitializes{server: "docs", n: 1}},
 		},
 	})
 }

@@ -54,7 +54,9 @@ func (s *Source) Replace(servers map[string]config.MCPServerSpec) func() []proto
 			}
 			e.sv = nil
 		}
-		if s.started {
+		if !s.started {
+			s.start.Do(func() { s.group.Go(s.firstConnect) })
+		} else {
 			for _, e := range fresh {
 				e.dialing <- struct{}{}
 				s.group.Go(func() { s.bring(e) })
