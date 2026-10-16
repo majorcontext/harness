@@ -56,6 +56,8 @@ type control struct {
 	all    []remote
 	loaded map[string]bool
 	v      view
+	// ok is the allowed-tools filter of the model call.
+	ok func(string) bool
 }
 
 func (c control) Spec() protocol.ToolSpec {
@@ -75,6 +77,10 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 	var in args
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: invalid arguments: %w", err)
+	}
+	if in.Action == "search" || in.Action == "select" {
+		c.v = c.s.view()
+		c.all = c.v.liveAll(c.ok)
 	}
 	var out any
 	var err error

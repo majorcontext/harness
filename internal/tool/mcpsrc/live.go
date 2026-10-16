@@ -150,10 +150,15 @@ func (s *Source) refresh(e *entry, c *mcp.Client, gen int) {
 	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.entries[e.name] != e || !e.sv.up() || e.sv.client != c || gen < e.applied {
+	switch {
+	case s.entries[e.name] != e || gen != e.gen:
+		return
+	case !e.sv.up():
+		e.pending = &pendingList{c, tools}
+		return
+	case e.sv.client != c:
 		return
 	}
-	e.applied = gen
 	e.sv = newServer(c, tools)
 	s.remember(e.name, e.sv)
 }

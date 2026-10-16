@@ -134,6 +134,8 @@ func liveTurns(between ...action) []action {
 
 // mcpLiveRows is the disposition of the rows of the live MCP server set.
 var mcpLiveRows = map[string]runtimeRow{
+	"mcp_select_reads_the_live_set_when_it_runs":                          sameAsServe(),
+	"mcp_session_that_began_with_an_empty_set_keeps_that_after_a_reopen":  sameAsServe(),
 	"mcp_put_before_any_call_sets_the_tool_loading_of_the_new_spec":       sameAsServe(),
 	"mcp_put_connects_a_new_server_before_any_model_call":                 sameAsServe(),
 	"mcp_put_adds_a_server_whose_tools_arrive_deferred":                   sameAsServe(),
@@ -275,10 +277,48 @@ func TestContractMCPPutBeforeAnyCall(t *testing.T) {
 	})
 }
 
+func TestContractMCPLiveSetTiming(t *testing.T) {
+	weather := mcpServerDef{name: "weather", spec: mcpWeather("")}
+	docs := mcpServerDef{name: "docs", spec: mcpDocs(), unlisted: true}
+	add := putMCP{servers: []string{"weather", "docs"}}
+	sel := mcpAction("action", "select", "tools", []string{"mcp__docs__search"})
+	sel.ID = "toolu_1"
+	runScenarios(t, []scenario{
+		{
+			name:  "mcp_select_reads_the_live_set_when_it_runs",
+			setup: mcpSetup(nil, weather, docs),
+			model: []harnesstest.Step{
+				{Name: "first", Match: assistantTurns(0), Reply: harnesstest.Reply{Text: "hi"}},
+				{Name: "sel", Match: assistantTurns(1), Reply: harnesstest.Reply{Text: "loading", Block: true, ToolCalls: []harnesstest.ToolCall{sel}}},
+				{Name: "done", Match: assistantTurns(2), Reply: harnesstest.Reply{Text: "done"}},
+			},
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				submit{as: "a", text: "again"}, awaitRequests{n: 2},
+				add, awaitMCPConnected{put: add},
+				release{step: "sel"}, waitIdle{as: "a"},
+			},
+		},
+	})
+}
+
 func TestContractMCPEmptySetSurface(t *testing.T) {
 	docs := mcpServerDef{name: "docs", spec: mcpDocs(), unlisted: true}
 	add := putMCP{servers: []string{"docs"}}
 	runScenarios(t, []scenario{
+		{
+			name:  "mcp_session_that_began_with_an_empty_set_keeps_that_after_a_reopen",
+			setup: mcpSetup(nil, docs),
+			model: []harnesstest.Step{
+				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "1"}},
+				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "2"}},
+			},
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				endSession{as: "a"}, add,
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+			},
+		},
 		{
 			name:  "mcp_session_that_began_with_an_empty_set_never_gets_mcp_tools",
 			setup: mcpSetup(nil, docs),

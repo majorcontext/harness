@@ -87,8 +87,15 @@ type entry struct {
 	dialing chan struct{}
 	health  health
 	sv      *server
-	// gen counts the reads of the tool list that a notification started, and applied is the newest one that took effect.
-	gen, applied int
+	// gen counts the reads of the tool list that a notification started. Only the answer of the newest one counts.
+	gen int
+	// pending is the answer of the newest read when it ends before the first list of its client is installed.
+	pending *pendingList
+}
+
+type pendingList struct {
+	client *mcp.Client
+	tools  []mcp.Tool
 }
 
 // memory is what the runtime keeps of a server name for the whole process, so a session that sent a tool
@@ -313,6 +320,9 @@ func (s *Source) connect(ctx context.Context, e *entry) (bool, error) {
 
 // dialHeld is connect for a caller that holds e.dialing.
 func (s *Source) dialHeld(ctx context.Context, e *entry) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, context.Cause(ctx)
+	}
 	if s.connected(e) {
 		return false, nil
 	}
@@ -328,6 +338,10 @@ func (s *Source) dialHeld(ctx context.Context, e *entry) (bool, error) {
 		_ = sv.client.Close()
 		return true, errors.New("mcp: closed")
 	}
+	if p := e.pending; p != nil && p.client == sv.client {
+		sv = newServer(sv.client, p.tools)
+	}
+	e.pending = nil
 	e.sv, e.health.reason, e.health.parked = sv, "", false
 	s.remember(e.name, sv)
 	return true, nil
@@ -343,6 +357,9 @@ func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, chang
 	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: hc}
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, context.Cause(ctx)
 	}
 	var client atomic.Pointer[mcp.Client]
 	c, err := mcp.NewClient(tr, mcp.Options{OnNotification: func(method string, _ json.RawMessage) {
@@ -420,7 +437,7 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
 	autoDefer := v.baseCount(ok) > s.threshold
 	loaded := selected(history)
-	ctl := control{s: s, loaded: map[string]bool{}, v: v}
+	ctl := control{s: s, loaded: map[string]bool{}, v: v, ok: ok}
 	var ts turn.Toolset
 	var listed []remote
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
@@ -456,6 +473,19 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), catalog(listed)}, func(p string) bool { return p == "" }), "\n\n")
 	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok)}}
 	return ts
+}
+
+// liveAll returns the tools that their servers list now and ok allows.
+func (v view) liveAll(ok func(string) bool) []remote {
+	var out []remote
+	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
+		for _, r := range v.remotes(name, ok) {
+			if r.client != nil {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
 }
 
 // baseCount counts the tools that the first connect reached and ok allows.
