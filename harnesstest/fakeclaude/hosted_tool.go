@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +10,11 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 const toolUseMeta = "claudecode/toolUseId"
@@ -69,8 +73,22 @@ func hangAfterListing(f *fake) {
 
 // hostedPost sends one JSON-RPC request to srv and returns the response body.
 func hostedPost(srv hostedEntry, method string, params obj) ([]byte, error) {
+	return hostedPostCtx(context.Background(), srv, method, params)
+}
+
+// hostedPostContext is hostedPost on the harness server of --mcp-config; it
+// drops the request when ctx ends.
+func hostedPostContext(ctx context.Context, method string, params obj) ([]byte, error) {
+	srv, ok := hostedServer()
+	if !ok {
+		return nil, fmt.Errorf("no harness server in --mcp-config")
+	}
+	return hostedPostCtx(ctx, srv, method, params)
+}
+
+func hostedPostCtx(ctx context.Context, srv hostedEntry, method string, params obj) ([]byte, error) {
 	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -248,5 +266,48 @@ func turnCalls(f *fake) {
 			f.emit(user(toolResult(ids[i], results[i].text(), results[i].Result.IsError)))
 		}
 		last = results[0].text()
+	}
+}
+
+// abandonTool runs a slow harness tool call and gives it up, as the CLI does
+// when its tool timeout ends. The call is a bash command that writes its pid
+// to abandon.pid in its working directory and then sleeps. Once the file exists, the
+// mode drops the request and waits for the process to be gone, so the turn
+// ends only if the host stopped the call. It then prints the error result of
+// the timeout and a success result. The mode "hold_tool" keeps the request
+// and hangs instead, so that an interrupt of the turn ends the call.
+func abandonTool(f *fake) {
+	const pidfile = "abandon.pid"
+	_ = os.Remove(pidfile)
+	cmd := "echo $$ > " + pidfile + ".tmp && mv " + pidfile + ".tmp " + pidfile + " && exec sleep 600"
+	args := obj{"command": cmd}
+	f.emit(say("Let me check that."), assistant(toolUse("toolu_slow", "mcp__harness__bash", args)))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = hostedPostContext(ctx, "tools/call", obj{"name": "bash", "arguments": args, "_meta": obj{toolUseMeta: "toolu_slow"}})
+	}()
+	pid := awaitPid(pidfile)
+	if f.mode == "hold_tool" {
+		hang(f)
+	}
+	cancel()
+	<-done
+	for syscall.Kill(pid, 0) == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	f.emit(user(toolResult("toolu_slow", "MCP error -32001: Request timed out", true)), say("Done."), success("Done.", 0, 0))
+}
+
+// awaitPid returns the pid that the file holds, once the file exists.
+func awaitPid(path string) int {
+	for {
+		if data, err := os.ReadFile(path); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

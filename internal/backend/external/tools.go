@@ -35,7 +35,8 @@ type Tools struct {
 	calls  sync.WaitGroup
 }
 
-// ServeTools serves specs until Close. call runs each tool call under ctx.
+// ServeTools serves specs until Close. call runs each tool call under ctx,
+// and ends the call when the external harness drops its request.
 // call.ID is the field idMeta of the request _meta: the external harness
 // sends its tool use ID there, and a call without it is an error result.
 // After ctx ends, a call gets no reply, so the interrupted external harness
@@ -60,7 +61,10 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 				if id == "" {
 					return mcp.CallToolResult{}, fmt.Errorf("the call has no %q in _meta", idMeta)
 				}
-				res, ok := t.run(ctx, call, protocol.ToolCall{ID: id, Name: s.Name, Arguments: args})
+				cctx, stop := context.WithCancel(ctx)
+				defer stop()
+				defer context.AfterFunc(rctx, stop)()
+				res, ok := t.run(cctx, call, protocol.ToolCall{ID: id, Name: s.Name, Arguments: args})
 				if !ok || ctx.Err() != nil {
 					<-t.closed
 					return mcp.CallToolResult{}, context.Cause(ctx)
