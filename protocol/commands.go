@@ -9,6 +9,9 @@ const SourceCommand = "command"
 // SourceUser is the source that the admission step stores for an input with no source.
 const SourceUser = "user"
 
+// SourceUsageReset marks the input that the runtime admits when a usage limit of the provider resets.
+const SourceUsageReset = "usage_reset"
+
 // Slash command statuses.
 const (
 	CommandAccepted    = "accepted"

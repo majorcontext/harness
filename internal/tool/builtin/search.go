@@ -21,6 +21,10 @@ const (
 	maxWalked = 200000
 	// maxGrepBytes skips a larger file. The cap binds on the bytes read.
 	maxGrepBytes = 20 * 1024 * 1024
+	// linesPerCtxCheck is the count of lines that grep scans between two checks of its context.
+	linesPerCtxCheck = 4096
+	// readChunk is the count of bytes that grep reads between two checks of its context.
+	readChunk = 1 << 20
 	// binarySniff is the prefix in which a NUL marks a file as binary.
 	binarySniff = 64 * 1024
 )
@@ -58,10 +62,14 @@ func globRegexp(pattern string) (*regexp.Regexp, error) {
 }
 
 // walk calls visit for each file under base. An unreadable entry is
-// skipped, but an unreadable base fails the walk.
-func walk(tool, base string, visit func(path, rel string, d fs.DirEntry) error) error {
+// skipped, but an unreadable base fails the walk. It returns the error of
+// ctx at the first entry after ctx ends.
+func walk(ctx context.Context, tool, base string, visit func(path, rel string, d fs.DirEntry) error) error {
 	walked := 0
 	return filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		switch {
 		case err != nil && p == base:
 			return err
@@ -94,7 +102,7 @@ const globSchema = `{
 
 func (d dir) glob() tool {
 	return newTool("glob", "Find files by name pattern. Supports * (any characters except /), ? (one character), and ** (any characters, including /, for recursive matching). Returns matching paths relative to the working directory, most-recently-modified first. Relative base paths resolve against the session working directory.",
-		globSchema, func(_ context.Context, args json.RawMessage) (string, error) {
+		globSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				Pattern string `json:"pattern"`
 				Path    string `json:"path"`
@@ -115,7 +123,7 @@ func (d dir) glob() tool {
 				mod int64
 			}
 			var matches []match
-			err = walk("glob", base, func(_, rel string, e fs.DirEntry) error {
+			err = walk(ctx, "glob", base, func(_, rel string, e fs.DirEntry) error {
 				if re.MatchString(rel) {
 					m := match{rel: rel}
 					if info, err := e.Info(); err == nil {
@@ -170,7 +178,7 @@ type grepArgs struct {
 
 func (d dir) grep() tool {
 	return newTool("grep", "Search file contents for a regular expression (RE2 syntax). Returns matching lines as path:line:text. Relative base paths resolve against the session working directory.",
-		grepSchema, func(_ context.Context, args json.RawMessage) (string, error) {
+		grepSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in grepArgs
 			if err := json.Unmarshal(args, &in); err != nil || in.Pattern == "" {
 				return "", errors.New("grep: missing pattern argument")
@@ -196,11 +204,14 @@ func (d dir) grep() tool {
 			}
 			g := &grepper{re: re, include: include}
 			if !info.IsDir() {
-				err = g.file(base, filepath.ToSlash(filepath.Base(base)))
+				err = g.file(ctx, base, filepath.ToSlash(filepath.Base(base)))
 			} else {
-				err = walk("grep", base, func(p, rel string, _ fs.DirEntry) error { return g.file(p, rel) })
+				err = walk(ctx, "grep", base, func(p, rel string, _ fs.DirEntry) error { return g.file(ctx, p, rel) })
 			}
 			if err != nil && err != errStop {
+				return "", err
+			}
+			if err := ctx.Err(); err != nil {
 				return "", err
 			}
 			if len(g.results) == 0 {
@@ -220,21 +231,32 @@ type grepper struct {
 	truncated   bool
 }
 
-// file skips a file that it cannot read, a file over maxGrepBytes, and a binary file.
-func (g *grepper) file(path, rel string) error {
+// file skips a file that it cannot read, an entry that is not a regular file
+// after symlinks (a named pipe or a device would block the read), a file over
+// maxGrepBytes, and a binary file. It returns the error of ctx when ctx ended.
+func (g *grepper) file(ctx context.Context, path, rel string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if g.include != nil && !g.include.MatchString(rel) {
 		return nil
 	}
-	f, err := os.Open(path)
+	f, err := openRegular(path)
 	if err != nil {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxGrepBytes+1))
+	data, err := readCtx(ctx, f, maxGrepBytes+1)
 	_ = f.Close()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil || len(data) > maxGrepBytes || slices.Contains(data[:min(len(data), binarySniff)], 0) {
 		return nil
 	}
 	for i, line := range strings.Split(string(data), "\n") {
+		if i%linesPerCtxCheck == 0 && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if !g.re.MatchString(line) {
 			continue
 		}
@@ -247,6 +269,30 @@ func (g *grepper) file(path, rel string) error {
 	return nil
 }
 
+// readCtx reads at most limit bytes of r, in reads of at most readChunk bytes,
+// and stops when ctx ends. Its buffer grows with the data.
+func readCtx(ctx context.Context, r io.Reader, limit int) ([]byte, error) {
+	data := make([]byte, 0, 512)
+	for len(data) < limit {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(data) == cap(data) {
+			data = append(data, 0)[:len(data)]
+		}
+		end := min(cap(data), len(data)+readChunk, limit)
+		n, err := r.Read(data[len(data):end])
+		data = data[:len(data)+n]
+		if err == io.EOF {
+			return data, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
 const lsSchema = `{
 	"type": "object",
 	"properties": {
@@ -256,7 +302,7 @@ const lsSchema = `{
 
 func (d dir) ls() tool {
 	return newTool("ls", "List a directory's immediate entries (not recursive), directories first, then files, both alphabetical. Relative paths resolve against the session working directory.",
-		lsSchema, func(_ context.Context, args json.RawMessage) (string, error) {
+		lsSchema, func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				Path string `json:"path"`
 			}
@@ -268,6 +314,9 @@ func (d dir) ls() tool {
 			entries, err := os.ReadDir(d.base(in.Path))
 			if err != nil {
 				return "", fmt.Errorf("ls: %w", err)
+			}
+			if err := ctx.Err(); err != nil {
+				return "", err
 			}
 			var dirs, files []string
 			for _, e := range entries {

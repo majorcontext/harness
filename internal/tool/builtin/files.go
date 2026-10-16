@@ -75,6 +75,9 @@ func (d dir) readFile() tool {
 			}
 			defer release()
 			c, err := readContent(path)
+			if errors.Is(err, errNotRegular) {
+				return protocol.ToolResult{}, fmt.Errorf("read_file: %s is %w", path, err)
+			}
 			if err != nil {
 				return protocol.ToolResult{}, fmt.Errorf("read_file: %s: %w", path, err)
 			}
@@ -173,8 +176,11 @@ func (d dir) mayOverwrite(ctx context.Context, path string) error {
 	if err != nil {
 		return fmt.Errorf("write_file: cannot stat %s to check the read-before-overwrite guard: %v", path, err)
 	}
-	if !info.Mode().IsRegular() {
+	if info.IsDir() {
 		return nil
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("write_file: %s is %w", path, errNotRegular)
 	}
 	seen, ok := d.read.hash(path)
 	if !ok {
@@ -230,6 +236,9 @@ func (d dir) editFile() tool {
 				defer release()
 			}
 			data, err := readCapped(path)
+			if errors.Is(err, errNotRegular) {
+				return "", fmt.Errorf("edit_file: %s is %w", path, err)
+			}
 			if err != nil {
 				return "", fmt.Errorf("edit_file: %w", err)
 			}

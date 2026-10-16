@@ -101,6 +101,10 @@ type State struct {
 	turn      Turn
 	turnIDs   map[string]bool
 	lastEnded protocol.TurnEnded
+	// continueAt is the time at which the session continues after a usage limit reset, or zero.
+	continueAt time.Time
+	// continued counts the usage_reset inputs since the last input of another source or the last turn that did not end provider_exhausted.
+	continued int
 	calls     []OpenToolCall
 	requests  map[string]pendingRequest
 	resolved  map[string]protocol.RequestResolved
@@ -276,12 +280,32 @@ func (s *State) Unsettled() []string {
 
 // Resumable reports whether opening the session has work to do: a turn that
 // runs or is suspended, an input that waits (not after a provider_exhausted
-// turn, which holds the queue), a goal that is active or paused (not blocked), a command
-// that no owner finished, or a child that has not settled.
+// turn, which holds the queue), a pending continue after a usage limit, a goal
+// that is active or paused (not blocked), a command that no owner finished, or
+// a child that has not settled.
 func (s *State) Resumable() bool {
-	held := s.lastEnded.Cause == protocol.CauseProviderExhausted
-	return s.turn.ID != "" || (len(s.prog.Queued) > 0 && !held) || s.goalState() == protocol.GoalActive || s.goalState() == protocol.GoalPaused ||
+	_, pending := s.ContinueAt()
+	return s.turn.ID != "" || (len(s.prog.Queued) > 0 && !s.Held()) || pending || s.goalState() == protocol.GoalActive || s.goalState() == protocol.GoalPaused ||
 		len(s.Unfinished()) > 0 || len(s.Unsettled()) > 0
+}
+
+// Held reports whether the queue waits for the next input: the last turn ended
+// provider_exhausted, and the usage_reset input of the runtime is not first in the queue.
+func (s *State) Held() bool {
+	if s.lastEnded.Cause != protocol.CauseProviderExhausted {
+		return false
+	}
+	return len(s.prog.Queued) == 0 || !IsUsageReset(s.inputs[s.prog.Queued[0]].event)
+}
+
+// ContinueAt returns the time at which the session continues after a usage
+// limit reset, and whether a continue is pending.
+func (s *State) ContinueAt() (time.Time, bool) {
+	return s.continueAt, !s.continueAt.IsZero()
+}
+
+func liveGoal(g protocol.GoalState) bool {
+	return g == protocol.GoalActive || g == protocol.GoalPaused || g == protocol.GoalBlocked
 }
 
 // Children returns every spawned child, settled or not, sorted.
@@ -433,7 +457,7 @@ func (s *State) step(env Envelope) error {
 	case protocol.TurnResumed:
 		return s.applyResumed(e)
 	case protocol.TurnEnded:
-		return s.applyEnded(e)
+		return s.applyEnded(e, env.Time)
 	case protocol.RequestOpened:
 		return s.applyRequestOpened(e)
 	case protocol.RequestResolved:
@@ -459,6 +483,8 @@ func (s *State) step(env Envelope) error {
 		return s.applyBackendState(e)
 	case protocol.ToolResultRetained:
 		return s.applyRetained(e)
+	case protocol.ContinueCancelled:
+		return s.applyContinueCancelled(e)
 	}
 	return fmt.Errorf("%w: %T", ErrUnknownKind, env.Event)
 }

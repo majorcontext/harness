@@ -320,3 +320,15 @@ func TestRegistryRegisterToolReplacesExistingByName(t *testing.T) {
 		t.Errorf("tools/call dispatched to the first handler, not the replacement: %+v", callResult.Content)
 	}
 }
+
+func TestRequestKeyMatchesEqualIDsAndSeparatesTypes(t *testing.T) {
+	same := [][2]string{{`"a"`, `"a"`}, {`7`, `7.0`}, {`7`, `7e0`}}
+	for _, p := range same {
+		if requestKey(json.RawMessage(p[0])) != requestKey(json.RawMessage(p[1])) {
+			t.Errorf("%s and %s have different keys, want one", p[0], p[1])
+		}
+	}
+	if requestKey(json.RawMessage(`"7"`)) == requestKey(json.RawMessage(`7`)) {
+		t.Error(`"7" and 7 share a key, want two`)
+	}
+}

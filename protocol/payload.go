@@ -39,6 +39,7 @@ var payloads = map[string]func() Payload{
 	KindContextMeasured:    func() Payload { return new(ContextMeasured) },
 	KindBackendState:       func() Payload { return new(BackendState) },
 	KindToolResultRetained: func() Payload { return new(ToolResultRetained) },
+	KindContinueCancelled:  func() Payload { return new(ContinueCancelled) },
 }
 
 // DurablePayloads returns a pointer to a zero payload of each durable kind, in kind order.
