@@ -53,6 +53,7 @@ const follow = (fn) => {
 
 // user is the signed-in user of the app. refreshWho reports whether it changed.
 let user = null;
+let mcpNames = [];
 const refreshWho = async () => {
   const who = await (await fetch("/whoami")).json();
   $("who").textContent = who.user ?? "not signed in";
@@ -60,6 +61,7 @@ const refreshWho = async () => {
   $("logout").hidden = !who.user;
   const changed = (who.user ?? null) !== user;
   user = who.user ?? null;
+  mcpNames = who.mcp;
   return changed;
 };
 await refreshWho();
@@ -86,6 +88,24 @@ const options = {
   tools: [],
   builtinTools: [],
 };
+// The allowed list names tools exactly, so the page lists the tools of each
+// server through the relay.
+if (mcpNames.length) options.builtinTools.push("mcp");
+for (const name of mcpNames) {
+  try {
+    const res = await fetch(`/mcp-proxy/mcp/${name}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const text = await res.text();
+    const body = text.match(/^data: (.*)$/m)?.[1] ?? text;
+    for (const t of JSON.parse(body).result.tools) options.builtinTools.push(`mcp__${name}__${t.name}`);
+  } catch {}
+}
+options.config.mcp_servers = Object.fromEntries(
+  mcpNames.map((name) => [name, { url: `${location.origin}/mcp-proxy/mcp/${name}` }]),
+);
 let h;
 let persisted = true;
 try {

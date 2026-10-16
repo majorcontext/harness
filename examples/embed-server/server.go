@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 
@@ -37,7 +38,20 @@ type config struct {
 	TokenFile string
 	// SessionFile, when set, keeps the sessions of the app on disk across restarts.
 	SessionFile string
+	// MCP are the remote MCP servers that the page may reach through /mcp-proxy/.
+	MCP []mcpServer
 }
+
+// mcpServer is one remote MCP server. Header and Token, when set, are added
+// to every request to it; the page never sees them.
+type mcpServer struct {
+	Name, URL, Header, Token string
+}
+
+// mcpTokens gives the relay the token of a server by its name (the grant).
+type mcpTokens map[string]string
+
+func (t mcpTokens) GetToken(grant string) (string, error) { return t[grant], nil }
 
 type server struct {
 	cfg      config
@@ -91,6 +105,18 @@ func newServer(cfg config) (*server, error) {
 				{Name: "ChatGPT-Account-ID", Value: tok.Account, Grant: "codex", Invalidate: invalidate, AllowInsecure: insecure},
 			}, nil
 		}, userHeader)
+	var servers []proxy.MCPServerConfig
+	tokens := mcpTokens{}
+	for _, m := range cfg.MCP {
+		c := proxy.MCPServerConfig{Name: m.Name, URL: m.URL}
+		if m.Header != "" {
+			c.Auth = &proxy.MCPAuthConfig{Grant: m.Name, Header: m.Header, AllowInsecure: strings.HasPrefix(m.URL, "http://")}
+			tokens[m.Name] = m.Token
+		}
+		servers = append(servers, c)
+	}
+	p.SetMCPServers(servers)
+	p.SetCredentialStore(tokens)
 	s.proxy = p
 	return s, nil
 }
@@ -116,6 +142,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /settings/codex/start", s.settingsStart)
 	mux.HandleFunc("POST /settings/codex/disconnect", s.settingsDisconnect)
 	mux.Handle("/model-proxy/", http.StripPrefix("/model-proxy", http.HandlerFunc(s.modelProxy)))
+	mux.Handle("/mcp-proxy/", http.StripPrefix("/mcp-proxy", http.HandlerFunc(s.mcpProxy)))
 	return mux
 }
 
@@ -123,32 +150,12 @@ func (s *server) handler() http.Handler {
 // request header, so the middleware must remove what the page sends.
 var strippedHeaders = []string{"Cookie", "Origin", "Referer", "Authorization", "Proxy-Authorization", "X-Api-Key", "ChatGPT-Account-ID", userHeader}
 
-// modelProxy is the only door to the gatekeeper relay. The proxy has no
-// listener of its own and no authentication: this function is its
-// authentication. Never mount the proxy where a request skips this function.
+// modelProxy and mcpProxy are the two doors to the gatekeeper proxy. The proxy
+// has no listener of its own and no authentication: these functions are its
+// authentication. Never mount the proxy where a request skips them.
 func (s *server) modelProxy(w http.ResponseWriter, r *http.Request) {
-	// A gatekeeper Proxy is a forward proxy. It takes the relay branch only
-	// when r.URL.Host is empty; an absolute-form request (or CONNECT) would go
-	// to the host it names, with the credential of the resolver. Refuse them,
-	// and rebuild the URL from the path and the query alone.
-	if r.URL.Host != "" || r.URL.Scheme != "" || r.Method == http.MethodConnect {
-		http.Error(w, "bad request target", http.StatusBadRequest)
-		return
-	}
-	r.URL = &url.URL{Path: r.URL.Path, RawQuery: r.URL.RawQuery}
-	r.RequestURI = ""
-	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
-		r.Host = addr.String()
-	} else {
-		r.Host = ""
-	}
-	_, sess := s.sessions.sessionOf(r)
+	sess := s.guard(w, r)
 	if sess == nil {
-		unauthorized(w, "sign in to the app")
-		return
-	}
-	if !sameOrigin(r) {
-		http.Error(w, "cross-site request", http.StatusForbidden)
 		return
 	}
 	// Only the codex relay is reachable. path.Clean stops dot segments.
@@ -168,6 +175,12 @@ func (s *server) modelProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the sign-in could not be refreshed now", http.StatusServiceUnavailable)
 		return
 	}
+	stripRequest(r)
+	r.Header.Set(userHeader, sess.user)
+	s.proxy.ServeHTTP(w, r)
+}
+
+func stripRequest(r *http.Request) {
 	for _, h := range strippedHeaders {
 		r.Header.Del(h)
 	}
@@ -176,8 +189,65 @@ func (s *server) modelProxy(w http.ResponseWriter, r *http.Request) {
 			r.Header.Del(k)
 		}
 	}
-	r.Header.Set(userHeader, sess.user)
-	s.proxy.ServeHTTP(w, r)
+}
+
+// mcpProxy is the second door to the gatekeeper proxy. It reaches only the
+// MCP relay of a configured server; the relay adds the token of the server.
+func (s *server) mcpProxy(w http.ResponseWriter, r *http.Request) {
+	if s.guard(w, r) == nil {
+		return
+	}
+	clean := path.Clean(r.URL.Path)
+	rest, ok := strings.CutPrefix(clean, "/mcp/")
+	name, _, _ := strings.Cut(rest, "/")
+	if clean != r.URL.Path || !ok || !slices.ContainsFunc(s.cfg.MCP, func(m mcpServer) bool { return m.Name == name }) {
+		http.NotFound(w, r)
+		return
+	}
+	stripRequest(r)
+	s.proxy.ServeHTTP(noCookies{w}, r)
+}
+
+// noCookies drops Set-Cookie: an MCP server must not set cookies on this origin.
+type noCookies struct{ http.ResponseWriter }
+
+func (n noCookies) WriteHeader(code int) {
+	n.Header().Del("Set-Cookie")
+	n.ResponseWriter.WriteHeader(code)
+}
+
+func (n noCookies) Flush() { _ = http.NewResponseController(n.ResponseWriter).Flush() }
+
+func (n noCookies) Unwrap() http.ResponseWriter { return n.ResponseWriter }
+
+// guard is the check that both doors share. It returns the session of a request
+// that may go on, and answers the others itself.
+func (s *server) guard(w http.ResponseWriter, r *http.Request) *session {
+	// A gatekeeper Proxy is a forward proxy. It takes the relay branch only
+	// when r.URL.Host is empty; an absolute-form request (or CONNECT) would go
+	// to the host it names, with the credential of the resolver. Refuse them,
+	// and rebuild the URL from the path and the query alone.
+	if r.URL.Host != "" || r.URL.Scheme != "" || r.Method == http.MethodConnect {
+		http.Error(w, "bad request target", http.StatusBadRequest)
+		return nil
+	}
+	r.URL = &url.URL{Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+	r.RequestURI = ""
+	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		r.Host = addr.String()
+	} else {
+		r.Host = ""
+	}
+	_, sess := s.sessions.sessionOf(r)
+	if sess == nil {
+		unauthorized(w, "sign in to the app")
+		return nil
+	}
+	if !sameOrigin(r) {
+		http.Error(w, "cross-site request", http.StatusForbidden)
+		return nil
+	}
+	return sess
 }
 
 func unauthorized(w http.ResponseWriter, msg string) {
