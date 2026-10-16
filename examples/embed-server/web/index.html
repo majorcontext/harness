@@ -320,28 +320,37 @@ const giveUp = async () => {
   status("this session moved to another tab · use here", "warn");
   channel.postMessage("released");
 };
+// take leaves the current harness and tries the persistent store. It falls
+// back to a memory store while another tab holds the store.
+const take = async () => {
+  reset();
+  await h?.close();
+  h = null;
+  try {
+    await connect(true);
+    return true;
+  } catch (err) {
+    if (err?.code !== "store_in_use") throw err;
+    await connect(false);
+    return false;
+  }
+};
 channel.onmessage = async ({ data }) => {
   if (data === "use-here" && persisted) {
     handoff = true;
     if (!running) await giveUp();
   } else if (data === "released" && wanted) {
     wanted = false;
-    reset();
-    await h?.close();
-    h = null;
-    try {
-      await connect(true);
-    } catch (err) {
-      if (err?.code !== "store_in_use") throw err;
-      await connect(false);
-    }
+    await take();
     open();
   }
 };
-$("here").addEventListener("click", () => {
+$("here").addEventListener("click", async () => {
+  if (running) return;
   wanted = true;
-  status("waiting for the other tab");
-  channel.postMessage("use-here");
+  if (await take()) wanted = false;
+  else channel.postMessage("use-here");
+  open();
 });
 
 // A focus checks the app user: another user gets their own conversation.
