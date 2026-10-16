@@ -21,6 +21,8 @@ const (
 	maxWalked = 200000
 	// maxGrepBytes skips a larger file. The cap binds on the bytes read.
 	maxGrepBytes = 20 * 1024 * 1024
+	// linesPerCtxCheck is the count of lines that grep scans between two checks of its context.
+	linesPerCtxCheck = 4096
 	// binarySniff is the prefix in which a NUL marks a file as binary.
 	binarySniff = 64 * 1024
 )
@@ -247,6 +249,9 @@ func (g *grepper) file(ctx context.Context, path, rel string) error {
 		return nil
 	}
 	for i, line := range strings.Split(string(data), "\n") {
+		if i%linesPerCtxCheck == 0 && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if !g.re.MatchString(line) {
 			continue
 		}

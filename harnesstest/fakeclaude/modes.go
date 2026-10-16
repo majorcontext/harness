@@ -174,6 +174,7 @@ var basicModes = map[string]mode{
 	"hang_in_tool":                 hangInTool,
 	"abandon_tool":                 abandonTool,
 	"hold_tool":                    abandonTool,
+	"drop_tool":                    abandonTool,
 	"question":                     question,
 	"question_sibling":             question,
 	"question_late_sibling":        question,

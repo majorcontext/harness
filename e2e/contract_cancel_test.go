@@ -4,10 +4,11 @@ import "testing"
 
 // cancelRows are the runtime dispositions of the rows of this file.
 var cancelRows = map[string]runtimeRow{
-	"claudecode_cli_that_drops_a_tool_request_stops_the_call": sameAsServe(),
-	"claudecode_interrupt_stops_a_running_tool_call":          sameAsServe(),
-	"interrupt_stops_a_running_bash_call":                     sameAsServe(),
-	"file_tools_refuse_a_named_pipe":                          sameAsServe(),
+	"claudecode_cli_that_cancels_a_tool_request_stops_the_call":  sameAsServe(),
+	"claudecode_cli_that_drops_a_tool_connection_stops_the_call": sameAsServe(),
+	"claudecode_interrupt_stops_a_running_tool_call":             sameAsServe(),
+	"interrupt_stops_a_running_bash_call":                        sameAsServe(),
+	"file_tools_refuse_a_named_pipe":                             sameAsServe(),
 }
 
 func joinRows(base, more map[string]runtimeRow) map[string]runtimeRow {
@@ -19,8 +20,12 @@ func joinRows(base, more map[string]runtimeRow) map[string]runtimeRow {
 
 func TestContractToolCallCancel(t *testing.T) {
 	runScenarios(t, []scenario{{
-		name:    "claudecode_cli_that_drops_a_tool_request_stops_the_call",
+		name:    "claudecode_cli_that_cancels_a_tool_request_stops_the_call",
 		driver:  claudeLane{mode: "abandon_tool"}.newDriver,
+		actions: claudeOneTurn,
+	}, {
+		name:    "claudecode_cli_that_drops_a_tool_connection_stops_the_call",
+		driver:  claudeLane{mode: "drop_tool"}.newDriver,
 		actions: claudeOneTurn,
 	}, {
 		name:   "claudecode_interrupt_stops_a_running_tool_call",
