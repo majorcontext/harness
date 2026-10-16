@@ -23,7 +23,7 @@ Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, 
 
 ## Web search
 
-Set `web` to `{"search": true}` to let the model use the web search of its provider. It is off by default and works with `anthropic`, `openai`, `codex`, and `claude-code` models; an `openai-compat` model ignores it.
+Set `web` to `{"search": true}` to let the model use the web search of its provider. It is off by default and works with `anthropic`, `openai`, `codex`, and `claude-code` models; an `openai-compat` model ignores it, and so does a ChatGPT `codex` model that uses the Responses Lite API, because that API refuses the hosted search.
 
 ```json
 { "web": { "search": true } }

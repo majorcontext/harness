@@ -39,6 +39,10 @@ The middleware on `/model-proxy/` checks the session cookie and the `Sec-Fetch-S
 
 A token is refreshed when it ends within five minutes. When the backend answers `401`, `403`, or `429`, gatekeeper calls `Invalidate`, and the next request refreshes (at most once a minute). When the issuer rejects the refresh token, the login is dropped and the user gets `401`, which the module maps to `login_required`. No code logs or returns a token.
 
+## The page
+
+One tab holds the saved sessions at a time. Another tab of the demo runs without history and shows "another tab holds this session  use here"; "use here" moves the session to that tab after any running turn ends. The page asks the model for plain text, because it shows a reply as is and renders no Markdown.
+
 ## MCP servers
 
 `-mcp name=url` (repeatable) lets the page use a remote MCP server through the gatekeeper MCP relay on the origin of the demo. `/whoami` lists the names, and the page adds each one to `mcp_servers` with the url `/mcp-proxy/mcp/<name>`. The door checks the session cookie and the path like `/model-proxy/`, and `Mcp-Session-Id` passes both ways.

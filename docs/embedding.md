@@ -212,6 +212,8 @@ server, never in the page. A provider entry with `auth: "injected"` sends no
 credential, and the server adds it; `proxy.providers` sets the URLs of the
 server and of its sign-in page. See the `sdk/embed` README.
 
+In the browser, an `mcp_servers` entry with a `url` works when the MCP server allows the origin of the page. To keep its credential out of the page, send it through a relay on your server, as [`examples/embed-server`](../examples/embed-server) does with the gatekeeper MCP relay.
+
 ## Examples
 
 [examples/](../examples) holds small programs that run. Clone the repository and
