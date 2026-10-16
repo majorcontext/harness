@@ -349,9 +349,8 @@ func TestContractInterruptByCompactionIDCancelsTheContinue(t *testing.T) {
 			if d.view(t, id).ContinueAt == 0 {
 				t.Fatal("no pending continue after the usage limit")
 			}
-			head := d.view(t, id).HeadSeq
 			base, client := d.endpoint()
-			go func() {
+			compact := func() {
 				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/sessions/"+id+"/compact", strings.NewReader("{}"))
 				if err != nil {
 					return
@@ -361,9 +360,16 @@ func TestContractInterruptByCompactionIDCancelsTheContinue(t *testing.T) {
 				if resp, err := client.Do(req); err == nil {
 					_ = resp.Body.Close()
 				}
-			}()
+			}
+			// The compacting frame is ephemeral. The stream subscribes before it yields its first replayed record,
+			// so a record seen from seq 0 proves the subscription, and only then does the row start the compaction.
 			var compaction string
-			d.stream(t, id, head, false, func(_ string, ev protocol.Event) bool {
+			started := false
+			d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+				if !started {
+					started = true
+					go compact()
+				}
 				var f protocol.StatusFrame
 				if ev.Kind == protocol.KindStatus && json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusCompacting {
 					compaction = f.TurnID
