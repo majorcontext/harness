@@ -233,12 +233,3 @@ func TestCallDialsAServerThatNothingHasTried(t *testing.T) {
 		t.Errorf("attempts = %d, want 1", got)
 	}
 }
-
-func TestReplacementBeforeTheFirstConnectTakesTheNewToolLoading(t *testing.T) {
-	s, srv := source(t, nil)
-	s.Replace(map[string]config.MCPServerSpec{"weather": {URL: srv["weather"].URL(), ToolLoading: "lazy"}})()
-	ts := s.Toolset(bg, nil, nil, "")
-	if got := names(ts.Tools); strings.Contains(got, "mcp__weather__") || !strings.Contains(names(ts.Deferred), "mcp__weather__forecast") {
-		t.Errorf("tools = %q, deferred = %q, want the weather tools deferred", got, names(ts.Deferred))
-	}
-}

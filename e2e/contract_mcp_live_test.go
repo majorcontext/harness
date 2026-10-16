@@ -134,6 +134,7 @@ func liveTurns(between ...action) []action {
 
 // mcpLiveRows is the disposition of the rows of the live MCP server set.
 var mcpLiveRows = map[string]runtimeRow{
+	"mcp_put_before_any_call_sets_the_tool_loading_of_the_new_spec":       sameAsServe(),
 	"mcp_put_connects_a_new_server_before_any_model_call":                 sameAsServe(),
 	"mcp_put_adds_a_server_whose_tools_arrive_deferred":                   sameAsServe(),
 	"mcp_put_removes_a_server_and_a_sent_tool_stays_in_the_definitions":   sameAsServe(),
@@ -258,7 +259,14 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 func TestContractMCPPutBeforeAnyCall(t *testing.T) {
 	docs := mcpServerDef{name: "docs", spec: mcpDocs(), unlisted: true}
 	add := putMCP{servers: []string{"docs"}}
+	lazy := putMCP{servers: []string{"weather"}, edit: map[string]func(map[string]any){"weather": func(e map[string]any) { e["tool_loading"] = "lazy" }}}
 	runScenarios(t, []scenario{
+		{
+			name:    "mcp_put_before_any_call_sets_the_tool_loading_of_the_new_spec",
+			setup:   mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
+			model:   textReply("hi"),
+			actions: append([]action{lazy}, append(oneTurn, expectSystem{req: 1, has: []string{"Deferred MCP tools", "mcp__weather__forecast \u2014"}})...),
+		},
 		{
 			name:    "mcp_put_connects_a_new_server_before_any_model_call",
 			setup:   mcpSetup(nil, docs),
