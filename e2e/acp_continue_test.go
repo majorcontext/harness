@@ -105,3 +105,19 @@ func TestACPCloseCancelsThePendingContinue(t *testing.T) {
 			}
 		})
 }
+
+func TestACPCloseWhileTheExhaustedPromptIsInFlightCancelsThePendingContinue(t *testing.T) {
+	runACPContinue(t, []harnesstest.Step{{Name: "limit", Reply: codexLimit(time.Hour)}},
+		func(t *testing.T, c *acpConn, o *harnesstest.OpenAI, snap func() protocol.Session) {
+			acpPromptStart{as: "a", text: "go"}.run(t, c)
+			if !o.AwaitRequests(1, waitBound) {
+				t.Fatal("the turn never called the model")
+			}
+			closing := c.request("session/close", map[string]any{"sessionId": c.session("a")})
+			c.response(c.pending["a"])
+			c.mustBeResult(c.response(closing), "CloseSessionResponse")
+			if at := snap().ContinueAt; at != 0 {
+				t.Fatalf("continue_at after session/close = %d, want none, so a later load runs no continue", at)
+			}
+		})
+}
