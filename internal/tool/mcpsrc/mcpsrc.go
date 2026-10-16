@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -54,6 +55,8 @@ type Source struct {
 	parent    *Source
 	mode      string
 	threshold int
+	// httpClient is the client of the HTTP servers; nil is the default client. A test sets it.
+	httpClient *http.Client
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -313,7 +316,7 @@ func (s *Source) dialHeld(ctx context.Context, e *entry) (bool, error) {
 	if s.connected(e) {
 		return false, nil
 	}
-	sv, err := dial(ctx, e.spec, func(c *mcp.Client) { s.listChanged(e, c) })
+	sv, err := dial(ctx, e.spec, s.httpClient, func(c *mcp.Client) { s.listChanged(e, c) })
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e.health.attempts++
@@ -336,8 +339,8 @@ func (s *Source) connected(e *entry) bool {
 	return e.sv.up()
 }
 
-func dial(ctx context.Context, spec config.MCPServerSpec, changed func(*mcp.Client)) (*server, error) {
-	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers}
+func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, changed func(*mcp.Client)) (*server, error) {
+	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: hc}
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}

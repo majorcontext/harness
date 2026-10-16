@@ -38,3 +38,4 @@ internal/modelmeta/internal/genctx/main_test.go The generator is pure code: it m
 protocol/errors_test.go Reason is a pure function of an error chain; a serve binary cannot build a chain that wraps a sentinel of another category
 internal/tool/webfetch/webfetch_test.go the address classifier, the dial check with a fake resolver, the HTML converter, and the redirect rule are pure tables; a serve binary cannot resolve a name to a chosen address
 internal/injectedauth/injectedauth_test.go the body of a probe is dropped by a model call that the server rejects, by a reset, and by a failed read; a scenario cannot place a request between the probe and the catalog fetch of one session open, or cut a response body
+internal/tool/mcpsrc/live_test.go the live set needs an in-memory server with held answers, which a scenario cannot hold; a synctest bubble sees every wait
