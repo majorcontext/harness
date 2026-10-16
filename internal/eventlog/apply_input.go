@@ -3,6 +3,7 @@ package eventlog
 import (
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -32,7 +33,20 @@ func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 		return illegal("input %s has delivery %q", e.InputID, e.Delivery)
 	}
 	s.inputs[e.InputID] = input{state: inputAdmitted, seq: seq, event: e}
+	s.continueAt = time.Time{}
+	if IsUsageReset(e) {
+		s.continued++
+	} else {
+		s.continued = 0
+	}
 	return nil
+}
+
+// IsUsageReset reports whether in is the input that the runtime admits when a
+// usage limit resets. A caller cannot write an engine_context part, so this
+// tells it from a prompt that names the source usage_reset.
+func IsUsageReset(in protocol.InputAdmitted) bool {
+	return in.Source == protocol.SourceUsageReset && slices.ContainsFunc(in.Parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartEngineContext })
 }
 
 func (s *State) applyPromoted(e protocol.InputPromoted) error {
@@ -55,6 +69,7 @@ func (s *State) applyWithdrawn(e protocol.InputWithdrawn) error {
 		return err
 	}
 	s.takeInput(e.InputID, inputWithdrawn)
+	s.continueAt = time.Time{}
 	return nil
 }
 
