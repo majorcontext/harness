@@ -457,6 +457,7 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	}
 	switch {
 	case r == nil && turnID == "":
+		a.cancelContinue()
 		reply(struct{}{}, nil)
 	case r == nil || turnID != "" && turnID != r.id:
 		reply(struct{}{}, ErrTurnMismatch)

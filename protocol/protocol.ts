@@ -168,6 +168,7 @@ export interface GoalChanged {
   state: "active" | "paused" | "blocked" | "achieved" | "failed" | "exhausted" | "cleared";
   reason?: string;
   retry_at?: string;
+  usage_limit?: boolean;
 }
 
 export interface GoalEvaluated {
@@ -253,6 +254,7 @@ export interface LastTurn {
   stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input";
   cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
   error?: string;
+  resets_at?: number;
 }
 
 export interface LogMessage {
@@ -458,6 +460,7 @@ export interface Session {
   usage: Usage;
   context: Context;
   last_turn?: LastTurn;
+  continue_at?: number;
   compaction_count?: number;
   subscription_usage: SubscriptionUsage | null;
   plugins?: Plugin[];
