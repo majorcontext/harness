@@ -172,3 +172,14 @@ func (s *Source) Specs() map[string]config.MCPServerSpec {
 	}
 	return out
 }
+
+// Populated reports whether s or its parent has a server now.
+func (s *Source) Populated() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	n := len(s.entries)
+	s.mu.Unlock()
+	return n > 0 || s.parent.Populated()
+}

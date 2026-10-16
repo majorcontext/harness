@@ -141,6 +141,7 @@ var mcpLiveRows = map[string]runtimeRow{
 	"mcp_put_that_removes_a_server_ends_the_call_in_flight_with_an_error": sameAsServe(),
 	"mcp_list_changed_adds_a_deferred_tool_that_the_notice_names":         sameAsServe(),
 	"mcp_put_with_a_bad_body_is_invalid_and_keeps_the_set":                sameAsServe(),
+	"mcp_session_that_began_with_an_empty_set_never_gets_mcp_tools":       sameAsServe(),
 }
 
 func withRows(parts ...map[string]runtimeRow) map[string]runtimeRow {
@@ -249,6 +250,28 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 				putMCP{body: map[string]any{"mcp_servers": map[string]any{"a__b": map[string]any{"url": "http://127.0.0.1:1"}}}, status: http.StatusBadRequest},
 				putMCP{body: map[string]any{"mcp_servers": map[string]any{"weather": map[string]any{"url": "http://127.0.0.1:1", "tool_loading": "auto"}}}, status: http.StatusBadRequest},
 			),
+		},
+	})
+}
+
+func TestContractMCPEmptySetSurface(t *testing.T) {
+	docs := mcpServerDef{name: "docs", spec: mcpDocs(), unlisted: true}
+	add := putMCP{servers: []string{"docs"}}
+	runScenarios(t, []scenario{
+		{
+			name:  "mcp_session_that_began_with_an_empty_set_never_gets_mcp_tools",
+			setup: mcpSetup(nil, docs),
+			model: []harnesstest.Step{
+				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "1"}},
+				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "2"}},
+				{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "3"}},
+			},
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				add,
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				create{as: "b"}, submit{as: "b", text: "three"}, waitIdle{as: "b"},
+			},
 		},
 	})
 }

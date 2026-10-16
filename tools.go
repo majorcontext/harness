@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/plugin"
@@ -126,8 +127,11 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		srcs = append(srcs, files)
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
+		var decide sync.Once
+		var surface bool
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {
-			if allowed == nil && c.OwnsMCP {
+			decide.Do(func() { surface = mcp.Populated() })
+			if !surface || allowed == nil && c.OwnsMCP {
 				return nil
 			}
 			return mcp
