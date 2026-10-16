@@ -31,7 +31,6 @@ var cancelRows = map[string]runtimeRow{
 	"file_tools_refuse_a_named_pipe":                             sameAsServe(),
 }
 
-
 func TestContractToolCallCancel(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name:    "claudecode_cli_that_cancels_a_tool_request_stops_the_call",
