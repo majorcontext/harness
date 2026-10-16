@@ -47,6 +47,8 @@ harness run -p "Fetch https://go.dev/VERSION?m=text and tell me the latest Go re
 
 For a remote server, set `url` and `headers` in place of `command`.
 
+A tool call to an MCP server ends after 120 seconds. Set `tool_timeout_s` on the server to change it.
+
 ## Work toward a goal
 
 `-goal` runs turns until an independent evaluator model judges the condition
@@ -84,6 +86,8 @@ To choose the model, add `"model": "codex/gpt-6.1-sol"` to the create request.
 With no `HARNESS_RUN_TOKEN` set, the server needs no token on `localhost`.
 `harness serve -h` lists the flags, and
 [`protocol/openapi.json`](../protocol/openapi.json) describes every route.
+
+A running server can change its MCP servers and plugins with no restart. `PUT /mcp/servers` with `{"mcp_servers": {...}}` and `PUT /plugins` with `{"plugins": [...]}` each replace the whole set. The new set is in memory only: a restart starts from the config again. A running session keeps the tools it started with. A tool that is added later is deferred, and the model loads it with the `mcp` tool.
 
 The server keeps the built-in default model, `anthropic/claude-fable-5`, and does
 not look for a subscription login. Set `model` in the config, or in the create

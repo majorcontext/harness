@@ -83,6 +83,8 @@ equal `Plugin.Name`, and `command` is found on your `PATH`:
 {"plugins": [{"name": "guard", "command": ["guard-plugin"]}]}
 ```
 
+A call to a plugin tool ends after 120 seconds. Set `tool_timeout_s` on the plugin entry to change it.
+
 Check that Harness finds it. The probe prints each plugin and its hooks:
 
 ```console
