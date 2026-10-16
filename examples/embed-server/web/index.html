@@ -266,7 +266,7 @@ const doOpen = async () => {
   clearTimeout(retry);
   retries = 0;
   log.scrollTop = log.scrollHeight;
-  status(persisted ? "enter: send · shift+enter: new line" : "another tab holds this session · use here", persisted ? "" : "warn");
+  status(persisted ? "enter: send · shift+enter: new line" : "another tab holds this session", persisted ? "" : "warn");
   input.disabled = false;
   input.focus();
 };
@@ -317,7 +317,7 @@ const giveUp = async () => {
   persisted = false;
   await old.close();
   $("here").hidden = false;
-  status("this session moved to another tab · use here", "warn");
+  status("this session moved to another tab", "warn");
 };
 // take leaves the current harness and asks for the store until it gets it:
 // each try waits for the lock, so a holder that closes meanwhile also ends it.
