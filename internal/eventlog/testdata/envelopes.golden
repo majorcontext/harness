@@ -56,7 +56,7 @@
 {"v":1,"seq":19,"t":"2026-10-02T12:00:00Z","k":"tool_result.retained","d":{"handle":"Handle","tool":"Tool","blob_key":"BlobKey","bytes":7,"lines":7,"head":"Head"}}
 {"v":1,"seq":19,"t":"2026-10-02T12:00:00Z","k":"tool_result.retained","d":{"handle":"","tool":"","blob_key":"","bytes":0,"lines":0,"head":""}}
 {"v":1,"seq":20,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"","stop_reason":""}}
-{"v":1,"seq":20,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"TurnID","stop_reason":"StopReason","cause":"Cause","task_cancel":true,"error":"Error","error_class":"ErrorClass","recover_hint":"RecoverHint","error_detail":"ErrorDetail"}}
+{"v":1,"seq":20,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"TurnID","stop_reason":"StopReason","cause":"Cause","task_cancel":true,"error":"Error","error_class":"ErrorClass","recover_hint":"RecoverHint","resets_at":7,"error_detail":"ErrorDetail"}}
 {"v":1,"seq":20,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"","stop_reason":""}}
 {"v":1,"seq":21,"t":"2026-10-02T12:00:00Z","k":"turn.resumed","d":{"turn_id":"","count":0}}
 {"v":1,"seq":21,"t":"2026-10-02T12:00:00Z","k":"turn.resumed","d":{"turn_id":"TurnID","count":7}}

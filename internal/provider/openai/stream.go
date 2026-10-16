@@ -275,7 +275,7 @@ func isInvalidPreviousResponseMessage(message string) bool {
 	return strings.Contains(message, "previous_response_id")
 }
 
-func streamError(code, message string) error {
+func streamError(code, message, typ string) error {
 	if isNotFoundErrorCode(code) || isInvalidPreviousResponseMessage(message) {
 		if message == "" {
 			message = "previous response not found"
@@ -286,7 +286,7 @@ func streamError(code, message string) error {
 	if code != "" {
 		msg = fmt.Sprintf("openai: %s (%s)", message, code)
 	}
-	if hint, ok := parseUsageExhaustion(0, message, code); ok {
+	if hint, ok := parseUsageExhaustion(0, message, typ, code); ok {
 		return provider.MarkPermanent(&provider.Error{
 			Kind:        provider.ErrKindProviderExhausted,
 			Raw:         msg,
@@ -303,13 +303,24 @@ func streamError(code, message string) error {
 	return err
 }
 
+// withReset gives an exhaustion error the reset time, in Unix seconds, that
+// the error body of the Codex backend states in resets_at.
+func withReset(err error, resetsAt int64) error {
+	if pe, ok := provider.AsProviderExhausted(err); ok && resetsAt > 0 {
+		pe.ResetsAt = resetsAt
+		pe.RecoverHint = cmp.Or(pe.RecoverHint, provider.ResetHint(resetsAt))
+	}
+	return err
+}
+
 var usageExhaustionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)usage limit has been reached`),
 	regexp.MustCompile(`(?i)usage limit (?:reached|exceeded)`),
 }
 
 var usageExhaustionCodes = map[string]bool{
-	"insufficient_quota": true,
+	"insufficient_quota":  true,
+	"usage_limit_reached": true,
 }
 
 var exhaustionStatuses = map[int]bool{
@@ -573,8 +584,10 @@ func (s *stream) handle(name string, data []byte) error {
 				} `json:"error"`
 			} `json:"response"`
 			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
+				Type     string `json:"type"`
+				Code     string `json:"code"`
+				Message  string `json:"message"`
+				ResetsAt int64  `json:"resets_at"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -582,17 +595,17 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		switch {
 		case isNotFoundErrorCode(ev.Response.Error.Code):
-			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message, "")
 		case isNotFoundErrorCode(ev.Error.Code):
-			return streamError(ev.Error.Code, ev.Error.Message)
+			return streamError(ev.Error.Code, ev.Error.Message, "")
 		case isNotFoundErrorCode(ev.Code):
-			return streamError(ev.Code, ev.Message)
+			return streamError(ev.Code, ev.Message, "")
 		case ev.Response.Error.Message != "" || ev.Response.Error.Code != "":
-			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
-		case ev.Error.Message != "" || ev.Error.Code != "":
-			return streamError(ev.Error.Code, ev.Error.Message)
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message, "")
+		case ev.Error.Message != "" || ev.Error.Code != "" || ev.Error.Type != "":
+			return withReset(streamError(cmp.Or(ev.Error.Code, ev.Code), cmp.Or(ev.Error.Message, ev.Message, ev.Error.Type), ev.Error.Type), ev.Error.ResetsAt)
 		case ev.Message != "" || ev.Code != "":
-			return streamError(ev.Code, ev.Message)
+			return streamError(ev.Code, ev.Message, "")
 		default:
 			return fmt.Errorf("openai: stream error: %s", data)
 		}
