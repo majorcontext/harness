@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -37,12 +38,14 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 	if !sv.up() {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not connected", server)
 	}
-	res, err := sv.client.CallTool(ctx, tool, in)
-	if err != nil {
-		return protocol.ToolResult{}, hide(server, err)
-	}
-	text, blobs := render(res.Content)
-	return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
+	return toolresult.Limit(ctx, prefix+server+"__"+tool, s.toolTimeout(server), func(ctx context.Context) (protocol.ToolResult, error) {
+		res, err := sv.client.CallTool(ctx, tool, in)
+		if err != nil {
+			return protocol.ToolResult{}, hide(server, err)
+		}
+		text, blobs := render(res.Content)
+		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
+	})
 }
 
 // redial dials a server that dropped after it connected. A server that is

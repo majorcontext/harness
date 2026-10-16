@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // validMCPToolLoading lists the accepted mcp_tool_loading values. "auto" is global-only: the threshold measures the whole catalog.
@@ -56,6 +57,8 @@ type MCPServerSpec struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	// ConnectTimeoutS bounds a connect attempt in seconds; zero means 15, and a negative value is rejected.
 	ConnectTimeoutS int `json:"connect_timeout_s,omitempty"`
+	// ToolTimeoutS bounds one tool call in seconds; nil means 120, and a value below 1 is rejected.
+	ToolTimeoutS *int `json:"tool_timeout_s,omitempty"`
 	// ToolLoading overrides Config.MCPToolLoading for this server: "eager" or "lazy". "auto" is rejected here.
 	ToolLoading string `json:"tool_loading,omitempty"`
 }
@@ -72,7 +75,32 @@ type PluginSpec struct {
 	Dir string `json:"dir,omitempty"`
 	// Config is passed to the plugin in InitializeParams.
 	Config json.RawMessage `json:"config,omitempty"`
+	// ToolTimeoutS bounds one tool call in seconds; nil means 120, and a value below 1 is rejected.
+	ToolTimeoutS *int `json:"tool_timeout_s,omitempty"`
 }
+
+// DefaultToolTimeout bounds one MCP or plugin tool call when the entry sets no tool_timeout_s.
+const DefaultToolTimeout = 120 * time.Second
+
+func toolTimeout(s *int) time.Duration {
+	if s == nil {
+		return DefaultToolTimeout
+	}
+	return time.Duration(*s) * time.Second
+}
+
+func checkToolTimeout(where string, s *int) error {
+	if s != nil && *s < 1 {
+		return fmt.Errorf("%s: tool_timeout_s must be positive (got %d)", where, *s)
+	}
+	return nil
+}
+
+// ToolTimeout returns the time limit of one tool call of the server.
+func (s MCPServerSpec) ToolTimeout() time.Duration { return toolTimeout(s.ToolTimeoutS) }
+
+// ToolTimeout returns the time limit of one tool call of the plugin.
+func (s PluginSpec) ToolTimeout() time.Duration { return toolTimeout(s.ToolTimeoutS) }
 
 func validatePlugins(plugins []PluginSpec) error {
 	seen := make(map[string]bool, len(plugins))
@@ -85,6 +113,9 @@ func validatePlugins(plugins []PluginSpec) error {
 		}
 		if seen[p.Name] {
 			return fmt.Errorf("plugins[%d]: duplicate plugin name %q", i, p.Name)
+		}
+		if err := checkToolTimeout(fmt.Sprintf("plugins[%d] (%s)", i, p.Name), p.ToolTimeoutS); err != nil {
+			return err
 		}
 		seen[p.Name] = true
 	}
@@ -113,6 +144,9 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 		}
 		if s.ConnectTimeoutS < 0 {
 			return fmt.Errorf("mcp_servers.%s: connect_timeout_s must not be negative (got %d)", name, s.ConnectTimeoutS)
+		}
+		if err := checkToolTimeout("mcp_servers."+name, s.ToolTimeoutS); err != nil {
+			return err
 		}
 		if !validMCPServerToolLoading[s.ToolLoading] {
 			if s.ToolLoading == "auto" {
@@ -164,6 +198,10 @@ func copyMCPServerSpec(s MCPServerSpec) MCPServerSpec {
 			hm[k] = v
 		}
 		s.Headers = hm
+	}
+	if s.ToolTimeoutS != nil {
+		v := *s.ToolTimeoutS
+		s.ToolTimeoutS = &v
 	}
 	return s
 }

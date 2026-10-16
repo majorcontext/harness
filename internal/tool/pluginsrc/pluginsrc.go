@@ -43,6 +43,8 @@ type Plugins struct {
 	opts      plugin.Options
 	workDir   string
 	cachePath string
+	// limits holds the tool_timeout_s of each config plugin tool, set before host.
+	limits map[string]time.Duration
 
 	// host is set once, by the first successful Start.
 	host   atomic.Pointer[plugin.Host]
@@ -107,6 +109,7 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 		return plugin.ProbeSpec(pctx, spec)
 	}
 	specs := make([]plugin.Spec, len(p.specs), len(p.specs)+len(p.inproc))
+	limits := map[string]time.Duration{}
 	names := map[string]bool{}
 	dirty := false
 	for i, ps := range p.specs {
@@ -120,6 +123,7 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 				return fmt.Errorf("plugin %s: tool name %q is empty or taken", ps.Name, d.Name)
 			}
 			names[d.Name] = true
+			limits[d.Name] = ps.ToolTimeout()
 		}
 		specs[i] = plugin.Spec{Command: ps.Command, Env: ps.Env, Dir: ps.Dir, Config: ps.Config, Manifest: m}
 	}
@@ -142,6 +146,7 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool, refresh bo
 			return fmt.Errorf("plugin cache: %w", err)
 		}
 	}
+	p.limits = limits
 	p.host.Store(host)
 	return nil
 }
@@ -170,7 +175,7 @@ func (p *Plugins) Session(id string) *Session {
 	host := p.host.Load()
 	s := &Session{id: id, host: host, workDir: p.workDir}
 	for _, d := range host.Tools() {
-		s.tools = append(s.tools, tool{s, d})
+		s.tools = append(s.tools, tool{s, d, cmp.Or(p.limits[d.Name], config.DefaultToolTimeout)})
 	}
 	return s
 }
@@ -309,8 +314,9 @@ func (s *Session) emit(typ string, props any) {
 }
 
 type tool struct {
-	s   *Session
-	def pub.ToolDef
+	s     *Session
+	def   pub.ToolDef
+	limit time.Duration
 }
 
 func (t tool) Spec() protocol.ToolSpec {
@@ -318,15 +324,17 @@ func (t tool) Spec() protocol.ToolSpec {
 }
 
 func (t tool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	resp, err := t.s.host.ExecuteTool(ctx, &pub.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
-	if err != nil {
-		return protocol.ToolResult{}, err
-	}
-	text, blobs, err := toolOutput(resp.Output)
-	if err != nil {
-		return protocol.ToolResult{}, err
-	}
-	return protocol.ToolResult{Text: text, IsError: resp.IsError, Blobs: blobs}, nil
+	return toolresult.Limit(ctx, c.Name, t.limit, func(ctx context.Context) (protocol.ToolResult, error) {
+		resp, err := t.s.host.ExecuteTool(ctx, &pub.ToolExecuteRequest{SessionID: t.s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments})
+		if err != nil {
+			return protocol.ToolResult{}, err
+		}
+		text, blobs, err := toolOutput(resp.Output)
+		if err != nil {
+			return protocol.ToolResult{}, err
+		}
+		return protocol.ToolResult{Text: text, IsError: resp.IsError, Blobs: blobs}, nil
+	})
 }
 
 // toolOutput maps tool output to result text and blobs. A blob part with

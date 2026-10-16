@@ -283,6 +283,19 @@ func TestContractPluginCrash(t *testing.T) {
 	})
 }
 
+func TestContractPluginToolTimeout(t *testing.T) {
+	cfg := pluginConfig(t, map[string]any{"echo_hang": true})
+	cfg["plugins"].([]any)[0].(map[string]any)["tool_timeout_s"] = 1
+	runScenarios(t, []scenario{
+		{
+			name:    "plugin_tool_call_past_tool_timeout_s_is_an_error_result_and_the_turn_continues",
+			config:  cfg,
+			model:   toolChain(ftTool("fixture_echo", ftArgs("text", "hi"))),
+			actions: oneTurn,
+		},
+	})
+}
+
 // pluginEntry is one fixture plugin entry under name, with conf as its config block.
 func pluginEntry(t *testing.T, name string, conf map[string]any) map[string]any {
 	t.Helper()

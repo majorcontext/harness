@@ -21,6 +21,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/mcp"
+	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -31,6 +32,9 @@ const (
 	listName       = "list_mcp_resources"
 	readName       = "read_mcp_resource"
 	connectTimeout = 15 * time.Second
+	// requestMargin keeps the request bound of the client after the tool
+	// limit, so the limit ends a tool call first.
+	requestMargin = time.Second
 )
 
 // Reserved reports whether name belongs to the tools of a Source.
@@ -125,6 +129,13 @@ func (s *Source) loading(server string) string {
 		return s.parent.loading(server)
 	}
 	return cmp.Or(s.specs[server].ToolLoading, s.mode, "eager")
+}
+
+func (s *Source) toolTimeout(server string) time.Duration {
+	if !s.owns(server) && s.parent != nil {
+		return s.parent.toolTimeout(server)
+	}
+	return s.specs[server].ToolTimeout()
 }
 
 // Close closes every connection and stops every stdio server. A nil Source has none.
@@ -232,7 +243,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec) (*server, error) {
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}
-	c, err := mcp.NewClient(tr, mcp.Options{})
+	c, err := mcp.NewClient(tr, mcp.Options{RequestTimeout: spec.ToolTimeout() + requestMargin})
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +297,7 @@ func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		for _, t := range sv.tools {
 			spec := protocol.ToolSpec{Name: prefix + name + "__" + t.Name, Description: t.Description, InputSchema: t.InputSchema, ReadOnly: readOnlyHint(t.Annotations)}
 			if ok(spec.Name) {
-				all = append(all, remote{server: name, name: t.Name, client: sv.client, spec: spec})
+				all = append(all, remote{server: name, name: t.Name, client: sv.client, spec: spec, timeout: s.toolTimeout(name)})
 			}
 		}
 	}
@@ -341,6 +352,7 @@ type remote struct {
 	server, name string
 	client       *mcp.Client
 	spec         protocol.ToolSpec
+	timeout      time.Duration
 }
 
 func (r remote) Spec() protocol.ToolSpec { return r.spec }
@@ -352,12 +364,14 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 			return protocol.ToolResult{}, fmt.Errorf("mcp: invalid arguments for %s: %w", call.Name, err)
 		}
 	}
-	res, err := r.client.CallTool(ctx, r.name, in)
-	if err != nil {
-		return protocol.ToolResult{}, hide(r.server, err)
-	}
-	text, blobs := render(res.Content)
-	return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
+	return toolresult.Limit(ctx, call.Name, r.timeout, func(ctx context.Context) (protocol.ToolResult, error) {
+		res, err := r.client.CallTool(ctx, r.name, in)
+		if err != nil {
+			return protocol.ToolResult{}, hide(r.server, err)
+		}
+		text, blobs := render(res.Content)
+		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
+	})
 }
 
 // hide replaces every error but a server's own RPC error with a reason. A
