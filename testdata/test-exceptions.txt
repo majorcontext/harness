@@ -40,4 +40,3 @@ internal/tool/webfetch/webfetch_test.go the address classifier, the dial check w
 internal/injectedauth/injectedauth_test.go the body of a probe is dropped by a model call that the server rejects, by a reset, and by a failed read; a scenario cannot place a request between the probe and the catalog fetch of one session open, or cut a response body
 internal/tool/mcpsrc/live_test.go the live set needs an in-memory server with held answers, which a scenario cannot hold; a synctest bubble sees every wait
 internal/mcp/server_test.go the key of a JSON-RPC request id is a pure function of its spelling, which a scenario cannot vary: the CLI always sends one spelling
-internal/session/continue_test.go a scenario row cannot move the clock to a reset time, so a synctest bubble holds the timer of the pending continue

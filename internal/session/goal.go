@@ -12,7 +12,6 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
-	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -231,7 +230,7 @@ func (a *Actor) blockUndriven() error {
 		return nil
 	}
 	q := a.state.Queue()
-	if len(q) > 0 && !a.state.Held() {
+	if len(q) > 0 && !a.waitsForInput() {
 		return nil
 	}
 	return a.append(protocol.GoalChanged{State: protocol.GoalBlocked, Reason: goalNoDriver})
@@ -381,10 +380,6 @@ func (a *Actor) goalStop(err error) []protocol.Payload {
 	}
 	change := protocol.GoalChanged{State: protocol.GoalFailed, Reason: plugin.SanitizeSessionError(err.Error())}
 	if errors.Is(err, turn.ErrRetryable) || errors.Is(err, turn.ErrExhausted) {
-		if reset, ok := usageReset(err); ok {
-			change.State, change.RetryAt, change.UsageLimit = protocol.GoalPaused, reset, true
-			return append(a.withdrawGoal(), change)
-		}
 		if g.Pauses >= goalMaxPauses {
 			change.Reason = goalRetriesExhausted
 			return append(a.withdrawGoal(), change)
@@ -392,18 +387,6 @@ func (a *Actor) goalStop(err error) []protocol.Payload {
 		change.State, change.RetryAt = protocol.GoalPaused, time.Now().Add(min(goalRetry<<min(g.Pauses, 10), goalRetryMax))
 	}
 	return append(a.withdrawGoal(), change)
-}
-
-// usageReset returns the reset time of a usage limit that err reports, when
-// that time lies after now and within eventlog.ContinueWindow. A goal waits for
-// such a time, and the wait is no pause.
-func usageReset(err error) (time.Time, bool) {
-	pe, ok := provider.AsProviderExhausted(err)
-	if !ok || pe.ResetsAt <= 0 {
-		return time.Time{}, false
-	}
-	reset, now := time.Unix(pe.ResetsAt, 0), time.Now()
-	return reset, reset.After(now) && !reset.After(now.Add(eventlog.ContinueWindow))
 }
 
 // retryLater resumes a paused goal at its retry time. It replaces the

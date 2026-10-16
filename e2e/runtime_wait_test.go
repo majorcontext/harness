@@ -44,10 +44,10 @@ func (d *runtimeDriver) stream(t *testing.T, id string, after uint64, header boo
 
 // settled reports whether a session runs nothing and has nothing to run. A
 // session that waits for an answer runs nothing, and neither does one whose
-// queue waits after a turn that ended provider_exhausted, unless a continue is pending.
+// queue waits after a turn that ended provider_exhausted.
 func settled(v protocol.Session) bool {
 	held := v.LastTurn != nil && v.LastTurn.Cause == "provider_exhausted"
-	return (v.Status == protocol.StatusIdle || v.Status == protocol.StatusWaiting) && (len(v.Queued) == 0 || held) && (v.Goal == nil || v.Goal.State != "active") && v.ContinueAt == 0
+	return (v.Status == protocol.StatusIdle || v.Status == protocol.StatusWaiting) && (len(v.Queued) == 0 || held) && (v.Goal == nil || v.Goal.State != "active")
 }
 
 // WaitIdle reads the view again on each frame of the session, from the head
