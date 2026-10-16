@@ -587,6 +587,7 @@ func TestMCPProxyInjectsTheTokenAndReachesOnlyConfiguredServers(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
 		got.Store(q)
 		w.Header().Set("Mcp-Session-Id", "s2")
+		http.SetCookie(w, &http.Cookie{Name: "evil", Value: "1"})
 	}))
 	defer up.Close()
 	srv, err := newServer(config{Upstream: up.URL, MCP: []mcpServer{{Name: "docs", URL: up.URL + "/mcp", Header: "X-Token", Token: "real"}}})
@@ -617,7 +618,7 @@ func TestMCPProxyInjectsTheTokenAndReachesOnlyConfiguredServers(t *testing.T) {
 	if resp.StatusCode != 200 || q == nil || q.URL.Path != "/mcp/x" || q.URL.RawQuery != "q=1" || q.Header.Get("X-Token") != "real" || q.Header.Get("Mcp-Session-Id") != "s1" || q.Header.Get("Cookie") != "" {
 		t.Errorf("status %d, request %+v", resp.StatusCode, q)
 	}
-	if resp.Header.Get("Mcp-Session-Id") != "s2" {
+	if len(resp.Cookies()) != 0 || resp.Header.Get("Mcp-Session-Id") != "s2" {
 		t.Errorf("response Mcp-Session-Id %q, want s2", resp.Header.Get("Mcp-Session-Id"))
 	}
 	got.Store(nil)

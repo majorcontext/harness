@@ -150,9 +150,9 @@ func (s *server) handler() http.Handler {
 // request header, so the middleware must remove what the page sends.
 var strippedHeaders = []string{"Cookie", "Origin", "Referer", "Authorization", "Proxy-Authorization", "X-Api-Key", "ChatGPT-Account-ID", userHeader}
 
-// modelProxy is the only door to the gatekeeper relay. The proxy has no
-// listener of its own and no authentication: this function is its
-// authentication. Never mount the proxy where a request skips this function.
+// modelProxy and mcpProxy are the two doors to the gatekeeper proxy. The proxy
+// has no listener of its own and no authentication: these functions are its
+// authentication. Never mount the proxy where a request skips them.
 func (s *server) modelProxy(w http.ResponseWriter, r *http.Request) {
 	sess := s.guard(w, r)
 	if sess == nil {
@@ -205,8 +205,20 @@ func (s *server) mcpProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stripRequest(r)
-	s.proxy.ServeHTTP(w, r)
+	s.proxy.ServeHTTP(noCookies{w}, r)
 }
+
+// noCookies drops Set-Cookie: an MCP server must not set cookies on this origin.
+type noCookies struct{ http.ResponseWriter }
+
+func (n noCookies) WriteHeader(code int) {
+	n.Header().Del("Set-Cookie")
+	n.ResponseWriter.WriteHeader(code)
+}
+
+func (n noCookies) Flush() { _ = http.NewResponseController(n.ResponseWriter).Flush() }
+
+func (n noCookies) Unwrap() http.ResponseWriter { return n.ResponseWriter }
 
 // guard is the check that both doors share. It returns the session of a request
 // that may go on, and answers the others itself.

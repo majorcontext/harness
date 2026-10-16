@@ -28,7 +28,7 @@
   </footer>
 </div>
 <script type="module">
-import { createHarness, defaultBuiltinTools, wasm } from "/embed/index.mjs";
+import { createHarness, wasm } from "/embed/index.mjs";
 
 const $ = (id) => document.getElementById(id);
 const log = $("log");
@@ -86,10 +86,11 @@ const options = {
   },
   proxy: { providers: { codex: { baseURL: "/model-proxy/relay/codex", loginURL: "/settings/codex" } } },
   tools: [],
-  builtinTools: [...defaultBuiltinTools, "mcp"],
+  builtinTools: [],
 };
 // The allowed list names tools exactly, so the page lists the tools of each
 // server through the relay.
+if (mcpNames.length) options.builtinTools.push("mcp");
 for (const name of mcpNames) {
   try {
     const res = await fetch(`/mcp-proxy/mcp/${name}`, {
