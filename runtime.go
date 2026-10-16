@@ -264,11 +264,13 @@ func New(opts Options) (*Runtime, error) {
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{MCPServers: r.mcp.Specs, Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
+			r.mcp.Close()
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
 		}
 		r.tools = append(r.tools, t)
 	}
 	if err := r.checkPlugins(opts.Config.Plugins, opts.Plugins); err != nil {
+		r.mcp.Close()
 		return nil, err
 	}
 	if r.owner == nil {

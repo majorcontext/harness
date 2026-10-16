@@ -103,10 +103,10 @@ func (s *Source) settle(ctx context.Context) bool {
 	if s == nil {
 		return true
 	}
-	if !s.parent.settle(ctx) {
-		return false
-	}
 	for {
+		if !s.parent.settle(ctx) {
+			return false
+		}
 		sn := s.snap.Load()
 		if sn.reads == 0 {
 			return true

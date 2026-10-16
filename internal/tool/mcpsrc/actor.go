@@ -70,6 +70,7 @@ type actor struct {
 	started bool
 	frozen  bool
 	closed  bool
+	after   []func()
 	// signalReady asks the loop to close s.ready after it publishes the snapshot, so a reader that wakes reads the frozen state.
 	signalReady bool
 }
@@ -86,6 +87,10 @@ func (a *actor) run() {
 			m.handle(a)
 			a.checkFreeze()
 			a.publish()
+			for _, f := range a.after {
+				f()
+			}
+			a.after = nil
 			if a.signalReady {
 				a.signalReady = false
 				close(a.s.ready)
@@ -377,7 +382,8 @@ func (m setMsg) handle(a *actor) {
 	case len(a.entries) > 0:
 		a.startFirst()
 	}
-	m.reply <- a.statuses()
+	statuses := a.statuses()
+	a.after = append(a.after, func() { m.reply <- statuses })
 }
 
 // connectMsg asks for one attempt to connect the server name.
