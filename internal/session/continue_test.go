@@ -16,8 +16,12 @@ type inputBackend struct{ runs chan protocol.LogPart }
 
 func (*inputBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
-func (b *inputBackend) Run(_ context.Context, req turn.Request, out turn.Sink) error {
-	b.runs <- req.Input[0].Parts[0]
+func (b *inputBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
+	select {
+	case b.runs <- req.Input[0].Parts[0]:
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 	return out.Item(protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "ok"}}})
 }
 
