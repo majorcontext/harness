@@ -380,9 +380,11 @@ func (h *held) idle(ctx context.Context) {
 }
 
 // cancel marks every prompt in flight as cancelled and cancels the turns that
-// are admitted. It does not block.
+// are admitted. With no prompt in flight, it interrupts the session, which
+// stops an automatic turn and cancels a pending continue. It does not block.
 func (h *held) cancel(ctx context.Context) {
 	h.mu.Lock()
+	idle := len(h.prompts) == 0
 	var turns []*harness.Turn
 	for p := range h.prompts {
 		p.cancelled = true
@@ -393,6 +395,17 @@ func (h *held) cancel(ctx context.Context) {
 	h.mu.Unlock()
 	for _, t := range turns {
 		go h.cancelTurn(ctx, t)
+	}
+	if idle {
+		go h.interruptSession(ctx)
+	}
+}
+
+func (h *held) interruptSession(ctx context.Context) {
+	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptBudget)
+	defer cancel()
+	if err := h.sess.Interrupt(bg, protocol.Interrupt{}); err != nil && ctx.Err() == nil {
+		h.log.Warn("acp: interrupt failed", "session", h.id, "error", err.Error())
 	}
 }
 
