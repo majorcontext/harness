@@ -16,7 +16,8 @@ import (
 // with IsError; a failed connect or transport returns an error without the
 // endpoint.
 func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMessage) (protocol.ToolResult, error) {
-	if !s.owns(server) {
+	owner, e := s.find(server)
+	if e == nil {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not configured", server)
 	}
 	var in any
@@ -28,15 +29,18 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 	if !s.wait(ctx) {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q: %w", server, context.Cause(ctx))
 	}
-	if !s.server(server).up() {
-		if err := s.redial(ctx, server); err != nil {
+	if !owner.connected(e) {
+		if err := owner.redial(ctx, e); err != nil {
 			return protocol.ToolResult{}, err
 		}
 	}
-	sv := s.server(server)
+	sv := owner.serverOf(e)
 	if !sv.up() {
 		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not connected", server)
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(e.ctx, cancel)()
 	res, err := sv.client.CallTool(ctx, tool, in)
 	if err != nil {
 		return protocol.ToolResult{}, hide(server, err)
@@ -45,17 +49,21 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 	return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
 }
 
+func (s *Source) serverOf(e *entry) *server {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return e.sv
+}
+
 // redial dials a server that dropped after it connected. A server that is
 // retrying or parked returns the reason of its last failed connect instead.
-func (s *Source) redial(ctx context.Context, server string) error {
+func (s *Source) redial(ctx context.Context, e *entry) error {
 	s.mu.Lock()
-	h := *s.health[server]
+	h := e.health
 	s.mu.Unlock()
+	server := e.name
 	if h.reason == "" {
-		dctx, cancel := context.WithCancel(s.ctx)
-		defer cancel()
-		defer context.AfterFunc(ctx, cancel)()
-		if err := s.connect(dctx, server); err != nil {
+		if _, err := s.connect(ctx, e); err != nil {
 			if ctx.Err() != nil {
 				return fmt.Errorf("mcp: server %q: %w", server, context.Cause(ctx))
 			}

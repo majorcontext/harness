@@ -25,9 +25,6 @@ func (r *Runtime) bound(ctx context.Context) (context.Context, func(), error) {
 // mcpCall serves client/mcp.call. Every configured server is open to it;
 // the allowed-tools filter of a session does not apply.
 func (r *Runtime) mcpCall(ctx context.Context, server, tool string, args json.RawMessage) (protocol.ToolResult, error) {
-	if r.mcp == nil {
-		return protocol.ToolResult{}, fmt.Errorf("mcp: server %q is not configured", server)
-	}
 	ctx, done, err := r.bound(ctx)
 	if err != nil {
 		return protocol.ToolResult{}, err

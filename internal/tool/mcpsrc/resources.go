@@ -55,7 +55,8 @@ func (l lister) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	}
 	servers := []string{in.Server}
 	if in.Server == "" {
-		servers = slices.DeleteFunc(slices.Clone(l.s.names), func(n string) bool { return !l.s.server(n).resources() })
+		v := l.s.view()
+		servers = slices.DeleteFunc(slices.Clone(v.names), func(n string) bool { return !v.live[n].resources() })
 	}
 	var out struct {
 		Resources []resource `json:"resources"`
@@ -108,9 +109,10 @@ func (s *Source) list(ctx context.Context, name string) ([]mcp.Resource, bool, e
 }
 
 func (s *Source) resourceClient(name string) (*mcp.Client, error) {
-	sv := s.server(name)
+	v := s.view()
+	sv := v.live[name]
 	switch {
-	case !slices.Contains(s.names, name):
+	case !slices.Contains(v.names, name):
 		return nil, fmt.Errorf("mcp: server %q is not configured", name)
 	case !sv.up():
 		return nil, fmt.Errorf("mcp: server %q is not connected", name)

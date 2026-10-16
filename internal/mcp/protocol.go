@@ -33,6 +33,9 @@ const (
 
 	notificationInitialized = "notifications/initialized"
 	notificationCancelled   = "notifications/cancelled"
+
+	// NotificationToolsListChanged tells that the tool list of a server changed.
+	NotificationToolsListChanged = "notifications/tools/list_changed"
 )
 
 // JSON-RPC 2.0 standard error codes

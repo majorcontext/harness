@@ -156,7 +156,7 @@ type Runtime struct {
 	tree    *tree.Tree
 	// procs is nil without a WorkDir.
 	procs *process.Manager
-	// mcp is nil without MCP servers. mcpCfg is the config of the runtime source.
+	// mcp is the live set of runtime MCP servers. mcpCfg is the config of the runtime source.
 	mcp    *mcpsrc.Source
 	mcpCfg config.Config
 	// plugins is nil without plugins.
@@ -259,7 +259,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{MCPServers: r.mcp.Specs, Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			return nil, fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
@@ -725,9 +725,7 @@ func (r *Runtime) closeTools(ctx context.Context) bool {
 	if r.plugins != nil {
 		clean = closeBy(ctx, r.plugins.Close) && clean
 	}
-	if r.mcp != nil {
-		clean = closeBy(ctx, r.mcp.Close) && clean
-	}
+	clean = closeBy(ctx, r.mcp.Close) && clean
 	return clean
 }
 

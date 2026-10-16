@@ -963,6 +963,104 @@
           "type"
         ]
       },
+      "MCPServerSet": {
+        "properties": {
+          "mcp_servers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/MCPServerSpec"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mcp_servers"
+        ]
+      },
+      "MCPServerSpec": {
+        "properties": {
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "env": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "connect_timeout_s": {
+            "type": "integer"
+          },
+          "tool_loading": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "MCPServerStatus": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "parked": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "connected",
+          "attempts",
+          "parked"
+        ]
+      },
+      "MCPServers": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/MCPServerStatus"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "servers"
+        ]
+      },
       "Message": {
         "properties": {
           "id": {
@@ -2128,6 +2226,43 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/mcp/servers": {
+      "put": {
+        "operationId": "setMCPServers",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPServerSet"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServers"
                 }
               }
             },

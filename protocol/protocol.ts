@@ -277,6 +277,32 @@ export interface LogPart {
   results?: SearchResult[];
 }
 
+export interface MCPServerSet {
+  mcp_servers: Record<string, MCPServerSpec> | null;
+}
+
+export interface MCPServerSpec {
+  command?: string[];
+  env?: string[];
+  dir?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  connect_timeout_s?: number;
+  tool_loading?: string;
+}
+
+export interface MCPServerStatus {
+  name: string;
+  connected: boolean;
+  attempts: number;
+  parked: boolean;
+  reason?: string;
+}
+
+export interface MCPServers {
+  servers: MCPServerStatus[];
+}
+
 export interface Message {
   id: string;
   role: string;
@@ -623,6 +649,7 @@ export interface Operations {
   restartProcess: { query: Record<string, never>; request: void; response: ProcessStatus };
   processLogs: { query: { tail?: number }; request: void; response: ProcessLogs };
   workspaceChanges: { query: { scope?: string; dir?: string }; request: void; response: WorkspaceChanges };
+  setMCPServers: { query: Record<string, never>; request: MCPServerSet; response: MCPServers };
   health: { query: Record<string, never>; request: void; response: Health };
 }
 
@@ -654,5 +681,6 @@ export const routes = [
   { name: "restartProcess", method: "POST", path: "/processes/{name}/restart", status: 200, stream: false },
   { name: "processLogs", method: "GET", path: "/processes/{name}/logs", status: 200, stream: false },
   { name: "workspaceChanges", method: "GET", path: "/workspace/changes", status: 200, stream: false },
+  { name: "setMCPServers", method: "PUT", path: "/mcp/servers", status: 200, stream: false },
   { name: "health", method: "GET", path: "/health", status: 200, stream: false },
 ] as const;

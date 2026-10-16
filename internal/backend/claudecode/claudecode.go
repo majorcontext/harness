@@ -105,7 +105,7 @@ type Backend struct {
 	p       config.Provider
 	system  string
 	workDir string
-	servers map[string]config.MCPServerSpec
+	servers func() map[string]config.MCPServerSpec
 	// toolLoading is the mcp_tool_loading mode of the config.
 	toolLoading string
 }
@@ -115,7 +115,7 @@ type Backend struct {
 // CLI runs in workDir, or in the process directory when workDir is empty.
 // The CLI connects the MCP servers itself. toolLoading is mcp_tool_loading,
 // which sets ENABLE_TOOL_SEARCH of the CLI.
-func New(p config.Provider, system []string, workDir string, servers map[string]config.MCPServerSpec, toolLoading string) *Backend {
+func New(p config.Provider, system []string, workDir string, servers func() map[string]config.MCPServerSpec, toolLoading string) *Backend {
 	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, servers: servers, toolLoading: toolLoading}
 }
 
@@ -185,7 +185,11 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		"--include-partial-messages", "--thinking-display", "summarized", "--disallowedTools", disallowed}
 	tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
 	args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
-	mcpArgs, err := r.mcpArgs(ctx, req, b.servers)
+	var live map[string]config.MCPServerSpec
+	if b.servers != nil {
+		live = b.servers()
+	}
+	mcpArgs, err := r.mcpArgs(ctx, req, live)
 	if err != nil {
 		return nil, err
 	}
