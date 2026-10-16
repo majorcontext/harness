@@ -269,16 +269,20 @@ func (g *grepper) file(ctx context.Context, path, rel string) error {
 	return nil
 }
 
-// readCtx reads at most limit bytes of r, in chunks, and stops when ctx ends.
+// readCtx reads at most limit bytes of r, in reads of at most readChunk bytes,
+// and stops when ctx ends. Its buffer grows with the data.
 func readCtx(ctx context.Context, r io.Reader, limit int) ([]byte, error) {
-	var data []byte
-	buf := make([]byte, readChunk)
+	data := make([]byte, 0, 512)
 	for len(data) < limit {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		n, err := r.Read(buf[:min(readChunk, limit-len(data))])
-		data = append(data, buf[:n]...)
+		if len(data) == cap(data) {
+			data = append(data, 0)[:len(data)]
+		}
+		end := min(cap(data), len(data)+readChunk, limit)
+		n, err := r.Read(data[len(data):end])
+		data = data[:len(data)+n]
 		if err == io.EOF {
 			return data, nil
 		}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 )
 
@@ -106,7 +107,7 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(io.Discard, r.Body)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	key := string(msg.ID)
+	key := requestKey(msg.ID)
 	reg.mu.Lock()
 	reg.inflight[key] = cancel
 	reg.mu.Unlock()
@@ -123,6 +124,20 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reg.writeResult(w, msg.ID, result)
 }
 
+// requestKey is the key of a JSON-RPC id in inflight: a string id and a number
+// id never share a key, and equal numbers share one however they are spelled.
+func requestKey(id json.RawMessage) string {
+	var str string
+	if json.Unmarshal(id, &str) == nil {
+		return "s:" + str
+	}
+	var num float64
+	if json.Unmarshal(id, &num) == nil {
+		return "n:" + strconv.FormatFloat(num, 'g', -1, 64)
+	}
+	return "r:" + string(id)
+}
+
 // cancel ends the running request that a notifications/cancelled payload
 // names. An unknown or finished request is ignored.
 func (reg *Registry) cancel(params json.RawMessage) {
@@ -131,7 +146,7 @@ func (reg *Registry) cancel(params json.RawMessage) {
 		return
 	}
 	reg.mu.Lock()
-	cancel := reg.inflight[string(p.RequestID)]
+	cancel := reg.inflight[requestKey(p.RequestID)]
 	reg.mu.Unlock()
 	if cancel != nil {
 		cancel()
