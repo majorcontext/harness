@@ -210,9 +210,7 @@ func TestCustomToolWithClientAPI(t *testing.T) {
 		t.Fatalf("Tools() = %+v", defs)
 	}
 
-	resp, err := h.ExecuteTool(context.Background(), &pub.ToolExecuteRequest{
-		SessionID: "s1", CallID: "tc1", Tool: "upload_file", Args: json.RawMessage(`{}`),
-	})
+	resp, err := executeTool(h, &pub.ToolExecuteRequest{SessionID: "s1", CallID: "tc1", Tool: "upload_file", Args: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +475,7 @@ func TestMalformedResponsesFailTheHook(t *testing.T) {
 	}}, bad)
 	params := h.ChatParams(context.Background(), &pub.ChatParamsRequest{SessionID: "s1", Params: pub.ChatParams{Model: "a/b"}})
 	out := h.ToolExecuteAfter(context.Background(), &pub.ToolExecuteAfterRequest{SessionID: "s1", Output: []pub.Part{pub.TextPart("kept")}})
-	_, err := h.ExecuteTool(context.Background(), &pub.ToolExecuteRequest{SessionID: "s1", Tool: "bad_tool", Args: json.RawMessage(`{}`)})
+	_, err := executeTool(h, &pub.ToolExecuteRequest{SessionID: "s1", Tool: "bad_tool", Args: json.RawMessage(`{}`)})
 	if err == nil || !strings.Contains(err.Error(), `unknown part type "bogus"`) {
 		t.Errorf("ExecuteTool error = %v, want the unknown part type", err)
 	}
@@ -668,4 +666,12 @@ func TestNilChatParamsAndMessageResponsesChangeNothing(t *testing.T) {
 	if len(msg.Parts) != 1 || msg.Parts[0].Text != "changed" {
 		t.Errorf("message parts = %+v, want the first plugin's change kept after a nil response", msg.Parts)
 	}
+}
+
+func executeTool(h *Host, req *pub.ToolExecuteRequest) (resp *pub.ToolExecuteResponse, err error) {
+	run, err := h.StartTool(context.Background(), req.Tool)
+	if err == nil {
+		resp, err = run(context.Background(), req)
+	}
+	return resp, err
 }

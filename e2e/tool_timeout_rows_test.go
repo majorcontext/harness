@@ -11,15 +11,9 @@ var toolTimeoutRows = map[string]runtimeRow{
 
 // allRowDispositions returns runtimeRows and toolTimeoutRows as one map.
 func allRowDispositions() map[string]runtimeRow {
-	return maps.Collect(func(yield func(string, runtimeRow) bool) {
-		for _, m := range []map[string]runtimeRow{runtimeRows, toolTimeoutRows} {
-			for k, v := range m {
-				if !yield(k, v) {
-					return
-				}
-			}
-		}
-	})
+	all := maps.Clone(runtimeRows)
+	maps.Copy(all, toolTimeoutRows)
+	return all
 }
 
 // rowDisposition returns the disposition of the row name.

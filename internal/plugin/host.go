@@ -330,19 +330,7 @@ func (h *Host) ShellEnv(ctx context.Context, req *pub.ShellEnvRequest) map[strin
 	return env
 }
 
-// ExecuteTool routes a plugin-provided tool call to the plugin that declares
-// it in its manifest.
-func (h *Host) ExecuteTool(ctx context.Context, req *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error) {
-	run, err := h.StartTool(ctx, req.Tool)
-	if err != nil {
-		return nil, err
-	}
-	return run(ctx, req)
-}
-
-// StartTool starts the plugin that declares tool, if it is not running, and
-// returns the function that sends one tool/execute request to it. The start
-// takes ctx alone, so a caller can put a deadline on the request only.
+// StartTool starts the plugin of tool and returns the sender of its tool/execute request, so a deadline can cover the request only.
 func (h *Host) StartTool(ctx context.Context, tool string) (func(context.Context, *pub.ToolExecuteRequest) (*pub.ToolExecuteResponse, error), error) {
 	for _, inst := range h.instances {
 		for _, def := range inst.spec.Manifest.Tools {

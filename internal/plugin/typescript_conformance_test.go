@@ -105,12 +105,7 @@ func TestTypeScriptSDKConformance(t *testing.T) {
 	}
 
 	// Custom tool execution.
-	resp, err := h.ExecuteTool(context.Background(), &pub.ToolExecuteRequest{
-		SessionID: "s1",
-		CallID:    "c3",
-		Tool:      "echo_reverse",
-		Args:      json.RawMessage(`{"text":"harness"}`),
-	})
+	resp, err := executeTool(h, &pub.ToolExecuteRequest{SessionID: "s1", CallID: "c3", Tool: "echo_reverse", Args: json.RawMessage(`{"text":"harness"}`)})
 	if err != nil {
 		t.Fatalf("ExecuteTool: %v", err)
 	}
