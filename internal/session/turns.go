@@ -455,12 +455,6 @@ func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error))
 	if r != nil && r.kind == kindJudge && !a.goalStopped(why) {
 		r = nil
 	}
-	if turnID == "" || a.run != nil && turnID == a.run.id {
-		if err := a.cancelContinue(); err != nil {
-			reply(struct{}{}, err)
-			return
-		}
-	}
 	switch {
 	case r == nil && turnID == "":
 		reply(struct{}{}, nil)
@@ -539,10 +533,6 @@ func (a *Actor) End(ctx context.Context) error {
 	err := a.halt(ctx, func(reply func(struct{}, error)) {
 		if a.turnRuns() || len(a.state.Unfinished()) > 0 {
 			reply(struct{}{}, ErrBusy)
-			return
-		}
-		if err := a.cancelContinue(); err != nil {
-			reply(struct{}{}, err)
 			return
 		}
 		a.requestStop(ErrEnded)

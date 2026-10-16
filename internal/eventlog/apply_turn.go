@@ -116,7 +116,7 @@ func (s *State) applyResumed(e protocol.TurnResumed) error {
 	return nil
 }
 
-func (s *State) applyEnded(e protocol.TurnEnded, at time.Time) error {
+func (s *State) applyEnded(e protocol.TurnEnded) error {
 	if s.turn.ID == e.TurnID && s.turn.Suspended {
 		return illegal("turn %s is suspended", e.TurnID)
 	}
@@ -158,31 +158,7 @@ func (s *State) applyEnded(e protocol.TurnEnded, at time.Time) error {
 	}
 	s.turn = Turn{}
 	s.lastEnded = e
-	s.armContinue(e, at)
 	return nil
-}
-
-// MaxContinues is the number of usage_reset inputs in a row after which a
-// usage limit arms no further continue. ContinueWindow bounds how far past
-// the end of a turn a reset time may lie.
-const (
-	MaxContinues   = 2
-	ContinueWindow = 24 * time.Hour
-)
-
-// armContinue sets the pending continue of the turn that ended at at: a root
-// session with no live goal, a usage limit that states a reset time within
-// ContinueWindow, and fewer than MaxContinues usage_reset inputs in a row.
-func (s *State) armContinue(e protocol.TurnEnded, at time.Time) {
-	s.continueAt = time.Time{}
-	if e.Cause != protocol.CauseProviderExhausted {
-		s.continued = 0
-		return
-	}
-	reset := time.Unix(e.ResetsAt, 0)
-	if e.ResetsAt > 0 && s.parentID == "" && !liveGoal(s.goalState()) && s.continued < MaxContinues && !reset.After(at.Add(ContinueWindow)) {
-		s.continueAt = reset
-	}
 }
 
 func (s *State) applyRequestOpened(e protocol.RequestOpened) error {
@@ -233,12 +209,4 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 func (s *State) isOpen(id string) bool {
 	_, ok := s.requests[id]
 	return ok
-}
-
-func (s *State) applyContinueCancelled(e protocol.ContinueCancelled) error {
-	if s.continueAt.IsZero() || s.continueAt.Unix() != e.ContinueAt {
-		return illegal("continue.cancelled names %d, and the pending continue is %v", e.ContinueAt, s.continueAt)
-	}
-	s.continueAt = time.Time{}
-	return nil
 }

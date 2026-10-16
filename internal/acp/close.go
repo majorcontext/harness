@@ -9,8 +9,8 @@ import (
 )
 
 // closeSession cancels the work of a session as session/cancel does, waits for
-// the prompts to answer and for the pump to send their updates, cancels a pending
-// continue after a usage limit, then stops the pump and releases the session. The log stays.
+// the prompts to answer and for the pump to send their updates, then stops the
+// pump and releases the session. The log stays.
 func (a *agent) closeSession(ctx context.Context, params json.RawMessage) (any, error) {
 	return a.ordered(ctx, params, func() (any, error) { return a.closeNow(ctx, params) })
 }
@@ -33,10 +33,6 @@ func (a *agent) closeNow(ctx context.Context, params json.RawMessage) (any, erro
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
 	defer cancel()
 	h.idle(bg)
-	h.awaitStop(bg)
-	if h.sess.Snapshot().ContinueAt != 0 {
-		h.interruptSession(bg)
-	}
 	h.flush(bg, h.sess.Snapshot().HeadSeq)
 	h.close()
 	if err := h.sess.Release(bg); err != nil && !errors.Is(err, harness.ErrSessionNotOwned) {

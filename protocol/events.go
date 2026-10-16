@@ -147,7 +147,6 @@ const (
 	KindContextMeasured    = "context.measured"
 	KindBackendState       = "backend.state"
 	KindToolResultRetained = "tool_result.retained"
-	KindContinueCancelled  = "continue.cancelled"
 )
 
 // Settings are the session settings other than the model.
@@ -343,13 +342,11 @@ type GoalEvaluated struct {
 }
 
 // GoalChanged moves the goal to another state. A paused goal resumes at
-// RetryAt. A blocked goal has no RetryAt and resumes at an input. UsageLimit
-// marks a pause until a usage limit resets, which no count includes.
+// RetryAt. A blocked goal has no RetryAt and resumes at an input.
 type GoalChanged struct {
-	State      GoalState `json:"state"`
-	Reason     string    `json:"reason,omitempty"`
-	RetryAt    time.Time `json:"retry_at,omitzero"`
-	UsageLimit bool      `json:"usage_limit,omitempty"`
+	State   GoalState `json:"state"`
+	Reason  string    `json:"reason,omitempty"`
+	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
 // CompactionApplied replaces the records from FromSeq to ToSeq with Summary, the plain text of the summary.
@@ -494,14 +491,6 @@ func (ContextMeasured) Kind() string { return KindContextMeasured }
 
 // Kind returns KindBackendState.
 func (BackendState) Kind() string { return KindBackendState }
-
-// ContinueCancelled cancels the pending continue (ContinueAt, Unix seconds).
-type ContinueCancelled struct {
-	ContinueAt int64 `json:"continue_at"`
-}
-
-// Kind returns KindContinueCancelled.
-func (ContinueCancelled) Kind() string { return KindContinueCancelled }
 
 // Kind returns KindToolResultRetained.
 func (ToolResultRetained) Kind() string { return KindToolResultRetained }
