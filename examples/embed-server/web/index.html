@@ -311,6 +311,7 @@ let wanted = false;
 let handoff = false;
 const giveUp = async () => {
   handoff = false;
+  await opening?.catch(() => {});
   reset();
   const old = h;
   h = null;
@@ -323,6 +324,7 @@ const giveUp = async () => {
 // take leaves the current harness and tries the persistent store. It falls
 // back to a memory store while another tab holds the store.
 const take = async () => {
+  await opening?.catch(() => {});
   reset();
   await h?.close();
   h = null;
@@ -345,11 +347,17 @@ channel.onmessage = async ({ data }) => {
     open();
   }
 };
+let taking = false;
 $("here").addEventListener("click", async () => {
-  if (running) return;
+  if (running || taking) return;
+  taking = true;
   wanted = true;
-  if (await take()) wanted = false;
-  else channel.postMessage("use-here");
+  try {
+    if (await take()) wanted = false;
+    else channel.postMessage("use-here");
+  } finally {
+    taking = false;
+  }
   open();
 });
 
