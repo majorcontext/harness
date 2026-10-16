@@ -152,11 +152,11 @@ const call = (method, params) =>
 
 const connect = async (persist) => {
   h = await createHarness(persist ? { ...options, store: { persist: true } } : options);
-  persisted = persist;
   writer = h.stream.writable.getWriter();
   pump(h.stream.readable.getReader());
   $("here").hidden = persist;
   await call("initialize", { protocolVersion: 1, clientCapabilities: {} });
+  persisted = persist;
 };
 try {
   await connect(true);
