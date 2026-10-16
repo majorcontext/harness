@@ -50,6 +50,9 @@ func (f *mcpFlags) Set(v string) error {
 	if !ok || name == "" || u == "" {
 		return errors.New("want name=url[,header=Name,env=VAR]")
 	}
+	if strings.ContainsAny(name, "/?#%") || strings.Contains(name, "__") {
+		return fmt.Errorf("name %q must be one path segment with no \"__\"", name)
+	}
 	m := mcpServer{Name: name, URL: u}
 	var env string
 	for _, kv := range parts[1:] {
