@@ -115,6 +115,7 @@ var bifrostFireworksContextWindows = map[string]int{
 	"kimi-latest":                    1048576,
 	"minimax-latest":                 512000,
 	"minimax-m3":                     512000,
+	"muse-spark-open":                1048576,
 	"nemotron-3-ultra-nvfp4":         262144,
 	"nemotron-lightning-3p5-30b-a3b": 262144,
 	"qwen-max-latest":                262144,
