@@ -10,11 +10,13 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+const engineGit = "git"
+
 // GitEngine reads a git work tree.
 type GitEngine struct{}
 
-// Name returns protocol.EngineGit.
-func (GitEngine) Name() string { return protocol.EngineGit }
+// Name returns "git".
+func (GitEngine) Name() string { return engineGit }
 
 // Open finds the work tree root of dir below ceiling. GIT_CEILING_DIRECTORIES
 // has no escape for a colon in a path, so git can walk past a ceiling that

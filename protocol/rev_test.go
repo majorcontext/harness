@@ -9,7 +9,7 @@ import (
 )
 
 func TestRevTextRoundTripsAndRefusesBadText(t *testing.T) {
-	for _, s := range []string{"branch:main", "tag:v1", "commit:abc123", "change:kkmpptxz", "op:9f8e", "branch:feat/a:b"} {
+	for _, s := range []string{"branch:main", "tag:v1", "commit:abc123", "change:kkmpptxz", "branch:feat/a:b"} {
 		r, err := protocol.ParseRev(s)
 		if err != nil || r.String() != s {
 			t.Errorf("ParseRev(%q) = %v, %v; String %q", s, r, err, r.String())

@@ -6,9 +6,6 @@ const (
 	ScopeUncommitted = "uncommitted"
 )
 
-// EngineGit is the Engine of a git work tree.
-const EngineGit = "git"
-
 // WorkspaceChanges is the diff of a work tree. Files is complete. Patch ends at
 // the last whole file that fits its cap, and Truncated reports a cut. HeadRev is
 // the zero Rev, which JSON omits, when the head has no commit.

@@ -20,7 +20,8 @@ type Fixture struct {
 	// New returns a work tree with a head and a base. Its seed.txt holds
 	// "seed\n" in both, and it holds no other file.
 	New func(t *testing.T) string
-	// Unborn returns a work tree whose head has no commit.
+	// Unborn returns a work tree whose head has no commit. It may be nil for
+	// an engine that has no such state.
 	Unborn func(t *testing.T) string
 	// NoBase returns a work tree with a head and no base.
 	NoBase func(t *testing.T) string
@@ -167,6 +168,9 @@ func outsideIsNotARepo(t *testing.T, fx Fixture) {
 }
 
 func unbornHead(t *testing.T, fx Fixture) {
+	if fx.Unborn == nil {
+		t.Skip("engine has no unborn head")
+	}
 	c := mustRead(t, fx, fx.Unborn(t), protocol.ScopeUncommitted)
 	if c.HeadRev != (protocol.Rev{}) {
 		t.Errorf("head_rev = %q, want none", c.HeadRev)
