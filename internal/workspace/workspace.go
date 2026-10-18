@@ -50,13 +50,17 @@ type Engine interface {
 type Repo interface {
 	// Root is the root directory of the work tree.
 	Root() string
-	// Head returns the head. Its Rev is the zero Rev when the head has no commit.
+	// Head returns the revision that the working-copy edits are relative to.
+	// Its Rev is the zero Rev when that revision is a merge of several parents
+	// or has no commit; the edits are then against the automatic merge of the
+	// parents, or the empty tree.
 	Head(ctx context.Context) (Head, error)
 	// Base returns the base of the branch scope. It wraps ErrNoBase when the
 	// work tree has no base; any other error is a failure of the engine.
 	Base(ctx context.Context, head Head) (Base, error)
 	// Diff lists the changed files and the patch against base. A zero base
-	// means the head. The patch ends at the last whole file within patchCap.
+	// means the head. The patch is a git-format unified diff and ends at the
+	// last whole file within patchCap.
 	Diff(ctx context.Context, head Head, base Base, patchCap int) (files []protocol.ChangedFile, patch string, truncated bool, err error)
 }
 
@@ -101,7 +105,7 @@ func ChangesWith(ctx context.Context, engines []Engine, root, dir, scope string)
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	c, err := changes(ctx, engines, root, abs, real, ceiling, scope, dir != "")
-	if ctx.Err() != nil || errors.Is(err, errMetadataTooLarge) {
+	if ctx.Err() != nil {
 		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: request exceeded its time budget diffing a large change set", ErrTooManyChanges)
 	}
 	return c, err

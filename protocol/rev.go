@@ -9,14 +9,13 @@ import (
 // RevKind names the kind of a revision. Only a VCS engine gives an ID meaning.
 type RevKind string
 
-// Revision kinds. RevBranch is a git branch or a jj bookmark, RevChange and
-// RevOp are jj kinds.
+// Revision kinds. RevBranch is a git branch or a jj bookmark, and RevChange is
+// a jj change.
 const (
 	RevBranch RevKind = "branch"
 	RevTag    RevKind = "tag"
 	RevCommit RevKind = "commit"
 	RevChange RevKind = "change"
-	RevOp     RevKind = "op"
 )
 
 // Rev names a revision or a change. Its text form, and its JSON form, is
@@ -39,7 +38,7 @@ func ParseRev(s string) (Rev, error) {
 		return Rev{}, fmt.Errorf("%w: %q has no ':'", ErrInvalidRev, s)
 	}
 	switch k := RevKind(kind); k {
-	case RevBranch, RevTag, RevCommit, RevChange, RevOp:
+	case RevBranch, RevTag, RevCommit, RevChange:
 		if id == "" {
 			return Rev{}, fmt.Errorf("%w: %q has an empty ID", ErrInvalidRev, s)
 		}
