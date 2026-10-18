@@ -18,7 +18,7 @@ func TestRevTextRoundTripsAndRefusesBadText(t *testing.T) {
 	if r, _ := protocol.ParseRev("branch:a:b"); r.ID != "a:b" {
 		t.Errorf("ID = %q, want the text after the first colon", r.ID)
 	}
-	for _, s := range []string{"", "main", "commit:", ":abc", "Commit:abc", "ref:abc"} {
+	for _, s := range []string{"", "main", "commit:", ":abc", "Commit:abc", "ref:abc", "op:9f8e"} {
 		if _, err := protocol.ParseRev(s); !errors.Is(err, protocol.ErrInvalidRev) {
 			t.Errorf("ParseRev(%q) error = %v, want ErrInvalidRev", s, err)
 		}
