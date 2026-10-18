@@ -30,6 +30,7 @@ type state struct {
 	Digest   string
 	Unborn   bool
 	NoBase   bool
+	Merge    bool
 	Baseline map[string]string
 }
 
@@ -39,6 +40,8 @@ type FakeOptions struct {
 	Unborn bool
 	// NoBase makes a work tree whose base is missing.
 	NoBase bool
+	// Merge makes a head of several parents: no head revision, and a base.
+	Merge bool
 }
 
 // Init makes dir a Fake work tree whose baseline is the files that dir holds.
@@ -47,7 +50,7 @@ func Init(dir string, o FakeOptions) error {
 	if err != nil {
 		return err
 	}
-	st := state{Ops: 1, Digest: digest(files), Unborn: o.Unborn, NoBase: o.NoBase, Baseline: files}
+	st := state{Ops: 1, Digest: digest(files), Unborn: o.Unborn, NoBase: o.NoBase, Merge: o.Merge, Baseline: files}
 	if o.Unborn {
 		st.Baseline = map[string]string{}
 	}
@@ -97,7 +100,7 @@ func (r repo) Head(context.Context) (workspace.Head, error) {
 			return workspace.Head{}, err
 		}
 	}
-	if st.Unborn {
+	if st.Unborn || st.Merge {
 		return workspace.Head{}, nil
 	}
 	return workspace.Head{Rev: change(st.Ops)}, nil
@@ -142,7 +145,13 @@ func (r repo) Diff(_ context.Context, _ workspace.Head, _ workspace.Base, _ int)
 			f = protocol.ChangedFile{Path: p, Status: "modified", Additions: lines(cur), Deletions: lines(old)}
 		}
 		files = append(files, f)
-		_, _ = fmt.Fprintf(&patch, "diff --fake %s\n", p)
+		from, to := "a/"+p, "b/"+p
+		if !had {
+			from = "/dev/null"
+		} else if !has {
+			to = "/dev/null"
+		}
+		_, _ = fmt.Fprintf(&patch, "diff --git a/%s b/%s\n--- %s\n+++ %s\n", p, p, from, to)
 	}
 	return files, patch.String(), false, nil
 }
