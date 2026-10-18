@@ -1,6 +1,6 @@
 package protocol
 
-// Workspace change scopes: the merge base with the default branch, or HEAD.
+// Workspace change scopes: the base of the branch scope, or the head revision.
 const (
 	ScopeBranch      = "branch"
 	ScopeUncommitted = "uncommitted"

@@ -47,7 +47,8 @@ func (g gitRepo) Head(ctx context.Context) (Head, error) {
 	return h, nil
 }
 
-// Base returns the merge base of head with the default branch.
+// Base returns the merge base of head with the default branch. A git work
+// tree has one parent, so a zero head Rev means an unborn HEAD.
 func (g gitRepo) Base(ctx context.Context, head Head) (Base, error) {
 	if head.Rev.ID == "" {
 		return Base{}, fmt.Errorf("%w: HEAD has no commit yet", ErrNoBase)

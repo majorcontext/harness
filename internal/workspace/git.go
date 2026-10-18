@@ -101,7 +101,7 @@ func gitOut(ctx context.Context, dir string, extraEnv []string, args ...string) 
 
 // errMetadataTooLarge reports a gitOutCapped overflow. Metadata must stay
 // complete, so an overflow is too_many_changes, never a cut.
-var errMetadataTooLarge = fmt.Errorf("%w: request exceeded its time budget diffing a large change set", ErrTooManyChanges)
+var errMetadataTooLarge = fmt.Errorf("%w: file list exceeded its size bound", ErrTooManyChanges)
 
 // gitOutCapped is gitOut that reads at most maxBytes of stdout.
 func gitOutCapped(ctx context.Context, dir string, extraEnv []string, maxBytes int, args ...string) (string, error) {

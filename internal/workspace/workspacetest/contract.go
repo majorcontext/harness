@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/internal/workspace"
@@ -23,6 +24,9 @@ type Fixture struct {
 	// Unborn returns a work tree whose head has no commit. It may be nil for
 	// an engine that has no such state.
 	Unborn func(t *testing.T) string
+	// Merge returns a work tree whose head has several parents, with a base.
+	// It may be nil for an engine that has no such state.
+	Merge func(t *testing.T) string
 	// NoBase returns a work tree with a head and no base.
 	NoBase func(t *testing.T) string
 	// Outside returns a directory that is in no work tree.
@@ -58,6 +62,8 @@ var rows = []struct {
 	{"a rename is reported as a rename or as a delete and an add", renameReported},
 	{"a directory outside any repository answers not_a_repo", outsideIsNotARepo},
 	{"an unborn head gives no head_rev and no error", unbornHead},
+	{"a head of several parents gives no head_rev and the edit alone", mergeHead},
+	{"the patch is a git-format diff of the reported files", patchFormat},
 	{"a missing base gives no_base", missingBase},
 	{"reads never write", readsNeverWrite},
 }
@@ -174,6 +180,44 @@ func unbornHead(t *testing.T, fx Fixture) {
 	c := mustRead(t, fx, fx.Unborn(t), protocol.ScopeUncommitted)
 	if c.HeadRev != (protocol.Rev{}) {
 		t.Errorf("head_rev = %q, want none", c.HeadRev)
+	}
+}
+
+func mergeHead(t *testing.T, fx Fixture) {
+	if fx.Merge == nil {
+		t.Skip("engine has no head of several parents")
+	}
+	dir := fx.Merge(t)
+	write(t, dir, "seed.txt", "changed\n")
+	c := mustRead(t, fx, dir, protocol.ScopeUncommitted)
+	wantFiles(t, c, "seed.txt modified")
+	if c.HeadRev != (protocol.Rev{}) {
+		t.Errorf("head_rev = %q, want none", c.HeadRev)
+	}
+	b := mustRead(t, fx, dir, protocol.ScopeBranch)
+	if b.HeadRev != (protocol.Rev{}) || b.Base == nil || b.Base.Rev == (protocol.Rev{}) {
+		t.Errorf("branch scope: head_rev = %q, base = %+v; want no head_rev and a base revision", b.HeadRev, b.Base)
+	}
+}
+
+func patchFormat(t *testing.T, fx Fixture) {
+	dir := fx.New(t)
+	write(t, dir, "seed.txt", "changed\n")
+	write(t, dir, "new.txt", "new\n")
+	c := mustRead(t, fx, dir, protocol.ScopeUncommitted)
+	var got, want []string
+	for _, line := range strings.Split(c.Patch, "\n") {
+		if p, ok := strings.CutPrefix(line, "diff --git "); ok {
+			got = append(got, p)
+		}
+	}
+	for _, f := range c.Files {
+		want = append(want, "a/"+f.Path+" b/"+f.Path)
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("patch headers = %q, want %q", got, want)
 	}
 }
 

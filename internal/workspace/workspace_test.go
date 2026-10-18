@@ -401,7 +401,7 @@ func TestChangesRefusals(t *testing.T) {
 		{"a colon in the root does not reach an outer repository", inner, inner, protocol.ScopeUncommitted, nil, workspace.ErrNotRepo, `not_a_repo: "` + inner + `" is not a work tree of a known VCS`},
 		{"branch scope with no common ancestor", root, "unrelated", "", nil, workspace.ErrNoBase, "no_base: HEAD and origin/main share no common ancestor"},
 		{"an ended deadline", filters, "", protocol.ScopeUncommitted, canceled, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
-		{"a flood of filter drivers", filters, "", protocol.ScopeUncommitted, nil, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
+		{"a flood of filter drivers", filters, "", protocol.ScopeUncommitted, nil, workspace.ErrTooManyChanges, "too_many_changes: file list exceeded its size bound"},
 	}
 	for _, row := range rows {
 		ctx := row.ctx
@@ -499,6 +499,7 @@ func fakeFixture(t *testing.T) workspacetest.Fixture {
 		Engine:         workspacetest.Fake{},
 		New:            tree(workspacetest.FakeOptions{}),
 		Unborn:         tree(workspacetest.FakeOptions{Unborn: true}),
+		Merge:          tree(workspacetest.FakeOptions{Merge: true}),
 		NoBase:         tree(workspacetest.FakeOptions{NoBase: true}),
 		Outside:        func(t *testing.T) string { return t.TempDir() },
 		Operations:     ops,

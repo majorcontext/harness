@@ -51,11 +51,12 @@ type Repo interface {
 	// Root is the root directory of the work tree.
 	Root() string
 	// Head returns the revision that the working-copy edits are relative to.
-	// Its Rev is the zero Rev when that revision is a merge of several parents
-	// or has no commit; the edits are then against the automatic merge of the
-	// parents, or the empty tree.
+	// Its Rev is the zero Rev when no single revision fits: several parents
+	// (the edits are against their automatic merge) or no commit yet. A zero
+	// Rev does not say which; the Repo tells from its own state.
 	Head(ctx context.Context) (Head, error)
-	// Base returns the base of the branch scope. It wraps ErrNoBase when the
+	// Base returns the base of the branch scope. With several parents it is
+	// the base of their automatic merge. It wraps ErrNoBase when the
 	// work tree has no base; any other error is a failure of the engine.
 	Base(ctx context.Context, head Head) (Base, error)
 	// Diff lists the changed files and the patch against base. A zero base
@@ -111,7 +112,7 @@ func ChangesWith(ctx context.Context, engines []Engine, root, dir, scope string)
 	return c, err
 }
 
-// resolve returns the absolute dir, its real path, and the git ceiling: the
+// resolve returns the absolute dir, its real path, and the ceiling: the
 // parent of root for an explicit dir, or none for root itself.
 func resolve(root, dir string) (abs, real, ceiling string, err error) {
 	if dir == "" {
@@ -131,7 +132,7 @@ func resolve(root, dir string) (abs, real, ceiling string, err error) {
 }
 
 // within checks dir after symlinks, so a symlink under root cannot point
-// outside it, and rejects a missing dir before any git subprocess runs.
+// outside it, and rejects a missing dir before any engine runs.
 func within(root, dir string) (real, ceiling string, err error) {
 	info, err := os.Stat(dir)
 	if err != nil {
