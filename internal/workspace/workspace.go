@@ -59,7 +59,8 @@ type Repo interface {
 	// work tree has no base; any other error is a failure of the engine.
 	Base(ctx context.Context, head Head) (Base, error)
 	// Diff lists the changed files and the patch against base. A zero base
-	// means the head. The patch is a git-format unified diff and ends at the last whole file within patchCap.
+	// means the head. The patch is a git-format unified diff and ends at the
+	// last whole file within patchCap.
 	Diff(ctx context.Context, head Head, base Base, patchCap int) (files []protocol.ChangedFile, patch string, truncated bool, err error)
 }
 
