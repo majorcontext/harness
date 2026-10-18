@@ -47,19 +47,10 @@ func (g gitRepo) Head(ctx context.Context) (Head, error) {
 	return h, nil
 }
 
-// unborn reports whether HEAD names no commit yet.
-func (g gitRepo) unborn(ctx context.Context) (bool, error) {
-	if _, err := gitOut(ctx, g.root, nil, "rev-parse", "--verify", "-q", "HEAD"); err != nil {
-		return ctx.Err() == nil, ctx.Err()
-	}
-	return false, nil
-}
-
-// Base returns the merge base of HEAD with the default branch.
-func (g gitRepo) Base(ctx context.Context, _ Head) (Base, error) {
-	if unborn, err := g.unborn(ctx); err != nil {
-		return Base{}, err
-	} else if unborn {
+// Base returns the merge base of head with the default branch. A git work
+// tree has one parent, so a zero head Rev means an unborn HEAD.
+func (g gitRepo) Base(ctx context.Context, head Head) (Base, error) {
+	if head.Rev.ID == "" {
 		return Base{}, fmt.Errorf("%w: HEAD has no commit yet", ErrNoBase)
 	}
 	display, revision, found := defaultBranchRef(ctx, g.root)
@@ -69,7 +60,7 @@ func (g gitRepo) Base(ctx context.Context, _ Head) (Base, error) {
 		}
 		return Base{}, fmt.Errorf("%w: no default branch found (checked origin/HEAD, origin/main, origin/master)", ErrNoBase)
 	}
-	mb, err := gitOut(ctx, g.root, nil, "merge-base", "HEAD", revision)
+	mb, err := gitOut(ctx, g.root, nil, "merge-base", head.Rev.ID, revision)
 	if err != nil {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && ctx.Err() == nil && exitErr.ExitCode() == 1 {
 			return Base{}, fmt.Errorf("%w: HEAD and %s share no common ancestor", ErrNoBase, display)
@@ -81,22 +72,17 @@ func (g gitRepo) Base(ctx context.Context, _ Head) (Base, error) {
 
 // Diff diffs the work tree against base, or against HEAD for a zero base.
 // An unborn HEAD diffs against the empty tree.
-func (g gitRepo) Diff(ctx context.Context, _ Head, base Base, patchCap int) ([]protocol.ChangedFile, string, bool, error) {
-	unborn, err := g.unborn(ctx)
-	if err != nil {
-		return nil, "", false, err
-	}
-	head, treeish := "HEAD", base.Rev.ID
+func (g gitRepo) Diff(ctx context.Context, head Head, base Base, patchCap int) ([]protocol.ChangedFile, string, bool, error) {
+	treeish := base.Rev.ID
 	switch {
-	case unborn:
-		head = ""
-		if treeish == "" {
-			if treeish, err = emptyTree(ctx, g.root); err != nil {
-				return nil, "", false, err
-			}
+	case treeish != "":
+	case head.Rev.ID == "":
+		var err error
+		if treeish, err = emptyTree(ctx, g.root); err != nil {
+			return nil, "", false, err
 		}
-	case treeish == "":
+	default:
 		treeish = "HEAD"
 	}
-	return changeSet(ctx, g.root, head, treeish, patchCap)
+	return changeSet(ctx, g.root, head.Rev.ID, treeish, patchCap)
 }
