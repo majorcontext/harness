@@ -194,6 +194,10 @@ func mergeHead(t *testing.T, fx Fixture) {
 	if c.HeadRev != (protocol.Rev{}) {
 		t.Errorf("head_rev = %q, want none", c.HeadRev)
 	}
+	b := mustRead(t, fx, dir, protocol.ScopeBranch)
+	if b.HeadRev != (protocol.Rev{}) || b.Base == nil || b.Base.Rev == (protocol.Rev{}) {
+		t.Errorf("branch scope: head_rev = %q, base = %+v; want no head_rev and a base revision", b.HeadRev, b.Base)
+	}
 }
 
 func patchFormat(t *testing.T, fx Fixture) {
