@@ -214,7 +214,7 @@ func (t *httpTransport) postResponse(ctx context.Context, resp message) error {
 	if err != nil {
 		return err
 	}
-	r, err := t.client.Do(req)
+	hr, err := t.client.Do(req)
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {
@@ -222,9 +222,9 @@ func (t *httpTransport) postResponse(ctx context.Context, resp message) error {
 		}
 		return fmt.Errorf("mcp: http response post: %w", err)
 	}
-	defer r.Body.Close()
-	if r.StatusCode < 200 || r.StatusCode >= 300 {
-		return httpStatusError(r)
+	defer func() { _ = hr.Body.Close() }()
+	if hr.StatusCode < 200 || hr.StatusCode >= 300 {
+		return httpStatusError(hr)
 	}
 	return nil
 }

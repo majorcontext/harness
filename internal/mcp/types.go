@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"path/filepath"
+	"strings"
 )
 
 // Implementation describes a client or server implementation, exchanged
@@ -210,6 +211,10 @@ func rootsList(dir string) map[string]any {
 	if dir == "" {
 		return nil
 	}
-	u := url.URL{Scheme: "file", Path: dir}
+	p := filepath.ToSlash(dir)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // a Windows drive path: file:///C:/dir
+	}
+	u := url.URL{Scheme: "file", Path: p}
 	return map[string]any{"roots": []map[string]string{{"uri": u.String(), "name": filepath.Base(dir)}}}
 }
