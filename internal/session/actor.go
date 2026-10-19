@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -135,8 +134,6 @@ type Config struct {
 	Version string
 	// Evaluator is the model that judges goal turns.
 	Evaluator string
-	// MCPServers are the session servers of WithSessionMCP, for a backend that connects MCP servers itself.
-	MCPServers map[string]config.MCPServerSpec
 	// Source gives the tools of each model call, and the hooks around each
 	// tool call. nil: no tool.
 	Source turn.Source

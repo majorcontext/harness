@@ -259,7 +259,7 @@ func New(opts Options) (*Runtime, error) {
 	r.mcp = mcpsrc.New(opts.Config, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
-	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{MCPServers: r.mcp.Specs, Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
 			r.mcp.Close()
@@ -391,7 +391,6 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		AskUserQuestion: r.questions,
 		WebSearch:       r.webSearch,
 		Evaluator:       r.evaluator,
-		MCPServers:      l.mcp,
 		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
 		Record:          sp.Recording,
 		Retain:          r.workDir != "",

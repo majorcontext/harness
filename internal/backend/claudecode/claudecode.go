@@ -105,7 +105,6 @@ type Backend struct {
 	p       config.Provider
 	system  string
 	workDir string
-	servers func() map[string]config.MCPServerSpec
 	// toolLoading is the mcp_tool_loading mode of the config.
 	toolLoading string
 }
@@ -113,17 +112,16 @@ type Backend struct {
 // New returns the Backend of provider entry p. The CLI keeps only the last
 // --append-system-prompt, so the entries of system join into one value. The
 // CLI runs in workDir, or in the process directory when workDir is empty.
-// The CLI connects the MCP servers itself. toolLoading is mcp_tool_loading,
-// which sets ENABLE_TOOL_SEARCH of the CLI.
-func New(p config.Provider, system []string, workDir string, servers func() map[string]config.MCPServerSpec, toolLoading string) *Backend {
-	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, servers: servers, toolLoading: toolLoading}
+// toolLoading is mcp_tool_loading, which sets ENABLE_TOOL_SEARCH of the CLI.
+func New(p config.Provider, system []string, workDir string, toolLoading string) *Backend {
+	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, toolLoading: toolLoading}
 }
 
 // Capabilities reports that the CLI runs the loop with the harness tools,
-// owns its context and the MCP servers, and takes steer input. It reports
+// owns its context, and takes steer input. It reports
 // the context window itself.
 func (b *Backend) Capabilities(string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts(), WebSearch: true}
+	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts(), WebSearch: true}
 }
 
 // Run runs one turn of the CLI on the external session in the saved state.
@@ -132,7 +130,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 	if err != nil {
 		return err
 	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), restricted: req.AllowedTools != nil,
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req),
 		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID,
 		askedCh: make(chan string, 1), askMsg: map[string]string{}}
 	defer r.cleanup()
@@ -185,11 +183,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		"--include-partial-messages", "--thinking-display", "summarized", "--disallowedTools", disallowed}
 	tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
 	args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
-	var live map[string]config.MCPServerSpec
-	if b.servers != nil {
-		live = b.servers()
-	}
-	mcpArgs, err := r.mcpArgs(ctx, req, live)
+	mcpArgs, err := r.mcpArgs(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -273,37 +267,21 @@ func toolSearchEnv(mode string) string {
 	return "auto"
 }
 
-// mcpArgs returns the MCP flags of the run. An unrestricted run gives the
-// CLI the configured servers, beside the harness tools of req.
-func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[string]config.MCPServerSpec) ([]string, error) {
-	servers := map[string]mcpServer{}
-	if !r.restricted {
-		for name, spec := range configured {
-			servers[name] = serverOf(spec)
-		}
-		for name, m := range req.MCPServers {
-			servers[name] = serverOf(config.MCPServerSpec{Command: m.Command, Env: m.Env, Dir: m.Dir, URL: m.URL, Headers: m.Headers})
-		}
-	}
-	if len(req.Tools) > 0 {
-		url, err := r.serveTools(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		servers[external.ToolServer] = mcpServer{Type: "http", URL: url}
-	}
-	if len(servers) == 0 {
+// mcpArgs returns the MCP flags of the run. The CLI gets the harness tools
+// of req, MCP tools included, through the harness-hosted endpoint alone.
+func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
+	if len(req.Tools) == 0 {
 		return nil, nil
 	}
-	path, err := r.writeMCPConfig(servers)
+	url, err := r.serveTools(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"--mcp-config", path}
-	if len(req.Tools) > 0 {
-		args = append(args, "--allowedTools", "mcp__"+external.ToolServer)
+	path, err := r.writeMCPConfig(map[string]mcpServer{external.ToolServer: {Type: "http", URL: url}})
+	if err != nil {
+		return nil, err
 	}
-	return args, nil
+	return []string{"--mcp-config", path, "--allowedTools", "mcp__" + external.ToolServer}, nil
 }
 
 // serveTools serves the harness tools of req for this run and returns the
@@ -321,7 +299,7 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) 
 		}
 		return res
 	}
-	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, call); err != nil {
+	if r.tools, err = external.ServeTools(ctx, req.Tools, req.MCPInstructions, toolUseMeta, call); err != nil {
 		return "", err
 	}
 	r.bridged = map[string]bool{}
@@ -331,32 +309,10 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) 
 	return r.tools.URL, nil
 }
 
-// mcpServer is one server of an --mcp-config file. A stdio server has no Type.
+// mcpServer is one server of an --mcp-config file.
 type mcpServer struct {
-	Type    string            `json:"type,omitempty"`
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-}
-
-// serverOf returns the --mcp-config entry of spec. It skips an env entry
-// with no "=".
-func serverOf(spec config.MCPServerSpec) mcpServer {
-	if spec.URL != "" {
-		return mcpServer{Type: "http", URL: spec.URL, Headers: spec.Headers}
-	}
-	out := mcpServer{Command: spec.Command[0], Args: spec.Command[1:]}
-	for _, kv := range spec.Env {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			if out.Env == nil {
-				out.Env = map[string]string{}
-			}
-			out.Env[k] = v
-		}
-	}
-	return out
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 // writeMCPConfig writes servers to an --mcp-config file and returns its

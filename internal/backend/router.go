@@ -65,8 +65,6 @@ type Env struct {
 	Logins *injectedauth.Logins
 	// NoProcess says that the host starts no process, so a provider that runs a child process has no backend.
 	NoProcess bool
-	// MCPServers returns the live set of runtime MCP servers, which a backend that owns the loop hands to its CLI at each run. nil: none.
-	MCPServers func() map[string]config.MCPServerSpec
 	// NoLogin says that the host has no file login: a provider that uses the ChatGPT login is not listed, reads no login file, and fails a request before it is sent.
 	NoLogin bool
 }
@@ -90,7 +88,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			if env.NoProcess {
 				continue
 			}
-			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, env.MCPServers, cfg.MCPToolLoading)
+			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPToolLoading)
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
 			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
 			if rc, ok := c.(*responses.Client); ok && p.ModelsFrom == config.ModelsFromChatGPT {

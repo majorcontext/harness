@@ -35,13 +35,14 @@ type Tools struct {
 	calls  sync.WaitGroup
 }
 
-// ServeTools serves specs until Close. call runs each tool call under ctx,
+// ServeTools serves specs until Close. instructions is the server usage guidance
+// that the initialize reply carries. call runs each tool call under ctx,
 // and ends the call when the external harness drops its request.
 // call.ID is the field idMeta of the request _meta: the external harness
 // sends its tool use ID there, and a call without it is an error result.
 // After ctx ends or the external harness cancels a request, the call gets no
 // reply, so the interrupted external harness records it as interrupted.
-func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
+func ServeTools(ctx context.Context, specs []protocol.ToolSpec, instructions, idMeta string,
 	call func(context.Context, protocol.ToolCall) protocol.ToolResult) (*Tools, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -50,6 +51,7 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 	ctx, cancel := context.WithCancel(ctx)
 	t := &Tools{srv: &http.Server{}, cancel: cancel, served: make(chan struct{}), closed: make(chan struct{})}
 	reg := mcp.NewRegistry(ToolServer, "")
+	reg.SetInstructions(instructions)
 	for _, s := range specs {
 		schema := s.InputSchema
 		if len(schema) == 0 {

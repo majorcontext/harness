@@ -27,6 +27,8 @@ type Toolset struct {
 	Deferred []Tool
 	// Prompt follows the system prompt.
 	Prompt string
+	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
+	MCPInstructions string
 	// Tail is engine context for this call alone, after the last message and outside any cached prefix.
 	Tail string
 	// Notices are statuses that the model reads inside the conversation, and
@@ -87,13 +89,16 @@ type Sources []Source
 // Toolset implements Source.
 func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) Toolset {
 	var out Toolset
-	var prompts, tails []string
+	var prompts, tails, mcps []string
 	var hooks chain
 	for _, src := range s {
 		ts := src.Toolset(ctx, history, allowed, model)
 		out.Tools, out.Deferred = append(out.Tools, ts.Tools...), append(out.Deferred, ts.Deferred...)
 		if ts.Prompt != "" {
 			prompts = append(prompts, ts.Prompt)
+		}
+		if ts.MCPInstructions != "" {
+			mcps = append(mcps, ts.MCPInstructions)
 		}
 		if ts.Tail != "" {
 			tails = append(tails, ts.Tail)
@@ -103,7 +108,7 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 			hooks = append(hooks, ts.Hooks)
 		}
 	}
-	out.Prompt, out.Tail = strings.Join(prompts, "\n\n"), strings.Join(tails, "\n\n")
+	out.Prompt, out.Tail, out.MCPInstructions = strings.Join(prompts, "\n\n"), strings.Join(tails, "\n\n"), strings.Join(mcps, "\n\n")
 	switch len(hooks) {
 	case 0:
 	case 1:
@@ -227,7 +232,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
 	}
-	call.Tail = ts.Tail
+	call.Tail, call.MCPInstructions = ts.Tail, ts.MCPInstructions
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}

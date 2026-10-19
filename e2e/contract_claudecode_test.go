@@ -281,14 +281,20 @@ func TestContractClaudeCodePlugins(t *testing.T) {
 }
 
 func TestContractClaudeCodeMCPServers(t *testing.T) {
-	servers := map[string]any{
-		"chrome-devtools": map[string]any{"command": []string{"chrome-devtools-mcp-absent", "--headless"}, "env": []string{"A=1", "malformed"}, "dir": "/nonexistent"},
-		"gateway":         map[string]any{"url": "http://127.0.0.1:1/mcp", "headers": map[string]string{"Authorization": "Bearer t"}},
-	}
 	runScenarios(t, []scenario{{
-		name:    "claudecode_configured_mcp_servers_reach_the_cli",
-		driver:  claudeLane{mode: "normal", mcp: servers}.newDriver,
-		actions: withActions(claudeOneTurn, claudeMCPConfig{as: "a"}, claudeInvocations{as: "a"}),
+		name: "claudecode_configured_mcp_tool_runs_through_the_harness_endpoint",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")})(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "mcp__weather__forecast", callArgs: map[string]any{"city": "Oslo"}, mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeMCPConfig{as: "a"}, claudeToolCall{as: "a"}),
+	}, {
+		name: "claudecode_endpoint_initialize_carries_the_mcp_server_instructions",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts.")})(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "initialize", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}})
 }
 
