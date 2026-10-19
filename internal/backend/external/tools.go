@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -62,14 +63,14 @@ func ServeTools(ctx context.Context, groups []Group, idMeta string,
 	t := &Tools{srv: &http.Server{}, cancel: cancel, URLs: map[string]string{}, served: make(chan struct{}), closed: make(chan struct{})}
 	mux := http.NewServeMux()
 	base := "/" + rand.Text()
-	for _, g := range groups {
+	for i, g := range groups {
 		reg := mcp.NewRegistry(g.Server, "")
 		reg.SetInstructions(g.Instructions)
 		for _, s := range g.Specs {
 			reg.RegisterTool(mcp.Tool{Name: strings.TrimPrefix(s.Name, g.Prefix), Description: s.Description, InputSchema: schemaOf(s), Annotations: annotations(s)},
 				t.handler(ctx, s.Name, idMeta, call))
 		}
-		path := base + "/" + g.Server
+		path := base + "/" + strconv.Itoa(i) // a server name may hold pattern or URL syntax
 		mux.Handle("POST "+path, reg)
 		t.URLs[g.Server] = "http://" + ln.Addr().String() + path
 	}
