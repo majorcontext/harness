@@ -1,6 +1,11 @@
 package mcp
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"net/url"
+	"path/filepath"
+	"strings"
+)
 
 // Implementation describes a client or server implementation, exchanged
 // during initialize.
@@ -11,9 +16,10 @@ type Implementation struct {
 }
 
 // ClientCapabilities describes optional client-served features. This
-// package implements none of roots, sampling, or elicitation, so this is
-// sent as an empty object (extensible via Experimental).
+// package implements roots only; it implements neither sampling nor
+// elicitation.
 type ClientCapabilities struct {
+	Roots        *struct{}                  `json:"roots,omitempty"`
 	Experimental map[string]json.RawMessage `json:"experimental,omitempty"`
 }
 
@@ -198,4 +204,17 @@ type ReadResourceResult struct {
 type cancelledParams struct {
 	RequestID json.RawMessage `json:"requestId"`
 	Reason    string          `json:"reason,omitempty"`
+}
+
+// rootsList is the result of roots/list for the one root dir, or nil when dir is empty.
+func rootsList(dir string) map[string]any {
+	if dir == "" {
+		return nil
+	}
+	p := filepath.ToSlash(dir)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // a Windows drive path: file:///C:/dir
+	}
+	u := url.URL{Scheme: "file", Path: p}
+	return map[string]any{"roots": []map[string]string{{"uri": u.String(), "name": filepath.Base(dir)}}}
 }

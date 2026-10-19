@@ -11,7 +11,7 @@ import (
 
 // Transport configures how a Client connects to an MCP server.
 type Transport interface {
-	open(onNotify notificationHandler) (transport, error)
+	open(handler handlerFunc) (transport, error)
 }
 
 // Options configures a Client.
@@ -27,6 +27,9 @@ type Options struct {
 	// Logger is used by the default OnNotification. Defaults to
 	// log.Default().
 	Logger *log.Logger
+	// Root is the absolute directory that the client offers as its one root. Empty declares no roots
+	// capability.
+	Root string
 }
 
 // Client is an MCP client. It is safe for concurrent use after Initialize.
@@ -60,7 +63,14 @@ func NewClient(t Transport, opts Options) (*Client, error) {
 			logger.Printf("mcp: unhandled server notification %q: %s", method, string(params))
 		}
 	}
-	tr, err := t.open(onNotify)
+	rootsResult := rootsList(opts.Root)
+	tr, err := t.open(func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		if method == methodRootsList && rootsResult != nil {
+			return rootsResult, nil
+		}
+		onNotify(method, params)
+		return nil, &RPCError{Code: codeMethodNotFound, Message: fmt.Sprintf("unsupported method %q", method)}
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +84,9 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		ProtocolVersion: LatestProtocolVersion,
 		Capabilities:    ClientCapabilities{},
 		ClientInfo:      c.opts.ClientInfo,
+	}
+	if c.opts.Root != "" {
+		params.Capabilities.Roots = &struct{}{}
 	}
 	var result InitializeResult
 	if err := c.request(ctx, methodInitialize, params, &result); err != nil {

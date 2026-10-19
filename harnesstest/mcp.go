@@ -41,7 +41,7 @@ type MCPSpec struct {
 }
 
 // MCPTool is one scripted tool. A tools/call answers with the first of
-// RPCError, Echo, Cwd, and Result that applies.
+// RPCError, Echo, Cwd, Roots, and Result that applies.
 type MCPTool struct {
 	Name        string
 	Description string
@@ -49,6 +49,7 @@ type MCPTool struct {
 	Result      MCPResult
 	Echo        bool      // answer with the call arguments as one text item
 	Cwd         bool      // answer with the base name of the server's working directory
+	Roots       bool      `json:",omitempty"` // answer with the result of a roots/list request to the client; a stdio stub only
 	RPCError    *MCPError // answer with a JSON-RPC error
 	// Gated holds each call until Release names its "id" string argument. A
 	// call whose request ends first counts for AwaitAbandoned.
@@ -148,6 +149,8 @@ type mcpHandler struct {
 	mu    sync.Mutex
 	calls []MCPCall
 	inits int
+	// roots asks the client for its roots and returns the raw reply; nil on a transport with no duplex channel.
+	roots func() (string, error)
 }
 
 // tools returns the tools the server serves now.
@@ -289,6 +292,15 @@ func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RP
 		case t.Echo:
 			text, _ := json.Marshal(args)
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: string(text)}}}, nil
+		case t.Roots:
+			if h.roots == nil {
+				return nil, &mcp.RPCError{Code: -32603, Message: "no roots channel"}
+			}
+			text, err := h.roots()
+			if err != nil {
+				return nil, &mcp.RPCError{Code: -32603, Message: err.Error()}
+			}
+			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: text}}}, nil
 		case t.Cwd:
 			wd, _ := os.Getwd()
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: filepath.Base(wd)}}}, nil
@@ -332,6 +344,28 @@ func (h *mcpHandler) readResource(params json.RawMessage, auth string) (any, *mc
 func ServeMCPStdio(r io.Reader, w io.Writer, spec MCPSpec) error {
 	h := &mcpHandler{spec: spec}
 	br := bufio.NewReader(r)
+	h.roots = func() (string, error) {
+		if _, err := w.Write([]byte(`{"jsonrpc":"2.0","id":"roots-1","method":"roots/list"}` + "\n")); err != nil {
+			return "", err
+		}
+		for {
+			line, err := br.ReadBytes('\n')
+			var m struct {
+				ID     string          `json:"id"`
+				Result json.RawMessage `json:"result"`
+				Error  *mcp.RPCError   `json:"error"`
+			}
+			if json.Unmarshal(line, &m) == nil && m.ID == "roots-1" {
+				if m.Error != nil {
+					return m.Error.Message, nil
+				}
+				return rootURIs(m.Result), nil
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+	}
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
@@ -367,6 +401,10 @@ type MCPServer struct {
 	ready    bool
 	notify   bool
 
+	stream     http.ResponseWriter // the event stream of the tools/call that runs, for askRoots
+	streamCtx  context.Context
+	rootsReply chan json.RawMessage
+
 	gates     map[string]chan struct{}
 	inflight  atomic.Int64
 	held      chan struct{}
@@ -378,8 +416,9 @@ type MCPServer struct {
 // reuse once Close ran.
 func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	t.Helper()
-	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{},
+	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{}, rootsReply: make(chan json.RawMessage, 1),
 		held: make(chan struct{}, 64), abandoned: make(chan struct{}, 64)}
+	s.h.roots = s.askRoots
 	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
 	ln, err := listenQuiet()
 	if err != nil {
@@ -598,6 +637,21 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 	if req.Method == "tools/call" && !s.hold(r.Context(), req.Params) {
 		return
 	}
+	if req.Method == "" && strings.Contains(string(req.ID), "roots-1") {
+		var reply struct {
+			Result json.RawMessage `json:"result"`
+		}
+		_ = json.Unmarshal(body, &reply)
+		s.rootsReply <- reply.Result
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	s.mu.Lock()
+	if s.sse && req.Method == "tools/call" {
+		w.Header().Set("Content-Type", "text/event-stream")
+		s.stream, s.streamCtx = w, r.Context()
+	}
+	s.mu.Unlock()
 	resp := s.h.handle(body, r.Header.Get("Authorization"))
 	if req.Method == "initialize" {
 		w.Header().Set("Mcp-Session-Id", mcpSessionID)
@@ -668,4 +722,37 @@ func (s *MCPServer) reject(r *http.Request, method string) (int, string) {
 
 func acceptsMCPResponses(accept string) bool {
 	return strings.Contains(accept, "application/json") && strings.Contains(accept, "text/event-stream")
+}
+
+// rootURIs lists the uri of each root in a roots/list result, one for each line.
+func rootURIs(result json.RawMessage) string {
+	var res struct {
+		Roots []struct {
+			URI string `json:"uri"`
+		} `json:"roots"`
+	}
+	_ = json.Unmarshal(result, &res)
+	uris := make([]string, 0, len(res.Roots))
+	for _, r := range res.Roots {
+		uris = append(uris, r.URI)
+	}
+	return strings.Join(uris, "\n")
+}
+
+// askRoots sends roots/list in the event stream of the tools/call that runs and waits for the POSTed answer.
+func (s *MCPServer) askRoots() (string, error) {
+	s.mu.Lock()
+	w, ctx := s.stream, s.streamCtx
+	s.mu.Unlock()
+	if w == nil {
+		return "", fmt.Errorf("no event stream")
+	}
+	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", `{"jsonrpc":"2.0","id":"roots-1","method":"roots/list"}`)
+	w.(http.Flusher).Flush()
+	select {
+	case res := <-s.rootsReply:
+		return rootURIs(res), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }

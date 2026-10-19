@@ -256,7 +256,7 @@ func New(opts Options) (*Runtime, error) {
 			tools = append(tools, selftool.NewModel(toolHost{r}, catalog))
 		}
 	}
-	r.mcp = mcpsrc.New(opts.Config, r.log)
+	r.mcp = mcpsrc.New(opts.Config, opts.WorkDir, r.log)
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})

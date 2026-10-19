@@ -189,7 +189,7 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func memSource(m *memServer, specs map[string]config.MCPServerSpec) *Source {
-	s := New(config.Config{MCPServers: specs}, nil)
+	s := New(config.Config{MCPServers: specs}, "", nil)
 	s.httpClient = &http.Client{Transport: m}
 	return s
 }

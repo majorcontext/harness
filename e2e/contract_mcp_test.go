@@ -697,6 +697,29 @@ func TestContractMCPRuntime(t *testing.T) {
 	})
 }
 
+func TestContractMCPRoots(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "mcp_http_sse_server_gets_the_work_dir_as_a_root",
+			setup: mcpSetup(nil, mcpServerDef{name: "where", sse: true, spec: harnesstest.MCPSpec{
+				Name:  "where",
+				Tools: []harnesstest.MCPTool{{Name: "roots", Description: "Report the roots of the client", Roots: true}},
+			}}),
+			model:   toolChain(mcpTool("where", "roots")),
+			actions: oneTurn,
+		},
+		{
+			name: "mcp_stdio_server_gets_the_work_dir_as_a_root",
+			setup: mcpSetup(nil, mcpServerDef{name: "where", stdio: true, spec: harnesstest.MCPSpec{
+				Name:  "where",
+				Tools: []harnesstest.MCPTool{{Name: "roots", Description: "Report the roots of the client", Roots: true}},
+			}}),
+			model:   toolChain(mcpTool("where", "roots")),
+			actions: oneTurn,
+		},
+	})
+}
+
 func TestContractMCPRefusals(t *testing.T) {
 	weather := mcpServerDef{name: "weather", spec: mcpWeather("")}
 	forecast := mcpTool("weather", "forecast", "city", "Oslo")

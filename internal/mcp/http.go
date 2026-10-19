@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +47,7 @@ type HTTPTransport struct {
 	Client *http.Client
 }
 
-func (t *HTTPTransport) open(onNotify notificationHandler) (transport, error) {
+func (t *HTTPTransport) open(handler handlerFunc) (transport, error) {
 	if t.Endpoint == "" {
 		return nil, fmt.Errorf("mcp: http transport: no endpoint configured")
 	}
@@ -56,7 +59,7 @@ func (t *HTTPTransport) open(onNotify notificationHandler) (transport, error) {
 		endpoint: t.Endpoint,
 		headers:  t.Headers,
 		client:   client,
-		onNotify: onNotify,
+		handler:  handler,
 	}, nil
 }
 
@@ -64,7 +67,7 @@ type httpTransport struct {
 	endpoint string
 	headers  map[string]string
 	client   *http.Client
-	onNotify notificationHandler
+	handler  handlerFunc
 
 	nextID atomic.Int64
 
@@ -178,13 +181,14 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 				}
 				return false, nil // response to some other in-flight request; not ours
 			}
-			// Server-initiated request or notification arriving inline
-			// with our response stream: log-and-continue. This client
-			// does not implement any server-initiated methods (no roots,
-			// sampling, or elicitation), so requests go unanswered here
-			// rather than over a duplex channel — see the package doc's
-			// deferred-features list.
-			t.onNotify(msg.Method, msg.Params)
+			// A server request arriving inline with our response stream is
+			// answered with a POST of its response.
+			result, herr := t.handler(ctx, msg.Method, msg.Params)
+			if len(msg.ID) != 0 {
+				if err := t.postResponse(ctx, replyTo(msg, result, herr)); err != nil {
+					log.Printf("mcp: answer to server request %q was not delivered: %v", msg.Method, err)
+				}
+			}
 			return false, nil
 		})
 		if err != nil {
@@ -198,6 +202,31 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 	default:
 		return fmt.Errorf("mcp: unexpected response Content-Type %q", resp.Header.Get("Content-Type"))
 	}
+}
+
+func (t *httpTransport) postResponse(ctx context.Context, resp message) error {
+	resp.JSONRPC = "2.0"
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	req, err := t.newRequest(ctx, body)
+	if err != nil {
+		return err
+	}
+	hr, err := t.client.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // the URL may hold a credential
+		}
+		return fmt.Errorf("mcp: http response post: %w", err)
+	}
+	defer func() { _ = hr.Body.Close() }()
+	if hr.StatusCode < 200 || hr.StatusCode >= 300 {
+		return httpStatusError(hr)
+	}
+	return nil
 }
 
 func decodeResult(msg message, wantID string, result any) error {
