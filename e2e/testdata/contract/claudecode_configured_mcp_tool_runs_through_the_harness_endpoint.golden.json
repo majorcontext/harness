@@ -65,7 +65,11 @@
       "body": [
         {
           "bridge": true,
-          "servers": {}
+          "servers": {
+            "weather": {
+              "type": "http"
+            }
+          }
         }
       ]
     },

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -20,11 +21,21 @@ const ToolServer = "harness"
 
 var emptySchema = json.RawMessage(`{"type":"object"}`)
 
+// Group is one MCP server of the endpoint: the specs it lists, each under its
+// name without Prefix, and the usage guidance that its initialize reply carries.
+type Group struct {
+	Server       string
+	Prefix       string
+	Specs        []protocol.ToolSpec
+	Instructions string
+}
+
 // Tools is a loopback MCP endpoint that serves harness tools to an
 // external harness for one turn.
 type Tools struct {
-	// URL is secret: any local process that knows it can run the tools.
-	URL    string
+	// URLs holds the URL of each group by server name. A URL is secret: any
+	// local process that knows it can run the tools.
+	URLs   map[string]string
 	srv    *http.Server
 	served chan struct{}
 	closed chan struct{}
@@ -35,54 +46,67 @@ type Tools struct {
 	calls  sync.WaitGroup
 }
 
-// ServeTools serves specs until Close. instructions is the server usage guidance
-// that the initialize reply carries. call runs each tool call under ctx,
-// and ends the call when the external harness drops its request.
+// ServeTools serves groups until Close, each on its own path of one listener.
+// call runs each tool call under ctx, and ends the call when the external
+// harness drops its request. call.Name is the spec name, with its Prefix.
 // call.ID is the field idMeta of the request _meta: the external harness
 // sends its tool use ID there, and a call without it is an error result.
 // After ctx ends or the external harness cancels a request, the call gets no
 // reply, so the interrupted external harness records it as interrupted.
-func ServeTools(ctx context.Context, specs []protocol.ToolSpec, instructions, idMeta string,
+func ServeTools(ctx context.Context, groups []Group, idMeta string,
 	call func(context.Context, protocol.ToolCall) protocol.ToolResult) (*Tools, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	t := &Tools{srv: &http.Server{}, cancel: cancel, served: make(chan struct{}), closed: make(chan struct{})}
-	reg := mcp.NewRegistry(ToolServer, "")
-	reg.SetInstructions(instructions)
-	for _, s := range specs {
-		schema := s.InputSchema
-		if len(schema) == 0 {
-			schema = emptySchema
-		}
-		reg.RegisterTool(mcp.Tool{Name: s.Name, Description: s.Description, InputSchema: schema, Annotations: annotations(s)},
-			func(rctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
-				id := metaString(mcp.CallMeta(rctx), idMeta)
-				if id == "" {
-					return mcp.CallToolResult{}, fmt.Errorf("the call has no %q in _meta", idMeta)
-				}
-				cctx, stop := context.WithCancel(ctx)
-				defer stop()
-				defer context.AfterFunc(rctx, stop)()
-				res, ok := t.run(cctx, call, protocol.ToolCall{ID: id, Name: s.Name, Arguments: args})
-				if !ok || cctx.Err() != nil {
-					<-t.closed
-					return mcp.CallToolResult{}, context.Cause(ctx)
-				}
-				return mcp.CallToolResult{Content: content(res), IsError: res.IsError}, nil
-			})
-	}
-	path := "/" + rand.Text()
+	t := &Tools{srv: &http.Server{}, cancel: cancel, URLs: map[string]string{}, served: make(chan struct{}), closed: make(chan struct{})}
 	mux := http.NewServeMux()
-	mux.Handle("POST "+path, reg)
-	t.URL, t.srv.Handler = "http://"+ln.Addr().String()+path, mux
+	base := "/" + rand.Text()
+	for i, g := range groups {
+		reg := mcp.NewRegistry(g.Server, "")
+		reg.SetInstructions(g.Instructions)
+		for _, s := range g.Specs {
+			reg.RegisterTool(mcp.Tool{Name: strings.TrimPrefix(s.Name, g.Prefix), Description: s.Description, InputSchema: schemaOf(s), Annotations: annotations(s)},
+				t.handler(ctx, s.Name, idMeta, call))
+		}
+		path := base + "/" + strconv.Itoa(i) // a server name may hold pattern or URL syntax
+		mux.Handle("POST "+path, reg)
+		t.URLs[g.Server] = "http://" + ln.Addr().String() + path
+	}
+	t.srv.Handler = mux
 	go func() {
 		defer close(t.served)
 		_ = t.srv.Serve(ln)
 	}()
 	return t, nil
+}
+
+func schemaOf(s protocol.ToolSpec) json.RawMessage {
+	if len(s.InputSchema) == 0 {
+		return emptySchema
+	}
+	return s.InputSchema
+}
+
+// handler runs the calls of the tool name through call.
+func (t *Tools) handler(ctx context.Context, name, idMeta string,
+	call func(context.Context, protocol.ToolCall) protocol.ToolResult) func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
+	return func(rctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+		id := metaString(mcp.CallMeta(rctx), idMeta)
+		if id == "" {
+			return mcp.CallToolResult{}, fmt.Errorf("the call has no %q in _meta", idMeta)
+		}
+		cctx, stop := context.WithCancel(ctx)
+		defer stop()
+		defer context.AfterFunc(rctx, stop)()
+		res, ok := t.run(cctx, call, protocol.ToolCall{ID: id, Name: name, Arguments: args})
+		if !ok || cctx.Err() != nil {
+			<-t.closed
+			return mcp.CallToolResult{}, context.Cause(ctx)
+		}
+		return mcp.CallToolResult{Content: content(res), IsError: res.IsError}, nil
+	}
 }
 
 // annotations is the MCP annotations of a tool: readOnlyHint lets the

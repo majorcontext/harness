@@ -136,7 +136,7 @@ func question(f *fake) {
 		normalTurn(f)
 		return
 	}
-	if _, ok := hostedServer(); ok && !hostedOffers("ask_user_question") {
+	if _, ok := hostedServer(""); ok && !hostedOffers("ask_user_question") {
 		normalTurn(f)
 		return
 	}
@@ -146,7 +146,7 @@ func question(f *fake) {
 		bash := toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"})
 		partialEmit(f, messageStart(questionMsg), blockStart(0, bash))
 		f.emit(assistant(bash).inMessage("id", questionMsg))
-		if _, ok := hostedServer(); ok && os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" {
+		if _, ok := hostedServer(""); ok && os.Getenv("FAKE_CLAUDE_QUESTION_GATE") != "" {
 			awaitGate()
 		}
 	} else {
@@ -157,7 +157,7 @@ func question(f *fake) {
 		calls = append(calls, toolUse("toolu_s", "mcp__harness__bash", obj{"command": "echo hi"}))
 	}
 	f.emit(assistant(calls...).inMessage("id", questionMsg))
-	if _, ok := hostedServer(); !ok {
+	if _, ok := hostedServer(""); !ok {
 		hang(f)
 		return
 	}

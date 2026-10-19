@@ -343,8 +343,8 @@ func rowASessionToolReachesTheCLIThroughTheHarnessEndpoint(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &f); err != nil {
 		t.Fatalf("decode %q: %v", data, err)
 	}
-	if _, ok := f.MCPServers["harness"]; !ok || len(f.MCPServers) != 1 {
-		t.Errorf("--mcp-config servers = %v, want the harness endpoint alone", f.MCPServers)
+	if _, ok := f.MCPServers["harness"]; !ok || len(f.MCPServers) != 2 || f.MCPServers["weather"] == nil {
+		t.Errorf("--mcp-config servers = %v, want the harness endpoint and weather", f.MCPServers)
 	}
 	if got, err := os.ReadFile(toolLog); err != nil || !strings.Contains(string(got), "Oslo: 3C, snow") {
 		t.Errorf("tool call response = %s (%v), want the forecast of the session server", got, err)

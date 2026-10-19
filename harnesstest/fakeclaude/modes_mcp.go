@@ -4,47 +4,57 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 )
 
-// mcpTurn lists the tools of the "harness" server of --mcp-config into the
-// init frame, then calls FAKE_CLAUDE_MCP_CALL as tool use toolu_m with the
-// toolUseId meta that the real CLI sends. FAKE_CLAUDE_MCP_LOG receives the
-// server URL and the listed tool names as one JSON line.
+// mcpTurn lists the tools of each server of --mcp-config into the init frame
+// as mcp__<server>__<tool>, then calls FAKE_CLAUDE_MCP_CALL as tool use
+// toolu_m with the toolUseId meta that the real CLI sends. A call name with no
+// "mcp__" prefix is a tool of the "harness" server. FAKE_CLAUDE_MCP_LOG
+// receives the URL and the tool names of the "harness" server as one JSON line.
 func mcpTurn(f *fake) bool {
-	url, err := mcpURL()
+	servers, err := mcpServers()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	var list struct{ Tools []struct{ Name string } }
-	if err := rpc(url, "tools/list", obj{}, &list); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	var tools, names []string
+	var tools []string
 	if raw := os.Getenv("FAKE_CLAUDE_INIT_TOOLS"); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &tools)
 	}
-	for _, t := range list.Tools {
-		names = append(names, t.Name)
-		tools = append(tools, "mcp__harness__"+t.Name)
-	}
-	if path := os.Getenv("FAKE_CLAUDE_MCP_LOG"); path != "" {
-		b, _ := json.Marshal(obj{"url": url, "tools": names})
-		appendFile(path, string(b)+"\n")
+	for _, server := range slices.Sorted(maps.Keys(servers)) {
+		var list struct{ Tools []struct{ Name string } }
+		if err := rpc(servers[server], "tools/list", obj{}, &list); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		var names []string
+		for _, t := range list.Tools {
+			names = append(names, t.Name)
+			tools = append(tools, "mcp__"+server+"__"+t.Name)
+		}
+		if path := os.Getenv("FAKE_CLAUDE_MCP_LOG"); path != "" && server == "harness" {
+			b, _ := json.Marshal(obj{"url": servers[server], "tools": names})
+			appendFile(path, string(b)+"\n")
+		}
 	}
 	f.emit(system("init", obj{"session_id": f.sessionID, "tools": tools}))
-	name, args := os.Getenv("FAKE_CLAUDE_MCP_CALL"), obj{"q": "hi"}
-	f.emit(assistant(toolUse("toolu_m", "mcp__harness__"+name, args)))
+	cliName, args := os.Getenv("FAKE_CLAUDE_MCP_CALL"), obj{"q": "hi"}
+	if !strings.HasPrefix(cliName, "mcp__") {
+		cliName = "mcp__harness__" + cliName
+	}
+	server, name, _ := strings.Cut(strings.TrimPrefix(cliName, "mcp__"), "__")
+	f.emit(assistant(toolUse("toolu_m", cliName, args)))
 	var res struct {
 		Content []struct{ Text string }
 		IsError bool
 	}
 	call := obj{"name": name, "arguments": args, "_meta": obj{"claudecode/toolUseId": "toolu_m"}}
-	if err := rpc(url, "tools/call", call, &res); err != nil || len(res.Content) != 1 {
+	if err := rpc(servers[server], "tools/call", call, &res); err != nil || len(res.Content) != 1 {
 		fmt.Fprintln(os.Stderr, "tools/call:", err, res)
 		os.Exit(1)
 	}
@@ -67,22 +77,28 @@ func logMCPConfig() {
 	}
 }
 
-func mcpURL() (string, error) {
+func mcpServers() (map[string]string, error) {
 	data, err := mcpConfig()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var cfg struct {
 		MCPServers map[string]struct{ Type, URL string } `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "", err
+		return nil, err
 	}
-	s, ok := cfg.MCPServers["harness"]
-	if !ok || s.Type != "http" {
-		return "", fmt.Errorf("no http server named harness in %s", data)
+	urls := map[string]string{}
+	for name, s := range cfg.MCPServers {
+		if s.Type != "http" {
+			return nil, fmt.Errorf("server %s is not http in %s", name, data)
+		}
+		urls[name] = s.URL
 	}
-	return s.URL, nil
+	if urls["harness"] == "" {
+		return nil, fmt.Errorf("no http server named harness in %s", data)
+	}
+	return urls, nil
 }
 
 func rpc(url, method string, params obj, out any) error {
