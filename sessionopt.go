@@ -60,7 +60,7 @@ func (r *Runtime) sessionSource(servers map[string]config.MCPServerSpec) *mcpsrc
 	if len(servers) == 0 {
 		return nil
 	}
-	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.log)
+	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log)
 }
 
 // checkSessionTools fails when a session that has MCP servers would share a tool name with an

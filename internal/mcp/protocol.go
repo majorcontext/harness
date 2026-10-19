@@ -27,6 +27,7 @@ func isSupportedProtocolVersion(v string) bool {
 const (
 	methodInitialize    = "initialize"
 	methodToolsList     = "tools/list"
+	methodRootsList     = "roots/list"
 	methodToolsCall     = "tools/call"
 	methodResourcesList = "resources/list"
 	methodResourcesRead = "resources/read"

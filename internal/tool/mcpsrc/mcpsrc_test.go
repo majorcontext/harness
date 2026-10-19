@@ -68,7 +68,7 @@ func source(t *testing.T, edit func(*config.Config, map[string]*harnesstest.MCPS
 	if edit != nil {
 		edit(&cfg, srv)
 	}
-	s := mcpsrc.New(cfg, nil)
+	s := mcpsrc.New(cfg, "", nil)
 	t.Cleanup(s.Close)
 	return s, srv
 }
@@ -141,7 +141,7 @@ func run(ts turn.Toolset, c protocol.ToolCall) (string, bool) {
 func TestSearchScoresEachField(t *testing.T) {
 	srv := harnesstest.NewMCPServer(t, harnesstest.MCPSpec{Name: "weather", Tools: []harnesstest.MCPTool{
 		{Name: "other", Description: "weather forecast"}, {Name: "weather", Description: "x"}}})
-	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"}, nil)
+	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"}, "", nil)
 	t.Cleanup(s.Close)
 	got, _ := run(s.Toolset(bg, nil, nil, ""), call("mcp", `{"action":"search","query":"weather forecast"}`))
 	if first := `{"matches":[{"name":"mcp__weather__weather"`; !strings.HasPrefix(got, first) {
@@ -156,7 +156,7 @@ func TestCallEndsWithItsContextWhileAnotherDialHoldsTheServer(t *testing.T) {
 		once.Do(func() { close(dialing) })
 		<-release
 	}))
-	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"slow": {URL: srv.URL, ConnectTimeoutS: 3600}}}, nil)
+	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"slow": {URL: srv.URL, ConnectTimeoutS: 3600}}}, "", nil)
 	t.Cleanup(func() {
 		close(release)
 		s.Close()
@@ -198,7 +198,7 @@ func TestCallFailsFastOnADownServerAndNeverDialsIt(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		url := srv.URL
 		srv.Close()
-		s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"down": {URL: url}}}, nil)
+		s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"down": {URL: url}}}, "", nil)
 		defer s.Close()
 		if got := attemptsOf(t, s, "down"); got != 1 {
 			t.Fatalf("attempts after the first connect = %d, want 1", got)

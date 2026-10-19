@@ -9,7 +9,7 @@ Read the root AGENTS.md.
 - Preserve `tools/list` and `resources/list` pagination cursors.
 - Send static request headers on every HTTP call.
 - Client scope: `tools/list`, `tools/call`, `resources/list`, `resources/read`.
-- Add no OAuth, client capabilities, legacy HTTP+SSE, subscriptions, or prompts.
+- The client declares `roots` only when `Options.Root` is set, and answers `roots/list` with that one directory. It answers no other server request. Add no OAuth, other client capabilities, legacy HTTP+SSE, subscriptions, or prompts.
 - Preserve text, image, audio, resource-link, embedded-resource, and `isError` fields.
 - Never collapse structured content into text here.
 - Server (`Registry`): a tool that needs a harness type is registered by its caller.

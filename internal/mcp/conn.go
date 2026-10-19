@@ -22,9 +22,6 @@ type transport interface {
 	close() error
 }
 
-// notificationHandler observes unsupported server messages.
-type notificationHandler func(method string, params json.RawMessage)
-
 // handlerFunc serves one incoming JSON-RPC message.
 type handlerFunc func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
@@ -113,6 +110,12 @@ func (c *conn) serveRequest(msg message) {
 	if msg.isNotification() {
 		return // notifications get no response, whatever the handler returned
 	}
+	// The read loop reports write failures.
+	_ = c.write(context.Background(), replyTo(msg, result, err))
+}
+
+// replyTo builds the response to the server request msg.
+func replyTo(msg message, result any, err error) message {
 	resp := message{ID: msg.ID}
 	if err != nil {
 		var rerr *RPCError
@@ -120,16 +123,12 @@ func (c *conn) serveRequest(msg message) {
 			rerr = &RPCError{Code: codeInternalError, Message: err.Error()}
 		}
 		resp.Error = rerr
+	} else if raw, merr := json.Marshal(result); merr != nil {
+		resp.Error = &RPCError{Code: codeInternalError, Message: merr.Error()}
 	} else {
-		raw, merr := json.Marshal(result)
-		if merr != nil {
-			resp.Error = &RPCError{Code: codeInternalError, Message: merr.Error()}
-		} else {
-			resp.Result = raw
-		}
+		resp.Result = raw
 	}
-	// The read loop reports write failures.
-	_ = c.write(context.Background(), resp)
+	return resp
 }
 
 func (c *conn) call(ctx context.Context, method string, params, result any) error {

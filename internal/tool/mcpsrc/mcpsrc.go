@@ -58,6 +58,7 @@ func Reserved(name string) bool {
 // of the request prefix of each session. A tool that arrives later is
 // deferred, and a tool that a session sent stays in its definitions.
 type Source struct {
+	workDir   string
 	log       *slog.Logger
 	parent    *Source
 	mode      string
@@ -120,20 +121,21 @@ func (s *server) resources() bool { return s.up() && s.client.ServerCapabilities
 
 func (s *server) has(tool string) bool { return s.up() && s.index[tool] }
 
-// New returns the Source of cfg.MCPServers. It dials nothing. A nil log is slog.Default(). Close ends its goroutine.
-func New(cfg config.Config, log *slog.Logger) *Source {
-	return build(cfg, nil, cfg.MCPServers, log)
+// New returns the Source of cfg.MCPServers. It dials nothing. A nil log is slog.Default(). Every client offers
+// workDir as its root; an empty workDir offers none. Close ends its goroutine.
+func New(cfg config.Config, workDir string, log *slog.Logger) *Source {
+	return build(cfg, nil, cfg.MCPServers, workDir, log)
 }
 
 // NewSession returns the Source of one session: the servers in specs beside the servers of parent, which
 // may be nil. It connects only the servers in specs, and Close stops only them. It dials nothing. A name
 // in specs must not be a name of parent.
-func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, log *slog.Logger) *Source {
-	return build(cfg, parent, specs, log)
+func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger) *Source {
+	return build(cfg, parent, specs, workDir, log)
 }
 
-func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, log *slog.Logger) *Source {
-	s := &Source{log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
+func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger) *Source {
+	s := &Source{workDir: workDir, log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
 		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold),
 		inbox:     make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
@@ -148,7 +150,7 @@ func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerS
 
 // dial connects to the server of spec and reads its tools. changed receives the client when the server says that
 // its tool list changed.
-func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, changed func(*mcp.Client)) (*server, error) {
+func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.Client, changed func(*mcp.Client)) (*server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
@@ -157,7 +159,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec, hc *http.Client, chang
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}
 	var client atomic.Pointer[mcp.Client]
-	c, err := mcp.NewClient(tr, mcp.Options{RequestTimeout: max(requestBound, spec.ToolTimeout()+requestMargin), OnNotification: func(method string, _ json.RawMessage) {
+	c, err := mcp.NewClient(tr, mcp.Options{Root: root, RequestTimeout: max(requestBound, spec.ToolTimeout()+requestMargin), OnNotification: func(method string, _ json.RawMessage) {
 		if cl := client.Load(); method == mcp.NotificationToolsListChanged && cl != nil {
 			if t := cl.ServerCapabilities().Tools; t != nil && t.ListChanged {
 				changed(cl)

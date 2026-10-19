@@ -218,7 +218,7 @@ func (a *actor) startDial(e *entry, auto bool) {
 	e.dialing, e.wantDial, e.autoDial = true, false, auto
 	s := a.s
 	a.spawn(func() {
-		sv, err := dial(e.ctx, e.spec, s.httpClient, func(c *mcp.Client) { s.postUntil(e.ctx, changedMsg{e, c}) })
+		sv, err := dial(e.ctx, e.spec, s.workDir, s.httpClient, func(c *mcp.Client) { s.postUntil(e.ctx, changedMsg{e, c}) })
 		s.post(dialedMsg{e: e, sv: sv, err: err})
 	})
 }

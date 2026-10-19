@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -29,17 +28,10 @@ type StdioTransport struct {
 	dial func() (io.ReadWriteCloser, error)
 }
 
-func (t *StdioTransport) open(onNotify notificationHandler) (transport, error) {
+func (t *StdioTransport) open(handler handlerFunc) (transport, error) {
 	rwc, err := t.dialFunc()
 	if err != nil {
 		return nil, err
-	}
-	handler := func(_ context.Context, method string, params json.RawMessage) (any, error) {
-		// This client implements no server-initiated methods (no roots,
-		// sampling, or elicitation): notifications are logged and
-		// continued; requests get a method-not-found error.
-		onNotify(method, params)
-		return nil, &RPCError{Code: codeMethodNotFound, Message: fmt.Sprintf("unsupported method %q", method)}
 	}
 	c := newConn(rwc, handler)
 	go c.run() //nolint:errcheck // stream end surfaces via pending calls
