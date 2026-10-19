@@ -171,7 +171,7 @@ func hostedListAll() string {
 	}
 	_ = json.Unmarshal([]byte(hostedRPC("tools/list", obj{})), &out)
 	for server := range hostedServers() {
-		if strings.HasPrefix(server, "harness") {
+		if server == "harness" {
 			continue
 		}
 		var other struct {
