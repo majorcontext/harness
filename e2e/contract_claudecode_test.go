@@ -288,6 +288,13 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 			return claudeLane{mode: "normal", callTool: "mcp__weather__forecast", callArgs: map[string]any{"city": "Oslo"}, mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
 		},
 		actions: withActions(claudeOneTurn, claudeMCPConfig{as: "a"}, claudeToolCall{as: "a"}),
+	}, {
+		name: "claudecode_endpoint_initialize_carries_the_mcp_server_instructions",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts.")})(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "initialize", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}})
 }
 

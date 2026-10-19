@@ -106,7 +106,8 @@ representation.
   `list_mcp_resources`/`read_mcp_resource` are two more built-in session
   tools, registered alongside `mcp` whenever a server is configured, that
   give the native loop the `resources/list`/`resources/read` capability
-  Claude Code's CLI lane already gets from its own MCP client. Their defs
+  Claude Code's CLI lane gets through the same two tools on the harness-hosted
+  MCP endpoint. Their defs
   join the request's tool array only once a connected server has
   advertised the `resources` capability in its `initialize` response — a
   session with no resource-capable server never sees either tool.

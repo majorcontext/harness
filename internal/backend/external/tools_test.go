@@ -17,7 +17,7 @@ import (
 
 func TestServeToolsRefusesACallWithNoToolUseID(t *testing.T) {
 	ran := false
-	tools, err := external.ServeTools(context.Background(), []protocol.ToolSpec{{Name: "echo"}}, "id",
+	tools, err := external.ServeTools(context.Background(), []protocol.ToolSpec{{Name: "echo"}}, "", "id",
 		func(context.Context, protocol.ToolCall) protocol.ToolResult {
 			ran = true
 			return protocol.ToolResult{Text: "ran"}
@@ -47,7 +47,7 @@ func TestServeToolsRefusesACallWithNoToolUseID(t *testing.T) {
 }
 
 func TestCloseDropsAStalledRequest(t *testing.T) {
-	tools, err := external.ServeTools(context.Background(), nil, "id", nil)
+	tools, err := external.ServeTools(context.Background(), nil, "", "id", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -96,7 +96,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	srcs := turn.Sources{boundTools{tools: static, session: id, root: root}}
 	if len(loopOnly) > 0 {
 		goal := turn.Fixed(loopOnly)
-		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if c.OwnsLoop {
 				return nil
 			}
@@ -105,7 +105,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	}
 	if model != nil {
 		full, listed := turn.Fixed{*model}, turn.Fixed{model.ListOnly()}
-		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if c.OwnsLoop {
 				return listed
 			}
@@ -126,7 +126,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		srcs = append(srcs, files)
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
-		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) {
 				return nil
 			}
@@ -137,7 +137,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		}})
 	}
 	if plug != nil {
-		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if c.OwnsLoop {
 				return plug.Untransformed()
 			}
@@ -148,14 +148,14 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 }
 
 // perModel gives each model call the Source that pick chooses for the
-// capabilities of its model and its allowed tools. pick returns nil for none.
+// capabilities of its model. pick returns nil for none.
 type perModel struct {
 	backend turn.Backend
-	pick    func(caps turn.Capabilities, allowed []string) turn.Source
+	pick    func(caps turn.Capabilities) turn.Source
 }
 
 func (p perModel) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
-	src := p.pick(p.backend.Capabilities(model), allowed)
+	src := p.pick(p.backend.Capabilities(model))
 	if src == nil {
 		return turn.Toolset{}
 	}

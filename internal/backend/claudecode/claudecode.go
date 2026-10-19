@@ -299,7 +299,7 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) 
 		}
 		return res
 	}
-	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, call); err != nil {
+	if r.tools, err = external.ServeTools(ctx, req.Tools, req.MCPInstructions, toolUseMeta, call); err != nil {
 		return "", err
 	}
 	r.bridged = map[string]bool{}

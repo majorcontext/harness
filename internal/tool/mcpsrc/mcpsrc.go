@@ -278,7 +278,8 @@ func (s *Source) toolset(ctx context.Context, history []protocol.LogMessage, all
 		head = append(head, slices.DeleteFunc([]turn.Tool{lister{s}, reader{s}}, func(t turn.Tool) bool { return !ok(t.Spec().Name) })...)
 	}
 	ts.Tools = append(head, ts.Tools...)
-	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), catalog(listed)}, func(p string) bool { return p == "" }), "\n\n")
+	ts.MCPInstructions = v.instructions(ok)
+	ts.Prompt = strings.Join(slices.DeleteFunc([]string{ts.MCPInstructions, catalog(listed)}, func(p string) bool { return p == "" }), "\n\n")
 	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok, late)}}
 	return ts
 }

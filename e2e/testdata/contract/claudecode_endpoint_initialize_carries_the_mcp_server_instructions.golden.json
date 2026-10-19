@@ -1,0 +1,82 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "tool_call.a": {
+      "status": 200,
+      "body": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "capabilities": {
+            "tools": {}
+          },
+          "instructions": "\u003cmcp_instructions\u003e\n\u003cserver name=\"weather\" tools=\"mcp__weather__alerts, mcp__weather__echo, mcp__weather__flaky, mcp__weather__forecast, mcp__weather__strict\"\u003e\nCall forecast before alerts.\n\u003c/server\u003e\n\u003c/mcp_instructions\u003e",
+          "protocolVersion": "2025-11-25",
+          "serverInfo": {
+            "name": "harness",
+            "version": ""
+          }
+        }
+      }
+    }
+  }
+}
