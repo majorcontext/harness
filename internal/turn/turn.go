@@ -14,16 +14,6 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// MCPServer is an MCP server that one session adds. Command is the argv of a stdio server and URL the
-// endpoint of an HTTP server.
-type MCPServer struct {
-	Command []string
-	Env     []string
-	Dir     string
-	URL     string
-	Headers map[string]string
-}
-
 // ErrRetryable marks a backend error that a new attempt of the turn can fix.
 var ErrRetryable = errors.New("turn: retryable backend error")
 
@@ -50,9 +40,6 @@ type Backend interface {
 type Capabilities struct {
 	OwnsLoop    bool
 	OwnsContext bool
-	// OwnsMCP reports a backend that connects the configured MCP servers
-	// itself on a turn with no tool restriction.
-	OwnsMCP bool
 	// Steering is a backend that owns the loop and calls Sink.Steer.
 	Steering      bool
 	ContextWindow int
@@ -106,8 +93,6 @@ type Request struct {
 	AllowedTools []string
 	// Steered receives a value when a steer input waits for Sink.Steer. nil: no steer input.
 	Steered <-chan struct{}
-	// MCPServers are the session MCP servers, for a backend that owns MCP. Never log their env or headers.
-	MCPServers map[string]MCPServer
 	// Ask opens the request of a call to ask_user_question; false: the result is its error.
 	Ask           func(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, bool)
 	SearchAllowed bool // the config and AllowedTools allow the web search; each call sets WebSearch from it

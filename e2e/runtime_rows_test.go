@@ -389,7 +389,7 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, map[string]runtimeRow{
 	"task_profile_maps_claude_code_tool_names_to_harness_tools":                                  sameAsServe(),
 	"claudecode_bridge_serves_a_text_item_for_a_tool_with_no_output":                             sameAsServe(),
 	"claudecode_plugin_hook_denies_a_bash_call_of_the_cli":                                       sameAsServe(),
-	"claudecode_configured_mcp_servers_reach_the_cli":                                            sameAsServe(),
+	"claudecode_configured_mcp_tool_runs_through_the_harness_endpoint":                           sameAsServe(),
 	"claudecode_context_window_from_model_usage":                                                 reGolden(specView, specClaudeGauge),
 	"claudecode_compact_reads_post_tokens":                                                       reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),
 	"claudecode_compact_post_tokens_yields_to_assistant_usage":                                   reGolden(specView, specClaudeGauge, specClaudeCompactPostTokens),

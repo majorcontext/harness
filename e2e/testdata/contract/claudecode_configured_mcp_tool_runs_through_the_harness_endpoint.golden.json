@@ -60,46 +60,29 @@
     ]
   },
   "calls": {
-    "claude_invocations.a": {
-      "status": 200,
-      "body": [
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized",
-          "tools": "ToolSearch"
-        }
-      ]
-    },
     "claude_mcp_config.a": {
       "status": 200,
       "body": [
         {
           "bridge": true,
-          "servers": {
-            "chrome-devtools": {
-              "args": [
-                "--headless"
-              ],
-              "command": "chrome-devtools-mcp-absent",
-              "env": {
-                "A": "1"
-              }
-            },
-            "gateway": {
-              "headers": {
-                "Authorization": "Bearer t"
-              },
-              "type": "http",
-              "url": "http://127.0.0.1:1/mcp"
-            }
-          }
+          "servers": {}
         }
       ]
+    },
+    "tool_call.a": {
+      "status": 200,
+      "body": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "Oslo: 3C, snow",
+              "type": "text"
+            }
+          ]
+        }
+      }
     }
   }
 }

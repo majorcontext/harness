@@ -40,7 +40,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_server_that_fails_to_connect_parks", rowASessionServerThatFailsToConnectParks},
 		{"an_open_without_the_option_has_no_session_tools", rowAnOpenWithoutTheOptionHasNoSessionTools},
 		{"no_secret_of_a_session_server_is_in_the_log", rowNoSecretOfASessionServerIsInTheLog},
-		{"a_session_server_reaches_a_backend_that_owns_mcp", rowASessionServerReachesABackendThatOwnsMCP},
+		{"a_session_tool_reaches_the_cli_through_the_harness_endpoint", rowASessionToolReachesTheCLIThroughTheHarnessEndpoint},
 		{"runtime_and_session_servers_answer_in_one_turn_and_status_lists_both", rowRuntimeAndSessionServersAnswerInOneTurn},
 		{"no_secret_of_a_connected_session_server_is_in_the_log_or_a_tool_error", rowNoSecretOfAConnectedSessionServerIsInTheLogOrAToolError},
 		{"a_session_server_may_not_share_a_name_with_an_embedder_tool", rowASessionServerMayNotShareANameWithAnEmbedderTool},
@@ -316,19 +316,19 @@ func rowASessionServerMayNotTakeTheNameOfARuntimeServer(t *testing.T) {
 	}
 }
 
-func rowASessionServerReachesABackendThatOwnsMCP(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "mcp-config.jsonl")
+func rowASessionToolReachesTheCLIThroughTheHarnessEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	logPath, toolLog := filepath.Join(dir, "mcp-config.jsonl"), filepath.Join(dir, "tool.jsonl")
 	retries := 0
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
-		MCPServers: map[string]config.MCPServerSpec{"runtime": {URL: "http://127.0.0.1:1/runtime"}},
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: dir, Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: fakeClaudePath(),
-			ExtraArgs: fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "normal", "FAKE_CLAUDE_MCP_CONFIG_LOG": logPath})}}}})
+			ExtraArgs: fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "normal", "FAKE_CLAUDE_MCP_CONFIG_LOG": logPath,
+				"FAKE_CLAUDE_CALL_TOOL": "mcp__weather__forecast", "FAKE_CLAUDE_TOOL_LOG": toolLog})}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
-	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "claude-code/sonnet"},
-		harness.WithSessionMCP(map[string]config.MCPServerSpec{"session": {URL: "http://127.0.0.1:1/session"}}))
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "claude-code/sonnet"}, harness.WithSessionMCP(map[string]config.MCPServerSpec{"weather": {URL: harnesstest.NewMCPServer(t, mcpWeather("")).URL()}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,8 +343,11 @@ func rowASessionServerReachesABackendThatOwnsMCP(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &f); err != nil {
 		t.Fatalf("decode %q: %v", data, err)
 	}
-	if f.MCPServers["runtime"]["url"] != "http://127.0.0.1:1/runtime" || f.MCPServers["session"]["url"] != "http://127.0.0.1:1/session" {
-		t.Errorf("--mcp-config servers = %v, want the runtime server and the session server", f.MCPServers)
+	if _, ok := f.MCPServers["harness"]; !ok || len(f.MCPServers) != 1 {
+		t.Errorf("--mcp-config servers = %v, want the harness endpoint alone", f.MCPServers)
+	}
+	if got, err := os.ReadFile(toolLog); err != nil || !strings.Contains(string(got), "Oslo: 3C, snow") {
+		t.Errorf("tool call response = %s (%v), want the forecast of the session server", got, err)
 	}
 }
 

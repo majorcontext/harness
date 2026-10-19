@@ -330,11 +330,10 @@ func (a *actor) statuses() []protocol.MCPServerStatus {
 // publish makes the immutable snapshot of the state, and wakes the readers that wait for a change.
 func (a *actor) publish() {
 	sn := &snapshot{live: map[string]*server{}, life: map[string]context.Context{}, health: map[string]health{},
-		specs: map[string]config.MCPServerSpec{}, mem: maps.Clone(a.mem), reached: slices.Clone(a.reached), changed: make(chan struct{})}
+		mem: maps.Clone(a.mem), reached: slices.Clone(a.reached), changed: make(chan struct{})}
 	for name, e := range a.entries {
 		sn.names = append(sn.names, name)
 		sn.health[name] = health{attempts: e.attempts, reason: e.reason, parked: e.parked}
-		sn.specs[name] = e.spec
 		if e.sv.up() {
 			sn.live[name], sn.life[name] = e.sv, e.ctx
 		}

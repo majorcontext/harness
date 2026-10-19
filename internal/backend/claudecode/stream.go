@@ -26,10 +26,7 @@ type run struct {
 	dir     string
 	mirror  external.Mirror
 	allowed map[string]bool
-	// restricted is a run whose session lists its allowed tools: the CLI gets
-	// no configured MCP server.
-	restricted bool
-	bridged    map[string]bool
+	bridged map[string]bool
 	// blobs holds the blobs of the bridge results by call ID until the result frame arrives.
 	blobMu sync.Mutex
 	blobs  map[string][]protocol.Blob
@@ -393,16 +390,6 @@ func (r *run) system(env envelope) error {
 	return nil
 }
 
-// mayCall reports whether the CLI may call the tool name. A restricted run
-// calls only its allowed tools. Any run calls MCP tools. A call to any other
-// tool waits for its result; see checkRan.
-func (r *run) mayCall(name string) bool {
-	if r.restricted {
-		return r.allowed[name]
-	}
-	return strings.HasPrefix(name, "mcp__") || r.allowed[name]
-}
-
 // checkRan fails the turn when the result of a call to an unlisted tool is not
 // the refusal of the CLI: an error result whose tool_use_error text is "No
 // such tool available: <name>", ended by "." for a disabled built-in or by
@@ -435,9 +422,6 @@ func (r *run) checkTools(tools *[]string) error {
 		return fmt.Errorf("%w: the init frame lists no tools", ErrToolsNotRestricted)
 	}
 	for _, t := range *tools {
-		if strings.HasPrefix(t, "mcp__") && !r.restricted {
-			continue
-		}
 		if !r.allowed[t] {
 			return fmt.Errorf("%w: %s", ErrToolsNotRestricted, t)
 		}
@@ -480,7 +464,7 @@ func (r *run) assistant(env envelope) error {
 		return nil
 	}
 	for _, p := range parts {
-		if p.Type == protocol.LogPartToolCall && !r.mayCall(p.Name) {
+		if p.Type == protocol.LogPartToolCall && !r.allowed[p.Name] {
 			r.unlisted[p.CallID] = p.Name
 		}
 	}

@@ -126,8 +126,8 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		srcs = append(srcs, files)
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
-		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, allowed []string) turn.Source {
-			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) || allowed == nil && c.OwnsMCP {
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) {
 				return nil
 			}
 			if plug == nil || c.OwnsLoop {

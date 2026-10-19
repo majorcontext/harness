@@ -4,8 +4,6 @@ import (
 	"context"
 	"maps"
 	"slices"
-
-	"github.com/majorcontext/harness/config"
 )
 
 // snapshot is the immutable state that the actor of a Source publishes after each change. A reader never changes it.
@@ -15,7 +13,6 @@ type snapshot struct {
 	live   map[string]*server
 	life   map[string]context.Context
 	health map[string]health
-	specs  map[string]config.MCPServerSpec
 	// mem holds every server name that the runtime read, also a removed one.
 	mem     map[string]*memory
 	reached []string
@@ -87,15 +84,6 @@ func (s *Source) Active() bool {
 // Populated reports whether s or its parent has a server now.
 func (s *Source) Populated() bool {
 	return s != nil && (len(s.snap.Load().names) > 0 || s.parent.Populated())
-}
-
-// Specs returns a copy of the specs of the servers of s, without those of its parent.
-func (s *Source) Specs() map[string]config.MCPServerSpec {
-	out := map[string]config.MCPServerSpec{}
-	for name, sp := range s.snap.Load().specs {
-		out[name] = cloneSpec(sp)
-	}
-	return out
 }
 
 // settle waits until no read of a tool list is in flight, in s and its parent. It reports false when ctx ends first.
