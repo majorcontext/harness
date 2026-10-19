@@ -134,6 +134,8 @@ func liveTurns(between ...action) []action {
 
 // mcpLiveRows is the disposition of the rows of the live MCP server set.
 var mcpLiveRows = map[string]runtimeRow{
+	"mcp_http_sse_server_gets_the_work_dir_as_a_root":                     sameAsServe(),
+	"mcp_stdio_server_gets_the_work_dir_as_a_root":                        sameAsServe(),
 	"mcp_select_reads_the_live_set_when_it_runs":                          sameAsServe(),
 	"mcp_session_that_began_with_an_empty_set_keeps_that_after_a_reopen":  sameAsServe(),
 	"mcp_put_before_any_call_sets_the_tool_loading_of_the_new_spec":       sameAsServe(),

@@ -70,9 +70,10 @@ const (
 	specMirrorBlob              = "are appended as chunk blobs"
 	specKeepOwned               = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
 
-	specErrorText     = "The actor masks and bounds each error text that it writes to the log"
-	specGoalFailed    = "An error the user must fix yields `failed`."
-	specNoParkedGoal  = "no-deferred-goal"
+	specErrorText    = "The actor masks and bounds each error text that it writes to the log"
+	specGoalFailed   = "An error the user must fix yields `failed`."
+	specNoParkedGoal = "no-deferred-goal"
+
 	specStatusFollows = "status-line-follows"
 	specBadFileSkip   = "A file that cannot be read, is empty, or is not UTF-8 is skipped"
 	specBlankJoin     = "The runtime joins them with a blank line."
@@ -494,7 +495,6 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, map[string]runtimeRow{
 	"mcp_server_lost_mid_session_hides_the_endpoint":                           reGolden(specMCPText),
 	"mcp_status_reports_connected_and_unavailable_servers":                     sameAsServe(),
 	"mcp_stdio_server_call":                                                    sameAsServe(),
-	"mcp_stdio_server_gets_the_work_dir_as_a_root":                             sameAsServe(),
 	"mcp_stdio_server_starts_in_configured_dir":                                sameAsServe(),
 	"mcp_tool_call_result":                                                     sameAsServe(),
 	"mcp_tool_error_and_rpc_error_reach_model":                                 reGolden(specMCPText),

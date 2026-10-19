@@ -667,15 +667,6 @@ func TestContractMCPRuntime(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name: "mcp_stdio_server_gets_the_work_dir_as_a_root",
-			setup: mcpSetup(nil, mcpServerDef{name: "where", stdio: true, spec: harnesstest.MCPSpec{
-				Name:  "where",
-				Tools: []harnesstest.MCPTool{{Name: "roots", Description: "Report the roots of the client", Roots: true}},
-			}}),
-			model:   toolChain(mcpTool("where", "roots")),
-			actions: oneTurn,
-		},
-		{
 			name:  "mcp_server_lost_mid_session_hides_the_endpoint",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
 			model: append(callThenDone(0, forecast), callThenDone(2, forecast)...),
@@ -702,6 +693,29 @@ func TestContractMCPRuntime(t *testing.T) {
 			model: toolChain(mcpAction("action", "status")),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}},
 				expectSystem{req: 2, sameAs: 1}),
+		},
+	})
+}
+
+func TestContractMCPRoots(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "mcp_http_sse_server_gets_the_work_dir_as_a_root",
+			setup: mcpSetup(nil, mcpServerDef{name: "where", sse: true, spec: harnesstest.MCPSpec{
+				Name:  "where",
+				Tools: []harnesstest.MCPTool{{Name: "roots", Description: "Report the roots of the client", Roots: true}},
+			}}),
+			model:   toolChain(mcpTool("where", "roots")),
+			actions: oneTurn,
+		},
+		{
+			name: "mcp_stdio_server_gets_the_work_dir_as_a_root",
+			setup: mcpSetup(nil, mcpServerDef{name: "where", stdio: true, spec: harnesstest.MCPSpec{
+				Name:  "where",
+				Tools: []harnesstest.MCPTool{{Name: "roots", Description: "Report the roots of the client", Roots: true}},
+			}}),
+			model:   toolChain(mcpTool("where", "roots")),
+			actions: oneTurn,
 		},
 	})
 }

@@ -359,17 +359,7 @@ func ServeMCPStdio(r io.Reader, w io.Writer, spec MCPSpec) error {
 				if m.Error != nil {
 					return m.Error.Message, nil
 				}
-				var res struct {
-					Roots []struct {
-						URI string `json:"uri"`
-					} `json:"roots"`
-				}
-				_ = json.Unmarshal(m.Result, &res)
-				uris := make([]string, 0, len(res.Roots))
-				for _, r := range res.Roots {
-					uris = append(uris, r.URI)
-				}
-				return strings.Join(uris, "\n"), nil
+				return rootURIs(m.Result), nil
 			}
 			if err != nil {
 				return "", err
@@ -411,6 +401,10 @@ type MCPServer struct {
 	ready    bool
 	notify   bool
 
+	stream     http.ResponseWriter // the event stream of the tools/call that runs, for askRoots
+	streamCtx  context.Context
+	rootsReply chan json.RawMessage
+
 	gates     map[string]chan struct{}
 	inflight  atomic.Int64
 	held      chan struct{}
@@ -422,8 +416,9 @@ type MCPServer struct {
 // reuse once Close ran.
 func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	t.Helper()
-	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{},
+	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{}, rootsReply: make(chan json.RawMessage, 1),
 		held: make(chan struct{}, 64), abandoned: make(chan struct{}, 64)}
+	s.h.roots = s.askRoots
 	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
 	ln, err := listenQuiet()
 	if err != nil {
@@ -642,6 +637,21 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 	if req.Method == "tools/call" && !s.hold(r.Context(), req.Params) {
 		return
 	}
+	if req.Method == "" && strings.Contains(string(req.ID), "roots-1") {
+		var reply struct {
+			Result json.RawMessage `json:"result"`
+		}
+		_ = json.Unmarshal(body, &reply)
+		s.rootsReply <- reply.Result
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	s.mu.Lock()
+	if s.sse && req.Method == "tools/call" {
+		w.Header().Set("Content-Type", "text/event-stream")
+		s.stream, s.streamCtx = w, r.Context()
+	}
+	s.mu.Unlock()
 	resp := s.h.handle(body, r.Header.Get("Authorization"))
 	if req.Method == "initialize" {
 		w.Header().Set("Mcp-Session-Id", mcpSessionID)
@@ -712,4 +722,37 @@ func (s *MCPServer) reject(r *http.Request, method string) (int, string) {
 
 func acceptsMCPResponses(accept string) bool {
 	return strings.Contains(accept, "application/json") && strings.Contains(accept, "text/event-stream")
+}
+
+// rootURIs lists the uri of each root in a roots/list result, one for each line.
+func rootURIs(result json.RawMessage) string {
+	var res struct {
+		Roots []struct {
+			URI string `json:"uri"`
+		} `json:"roots"`
+	}
+	_ = json.Unmarshal(result, &res)
+	uris := make([]string, 0, len(res.Roots))
+	for _, r := range res.Roots {
+		uris = append(uris, r.URI)
+	}
+	return strings.Join(uris, "\n")
+}
+
+// askRoots sends roots/list in the event stream of the tools/call that runs and waits for the POSTed answer.
+func (s *MCPServer) askRoots() (string, error) {
+	s.mu.Lock()
+	w, ctx := s.stream, s.streamCtx
+	s.mu.Unlock()
+	if w == nil {
+		return "", fmt.Errorf("no event stream")
+	}
+	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", `{"jsonrpc":"2.0","id":"roots-1","method":"roots/list"}`)
+	w.(http.Flusher).Flush()
+	select {
+	case res := <-s.rootsReply:
+		return rootURIs(res), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }

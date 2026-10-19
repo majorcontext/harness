@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -182,7 +185,9 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 			// answered with a POST of its response.
 			result, herr := t.handler(ctx, msg.Method, msg.Params)
 			if len(msg.ID) != 0 {
-				return false, t.postResponse(ctx, replyTo(msg, result, herr))
+				if err := t.postResponse(ctx, replyTo(msg, result, herr)); err != nil {
+					log.Printf("mcp: answer to server request %q was not delivered: %v", msg.Method, err)
+				}
 			}
 			return false, nil
 		})
@@ -211,6 +216,10 @@ func (t *httpTransport) postResponse(ctx context.Context, resp message) error {
 	}
 	r, err := t.client.Do(req)
 	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // the URL may hold a credential
+		}
 		return fmt.Errorf("mcp: http response post: %w", err)
 	}
 	defer r.Body.Close()
