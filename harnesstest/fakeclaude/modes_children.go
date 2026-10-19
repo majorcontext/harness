@@ -80,7 +80,7 @@ func awaitGate() {
 
 func spawnChildren(f *fake, prompts []string) {
 	f.emit(say("Delegating."))
-	srv, ok := hostedServer()
+	srv, ok := hostedServer("")
 	if !ok {
 		f.emit(failed(0, 0, "no harness server in --mcp-config"))
 		return

@@ -17,7 +17,7 @@ import (
 
 func TestServeToolsRefusesACallWithNoToolUseID(t *testing.T) {
 	ran := false
-	tools, err := external.ServeTools(context.Background(), []protocol.ToolSpec{{Name: "echo"}}, "", "id",
+	tools, err := external.ServeTools(context.Background(), []external.Group{{Server: external.ToolServer, Specs: []protocol.ToolSpec{{Name: "echo"}}}}, "id",
 		func(context.Context, protocol.ToolCall) protocol.ToolResult {
 			ran = true
 			return protocol.ToolResult{Text: "ran"}
@@ -27,7 +27,7 @@ func TestServeToolsRefusesACallWithNoToolUseID(t *testing.T) {
 	}
 	t.Cleanup(tools.Close)
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{},"_meta":{"other":"x"}}}`
-	resp, err := http.Post(tools.URL, "application/json", strings.NewReader(body))
+	resp, err := http.Post(tools.URLs[external.ToolServer], "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +47,11 @@ func TestServeToolsRefusesACallWithNoToolUseID(t *testing.T) {
 }
 
 func TestCloseDropsAStalledRequest(t *testing.T) {
-	tools, err := external.ServeTools(context.Background(), nil, "", "id", nil)
+	tools, err := external.ServeTools(context.Background(), []external.Group{{Server: external.ToolServer}}, "id", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := url.Parse(tools.URL)
+	u, err := url.Parse(tools.URLs[external.ToolServer])
 	if err != nil {
 		t.Fatal(err)
 	}

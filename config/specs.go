@@ -122,11 +122,14 @@ func validatePlugins(plugins []PluginSpec) error {
 	return nil
 }
 
-// validateMCPServers requires a name that is free of "__" and "mcp__", so mcp__<server>__<tool> decodes in one way, and exactly one of command and url.
+// validateMCPServers requires a name that is not "harness" and is free of "__" and "mcp__", so mcp__<server>__<tool> decodes in one way, and exactly one of command and url.
 func validateMCPServers(servers map[string]MCPServerSpec) error {
 	for name, s := range servers {
 		if name == "" {
 			return fmt.Errorf("mcp_servers: server name is required (empty key)")
+		}
+		if name == "harness" {
+			return fmt.Errorf("mcp_servers.%s: server name is reserved for the server of the harness tools", name)
 		}
 		if strings.Contains(name, "__") {
 			return fmt.Errorf("mcp_servers.%s: server name must not contain \"__\" (the namespaced tool name mcp__<server>__<tool> would not be uniquely decodable)", name)

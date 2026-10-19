@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"regexp"
@@ -31,7 +32,11 @@ func callHostedTool(f *fake) {
 	if raw := os.Getenv("FAKE_CLAUDE_CALL_ARGS"); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &args)
 	}
-	method, params := "tools/call", obj{"name": name, "arguments": args, "_meta": obj{toolUseMeta: "toolu_hosted"}}
+	server, tool := "", name
+	if rest, ok := strings.CutPrefix(name, "mcp__"); ok {
+		server, tool, _ = strings.Cut(rest, "__")
+	}
+	method, params := "tools/call", obj{"name": tool, "arguments": args, "_meta": obj{toolUseMeta: "toolu_hosted"}}
 	if name == "initialize" {
 		method, params = "initialize", obj{"protocolVersion": "2025-06-18", "capabilities": obj{}, "clientInfo": obj{"name": "fakeclaude", "version": "1"}}
 	}
@@ -46,15 +51,19 @@ func callHostedTool(f *fake) {
 			break
 		}
 	}
-	appendFile(log, hostedRPC(method, params)+"\n")
+	appendFile(log, hostedRPCOn(server, method, params)+"\n")
 }
 
 // hostedRPC posts one JSON-RPC request to the harness MCP server of
 // --mcp-config and returns the response body, or the text of the failure.
-func hostedRPC(method string, params obj) string {
-	srv, ok := hostedServer()
+func hostedRPC(method string, params obj) string { return hostedRPCOn("", method, params) }
+
+// hostedRPCOn is hostedRPC on the server of --mcp-config named server, or on
+// the harness server when server is empty.
+func hostedRPCOn(server, method string, params obj) string {
+	srv, ok := hostedServer(server)
 	if !ok {
-		return "no harness server in --mcp-config"
+		return "no " + server + " harness server in --mcp-config"
 	}
 	out, err := hostedPost(srv, method, params)
 	if err != nil {
@@ -68,7 +77,7 @@ func hostedRPC(method string, params obj) string {
 // that the host offers a CLI that is still running.
 func hangAfterListing(f *fake) {
 	if log := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); log != "" {
-		appendFile(log, hostedRPC("tools/list", obj{})+"\n")
+		appendFile(log, hostedListAll()+"\n")
 	}
 	f.emit(say("Working on it."))
 	hang(f)
@@ -82,7 +91,7 @@ func hostedPost(srv hostedEntry, method string, params obj) ([]byte, error) {
 // hostedPostContext is hostedPost on the harness server of --mcp-config; it
 // drops the request when ctx ends.
 func hostedPostContext(ctx context.Context, id any, method string, params obj) ([]byte, error) {
-	srv, ok := hostedServer()
+	srv, ok := hostedServer("")
 	if !ok {
 		return nil, fmt.Errorf("no harness server in --mcp-config")
 	}
@@ -118,29 +127,64 @@ type hostedEntry struct {
 	Headers map[string]string `json:"headers"`
 }
 
-// hostedServer returns the first server of --mcp-config named harness*.
-func hostedServer() (hostedEntry, bool) {
+// hostedServer returns the server of --mcp-config named server, or the first
+// one named harness* when server is empty.
+func hostedServer(server string) (hostedEntry, bool) {
+	servers := hostedServers()
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if name == server || server == "" && strings.HasPrefix(name, "harness") {
+			return servers[name], true
+		}
+	}
+	return hostedEntry{}, false
+}
+
+// hostedServers returns the servers of --mcp-config by name.
+func hostedServers() map[string]hostedEntry {
 	for i, a := range os.Args {
 		if a != "--mcp-config" || i+1 >= len(os.Args) {
 			continue
 		}
 		data, err := os.ReadFile(os.Args[i+1])
 		if err != nil {
-			return hostedEntry{}, false
+			return nil
 		}
 		var cfg struct {
 			MCPServers map[string]hostedEntry `json:"mcpServers"`
 		}
 		if json.Unmarshal(data, &cfg) != nil {
-			return hostedEntry{}, false
+			return nil
 		}
-		for name, e := range cfg.MCPServers {
-			if strings.HasPrefix(name, "harness") {
-				return e, true
-			}
+		return cfg.MCPServers
+	}
+	return nil
+}
+
+// hostedListAll is the tools/list response of the harness server with the
+// tools of every other server added under their mcp__<server>__ names, as the
+// CLI offers them.
+func hostedListAll() string {
+	var out struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
+	}
+	_ = json.Unmarshal([]byte(hostedRPC("tools/list", obj{})), &out)
+	for server := range hostedServers() {
+		if strings.HasPrefix(server, "harness") {
+			continue
+		}
+		var other struct {
+			Result struct{ Tools []map[string]any }
+		}
+		_ = json.Unmarshal([]byte(hostedRPCOn(server, "tools/list", obj{})), &other)
+		for _, t := range other.Result.Tools {
+			t["name"] = "mcp__" + server + "__" + t["name"].(string)
+			out.Result.Tools = append(out.Result.Tools, t)
 		}
 	}
-	return hostedEntry{}, false
+	b, _ := json.Marshal(out)
+	return string(b)
 }
 
 type hostedText struct {
@@ -310,7 +354,7 @@ func abandonTool(f *fake) {
 	case "drop_tool":
 		drop()
 	default:
-		srv, _ := hostedServer()
+		srv, _ := hostedServer("")
 		_, _ = hostedPostCtx(context.Background(), srv, nil, "notifications/cancelled", obj{"requestId": requestID, "reason": "Request timed out"})
 	}
 	awaitGone(pid)

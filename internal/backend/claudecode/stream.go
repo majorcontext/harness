@@ -26,7 +26,7 @@ type run struct {
 	dir     string
 	mirror  external.Mirror
 	allowed map[string]bool
-	bridged map[string]bool
+	bridged map[string]string
 	// blobs holds the blobs of the bridge results by call ID until the result frame arrives.
 	blobMu sync.Mutex
 	blobs  map[string][]protocol.Blob
@@ -484,7 +484,7 @@ func (r *run) assistant(env envelope) error {
 				r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: text})
 			}
 		case protocol.LogPartToolCall:
-			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
+			if name, ok := r.bridged[p.Name]; ok {
 				parts[i].Name = name
 			}
 			r.names[p.CallID] = parts[i].Name

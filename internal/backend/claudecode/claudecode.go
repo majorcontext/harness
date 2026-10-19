@@ -89,8 +89,25 @@ var builtins = []string{toolSearchTool}
 // toolSearchTool is the CLI tool that loads the schema of a deferred MCP tool.
 const toolSearchTool = "ToolSearch"
 
-// mcpPrefix starts the CLI name of each harness tool.
-const mcpPrefix = "mcp__" + external.ToolServer + "__"
+// mcpPrefix starts the CLI name of each MCP tool.
+const mcpPrefix = "mcp__"
+
+// mcpGroup splits the harness name of an MCP tool, mcp__<server>__<tool>, into
+// its server. Server names hold no "__".
+func mcpGroup(name string) (server string, ok bool) {
+	rest, ok := strings.CutPrefix(name, mcpPrefix)
+	server, tool, found := strings.Cut(rest, "__")
+	return server, ok && found && server != "" && tool != ""
+}
+
+// cliName returns the name under which the CLI sees the harness tool name: an
+// MCP tool keeps its name, and any other tool is a tool of the harness server.
+func cliName(name string) string {
+	if _, ok := mcpGroup(name); ok {
+		return name
+	}
+	return mcpPrefix + external.ToolServer + "__" + name
+}
 
 // toolUseMeta is the _meta field of an MCP tool call that holds the CLI tool use ID.
 const toolUseMeta = "claudecode/toolUseId"
@@ -165,7 +182,7 @@ func restriction(req turn.Request) map[string]bool {
 		allowed[searchTool] = true
 	}
 	for _, t := range req.Tools {
-		allowed[mcpPrefix+t.Name] = true
+		allowed[cliName(t.Name)] = true
 	}
 	return allowed
 }
@@ -268,26 +285,60 @@ func toolSearchEnv(mode string) string {
 }
 
 // mcpArgs returns the MCP flags of the run. The CLI gets the harness tools
-// of req, MCP tools included, through the harness-hosted endpoint alone.
+// of req through the harness-hosted endpoint: one server for each MCP server,
+// under its own name, and the harness server for the other tools.
 func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
 	if len(req.Tools) == 0 {
 		return nil, nil
 	}
-	url, err := r.serveTools(ctx, req)
+	urls, err := r.serveTools(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	path, err := r.writeMCPConfig(map[string]mcpServer{external.ToolServer: {Type: "http", URL: url}})
+	servers := map[string]mcpServer{}
+	for _, name := range slices.Sorted(maps.Keys(urls)) {
+		servers[name] = mcpServer{Type: "http", URL: urls[name]}
+	}
+	path, err := r.writeMCPConfig(servers)
 	if err != nil {
 		return nil, err
 	}
-	return []string{"--mcp-config", path, "--allowedTools", "mcp__" + external.ToolServer}, nil
+	allowed := slices.Sorted(maps.Keys(servers))
+	for i, name := range allowed {
+		allowed[i] = mcpPrefix + name
+	}
+	return []string{"--mcp-config", path, "--allowedTools", strings.Join(allowed, ",")}, nil
+}
+
+// groupsOf splits tools by the MCP server of each tool. The harness group
+// holds the other tools and the usage guidance of every MCP server.
+func groupsOf(tools []protocol.ToolSpec, instructions string) []external.Group {
+	harness := external.Group{Server: external.ToolServer, Instructions: instructions}
+	byServer := map[string]*external.Group{}
+	for _, t := range tools {
+		server, ok := mcpGroup(t.Name)
+		if !ok {
+			harness.Specs = append(harness.Specs, t)
+			continue
+		}
+		g := byServer[server]
+		if g == nil {
+			g = &external.Group{Server: server, Prefix: mcpPrefix + server + "__"}
+			byServer[server] = g
+		}
+		g.Specs = append(g.Specs, t)
+	}
+	groups := []external.Group{harness}
+	for _, server := range slices.Sorted(maps.Keys(byServer)) {
+		groups = append(groups, *byServer[server])
+	}
+	return groups
 }
 
 // serveTools serves the harness tools of req for this run and returns the
-// URL of the endpoint. Items record a served tool by its harness name, as
+// URL of each server. Items record a served tool by its harness name, as
 // on the other backends.
-func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) {
+func (r *run) serveTools(ctx context.Context, req turn.Request) (map[string]string, error) {
 	var err error
 	call := func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
 		if c.Name == turn.AskTool {
@@ -299,14 +350,14 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) 
 		}
 		return res
 	}
-	if r.tools, err = external.ServeTools(ctx, req.Tools, req.MCPInstructions, toolUseMeta, call); err != nil {
-		return "", err
+	if r.tools, err = external.ServeTools(ctx, groupsOf(req.Tools, req.MCPInstructions), toolUseMeta, call); err != nil {
+		return nil, err
 	}
-	r.bridged = map[string]bool{}
+	r.bridged = map[string]string{}
 	for _, t := range req.Tools {
-		r.bridged[t.Name] = true
+		r.bridged[cliName(t.Name)] = t.Name
 	}
-	return r.tools.URL, nil
+	return r.tools.URLs, nil
 }
 
 // mcpServer is one server of an --mcp-config file.

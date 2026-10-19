@@ -240,7 +240,7 @@ func (a claudeSystemPrompt) run(t *testing.T, r *run) {
 
 // claudeMCPConfig records the operator servers of the --mcp-config file of
 // each invocation, and whether the file also names the harness tools bridge.
-// The bridge entry holds a port and a token, so it is not recorded.
+// A served entry holds a port and a token, so no URL is recorded.
 type claudeMCPConfig struct{ as string }
 
 func (a claudeMCPConfig) run(t *testing.T, r *run) {
@@ -262,6 +262,9 @@ func (a claudeMCPConfig) run(t *testing.T, r *run) {
 				bridge = true
 				delete(f.MCPServers, name)
 			}
+		}
+		for _, e := range f.MCPServers {
+			delete(e, "url")
 		}
 		out = append(out, map[string]any{"servers": f.MCPServers, "bridge": bridge})
 	}

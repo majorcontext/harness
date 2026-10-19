@@ -30,7 +30,7 @@ const hist = "get_conversation_history"
 func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *testing.T) {
 	dir, st := t.TempDir(), store.NewMemStore()
 	mcpLog, configLog := filepath.Join(dir, "mcp"), filepath.Join(dir, "config")
-	argvLog := fakeClaude(t, "mcp", toolsInit, `[]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
+	argvLog := fakeClaude(t, "mcp", toolsInit, `[]`, "FAKE_CLAUDE_MCP_CALL", "mcp__gateway__ping", "FAKE_CLAUDE_MCP_LOG", mcpLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG", configLog)
 	reg := mcp.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -52,18 +52,18 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	}
 	defer closeRuntime(t, r)
 	turnOf(t, createClaude(t, r, []string{"echo", "mcp__gateway__ping"}), text("a", "hi"))
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m", `item.completed tool toolu_m echo {"q":"hi"}`, "item.completed assistant done", "context.measured", "turn.ended completed")
-	offered := []string{"echo", "mcp__gateway__ping", hist}
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m", "item.completed tool toolu_m", "item.completed assistant done", "context.measured", "turn.ended completed")
 	runs := jsonLines[mcpRun](t, mcpLog)
-	if len(runs) != 1 || !slices.Equal(runs[0].Tools, offered) {
-		t.Fatalf("bridge runs = %+v, want one that offers %q", runs, offered)
+	if len(runs) != 1 || !slices.Equal(runs[0].Tools, []string{"echo", hist}) {
+		t.Fatalf("bridge runs = %+v, want one that offers echo and %s", runs, hist)
 	}
-	want := map[string]map[string]any{"harness": {"type": "http", "url": runs[0].URL}}
-	if got := jsonLines[mcpConfigFile](t, configLog); len(got) != 1 || !reflect.DeepEqual(got[0].MCPServers, want) {
-		t.Errorf("--mcp-config = %+v, want %+v", got, want)
+	got := jsonLines[mcpConfigFile](t, configLog)
+	if len(got) != 1 || len(got[0].MCPServers) != 2 || !reflect.DeepEqual(got[0].MCPServers["harness"], map[string]any{"type": "http", "url": runs[0].URL}) || got[0].MCPServers["gateway"]["url"] == runs[0].URL {
+		t.Errorf("--mcp-config = %+v, want harness at %s and a gateway entry at its own URL", got, runs[0].URL)
 	}
-	if argv := jsonLines[[]string](t, argvLog)[0]; !slices.Contains(argv, "--strict-mcp-config") {
-		t.Errorf("argv = %q, want --strict-mcp-config", argv)
+	if argv, names := jsonLines[[]string](t, argvLog)[0], toolPartNames(t, st); !hasArgs(argv, "--allowedTools", "mcp__gateway,mcp__harness") ||
+		!slices.Contains(argv, "--strict-mcp-config") || !slices.Equal(names, []string{"mcp__gateway__ping", "mcp__gateway__ping"}) {
+		t.Errorf("argv = %q, tool parts = %q, want --allowedTools mcp__gateway,mcp__harness, --strict-mcp-config, and the harness name of the gateway tool", argv, names)
 	}
 }
 
