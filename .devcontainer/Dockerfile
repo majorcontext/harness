@@ -15,7 +15,7 @@
 # the Go version actually used to build regardless of the image's patch
 # level. Pin by digest here only if spawn-time determinism ever becomes a
 # requirement.
-FROM golang:1.25-bookworm
+FROM golang:1.27.3-bookworm@sha256:5c3e9b43cfd3bb95c7937462e29d87ada57b481a96fa23ad0eb61778d7a00110
 
 # Node is required for the TypeScript plugin SDK tests
 # (node --test sdk/typescript/test/*.test.mjs, and the conformance test in

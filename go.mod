@@ -1,12 +1,12 @@
 module github.com/majorcontext/harness
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/invopop/jsonschema v0.13.0
 	github.com/klauspost/compress v1.20.0
-	golang.org/x/image v0.44.0
+	golang.org/x/image v0.45.0
 	golang.org/x/net v0.58.0
 	pgregory.net/rapid v1.3.0
 )

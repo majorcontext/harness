@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Build stage: matches the go directive in go.mod (go 1.25.x).
-FROM golang:1.25 AS build
+FROM golang:1.27.3-bookworm@sha256:5c3e9b43cfd3bb95c7937462e29d87ada57b481a96fa23ad0eb61778d7a00110 AS build
 WORKDIR /src
 
 # Cache module downloads separately from source.
