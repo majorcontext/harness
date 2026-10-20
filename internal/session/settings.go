@@ -9,7 +9,7 @@ import (
 )
 
 // Update appends the settings in ch that differ from the session settings, and
-// the title when it differs from the session title. Config.Check validates a
+// the title when it differs from the title of a person. Config.Check validates a
 // new model first.
 func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *string) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {

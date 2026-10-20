@@ -125,6 +125,9 @@ func rowNewRefusesABadOptionWithAPlainError(t *testing.T) {
 	for name, opts := range map[string]harness.Options{
 		"no store":              {},
 		"a token without a url": {Store: store.NewMemStore(), RunToken: "t"},
+		"a title_model that runs its own agent loop": {Store: store.NewMemStore(), Config: config.Config{
+			Providers:  map[string]config.Provider{"cc": {Type: "claude-code-cli", BinaryPath: fakeClaudePath()}},
+			TitleModel: "cc/sonnet"}},
 	} {
 		_, err := harness.New(opts)
 		if err == nil || errors.Is(err, harness.ErrInvalidRequest) || protocol.CodeOf(err) != protocol.CodeInternal {
