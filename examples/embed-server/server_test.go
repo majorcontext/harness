@@ -667,7 +667,7 @@ func TestWasmModuleIsServedCompressedWithAnETag(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		return resp, body
 	}
-	for _, c := range []struct{ accept, encoding string }{{"gzip, br", "br"}, {"gzip", "gzip"}, {"", ""}} {
+	for _, c := range []struct{ accept, encoding string }{{"gzip, br", "br"}, {"gzip", "gzip"}, {"br;q=0.0, gzip", "gzip"}, {"", ""}} {
 		resp, body := get(c.accept, "")
 		if got := resp.Header.Get("Content-Encoding"); got != c.encoding {
 			t.Fatalf("Accept-Encoding %q: Content-Encoding %q, want %q", c.accept, got, c.encoding)

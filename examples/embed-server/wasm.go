@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -57,7 +58,8 @@ func accepts(r *http.Request, coding string) bool {
 	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
 		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
 		if name == coding {
-			return strings.TrimSpace(params) != "q=0"
+			q, err := strconv.ParseFloat(strings.TrimPrefix(strings.TrimSpace(params), "q="), 64)
+			return params == "" || err != nil || q > 0
 		}
 	}
 	return false
