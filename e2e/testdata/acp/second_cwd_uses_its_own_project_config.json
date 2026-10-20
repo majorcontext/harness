@@ -233,6 +233,13 @@
                 "name": "queue"
               },
               {
+                "description": "Rename the session",
+                "input": {
+                  "hint": "\u003ctitle\u003e"
+                },
+                "name": "rename"
+              },
+              {
                 "description": "Show the session state",
                 "name": "status"
               },
@@ -373,6 +380,13 @@
                 "name": "queue"
               },
               {
+                "description": "Rename the session",
+                "input": {
+                  "hint": "\u003ctitle\u003e"
+                },
+                "name": "rename"
+              },
+              {
                 "description": "Show the session state",
                 "name": "status"
               },
@@ -410,6 +424,21 @@
             }
           ],
           "sessionId": "\u003csession:a\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "one",
+            "updatedAt": "\u003ctime\u003e"
+          }
         }
       }
     },
@@ -484,6 +513,21 @@
             }
           ],
           "sessionId": "\u003csession:b\u003e"
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:b\u003e",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "two",
+            "updatedAt": "\u003ctime\u003e"
+          }
         }
       }
     },

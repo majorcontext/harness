@@ -1712,6 +1712,9 @@
           "model": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
           "effort": {
             "type": "string"
           },
@@ -1851,6 +1854,17 @@
           "sessions"
         ]
       },
+      "SessionTitled": {
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ]
+      },
       "Settings": {
         "properties": {
           "effort": {
@@ -1885,6 +1899,9 @@
             "type": "string"
           },
           "service_tier": {
+            "type": "string"
+          },
+          "title": {
             "type": "string"
           }
         },

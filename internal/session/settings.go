@@ -8,9 +8,10 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 )
 
-// Update appends the settings in ch that differ from the session settings.
-// Config.Check validates a new model first.
-func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged) error {
+// Update appends the settings in ch that differ from the session settings, and
+// the title when it differs from the session title. Config.Check validates a
+// new model first.
+func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *string) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		set, prev := a.state.Settings(), a.state.Model()
 		ch.Model = changed(ch.Model, prev)
@@ -20,13 +21,21 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged) error {
 		if ch.Model != nil && a.cfg.Check != nil {
 			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
-		if err == nil && ch != (protocol.SettingsChanged{}) {
+		title = changed(title, a.state.Title())
+		if err == nil && (ch != protocol.SettingsChanged{} || title != nil) {
 			var events []protocol.Payload
 			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
 				events = a.dismissRequests()
 			}
-			err = a.append(append(events, ch)...)
-			if err == nil && len(events) > 0 && a.run == nil {
+			dismissed := len(events)
+			if ch != (protocol.SettingsChanged{}) {
+				events = append(events, ch)
+			}
+			if title != nil {
+				events = append(events, protocol.SessionTitled{Title: *title})
+			}
+			err = a.append(events...)
+			if err == nil && dismissed > 0 && a.run == nil {
 				err = a.next(true)
 			}
 			if err == nil && ch.Model != nil && a.cfg.Backend.Capabilities(*ch.Model).ContextWindow != a.cfg.Backend.Capabilities(prev).ContextWindow {

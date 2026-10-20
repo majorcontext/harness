@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -45,7 +46,9 @@ type acpCloseInFlight struct{ as, prompt string }
 type acpList struct {
 	cwd, rawCWD, cursor string
 	want                []string
-	code                int
+	// titles, when set, are the titles that the sessions of want carry in order; "" is null.
+	titles []string
+	code   int
 	// more expects a nextCursor, and fromCursor sends the one of the last list.
 	more, fromCursor bool
 }
@@ -194,14 +197,17 @@ func (s acpList) run(t *testing.T, c *acpConn) {
 	}
 	c.cursor = next
 	var got, want []string
+	var gotTitles []any
 	list, _ := res["sessions"].([]any)
 	for _, e := range list {
 		info, _ := e.(map[string]any)
 		id, _ := info["sessionId"].(string)
 		got = append(got, id)
-		if title, ok := info["title"]; !ok || title != nil {
-			t.Errorf("session %s has the title %v, want null", id, title)
+		title, ok := info["title"]
+		if _, isText := title.(string); !ok || title != nil && !isText {
+			t.Errorf("session %s has the title %v, want a string or null", id, title)
 		}
+		gotTitles = append(gotTitles, title)
 		if at, _ := info["updatedAt"].(string); at == "" {
 			t.Errorf("session %s has no updatedAt", id)
 		}
@@ -214,6 +220,12 @@ func (s acpList) run(t *testing.T, c *acpConn) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("session/list answered %v, want %v", got, want)
+	}
+	for i, title := range s.titles {
+		if i >= len(gotTitles) || fmt.Sprint(gotTitles[i]) != cmp.Or(title, "<nil>") {
+			t.Errorf("session/list answered the titles %v, want %v", gotTitles, s.titles)
+			break
+		}
 	}
 }
 

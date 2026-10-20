@@ -18,8 +18,8 @@ const listStep = 50
 // it with no match answers an empty page and a cursor.
 const listSteps = 4
 
-// sessionInfo is one entry of the answer of session/list. The title is null:
-// harness names no session.
+// sessionInfo is one entry of the answer of session/list. The title is null
+// while the session has none.
 type sessionInfo struct {
 	SessionID string  `json:"sessionId"`
 	CWD       string  `json:"cwd"`
@@ -74,7 +74,11 @@ func (a *agent) listSessions(ctx context.Context, params json.RawMessage) (any, 
 			if s.ParentID != "" || s.WorkDir == "" || (cwd != "" && filepath.Clean(s.WorkDir) != cwd) {
 				continue
 			}
-			res.Sessions = append(res.Sessions, sessionInfo{SessionID: s.ID, CWD: s.WorkDir, UpdatedAt: s.UpdatedAt.UTC().Format(time.RFC3339)})
+			info := sessionInfo{SessionID: s.ID, CWD: s.WorkDir, UpdatedAt: s.UpdatedAt.UTC().Format(time.RFC3339)}
+			if s.Title != "" {
+				info.Title = &s.Title
+			}
+			res.Sessions = append(res.Sessions, info)
 		}
 		if page.Next == "" {
 			return res, nil

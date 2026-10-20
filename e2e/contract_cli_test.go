@@ -94,20 +94,18 @@ func TestContractCLIRunSavesAndContinuesTheSession(t *testing.T) {
 		t.Fatalf("run = %d %q, want 0 and the reply\n%s", code, out, errOut)
 	}
 	id := sessionID(t, errOut)
-
 	list, _, _ := h.run("sessions")
-	if fields := strings.Split(strings.TrimSpace(list), "\t"); len(fields) != 3 || fields[0] != id || fields[2] != "2" {
-		t.Errorf("sessions = %q, want the session with 2 messages", list)
+	if fields := strings.Split(strings.TrimSpace(list), "\t"); len(fields) != 4 || fields[0] != id || fields[2] != "2" || fields[3] != "hi" {
+		t.Errorf("sessions = %q, want the session with 2 messages and the title hi", list)
 	}
 	raw, _, _ := h.run("sessions", "--json")
 	var rows []struct {
-		ID       string `json:"id"`
-		Messages int    `json:"messages"`
+		ID, Title string
+		Messages  int
 	}
-	if err := json.Unmarshal([]byte(raw), &rows); err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Messages != 2 {
-		t.Errorf("sessions --json = %q (%v), want one session with 2 messages", raw, err)
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Messages != 2 || rows[0].Title != "hi" {
+		t.Errorf("sessions --json = %q (%v), want one session with 2 messages and the title hi", raw, err)
 	}
-
 	for _, args := range [][]string{{"run", "-c", "-p", "again"}, {"run", "-r", id, "-p", "third"}} {
 		if _, errOut, code := h.run(args...); code != 0 || sessionID(t, errOut) != id {
 			t.Fatalf("run %v = %d, want the same session\n%s", args, code, errOut)
@@ -303,9 +301,12 @@ func TestContractCLIRunTypedCommandPrintsNothingOnSuccess(t *testing.T) {
 	h := newCLIHost(t, nil, replyText("hello"))
 	_, errOut, _ := h.run("run", "-p", "hi")
 	id := sessionID(t, errOut)
-	out, errOut, code := h.run("run", "-r", id, "-p", "/thinking high")
-	if code != 0 || out != "" {
+	if out, errOut, code := h.run("run", "-r", id, "-p", "/thinking high"); code != 0 || out != "" {
 		t.Fatalf("/thinking = %d %q, want 0 and no output\n%s", code, out, errOut)
+	}
+	_, _, code := h.run("run", "-r", id, "-p", "/rename Named")
+	if list, _, _ := h.run("sessions"); code != 0 || !strings.HasSuffix(strings.TrimSpace(list), "\tNamed") {
+		t.Errorf("/rename = %d, sessions = %q, want the title Named", code, list)
 	}
 	if _, errOut, code := h.run("run", "-r", id, "-p", "/compact abc"); code != 1 || !strings.Contains(errOut, "keep_turns must be a number") {
 		t.Errorf("a command with a bad argument = %d, want 1 and its text\n%s", code, errOut)

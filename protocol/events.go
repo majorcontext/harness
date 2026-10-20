@@ -127,6 +127,7 @@ const (
 	KindSessionCreated     = "session.created"
 	KindOwnerAcquired      = "owner.acquired"
 	KindSettingsChanged    = "settings.changed"
+	KindSessionTitled      = "session.titled"
 	KindInputAdmitted      = "input.admitted"
 	KindInputPromoted      = "input.promoted"
 	KindInputWithdrawn     = "input.withdrawn"
@@ -242,6 +243,11 @@ type SettingsChanged struct {
 	Model       *string `json:"model,omitempty"`
 	Effort      *string `json:"effort,omitempty"`
 	ServiceTier *string `json:"service_tier,omitempty"`
+}
+
+// SessionTitled renames the session. The title is not empty and has no control character, such as a tab or a line break.
+type SessionTitled struct {
+	Title string `json:"title"`
 }
 
 // InputAdmitted queues an input.
@@ -431,6 +437,9 @@ func (SessionCreated) Kind() string { return KindSessionCreated }
 
 // Kind returns KindOwnerAcquired.
 func (OwnerAcquired) Kind() string { return KindOwnerAcquired }
+
+// Kind returns KindSessionTitled.
+func (SessionTitled) Kind() string { return KindSessionTitled }
 
 // Kind returns KindSettingsChanged.
 func (SettingsChanged) Kind() string { return KindSettingsChanged }

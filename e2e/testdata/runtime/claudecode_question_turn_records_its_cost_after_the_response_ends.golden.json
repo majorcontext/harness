@@ -85,6 +85,7 @@
           "windows": []
         },
         "synced_seq": 0,
+        "title": "pick a db",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 10,

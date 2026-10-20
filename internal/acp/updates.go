@@ -8,11 +8,12 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// lastSent is the state that the pump has sent in config_option_update and
-// usage_update. The pump sends an update only when the session state differs.
+// lastSent is the state that the pump has sent in config_option_update,
+// usage_update, and session_info_update. The pump sends an update only when the
+// session state differs.
 type lastSent struct {
-	model, effort string
-	usage         usageState
+	model, effort, title string
+	usage                usageState
 }
 
 type usageState struct {
@@ -30,7 +31,7 @@ func usageOf(s protocol.Session) usageState {
 }
 
 func seedSent(s protocol.Session) lastSent {
-	return lastSent{model: s.Model, effort: s.Effort, usage: usageOf(s)}
+	return lastSent{model: s.Model, effort: s.Effort, title: s.Title, usage: usageOf(s)}
 }
 
 // update sends one session/update notification.
@@ -74,6 +75,16 @@ func usageBody(u usageState) map[string]any {
 // sessionInfo sends the time of the last activity of the session.
 func (h *held) sessionInfo() error {
 	return h.update(map[string]any{"sessionUpdate": "session_info_update", "updatedAt": h.sess.Snapshot().UpdatedAt.UTC().Format(time.RFC3339)})
+}
+
+// titleUpdate sends the title of the session when it differs from what the pump sent.
+func (h *held) titleUpdate(st *pumpState) error {
+	s := h.sess.Snapshot()
+	if s.Title == st.last.title {
+		return nil
+	}
+	st.last.title = s.Title
+	return h.update(map[string]any{"sessionUpdate": "session_info_update", "title": s.Title, "updatedAt": s.UpdatedAt.UTC().Format(time.RFC3339)})
 }
 
 // commandStatus sends the status text of a typed command that has ended as a message.

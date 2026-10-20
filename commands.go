@@ -43,6 +43,7 @@ var ops = map[command.Op]op{
 	command.OpSetModel:       update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Model: &v} }, "model"),
 	command.OpSetThinking:    setThinking,
 	command.OpSetServiceTier: update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{ServiceTier: &v} }, "service_tier"),
+	command.OpRename:         update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Title: &v} }, "title"),
 	command.OpStatus: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		return s.Snapshot(), nil
 	},

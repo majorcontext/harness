@@ -19,6 +19,7 @@ var payloads = map[string]func() Payload{
 	KindSessionCreated:     func() Payload { return new(SessionCreated) },
 	KindOwnerAcquired:      func() Payload { return new(OwnerAcquired) },
 	KindSettingsChanged:    func() Payload { return new(SettingsChanged) },
+	KindSessionTitled:      func() Payload { return new(SessionTitled) },
 	KindInputAdmitted:      func() Payload { return new(InputAdmitted) },
 	KindInputPromoted:      func() Payload { return new(InputPromoted) },
 	KindInputWithdrawn:     func() Payload { return new(InputWithdrawn) },

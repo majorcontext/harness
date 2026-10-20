@@ -72,6 +72,7 @@ func everyKind() []protocol.Payload {
 		protocol.SessionCreated{ParentID: "p", Model: "openai/gpt-5", Settings: protocol.Settings{Effort: "high"}, Origin: "cli"},
 		protocol.OwnerAcquired{Epoch: 7, Owner: "box-1"},
 		protocol.SettingsChanged{ServiceTier: new("flex")},
+		protocol.SessionTitled{Title: "Login fix"},
 		protocol.GoalSet{Condition: "tests pass", MaxTurns: 3},
 		admit("a"), start("t1", "a"), steer("s"), promote("s", "t1"),
 		protocol.ChildSpawned{ChildID: "k", Agent: "explore"},
@@ -132,8 +133,8 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 	if !reflect.DeepEqual(&replayed, &live) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
-	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
-		HeadSeq: 27, CreatedAt: t0, UpdatedAt: t0.Add(26 * time.Second)}
+	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Title: "Login fix", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
+		HeadSeq: 28, CreatedAt: t0, UpdatedAt: t0.Add(27 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

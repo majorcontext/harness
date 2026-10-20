@@ -197,6 +197,7 @@ type compact struct{ as string }
 type setModel struct{ as, model string }
 type setThinking struct{ as, level string }
 type setServiceTier struct{ as, tier string }
+type setTitle struct{ as, title string }
 type endSession struct{ as string }
 
 // endWhileOpened ends the session while the test opens it again and again until the end returns, so an open can come between the stop of the session and the stop of its children.
@@ -311,6 +312,9 @@ func (a setThinking) run(t *testing.T, r *run) {
 }
 func (a setServiceTier) run(t *testing.T, r *run) {
 	r.record(t, "set_service_tier", a.as, r.drv.SetServiceTier(t, r.id(t, a.as), a.tier))
+}
+func (a setTitle) run(t *testing.T, r *run) {
+	r.record(t, "set_title", a.as, r.drv.SetTitle(t, r.id(t, a.as), a.title))
 }
 func (a endSession) run(t *testing.T, r *run) {
 	r.record(t, "end_session", a.as, r.drv.EndSession(t, r.id(t, a.as)))

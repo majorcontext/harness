@@ -247,6 +247,23 @@
             "summary": "Leave the session"
           },
           {
+            "arg_hint": "\u003ctitle\u003e",
+            "args": [
+              {
+                "name": "title",
+                "type": "rest"
+              }
+            ],
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "rename",
+            "op": "rename",
+            "path": "/sessions/{id}",
+            "summary": "Rename the session"
+          },
+          {
             "arg_hint": "\u003csession-id\u003e",
             "args": [
               {
@@ -337,6 +354,9 @@
           "quit": {
             "reason": "Not available in this client.",
             "supported": false
+          },
+          "rename": {
+            "supported": true
           },
           "resume": {
             "reason": "Not available in this client.",

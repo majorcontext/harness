@@ -165,6 +165,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "native",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,
@@ -198,6 +199,7 @@
           "windows": []
         },
         "synced_seq": 0,
+        "title": "native",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "cache_read_tokens": 7,
@@ -223,6 +225,7 @@
         "status": "running",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "native",
         "turn_id": "turn#1",
         "updated_at": "\u003ctime\u003e",
         "usage": {

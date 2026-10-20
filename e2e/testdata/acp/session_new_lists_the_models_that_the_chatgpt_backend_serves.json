@@ -122,6 +122,13 @@
                 "name": "queue"
               },
               {
+                "description": "Rename the session",
+                "input": {
+                  "hint": "\u003ctitle\u003e"
+                },
+                "name": "rename"
+              },
+              {
                 "description": "Show the session state",
                 "name": "status"
               },
@@ -391,6 +398,13 @@
               {
                 "description": "Show queued prompts",
                 "name": "queue"
+              },
+              {
+                "description": "Rename the session",
+                "input": {
+                  "hint": "\u003ctitle\u003e"
+                },
+                "name": "rename"
               },
               {
                 "description": "Show the session state",

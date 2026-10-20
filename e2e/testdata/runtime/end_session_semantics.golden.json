@@ -177,6 +177,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "first",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,
@@ -205,6 +206,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "first",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 10,
@@ -234,6 +236,7 @@
             "status": "idle",
             "subscription_usage": null,
             "synced_seq": 0,
+            "title": "first",
             "updated_at": "\u003ctime\u003e",
             "usage": {
               "input_tokens": 5,
@@ -266,6 +269,7 @@
         "status": "running",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "first",
         "turn_id": "turn#1",
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -295,6 +299,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "first",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 10,

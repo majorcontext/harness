@@ -103,6 +103,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "one",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,
@@ -178,6 +179,7 @@
             "status": "idle",
             "subscription_usage": null,
             "synced_seq": 0,
+            "title": "one",
             "updated_at": "\u003ctime\u003e",
             "usage": {
               "input_tokens": 5,
@@ -237,6 +239,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "one",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,
@@ -276,6 +279,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "one",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,
@@ -304,6 +308,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "one",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,

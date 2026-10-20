@@ -11,12 +11,12 @@ and `-c` fails when the current directory has no session. Use `-r` for any
 other session.
 
 `harness sessions` lists the saved sessions, oldest first. Each line has the ID,
-the creation time, and the message count:
+the creation time, the message count, and the title:
 
 ```console
 $ harness sessions
-ses_ctqgq5qegmlzj2xub2rq5qewqj	2026-10-12T19:11:50Z	10
-ses_fplt2uzhgiwsj6celuziopq7nl	2026-10-12T19:12:09Z	2
+ses_ctqgq5qegmlzj2xub2rq5qewqj	2026-10-12T19:11:50Z	10	fix the flaky login test
+ses_fplt2uzhgiwsj6celuziopq7nl	2026-10-12T19:12:09Z	2	what does this repo do
 ```
 
 `-r` resumes a session by its ID:

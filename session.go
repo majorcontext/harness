@@ -10,6 +10,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -420,6 +421,9 @@ func checkEffort(effort string) error {
 	return nil
 }
 
+// maxTitleBytes is the longest title that a rename takes.
+const maxTitleBytes = 200
+
 // Update changes the settings of the session and returns its view. A running
 // turn that owns no loop uses them from its next model call; a backend that
 // owns its loop uses them from its next run.
@@ -432,7 +436,15 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 			return protocol.Session{}, err
 		}
 	}
-	err := s.a.Update(ctx, protocol.SettingsChanged(p))
+	title := p.Title
+	if title != nil {
+		t := strings.TrimSpace(*title)
+		if t == "" || len(t) > maxTitleBytes || strings.ContainsFunc(t, unicode.IsControl) {
+			return protocol.Session{}, fmt.Errorf("%w: title must be 1 to %d bytes with no control character", ErrInvalidRequest, maxTitleBytes)
+		}
+		title = &t
+	}
+	err := s.a.Update(ctx, protocol.SettingsChanged{Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier}, title)
 	if err != nil {
 		return protocol.Session{}, err
 	}

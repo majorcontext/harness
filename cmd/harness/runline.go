@@ -20,6 +20,7 @@ var runModeOps = map[command.Op]bool{
 	command.OpSetModel:       true,
 	command.OpSetThinking:    true,
 	command.OpSetServiceTier: true,
+	command.OpRename:         true,
 }
 
 // unknownLine is a /name that no built-in command and no prompt command of

@@ -423,3 +423,32 @@ func TestBackendStateFoldsIntoAChain(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionTitle(t *testing.T) {
+	text := func(s string) protocol.LogPart { return protocol.LogPart{Type: protocol.LogPartText, Text: s} }
+	in := func(id string, parts ...protocol.LogPart) protocol.Payload {
+		return protocol.InputAdmitted{InputID: id, Delivery: protocol.DeliveryQueue, Source: "user", Parts: parts}
+	}
+	image := protocol.LogPart{Type: protocol.LogPartBlob, MediaType: "image/png", BlobKey: "k", Bytes: 4}
+	rows := []struct {
+		name   string
+		events []protocol.Payload
+		want   string
+	}{
+		{"no input gives no title", base, ""},
+		{"the first line is cut to 8 words", with(base, in("a", text("\n  one  two three four five six seven eight nine\nsecond"))), "one two three four five six seven eight"},
+		{"a slash input gives no title and the next input does", with(base, in("a", text(" /compact")), in("b", text("hello there"))), "hello there"},
+		{"an image-only input gives no title and the next input does", with(base, in("a", image), in("b", text("hello"))), "hello"},
+		{"a title never changes", with(base, in("a", text("first")), in("b", text("second"))), "first"},
+		{"a long line is cut on a rune boundary", with(base, in("a", text(strings.Repeat("é", 60)))), strings.Repeat("é", 50)},
+		{"a rename beats the derived title", with(base, in("a", text("first")), protocol.SessionTitled{Title: "Named"}), "Named"},
+		{"the newest rename wins", with(base, protocol.SessionTitled{Title: "One"}, protocol.SessionTitled{Title: "Two"}, in("a", text("first"))), "Two"},
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := replay(t, tc.events).Title(); got != tc.want {
+				t.Fatalf("title = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
