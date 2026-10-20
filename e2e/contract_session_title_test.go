@@ -15,6 +15,7 @@ var sessionTitleRows = map[string]runtimeRow{
 	"session_rename_beats_the_derived_title_and_survives_a_restart":                  sameAsServe(),
 	"session_title_that_is_empty_has_a_line_break_or_is_too_long_is_invalid_request": sameAsServe(),
 	"session_title_model_writes_the_title_after_the_first_prompt":                    sameAsServe(),
+	"session_title_rename_to_the_derived_title_beats_a_later_model_title":            sameAsServe(),
 	"session_title_model_that_answers_empty_keeps_the_derived_title":                 sameAsServe(),
 	"session_title_without_a_title_model_sends_no_title_request":                     sameAsServe(),
 }
@@ -132,6 +133,25 @@ func TestContractSessionTitleModel(t *testing.T) {
 				submit{as: "a", text: "please look at why login is flaky"},
 				waitIdle{as: "a"},
 				awaitTitle{as: "a", title: "Fix the flaky login test"},
+				getSession{as: "a"},
+			},
+		},
+		{
+			name:       "session_title_rename_to_the_derived_title_beats_a_later_model_title",
+			concurrent: true,
+			config:     map[string]any{"title_model": "anthropic/title-model"},
+			model: []harnesstest.Step{
+				turn,
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "Model title", Block: true, Usage: harnesstest.Usage{Input: 11, Output: 7}}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "please look at why login is flaky"},
+				waitIdle{as: "a"},
+				awaitRequests{n: 2},
+				setTitle{as: "a", title: "please look at why login is flaky"},
+				release{step: "title"},
+				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
 			},
 		},

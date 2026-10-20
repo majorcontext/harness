@@ -267,7 +267,7 @@ func New(opts Options) (*Runtime, error) {
 		}
 		r.tools = append(r.tools, t)
 	}
-	if err := r.checkPlugins(opts.Config.Plugins, opts.Plugins); err != nil {
+	if err := cmp.Or(r.checkPlugins(opts.Config.Plugins, opts.Plugins), r.checkTitleModel()); err != nil {
 		r.mcp.Close()
 		return nil, err
 	}

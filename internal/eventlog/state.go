@@ -363,6 +363,9 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }
 
+// Renamed is the newest title of a person, or empty.
+func (s *State) Renamed() string { return s.renamed }
+
 // Title is the title of a person, else the title of a model, else the title of the first prompt, else empty.
 func (s *State) Title() string { return cmp.Or(s.renamed, s.modeled, s.derived) }
 

@@ -97,3 +97,11 @@ func modelRef(c config.Config, ref string) string {
 	}
 	return c.ResolveModel(ref)
 }
+
+// checkTitleModel refuses a title_model that runs its own agent loop, as generate does.
+func (r *Runtime) checkTitleModel() error {
+	if r.titleModel != "" && r.models.Capabilities(r.titleModel).OwnsLoop {
+		return fmt.Errorf("harness: title_model %s runs its own agent loop; use a model API provider", r.titleModel)
+	}
+	return nil
+}

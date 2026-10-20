@@ -21,7 +21,7 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *
 		if ch.Model != nil && a.cfg.Check != nil {
 			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
-		title = changed(title, a.state.Title())
+		title = changed(title, a.state.Renamed())
 		if err == nil && (ch != protocol.SettingsChanged{} || title != nil) {
 			var events []protocol.Payload
 			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
