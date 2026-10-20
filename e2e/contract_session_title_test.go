@@ -18,6 +18,7 @@ var sessionTitleRows = map[string]runtimeRow{
 	"session_title_rename_to_the_derived_title_beats_a_later_model_title":            sameAsServe(),
 	"session_title_model_that_answers_empty_keeps_the_derived_title":                 sameAsServe(),
 	"session_title_without_a_title_model_sends_no_title_request":                     sameAsServe(),
+	"session_title_model_on_a_model_that_runs_its_own_agent_loop_writes_the_title":   sameAsServe(),
 }
 
 func isTitleRequest(r harnesstest.Request) bool {
@@ -120,6 +121,19 @@ func (a awaitUsage) run(t *testing.T, r *run) {
 func TestContractSessionTitleModel(t *testing.T) {
 	turn := harnesstest.Step{Name: "turn", Match: notTitleRequest, Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}
 	runScenarios(t, []scenario{
+		{
+			name:   "session_title_model_on_a_model_that_runs_its_own_agent_loop_writes_the_title",
+			driver: ownsLoopConfig(map[string]any{"title_model": "claude-code/sonnet"}),
+			model:  []harnesstest.Step{turn},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "please look at why login is flaky"},
+				waitIdle{as: "a"},
+				awaitTitle{as: "a", title: "Claude answer"},
+				awaitUsage{as: "a", input: 12},
+				getSession{as: "a"},
+			},
+		},
 		{
 			name:       "session_title_model_writes_the_title_after_the_first_prompt",
 			concurrent: true,

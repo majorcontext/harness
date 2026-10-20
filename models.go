@@ -100,7 +100,7 @@ func modelRef(c config.Config, ref string) string {
 }
 
 // checkOptions adds tools to the runtime and refuses a tool name that is empty,
-// repeated, or reserved, a bad plugin, and a title_model that runs its own agent loop, as generate does.
+// repeated, or reserved, and a bad plugin.
 func (r *Runtime) checkOptions(tools []turn.Tool, opts Options) error {
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
@@ -110,9 +110,6 @@ func (r *Runtime) checkOptions(tools []turn.Tool, opts Options) error {
 	}
 	if err := r.checkPlugins(opts.Config.Plugins, opts.Plugins); err != nil {
 		return err
-	}
-	if r.titleModel != "" && r.models.Capabilities(r.titleModel).OwnsLoop {
-		return fmt.Errorf("harness: title_model %s runs its own agent loop; use a model API provider", r.titleModel)
 	}
 	return nil
 }

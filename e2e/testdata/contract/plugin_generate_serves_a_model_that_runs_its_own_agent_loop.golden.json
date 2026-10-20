@@ -94,7 +94,8 @@
               "tool_name": "fixture_generate",
               "tool_input": {
                 "model": "claude-code/sonnet",
-                "text": "hi"
+                "system": "GENERATE-SYSTEM",
+                "text": "say hi"
               },
               "tool_use_id": "toolu#1"
             }
@@ -105,10 +106,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "host error: client/generate: model claude-code/sonnet runs its own agent loop; use a model API provider",
+              "text": "{\"message\":{\"role\":\"assistant\",\"model\":\"claude-code/sonnet\",\"parts\":[{\"type\":\"text\",\"text\":\"Claude answer.\"}]},\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}",
               "tool_name": "fixture_generate",
-              "tool_use_id": "toolu#1",
-              "is_error": true
+              "tool_use_id": "toolu#1"
             },
             {
               "kind": "text",
@@ -141,7 +141,8 @@
             "name": "fixture_generate",
             "arguments": {
               "model": "claude-code/sonnet",
-              "text": "hi"
+              "system": "GENERATE-SYSTEM",
+              "text": "say hi"
             }
           }
         ]
@@ -153,8 +154,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "is_error": true,
-            "content": "host error: client/generate: model claude-code/sonnet runs its own agent loop; use a model API provider"
+            "content": "{\"message\":{\"role\":\"assistant\",\"model\":\"claude-code/sonnet\",\"parts\":[{\"type\":\"text\",\"text\":\"Claude answer.\"}]},\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}"
           }
         ]
       },
@@ -169,5 +169,41 @@
         ]
       }
     ]
+  },
+  "calls": {
+    "claude_inputs.stdin": {
+      "status": 200,
+      "body": [
+        {
+          "content": "say hi",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_invocations.cli": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": false,
+          "model": "sonnet",
+          "no_session_persistence": true,
+          "resume": null,
+          "settings": "{\"disableAllHooks\":true,\"claudeMdExcludes\":[\"**/*.md\"]}",
+          "strict_mcp_config": true,
+          "system_prompt_replaced": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        }
+      ]
+    },
+    "claude_system_prompt.system": {
+      "status": 200,
+      "body": [
+        true
+      ]
+    }
   }
 }

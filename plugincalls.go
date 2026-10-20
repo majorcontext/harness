@@ -34,8 +34,6 @@ func (r *Runtime) mcpCall(ctx context.Context, server, tool string, args json.Ra
 }
 
 // generate serves client/generate: one model call with no tools and no session.
-// A model that runs its own agent loop is refused, because it would start an
-// agent with every tool of its CLI.
 func (r *Runtime) generate(ctx context.Context, model string, req turn.Request) (modelref.ModelRef, string, protocol.Usage, error) {
 	ref, err := modelref.ParseModelRef(r.resolve(model))
 	if err != nil {
@@ -43,9 +41,6 @@ func (r *Runtime) generate(ctx context.Context, model string, req turn.Request) 
 	}
 	if err := (selftool.Catalog{Aliases: r.aliases, Providers: r.models.Providers}).CheckChild(ref.String()); err != nil {
 		return ref, "", protocol.Usage{}, err
-	}
-	if r.models.Capabilities(ref.String()).OwnsLoop {
-		return ref, "", protocol.Usage{}, fmt.Errorf("model %s runs its own agent loop; use a model API provider", ref)
 	}
 	ctx, done, err := r.bound(ctx)
 	if err != nil {

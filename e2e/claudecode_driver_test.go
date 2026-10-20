@@ -206,6 +206,11 @@ func argvFacts(argv []string) map[string]any {
 		"disallowed_tools":  value("--disallowedTools"),
 		"strict_mcp_config": slices.Contains(argv, "--strict-mcp-config"),
 	}
+	if slices.Contains(argv, "--no-session-persistence") {
+		facts["no_session_persistence"] = true
+		facts["settings"] = value("--settings")
+		facts["system_prompt_replaced"] = slices.Contains(argv, "--system-prompt") && !slices.Contains(argv, "--append-system-prompt")
+	}
 	if e := value("--effort"); e != nil {
 		facts["effort"] = e
 	}
@@ -233,6 +238,9 @@ func (a claudeSystemPrompt) run(t *testing.T, r *run) {
 			t.Fatalf("decode argv line %q: %v", line, err)
 		}
 		i := slices.Index(argv, "--append-system-prompt")
+		if i < 0 {
+			i = slices.Index(argv, "--system-prompt")
+		}
 		out = append(out, i >= 0 && i+1 < len(argv) && strings.Contains(argv[i+1], a.contains))
 	}
 	r.record(t, "claude_system_prompt", a.as, callResult{Status: http.StatusOK, Body: out})

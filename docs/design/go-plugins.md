@@ -231,7 +231,7 @@ The host serves `client/mcp.call` and `client/generate`. The wire request shapes
 
 `client/generate`:
 
-- The host resolves an empty `model` to the default model and an alias to its model. A model that no provider serves fails the call, and so does a model whose backend runs its own agent loop (`client/generate: model <ref> runs its own agent loop; use a model API provider`), because that backend would start an agent with every tool of its CLI. The failure text is masked as a session error is.
+- The host resolves an empty `model` to the default model and an alias to its model. A model that no provider serves fails the call. A model whose backend runs its own agent loop serves it with no tool and no session (see `docs/architecture.md`, Prompt). The failure text is masked as a session error is.
 - The call is one model request with no tools. The host uses the provider layer of the runtime, with its credentials and retry limits. The plugin never sees a key.
 - The response is `{message, usage}`. `message` is an assistant message with the text of the reply. `usage` has the token counts of the call, in the shape of the turn usage that the runtime reports.
 - No session records the call. On success the host logs one line with the plugin name, the model, and the usage. A plugin that wants the usage in a session puts it in its tool result.

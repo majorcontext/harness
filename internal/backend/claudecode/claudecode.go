@@ -26,6 +26,10 @@ import (
 	"github.com/majorcontext/harness/internal/turn"
 )
 
+// oneShotSettings keeps the CLI settings of the user that route the call, such as env
+// and apiKeyHelper, and turns off the hooks and every CLAUDE.md file.
+const oneShotSettings = `{"disableAllHooks":true,"claudeMdExcludes":["**/*.md"]}`
+
 // stateKey names the backend state of the external session.
 const stateKey = "claude-code"
 
@@ -211,6 +215,9 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if b.resumes(r.mirror) {
 		args = append(args, "--resume", r.mirror.SessionID)
 	}
+	if req.OneShot {
+		args = append(args, "--no-session-persistence")
+	}
 	if b.p.PermissionMode != "" {
 		args = append(args, "--permission-mode", b.p.PermissionMode)
 	}
@@ -222,12 +229,16 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, "--append-system-prompt-file", file)
+	if req.OneShot {
+		args = append(args, "--system-prompt-file", file, "--settings", oneShotSettings)
+	} else {
+		args = append(args, "--append-system-prompt-file", file)
+	}
 	if req.Sent != nil {
 		req.Sent(system)
 	}
 	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading))
-	if b.p.SessionMirror {
+	if b.p.SessionMirror && !req.OneShot {
 		dir, err := scratch(r.mirror)
 		r.dir = dir
 		if err != nil {
@@ -245,7 +256,12 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 // systemPrompt returns the --append-system-prompt value of a run: the tool
 // names, the entries of append_system_prompt, the skill segment of the
 // session, and the history directive of a session that another model began.
+// A one-shot call has the instructions of the call and the entries of append_system_prompt,
+// and replaces the system prompt of the CLI.
 func (b *Backend) systemPrompt(req turn.Request) string {
+	if req.OneShot {
+		return strings.Join(slices.DeleteFunc([]string{req.Instructions, b.system}, func(s string) bool { return s == "" }), "\n\n")
+	}
 	segs := []string{toolNamesOf(req.Tools, req.WebSearch), b.system, req.Skills}
 	if req.Foreign {
 		segs = append(segs, historyDirective)
@@ -412,6 +428,8 @@ func (r *run) prompt(req turn.Request) (input, error) {
 	m := protocol.LogMessage{Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: continuation}}}
 	if text, ok := answered(req); ok {
 		m.Parts = []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}
+	} else if req.OneShot {
+		m.Parts = startParts(req.History)
 	} else if !r.continues {
 		m.Parts = startParts(req.Input)
 	}
