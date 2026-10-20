@@ -33,7 +33,7 @@ func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 	}
 	s.inputs[e.InputID] = input{state: inputAdmitted, seq: seq, event: e}
 	if s.derived == "" {
-		s.derived = derivedTitle(e.Parts)
+		s.derived = DerivedTitle(e.Parts)
 	}
 	return nil
 }

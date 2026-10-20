@@ -607,10 +607,13 @@ func (a *Actor) append(events ...protocol.Payload) error {
 // actor: the next Open fences and replays from the store. Only a conflict
 // means that another owner holds the session.
 func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error {
+	untitled := a.state.Title() == ""
+	if untitled && a.cfg.TitleModel == "" && a.state.Summary().ParentID == "" {
+		events = withDerivedTitle(events)
+	}
 	if err := eventlog.Check(a.state, events); err != nil {
 		return err
 	}
-	untitled := a.state.Title() == ""
 	head, now := a.state.Head(), time.Now()
 	recs := make([][]byte, len(events))
 	for i, e := range events {
@@ -651,9 +654,6 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 		a.cfg.Appended(events, a.state)
 	}
 	a.publish(false, events...)
-	if untitled && a.state.Title() != "" {
-		a.recordDerivedTitle()
-	}
 	return nil
 }
 

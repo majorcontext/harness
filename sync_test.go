@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -99,11 +98,13 @@ func TestSyncReplicatesTheLog(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		faults []string
-		note   string
+		want   []string
 	}{
-		{"records arrive in seq order", nil, ""},
-		{"a lost ack is retried and acknowledged as a duplicate", []string{"lose"}, "1+2 lost"},
-		{"a receiver that missed records heals from its head", []string{"drop"}, " ack 0"},
+		{"records arrive in seq order", nil, []string{"1+2 ack 2", "3+3 ack 5", "6+1 ack 6"}},
+		{"a lost ack is retried and acknowledged as a duplicate", []string{"lose"},
+			[]string{"1+2 lost", "1+2 ack 2", "3+4 ack 6"}},
+		{"a receiver that missed records heals from its head", []string{"drop"},
+			[]string{"1+2 ack 2", "3+3 ack 0", "1+5 ack 5", "6+1 ack 6"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -114,8 +115,8 @@ func TestSyncReplicatesTheLog(t *testing.T) {
 				submit(t, s, text("a", "hi"))
 				(<-f.runs).end()
 				closeRuntime(t, r)
-				if got := rep.notes(); !strings.Contains(strings.Join(got, ";"), tc.note) {
-					t.Fatalf("deliveries = %q, want one with %q", got, tc.note)
+				if got := rep.notes(); !slices.Equal(got, tc.want) {
+					t.Fatalf("deliveries = %q, want %q", got, tc.want)
 				}
 				if got, want := rawLog(t, rep.st), rawLog(t, st); !slices.Equal(got, want) {
 					t.Fatalf("receiver log = %q, want %q", got, want)

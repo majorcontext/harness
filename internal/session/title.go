@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -37,13 +38,22 @@ func (a *Actor) startTitle(events []protocol.Payload) {
 	}
 }
 
-// recordDerivedTitle appends the derived title of a root session that has no
-// title model. With a title model, a failed call appends it.
-func (a *Actor) recordDerivedTitle() {
-	if a.cfg.TitleModel != "" || a.state.Summary().ParentID != "" || a.state.Renamed() != "" {
-		return
+// withDerivedTitle adds the derived title of the first input that gives one, so the
+// record joins the batch of that input. A batch that creates a child adds none.
+func withDerivedTitle(events []protocol.Payload) []protocol.Payload {
+	for _, e := range events {
+		if c, ok := e.(protocol.SessionCreated); ok && c.ParentID != "" {
+			return events
+		}
 	}
-	a.appendDerivedTitle()
+	for _, e := range events {
+		if in, ok := e.(protocol.InputAdmitted); ok {
+			if title := eventlog.DerivedTitle(in.Parts); title != "" {
+				return append(slices.Clone(events), protocol.SessionTitled{Title: title, Source: protocol.TitleDerived})
+			}
+		}
+	}
+	return events
 }
 
 func (a *Actor) appendDerivedTitle() {

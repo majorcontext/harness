@@ -13,9 +13,9 @@ const (
 	derivedTitleBytes = 100
 )
 
-// derivedTitle is the title that an input gives: the first line of its first
+// DerivedTitle is the title that an input gives: the first line of its first
 // text part, cut to a few words. A slash command and an input with no text give none.
-func derivedTitle(parts []protocol.LogPart) string {
+func DerivedTitle(parts []protocol.LogPart) string {
 	for _, p := range parts {
 		if p.Type != protocol.LogPartText {
 			continue
@@ -46,7 +46,7 @@ func cutTitle(text string) string {
 
 // TitleInput returns the first text part of parts when the input gives a derived title, else "".
 func TitleInput(parts []protocol.LogPart) string {
-	if derivedTitle(parts) == "" {
+	if DerivedTitle(parts) == "" {
 		return ""
 	}
 	for _, p := range parts {
