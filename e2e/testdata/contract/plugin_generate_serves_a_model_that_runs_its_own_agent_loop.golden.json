@@ -191,7 +191,7 @@
           "model": "sonnet",
           "no_session_persistence": true,
           "resume": null,
-          "setting_sources": "",
+          "settings": "{\"disableAllHooks\":true,\"claudeMdExcludes\":[\"**/*.md\"]}",
           "strict_mcp_config": true,
           "system_prompt_replaced": true,
           "thinking_display": "summarized",

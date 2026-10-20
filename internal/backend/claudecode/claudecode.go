@@ -26,6 +26,10 @@ import (
 	"github.com/majorcontext/harness/internal/turn"
 )
 
+// oneShotSettings keeps the CLI settings of the user that route the call, such as env
+// and apiKeyHelper, and turns off the hooks and every CLAUDE.md file.
+const oneShotSettings = `{"disableAllHooks":true,"claudeMdExcludes":["**/*.md"]}`
+
 // stateKey names the backend state of the external session.
 const stateKey = "claude-code"
 
@@ -226,7 +230,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		return nil, err
 	}
 	if req.OneShot {
-		args = append(args, "--system-prompt-file", file, "--setting-sources", "")
+		args = append(args, "--system-prompt-file", file, "--settings", oneShotSettings)
 	} else {
 		args = append(args, "--append-system-prompt-file", file)
 	}
@@ -234,7 +238,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		req.Sent(system)
 	}
 	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading))
-	if b.p.SessionMirror {
+	if b.p.SessionMirror && !req.OneShot {
 		dir, err := scratch(r.mirror)
 		r.dir = dir
 		if err != nil {

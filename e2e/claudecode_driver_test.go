@@ -208,7 +208,7 @@ func argvFacts(argv []string) map[string]any {
 	}
 	if slices.Contains(argv, "--no-session-persistence") {
 		facts["no_session_persistence"] = true
-		facts["setting_sources"] = value("--setting-sources")
+		facts["settings"] = value("--settings")
 		facts["system_prompt_replaced"] = slices.Contains(argv, "--system-prompt") && !slices.Contains(argv, "--append-system-prompt")
 	}
 	if e := value("--effort"); e != nil {

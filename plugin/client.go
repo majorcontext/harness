@@ -126,7 +126,8 @@ type GenerateResponse struct {
 
 // Generate makes one model call with no tools, with the retry limits of the
 // runtime. No session records it. A model whose backend runs its own agent
-// loop, such as Claude Code, answers with no tool and no session.
+// loop, such as Claude Code, answers with no tool and no session; all messages
+// join into one user prompt with no roles, and MaxTokens has no effect.
 func (c *Client) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
 	var resp GenerateResponse
 	if err := c.conn.Call(ctx, wire.MethodGenerate, req, &resp); err != nil {
