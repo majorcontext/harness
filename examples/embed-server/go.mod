@@ -2,7 +2,10 @@ module github.com/majorcontext/harness/examples/embed-server
 
 go 1.27.3
 
-require github.com/majorcontext/gatekeeper v0.28.0
+require (
+	github.com/andybalholm/brotli v1.2.6
+	github.com/majorcontext/gatekeeper v0.28.0
+)
 
 require (
 	cel.dev/expr v0.25.1 // indirect
@@ -12,7 +15,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/STARRY-S/zip v0.2.1 // indirect
-	github.com/andybalholm/brotli v1.1.2-0.20250424173009-453214e765f3 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect

@@ -15,6 +15,8 @@ cd examples/embed-server
 go run . -wasm /tmp/harness.wasm -wasm-exec /tmp/wasm_exec.js
 ```
 
+The server reads the module at startup and serves it with brotli or gzip when the browser accepts it, so restart it after a rebuild. The brotli body is ready about a minute after start; until then the server sends gzip, and before that the raw module.
+
 Open `http://127.0.0.1:8080/`:
 
 1. Select "Sign in to the app" and sign in as any user name (a stand-in, see below).
