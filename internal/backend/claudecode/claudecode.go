@@ -225,7 +225,11 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, "--append-system-prompt-file", file)
+	if req.OneShot {
+		args = append(args, "--system-prompt-file", file, "--setting-sources", "")
+	} else {
+		args = append(args, "--append-system-prompt-file", file)
+	}
 	if req.Sent != nil {
 		req.Sent(system)
 	}
@@ -248,7 +252,8 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 // systemPrompt returns the --append-system-prompt value of a run: the tool
 // names, the entries of append_system_prompt, the skill segment of the
 // session, and the history directive of a session that another model began.
-// A one-shot call has the instructions of the call and the entries of append_system_prompt.
+// A one-shot call has the instructions of the call and the entries of append_system_prompt,
+// and replaces the system prompt of the CLI.
 func (b *Backend) systemPrompt(req turn.Request) string {
 	if req.OneShot {
 		return strings.Join(slices.DeleteFunc([]string{req.Instructions, b.system}, func(s string) bool { return s == "" }), "\n\n")
