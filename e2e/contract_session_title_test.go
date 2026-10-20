@@ -12,6 +12,7 @@ import (
 // sessionTitleRows is the disposition of the rows of TestContractSessionTitle.
 var sessionTitleRows = map[string]runtimeRow{
 	"session_title_is_the_derived_title_of_the_first_prompt":                         sameAsServe(),
+	"session_title_of_a_prompt_with_an_escape_sequence_has_no_control_character":     sameAsServe(),
 	"session_rename_beats_the_derived_title_and_survives_a_restart":                  sameAsServe(),
 	"session_title_that_is_empty_has_a_line_break_or_is_too_long_is_invalid_request": sameAsServe(),
 	"session_title_model_writes_the_title_after_the_first_prompt":                    sameAsServe(),
@@ -75,6 +76,17 @@ func TestContractSessionTitle(t *testing.T) {
 				journalPage{as: "a"},
 				submit{as: "a", text: "second prompt"},
 				waitIdle{as: "a"},
+				journalPage{as: "a"},
+			},
+		},
+		{
+			name:  "session_title_of_a_prompt_with_an_escape_sequence_has_no_control_character",
+			model: []harnesstest.Step{rest},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "\x1b[31merror\x1b[0m in build"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
 				journalPage{as: "a"},
 			},
 		},

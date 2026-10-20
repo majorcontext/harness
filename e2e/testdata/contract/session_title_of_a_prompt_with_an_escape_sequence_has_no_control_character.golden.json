@@ -1,0 +1,196 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u001b[31merror\u001b[0m in build"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "\u001b[31merror\u001b[0m in build"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 8,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "title": "[31merror [0m in build",
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "journal_page.a": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "model": "anthropic/claude-fable-5",
+              "origin": "",
+              "settings": {},
+              "work_dir": "\u003cworkdir\u003e"
+            },
+            "k": "session.created",
+            "seq": 1,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "epoch": 1,
+              "owner": "\u003cowner\u003e"
+            },
+            "k": "owner.acquired",
+            "seq": 2,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in1",
+              "parts": [
+                {
+                  "text": "\u001b[31merror\u001b[0m in build",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 3,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in1"
+              ],
+              "turn_id": "turn#1"
+            },
+            "k": "turn.started",
+            "seq": 4,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "derived",
+              "title": "[31merror [0m in build"
+            },
+            "k": "session.titled",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#1",
+              "message": {
+                "parts": [
+                  {
+                    "text": "ok",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 8,
+            "t": "\u003ctime\u003e"
+          }
+        ]
+      }
+    }
+  }
+}

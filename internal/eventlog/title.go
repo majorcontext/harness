@@ -32,7 +32,7 @@ func DerivedTitle(parts []protocol.LogPart) string {
 // cutTitle cuts the first line of text to the words and bytes of a derived title.
 func cutTitle(text string) string {
 	line, _, _ := strings.Cut(text, "\n")
-	words := strings.Fields(line)
+	words := strings.FieldsFunc(line, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 	title := strings.Join(words[:min(len(words), derivedTitleWords)], " ")
 	if len(title) > derivedTitleBytes {
 		cut := derivedTitleBytes
