@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -40,11 +39,8 @@ func (a *Actor) startTitle(events []protocol.Payload) {
 
 // recordDerivedTitle appends the derived title of a root session that has no
 // title model. With a title model, a failed call appends it.
-func (a *Actor) recordDerivedTitle(events []protocol.Payload) {
+func (a *Actor) recordDerivedTitle() {
 	if a.cfg.TitleModel != "" || a.state.Summary().ParentID != "" || a.state.Renamed() != "" {
-		return
-	}
-	if !slices.ContainsFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.InputAdmitted); return ok }) {
 		return
 	}
 	a.appendDerivedTitle()
@@ -78,7 +74,7 @@ func (a *Actor) titled(answer string, usage protocol.Usage, err error) {
 	title := eventlog.ModelTitle(answer)
 	if err != nil || title == "" {
 		a.log().Warn("harness: session title call", "session", a.cfg.ID, "model", a.cfg.TitleModel, "err", err, "empty", title == "")
-		if a.state.Renamed() == "" && a.state.Title() != "" {
+		if a.state.Renamed() == "" {
 			a.appendDerivedTitle()
 		}
 		_ = a.recordUsage(usage)

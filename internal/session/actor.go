@@ -652,7 +652,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	}
 	a.publish(false, events...)
 	if untitled && a.state.Title() != "" {
-		a.recordDerivedTitle(events)
+		a.recordDerivedTitle()
 	}
 	return nil
 }

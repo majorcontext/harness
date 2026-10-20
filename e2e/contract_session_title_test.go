@@ -144,13 +144,16 @@ func TestContractSessionTitleModel(t *testing.T) {
 			config:     map[string]any{"title_model": "anthropic/title-model"},
 			model: []harnesstest.Step{
 				turn,
-				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "\n\"Fix the flaky login test.\"\nignored second line"}},
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "\n\"Fix the flaky login test.\"\nignored second line", Block: true, Usage: harnesstest.Usage{Input: 11, Output: 7}}},
 			},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "please look at why login is flaky"},
 				waitIdle{as: "a"},
+				awaitRequests{n: 2},
+				release{step: "title"},
 				awaitTitle{as: "a", title: "Fix the flaky login test"},
+				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
 				journalPage{as: "a"},
 			},
@@ -180,13 +183,14 @@ func TestContractSessionTitleModel(t *testing.T) {
 			config:     map[string]any{"title_model": "anthropic/title-model"},
 			model: []harnesstest.Step{
 				turn,
-				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "", Usage: harnesstest.Usage{Input: 11, Output: 7}}},
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "", Block: true, Usage: harnesstest.Usage{Input: 11, Output: 7}}},
 			},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "please look at why login is flaky"},
 				waitIdle{as: "a"},
 				awaitRequests{n: 2},
+				release{step: "title"},
 				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
 				journalPage{as: "a"},

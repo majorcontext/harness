@@ -257,7 +257,7 @@ type SettingsChanged struct {
 }
 
 // SessionTitled sets the session title. The title is not empty and has no control character, such as a tab or a line break.
-// A title from a person always replaces the title; a title from a model applies only while no person has titled the session.
+// A title from a person always replaces the title; a title from a model applies only while no person has titled the session. A derived title record changes no state.
 type SessionTitled struct {
 	Title  string      `json:"title"`
 	Source TitleSource `json:"source"`

@@ -98,8 +98,8 @@
         "title": "Fix the flaky login test",
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 16,
+          "output_tokens": 10
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -157,29 +157,6 @@
           },
           {
             "d": {
-              "source": "model",
-              "title": "Fix the flaky login test"
-            },
-            "k": "session.titled",
-            "seq": 5,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "source": "",
-              "tokens": 0,
-              "usage": {
-                "input_tokens": 5,
-                "output_tokens": 3
-              },
-              "window": 0
-            },
-            "k": "context.measured",
-            "seq": 6,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
               "source": "anthropic",
               "tokens": 5,
               "usage": {
@@ -189,7 +166,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 7,
+            "seq": 5,
             "t": "\u003ctime\u003e"
           },
           {
@@ -207,7 +184,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 8,
+            "seq": 6,
             "t": "\u003ctime\u003e"
           },
           {
@@ -216,6 +193,29 @@
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "model",
+              "title": "Fix the flaky login test"
+            },
+            "k": "session.titled",
+            "seq": 8,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "",
+              "tokens": 0,
+              "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7
+              },
+              "window": 0
+            },
+            "k": "context.measured",
             "seq": 9,
             "t": "\u003ctime\u003e"
           }
