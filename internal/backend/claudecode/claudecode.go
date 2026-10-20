@@ -327,22 +327,31 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
 }
 
 // groupsOf splits tools by the MCP server of each tool. The harness group
-// holds the other tools and the usage guidance of every MCP server.
-func groupsOf(tools []protocol.ToolSpec, instructions string) []external.Group {
-	harness := external.Group{Server: external.ToolServer, Instructions: instructions}
+// holds the other tools and the common guidance. Each server group carries the
+// instructions of its own server, because the CLI cuts the instructions of
+// each server by itself, and shows them under the name of that server.
+func groupsOf(tools []protocol.ToolSpec, instructions turn.MCPInstructions) []external.Group {
+	harness := external.Group{Server: external.ToolServer, Instructions: instructions.Common}
 	byServer := map[string]*external.Group{}
+	group := func(server string) *external.Group {
+		g := byServer[server]
+		if g == nil {
+			g = &external.Group{Server: server, Prefix: mcpPrefix + server + "__", Instructions: instructions.Servers[server]}
+			byServer[server] = g
+		}
+		return g
+	}
 	for _, t := range tools {
 		server, ok := mcpGroup(t.Name)
 		if !ok {
 			harness.Specs = append(harness.Specs, t)
 			continue
 		}
-		g := byServer[server]
-		if g == nil {
-			g = &external.Group{Server: server, Prefix: mcpPrefix + server + "__"}
-			byServer[server] = g
-		}
+		g := group(server)
 		g.Specs = append(g.Specs, t)
+	}
+	for server := range instructions.Servers {
+		group(server)
 	}
 	groups := []external.Group{harness}
 	for _, server := range slices.Sorted(maps.Keys(byServer)) {

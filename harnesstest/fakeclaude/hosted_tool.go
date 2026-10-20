@@ -16,13 +16,15 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
 )
 
 const toolUseMeta = "claudecode/toolUseId"
 
 // callHostedTool runs when FAKE_CLAUDE_CALL_TOOL names a tool and
-// FAKE_CLAUDE_TOOL_LOG a file (the name "initialize" sends the initialize request; the call takes the JSON arguments of
-// FAKE_CLAUDE_CALL_ARGS), or when FAKE_CLAUDE_LIST_TOOLS names a file.
+// FAKE_CLAUDE_TOOL_LOG a file (the tool name "initialize" sends the initialize request, the name "server_instructions"
+// logs serverInstructions, and a call takes the JSON arguments of FAKE_CLAUDE_CALL_ARGS), or when
+// FAKE_CLAUDE_LIST_TOOLS names a file.
 // It waits for harness to close stdin, which it does after it has recorded
 // the result, then calls the tool or lists the tools on the harness MCP
 // server of --mcp-config, and appends the response body to the file.
@@ -37,7 +39,7 @@ func callHostedTool(f *fake) {
 		server, tool, _ = strings.Cut(rest, "__")
 	}
 	method, params := "tools/call", obj{"name": tool, "arguments": args, "_meta": obj{toolUseMeta: "toolu_hosted"}}
-	if name == "initialize" {
+	if tool == "initialize" {
 		method, params = "initialize", obj{"protocolVersion": "2025-06-18", "capabilities": obj{}, "clientInfo": obj{"name": "fakeclaude", "version": "1"}}
 	}
 	if list := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); list != "" {
@@ -51,7 +53,43 @@ func callHostedTool(f *fake) {
 			break
 		}
 	}
+	if name == "server_instructions" {
+		appendFile(log, serverInstructions()+"\n")
+		return
+	}
 	appendFile(log, hostedRPCOn(server, method, params)+"\n")
+}
+
+// cliInstructionsMax is the length in UTF-16 code units at which Claude Code
+// 2.1.303 cuts the instructions of one MCP server. It then appends cliCutMarker.
+const (
+	cliInstructionsMax = 4096
+	cliCutMarker       = "\u2026 [truncated]"
+)
+
+// serverInstructions returns, as one JSON object, the instructions of each
+// server of --mcp-config by name as the CLI gives them to its model: the
+// instructions of the initialize reply, cut as the CLI cuts them.
+func serverInstructions() string {
+	out := map[string]string{}
+	for name, srv := range hostedServers() {
+		var init struct {
+			Result struct{ Instructions string }
+		}
+		raw, err := hostedPost(srv, "initialize", obj{"protocolVersion": "2025-06-18", "capabilities": obj{}, "clientInfo": obj{"name": "fakeclaude", "version": "1"}})
+		if err != nil || json.Unmarshal(raw, &init) != nil {
+			out[name] = fmt.Sprintf("initialize failed: %v", err)
+			continue
+		}
+		if text := init.Result.Instructions; text != "" {
+			if units := utf16.Encode([]rune(text)); len(units) > cliInstructionsMax {
+				text = string(utf16.Decode(units[:cliInstructionsMax])) + cliCutMarker
+			}
+			out[name] = text
+		}
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
 }
 
 // hostedRPC posts one JSON-RPC request to the harness MCP server of

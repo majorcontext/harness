@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -111,7 +112,7 @@ func (v view) instructions(ok func(string) bool) string {
 	var b strings.Builder
 	for _, name := range v.reached {
 		m := v.mem[name]
-		text := cutRunes(strings.TrimSpace(m.inst), instructionsMax)
+		text := v.serverText(name)
 		if text == "" {
 			continue
 		}
@@ -123,13 +124,42 @@ func (v view) instructions(ok func(string) bool) string {
 		}
 		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), listNames(tools), tag.Replace(text))
 	}
-	if slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].resources }) {
+	if v.resources() {
 		return "<mcp_instructions>\n" + resourcesLine + b.String() + "\n</mcp_instructions>"
 	}
 	if b.Len() == 0 {
 		return ""
 	}
 	return "<mcp_instructions>" + b.String() + "\n</mcp_instructions>"
+}
+
+// perServer is the guidance of the segment for an external harness, which shows the instructions of each
+// server under the name of that server and cuts each one by itself: the line about the resource tools, and
+// the instructions of each server that the first connect reached, cut as in the segment.
+func (v view) perServer() turn.MCPInstructions {
+	var out turn.MCPInstructions
+	if v.resources() {
+		out.Common = resourcesLine
+	}
+	for _, name := range v.reached {
+		if text := v.serverText(name); text != "" {
+			if out.Servers == nil {
+				out.Servers = map[string]string{}
+			}
+			out.Servers[name] = text
+		}
+	}
+	return out
+}
+
+// serverText is the instructions of the server name that the first connect froze, cut at instructionsMax.
+func (v view) serverText(name string) string {
+	return cutRunes(strings.TrimSpace(v.mem[name].inst), instructionsMax)
+}
+
+// resources reports whether a server that the first connect reached serves resources.
+func (v view) resources() bool {
+	return slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].resources })
 }
 
 const pluginsHeader = "[plugins: tools added after the first tool read — %s. They are deferred: to use one you MUST first load it with " +

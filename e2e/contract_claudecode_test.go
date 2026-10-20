@@ -3,8 +3,10 @@ package e2e
 import (
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
@@ -280,6 +282,12 @@ func TestContractClaudeCodePlugins(t *testing.T) {
 	}})
 }
 
+// claudeMCPRows are the runtime rows of the MCP rows of the Claude Code lane
+// that runtimeRows does not list.
+var claudeMCPRows = map[string]runtimeRow{
+	"claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one": sameAsServe(),
+}
+
 func TestContractClaudeCodeMCPServers(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name: "claudecode_configured_mcp_tool_runs_through_the_harness_endpoint",
@@ -292,10 +300,49 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 		name: "claudecode_endpoint_initialize_carries_the_mcp_server_instructions",
 		driver: func(t *testing.T, h host, modelURL string) driver {
 			cfg := mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts.")})(t, map[string]any{})
-			return claudeLane{mode: "normal", callTool: "initialize", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+			return claudeLane{mode: "normal", callTool: "mcp__weather__initialize", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
 		},
 		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+	}, {
+		name: "claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			long := mcpWeather(strings.Repeat("a", 3900) + "ALPHA END")
+			cfg := mcpSetup(nil, mcpServerDef{name: "alpha", spec: long}, mcpServerDef{name: "zeta", spec: mcpWeather("Call forecast before alerts.")})(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "server_instructions", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeServerInstructions{as: "a", has: map[string]string{
+			"alpha": strings.Repeat("a", 3900) + "ALPHA END",
+			"zeta":  "Call forecast before alerts.",
+		}}),
 	}})
+}
+
+// claudeServerInstructions checks the instructions that the CLI of the newest
+// run gives its model for each MCP server, after the cut of the CLI: the
+// instructions of each server of has hold its text, and no server text is cut.
+// It records the length in runes of the instructions of each server.
+type claudeServerInstructions struct {
+	as  string
+	has map[string]string
+}
+
+func (a claudeServerInstructions) run(t *testing.T, r *run) {
+	t.Helper()
+	body, _ := claudeDriverOf(t, r).lastToolCall(t).Body.(map[string]any)
+	lengths := map[string]int{}
+	for server, v := range body {
+		text, _ := v.(string)
+		lengths[server] = utf8.RuneCountInString(text)
+		if strings.HasSuffix(text, "\u2026 [truncated]") {
+			t.Errorf("the CLI cut the instructions of server %q: ...%s", server, text[max(0, len(text)-80):])
+		}
+	}
+	for server, want := range a.has {
+		if text, _ := body[server].(string); !strings.Contains(text, want) {
+			t.Errorf("the instructions of server %q lack %.60q; the CLI got %v", server, want, lengths)
+		}
+	}
+	r.record(t, "server_instructions", a.as, callResult{Status: http.StatusOK, Body: lengths})
 }
 
 func TestContractClaudeCodeFrames(t *testing.T) {
