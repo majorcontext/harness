@@ -47,6 +47,7 @@ func TestContractSessionTitle(t *testing.T) {
 				create{as: "a"},
 				setTitle{as: "a", title: "   "},
 				setTitle{as: "a", title: "two\nlines"},
+				setTitle{as: "a", title: "a\ttab"},
 				setTitle{as: "a", title: strings.Repeat("x", 201)},
 				getSession{as: "a"},
 			},

@@ -2,6 +2,7 @@ package eventlog
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/majorcontext/harness/protocol"
@@ -39,8 +40,8 @@ func derivedTitle(parts []protocol.LogPart) string {
 }
 
 func (s *State) applyTitled(e protocol.SessionTitled) error {
-	if e.Title == "" || strings.ContainsAny(e.Title, "\r\n") {
-		return illegal("session.titled has an empty title or a title with a line break")
+	if e.Title == "" || strings.ContainsFunc(e.Title, unicode.IsControl) {
+		return illegal("session.titled has an empty title or a title with a control character")
 	}
 	s.renamed = e.Title
 	return nil

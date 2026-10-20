@@ -10,6 +10,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -438,8 +439,8 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 	title := p.Title
 	if title != nil {
 		t := strings.TrimSpace(*title)
-		if t == "" || len(t) > maxTitleBytes || strings.ContainsAny(t, "\r\n") {
-			return protocol.Session{}, fmt.Errorf("%w: title must be 1 to %d bytes on one line", ErrInvalidRequest, maxTitleBytes)
+		if t == "" || len(t) > maxTitleBytes || strings.ContainsFunc(t, unicode.IsControl) {
+			return protocol.Session{}, fmt.Errorf("%w: title must be 1 to %d bytes with no control character", ErrInvalidRequest, maxTitleBytes)
 		}
 		title = &t
 	}

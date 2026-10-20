@@ -245,7 +245,7 @@ type SettingsChanged struct {
 	ServiceTier *string `json:"service_tier,omitempty"`
 }
 
-// SessionTitled renames the session. The title is not empty and has no line break.
+// SessionTitled renames the session. The title is not empty and has no control character, such as a tab or a line break.
 type SessionTitled struct {
 	Title string `json:"title"`
 }
