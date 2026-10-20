@@ -64,7 +64,7 @@
       "body": {
         "command": "accepted",
         "input_id": "in2",
-        "seq": 8
+        "seq": 9
       }
     },
     "command_records.a": {
@@ -86,7 +86,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

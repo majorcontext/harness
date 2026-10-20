@@ -129,6 +129,11 @@
           {
             "id": "7",
             "seq": 7,
+            "type": "item.completed"
+          },
+          {
+            "id": "8",
+            "seq": 8,
             "type": "turn.ended"
           }
         ]
@@ -141,11 +146,16 @@
           {
             "id": "7",
             "seq": 7,
-            "type": "turn.ended"
+            "type": "item.completed"
           },
           {
             "id": "8",
             "seq": 8,
+            "type": "turn.ended"
+          },
+          {
+            "id": "9",
+            "seq": 9,
             "type": "owner.acquired"
           }
         ]

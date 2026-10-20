@@ -1863,7 +1863,8 @@
             "type": "string",
             "enum": [
               "user",
-              "model"
+              "model",
+              "derived"
             ]
           }
         },

@@ -166,7 +166,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -195,7 +195,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 14,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -225,7 +225,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 7,
+            "head_seq": 8,
             "id": "ses:a",
             "last_turn": {
               "stop_reason": "completed",
@@ -251,7 +251,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 9
+        "seq": 10
       }
     },
     "set_model.a": {
@@ -262,7 +262,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 4,
+        "head_seq": 5,
         "id": "ses:a",
         "model": "anthropic/claude-fable-5",
         "origin": "",
@@ -288,7 +288,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 14,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

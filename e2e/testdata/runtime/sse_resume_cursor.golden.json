@@ -264,12 +264,12 @@
           {
             "id": "5",
             "seq": 5,
-            "type": "context.measured"
+            "type": "session.titled"
           },
           {
             "id": "6",
             "seq": 6,
-            "type": "item.completed"
+            "type": "context.measured"
           },
           {
             "id": "7",
@@ -279,26 +279,31 @@
           {
             "id": "8",
             "seq": 8,
-            "type": "context.measured"
+            "type": "item.completed"
           },
           {
             "id": "9",
             "seq": 9,
-            "type": "item.completed"
+            "type": "context.measured"
           },
           {
             "id": "10",
             "seq": 10,
-            "type": "turn.ended"
+            "type": "item.completed"
           },
           {
             "id": "11",
             "seq": 11,
-            "type": "input.admitted"
+            "type": "turn.ended"
           },
           {
             "id": "12",
             "seq": 12,
+            "type": "input.admitted"
+          },
+          {
+            "id": "13",
+            "seq": 13,
             "type": "turn.started"
           }
         ]

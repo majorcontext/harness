@@ -269,7 +269,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 29,
+        "head_seq": 30,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -320,7 +320,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
+        "head_seq": 13,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -356,7 +356,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 18,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

@@ -651,6 +651,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 		a.cfg.Appended(events, a.state)
 	}
 	a.publish(false, events...)
+	if untitled && a.state.Title() != "" {
+		a.recordDerivedTitle(events)
+	}
 	return nil
 }
 

@@ -80,6 +80,7 @@ func (s *State) applyTitled(e protocol.SessionTitled) error {
 		if s.renamed == "" {
 			s.modeled = e.Title
 		}
+	case protocol.TitleDerived:
 	default:
 		return illegal("session.titled has source %q", e.Source)
 	}

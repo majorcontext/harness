@@ -119,6 +119,8 @@ type TitleSource string
 const (
 	TitleUser  TitleSource = "user"
 	TitleModel TitleSource = "model"
+	// TitleDerived marks the title that the first prompt gives; it changes no state.
+	TitleDerived TitleSource = "derived"
 )
 
 // Outcome is how a child session settled.

@@ -135,7 +135,7 @@ func TestModelStreams(t *testing.T) {
 		a, log := runOn(t, &wire{calls: []modelCall{activity}}, turn.Limits{Retries: 1, Idle: 500 * time.Millisecond})
 		head := uint64(len(lines(t, log, 0)))
 		converse(t, a, "charlie")
-		want := []string{"input.admitted", "turn.started", "item.completed assistant written", "turn.ended completed"}
+		want := []string{"input.admitted", "turn.started", "session.titled", "item.completed assistant written", "turn.ended completed"}
 		if got := lines(t, log, head); !slices.Equal(got, want) {
 			t.Errorf("log =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}

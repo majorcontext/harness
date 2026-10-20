@@ -283,6 +283,15 @@
           },
           {
             "d": {
+              "source": "derived",
+              "title": "one"
+            },
+            "k": "session.titled",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "source": "anthropic",
               "tokens": 5,
               "usage": {
@@ -292,9 +301,17 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 5,
+            "seq": 6,
             "t": "\u003ctime\u003e"
-          },
+          }
+        ],
+        "next": 6
+      }
+    },
+    "journal_page.a#3": {
+      "status": 200,
+      "body": {
+        "events": [
           {
             "d": {
               "item_id": "item#1",
@@ -310,24 +327,16 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 6,
+            "seq": 7,
             "t": "\u003ctime\u003e"
-          }
-        ],
-        "next": 6
-      }
-    },
-    "journal_page.a#3": {
-      "status": 200,
-      "body": {
-        "events": [
+          },
           {
             "d": {
               "stop_reason": "completed",
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
-            "seq": 7,
+            "seq": 8,
             "t": "\u003ctime\u003e"
           },
           {
@@ -343,17 +352,6 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 8,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "input_ids": [
-                "in2"
-              ],
-              "turn_id": "turn#2"
-            },
-            "k": "turn.started",
             "seq": 9,
             "t": "\u003ctime\u003e"
           }
@@ -367,6 +365,17 @@
         "events": [
           {
             "d": {
+              "input_ids": [
+                "in2"
+              ],
+              "turn_id": "turn#2"
+            },
+            "k": "turn.started",
+            "seq": 10,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "source": "anthropic",
               "tokens": 5,
               "usage": {
@@ -376,7 +385,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 10,
+            "seq": 11,
             "t": "\u003ctime\u003e"
           },
           {
@@ -394,15 +403,6 @@
               "turn_id": "turn#2"
             },
             "k": "item.completed",
-            "seq": 11,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "stop_reason": "completed",
-              "turn_id": "turn#2"
-            },
-            "k": "turn.ended",
             "seq": 12,
             "t": "\u003ctime\u003e"
           }
@@ -422,26 +422,28 @@
         "events": [
           {
             "d": {
-              "stop_reason": "completed",
+              "item_id": "item#1",
+              "message": {
+                "parts": [
+                  {
+                    "text": "1",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
               "turn_id": "turn#1"
             },
-            "k": "turn.ended",
+            "k": "item.completed",
             "seq": 7,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
-              "delivery": "steer",
-              "input_id": "in2",
-              "parts": [
-                {
-                  "text": "two",
-                  "type": "text"
-                }
-              ],
-              "source": "user"
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
             },
-            "k": "input.admitted",
+            "k": "turn.ended",
             "seq": 8,
             "t": "\u003ctime\u003e"
           }

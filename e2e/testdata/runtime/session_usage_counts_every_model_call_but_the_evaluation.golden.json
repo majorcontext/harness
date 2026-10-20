@@ -273,7 +273,7 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 8
+        "to_seq": 9
       }
     },
     "get_session.a": {
@@ -292,7 +292,7 @@
           "turns": 1,
           "verdict": "met"
         },
-        "head_seq": 21,
+        "head_seq": 22,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

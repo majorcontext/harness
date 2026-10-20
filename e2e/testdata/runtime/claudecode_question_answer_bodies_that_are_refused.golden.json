@@ -79,7 +79,7 @@
     "answer_question.a#10": {
       "status": 202,
       "body": {
-        "seq": 10,
+        "seq": 11,
         "status": "started"
       }
     },
@@ -206,7 +206,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -240,7 +240,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -274,7 +274,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 16,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

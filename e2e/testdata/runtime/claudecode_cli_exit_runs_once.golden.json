@@ -38,7 +38,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 6,
+        "head_seq": 7,
         "id": "ses:a",
         "last_turn": {
           "error": "claudecode: the CLI exited before its result: exit status 1",

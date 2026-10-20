@@ -124,7 +124,7 @@ func TestCodexTurn(t *testing.T) {
 				t.Fatal(err)
 			}
 			converse(t, sess, "hi")
-			wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed")
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "context.measured", "item.completed assistant hello", "turn.ended completed")
 			if got := rec.Calls(); !reflect.DeepEqual(got, tc.calls) {
 				t.Errorf("transport calls = %q, want %q", got, tc.calls)
 			}
@@ -165,7 +165,7 @@ func TestEachWireRunsATurn(t *testing.T) {
 				t.Fatal(err)
 			}
 			converse(t, sess, "hi")
-			wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed")
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "context.measured", "item.completed assistant hello", "turn.ended completed")
 			if got := s.Requests()[0]; got.Model != model || got.MaxTokens < 1 {
 				t.Errorf("request model, max tokens = %q, %d, want %q and a cap", got.Model, got.MaxTokens, model)
 			}
@@ -225,7 +225,7 @@ func TestNativeCodexRunsATurnWithAnEmptyConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	converse(t, sess, "hi")
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed")
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "context.measured", "item.completed assistant hello", "turn.ended completed")
 	if got, want := rec.Calls(), []string{"POST chatgpt.com/backend-api/codex/responses"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("transport calls = %q, want %q", got, want)
 	}

@@ -98,7 +98,7 @@ func TestEmbedderTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			converse(t, sess, "run")
-			wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant call_1",
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "context.measured", "item.completed assistant call_1",
 				"item.completed tool call_1 "+tc.want, "context.measured", "item.completed assistant done", "turn.ended completed")
 			reqs := s.Requests()
 			for i, req := range reqs {

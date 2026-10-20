@@ -72,6 +72,10 @@ func TestContractSessionTitle(t *testing.T) {
 				submit{as: "a", text: "\n  fix the flaky   login test, then rerun the whole suite twice\nsecond line"},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
+				journalPage{as: "a"},
+				submit{as: "a", text: "second prompt"},
+				waitIdle{as: "a"},
+				journalPage{as: "a"},
 			},
 		},
 		{
@@ -148,6 +152,7 @@ func TestContractSessionTitleModel(t *testing.T) {
 				waitIdle{as: "a"},
 				awaitTitle{as: "a", title: "Fix the flaky login test"},
 				getSession{as: "a"},
+				journalPage{as: "a"},
 			},
 		},
 		{
@@ -184,6 +189,7 @@ func TestContractSessionTitleModel(t *testing.T) {
 				awaitRequests{n: 2},
 				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
+				journalPage{as: "a"},
 			},
 		},
 	})
