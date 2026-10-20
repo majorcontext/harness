@@ -38,6 +38,9 @@ func mergeScalars(out, over *Config) {
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
 	}
+	if over.TitleModel != "" {
+		out.TitleModel = over.TitleModel
+	}
 	if over.MaxTaskDepth != 0 {
 		out.MaxTaskDepth = over.MaxTaskDepth
 	}

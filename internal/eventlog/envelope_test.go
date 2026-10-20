@@ -72,7 +72,7 @@ func everyKind() []protocol.Payload {
 		protocol.SessionCreated{ParentID: "p", Model: "openai/gpt-5", Settings: protocol.Settings{Effort: "high"}, Origin: "cli"},
 		protocol.OwnerAcquired{Epoch: 7, Owner: "box-1"},
 		protocol.SettingsChanged{ServiceTier: new("flex")},
-		protocol.SessionTitled{Title: "Login fix"},
+		protocol.SessionTitled{Title: "Login fix", Source: protocol.TitleUser},
 		protocol.GoalSet{Condition: "tests pass", MaxTurns: 3},
 		admit("a"), start("t1", "a"), steer("s"), promote("s", "t1"),
 		protocol.ChildSpawned{ChildID: "k", Agent: "explore"},

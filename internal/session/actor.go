@@ -134,6 +134,8 @@ type Config struct {
 	Version string
 	// Evaluator is the model that judges goal turns.
 	Evaluator string
+	// TitleModel is the model that writes the title of a root session from its first prompt. Empty: none.
+	TitleModel string
 	// Source gives the tools of each model call, and the hooks around each
 	// tool call. nil: no tool.
 	Source turn.Source
@@ -226,7 +228,9 @@ type Actor struct {
 	// releaseErr is the error of Ownership.Release, set before done closes.
 	releaseErr error
 	retryStop  context.CancelFunc
-	retryAt    time.Time
+	// titleCancel stops the title call, if one runs.
+	titleCancel context.CancelFunc
+	retryAt     time.Time
 	// pins holds the engine context that the model reads inside the history.
 	pins turn.Pins
 	// pinned is true once a model call of this process has pinned.
@@ -477,6 +481,9 @@ func (a *Actor) finish() {
 	if a.run != nil {
 		a.run.cancel(ErrNotOwned)
 	}
+	if a.titleCancel != nil {
+		a.titleCancel()
+	}
 	a.publish(true)
 	close(a.quit)
 	a.runs.Wait()
@@ -603,6 +610,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	if err := eventlog.Check(a.state, events); err != nil {
 		return err
 	}
+	untitled := a.state.Title() == ""
 	head, now := a.state.Head(), time.Now()
 	recs := make([][]byte, len(events))
 	for i, e := range events {
@@ -629,6 +637,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 			a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))
 			return err
 		}
+	}
+	if untitled && a.state.Title() != "" {
+		a.startTitle(events)
 	}
 	if slices.ContainsFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.CompactionApplied); return ok }) {
 		a.pins.Move(len(a.state.ModelHistory()))

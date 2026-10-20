@@ -441,8 +441,11 @@ func TestSessionTitle(t *testing.T) {
 		{"an image-only input gives no title and the next input does", with(base, in("a", image), in("b", text("hello"))), "hello"},
 		{"a title never changes", with(base, in("a", text("first")), in("b", text("second"))), "first"},
 		{"a long line is cut on a rune boundary", with(base, in("a", text(strings.Repeat("é", 60)))), strings.Repeat("é", 50)},
-		{"a rename beats the derived title", with(base, in("a", text("first")), protocol.SessionTitled{Title: "Named"}), "Named"},
-		{"the newest rename wins", with(base, protocol.SessionTitled{Title: "One"}, protocol.SessionTitled{Title: "Two"}, in("a", text("first"))), "Two"},
+		{"a rename beats the derived title", with(base, in("a", text("first")), protocol.SessionTitled{Title: "Named", Source: protocol.TitleUser}), "Named"},
+		{"a model title after a person title is ignored", with(base, protocol.SessionTitled{Title: "Named", Source: protocol.TitleUser}, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}), "Named"},
+		{"a person title after a model title wins", with(base, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}, protocol.SessionTitled{Title: "Named", Source: protocol.TitleUser}), "Named"},
+		{"a model title beats the derived title", with(base, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}, in("a", text("first"))), "Model"},
+		{"the newest rename wins", with(base, protocol.SessionTitled{Title: "One", Source: protocol.TitleUser}, protocol.SessionTitled{Title: "Two", Source: protocol.TitleUser}, in("a", text("first"))), "Two"},
 	}
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {

@@ -529,6 +529,7 @@ export interface SessionPage {
 
 export interface SessionTitled {
   title: string;
+  source: "user" | "model";
 }
 
 export interface Settings {

@@ -17,6 +17,10 @@ are for API keys.
 
 `harness serve` and the Go API take the API default, unless the embedder sets `Config.SubscriptionDefault`. `harness login codex` and `harness login claude-code` write `model` to the user config when it has none, and print a line that says so. They never change a `model` that is set.
 
+## Session titles
+
+A session has a title: the first line of its first prompt, cut to 8 words. Set `title_model` (a model ref or an alias) to let a model write it instead. After the first prompt of a root session, one short request goes to that model beside the turn. A title that you set with a rename always wins. If the request fails, the title of the first prompt stays.
+
 ## Web fetch
 
 Set `web` to `{"fetch": true}` to give the model the built-in `web_fetch` tool, which reads public http and https pages. It is off by default. It follows the standard proxy variables: `HTTP_PROXY` for http URLs, `HTTPS_PROXY` for https URLs, and `NO_PROXY` to skip the proxy.

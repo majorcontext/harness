@@ -32,7 +32,7 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *
 				events = append(events, ch)
 			}
 			if title != nil {
-				events = append(events, protocol.SessionTitled{Title: *title})
+				events = append(events, protocol.SessionTitled{Title: *title, Source: protocol.TitleUser})
 			}
 			err = a.append(events...)
 			if err == nil && dismissed > 0 && a.run == nil {

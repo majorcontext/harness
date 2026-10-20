@@ -42,3 +42,11 @@ func (r *Runtime) SetPlugins(ctx context.Context, plugins []config.PluginSpec) (
 	}
 	return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 }
+
+// titleRef resolves the title_model of c. An empty key gives no title model.
+func titleRef(c config.Config) string {
+	if c.TitleModel == "" {
+		return ""
+	}
+	return c.ResolveModel(c.TitleModel)
+}

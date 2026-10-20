@@ -148,9 +148,10 @@ type Runtime struct {
 	limits    turn.Limits
 	maxTokens int
 	// prompt reads the system prompt of a session with the files that it holds.
-	prompt    func() prompt.Info
-	evaluator string
-	resolve   func(string) string
+	prompt     func() prompt.Info
+	evaluator  string
+	titleModel string
+	resolve    func(string) string
 	// aliases map a model alias to its ref.
 	aliases map[string]string
 	tree    *tree.Tree
@@ -219,7 +220,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
-		sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
+		sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1), titleModel: titleRef(opts.Config),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
@@ -390,23 +391,23 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Version:         r.version,
 		AskUserQuestion: r.questions,
 		WebSearch:       r.webSearch,
-		Evaluator:       r.evaluator,
-		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
-		Record:          sp.Recording,
-		Retain:          r.workDir != "",
-		Prompt:          sp.System,
-		Skills:          sp.SkillList(),
-		Sent:            sp.Sent,
-		Appended:        r.appended(id, plug),
-		Params:          chatParams(plug),
-		Sync:            r.sync,
-		Log:             r.log,
-		Limits:          r.limits,
-		MaxTokens:       r.maxTokens,
-		Threshold:       r.threshold,
-		KeepTurns:       r.keep,
-		Base:            r.base,
-		Go:              r.group.Go,
+		Evaluator:       r.evaluator, TitleModel: r.titleModel,
+		Source:    r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
+		Record:    sp.Recording,
+		Retain:    r.workDir != "",
+		Prompt:    sp.System,
+		Skills:    sp.SkillList(),
+		Sent:      sp.Sent,
+		Appended:  r.appended(id, plug),
+		Params:    chatParams(plug),
+		Sync:      r.sync,
+		Log:       r.log,
+		Limits:    r.limits,
+		MaxTokens: r.maxTokens,
+		Threshold: r.threshold,
+		KeepTurns: r.keep,
+		Base:      r.base,
+		Go:        r.group.Go,
 		Done: func(closeDone func()) {
 			if a != nil && a.Rejected() {
 				r.syncStopped.Store(true)
