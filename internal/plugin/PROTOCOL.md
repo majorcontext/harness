@@ -149,7 +149,7 @@ an RPC error, and its text hides the server URL and headers.
 
 `client/generate` makes one model request with no tools. An empty `model` is
 the default model, and an alias resolves. A model that no configured provider
-serves is an RPC error. A model whose backend runs its own agent loop (claude-code) is an RPC error too, because it would start an agent with every tool of its CLI. A failure message is masked as a session error is. The result is `{message, usage}`: `message` is an
+serves is an RPC error. A model of a backend that runs its own agent loop (claude-code) serves the call with no tool and no session of the CLI. A failure message is masked as a session error is. The result is `{message, usage}`: `message` is an
 assistant message with the text of the reply, and `usage` is the optional
 token count of the call, which this host always sends, with zero counts when the model reports none (`input_tokens`, `output_tokens`, and the cache
 counts). No session records the call. On success the host logs one line with the

@@ -539,7 +539,7 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, sessionTitleRows, map[st
 	"plugin_generate_with_an_unserved_model_fails":                             sameAsServe(),
 	"plugin_generate_rejects_a_negative_max_tokens":                            sameAsServe(),
 	"plugin_generate_resolves_an_alias":                                        sameAsServe(),
-	"plugin_generate_refuses_a_model_that_runs_its_own_agent_loop":             sameAsServe(),
+	"plugin_generate_serves_a_model_that_runs_its_own_agent_loop":              sameAsServe(),
 	"plugin_exit_during_generate_ends_the_call":                                sameAsServe(),
 	"plugin_tools_listed_and_run":                                              reGolden(specView),
 	"provider_429_then_ok":                                                     reGolden(specView),

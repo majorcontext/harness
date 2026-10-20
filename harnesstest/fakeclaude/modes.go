@@ -187,6 +187,7 @@ var basicModes = map[string]mode{
 	"placeholder_before_turn":      frames(success("", 0, 0).set("num_turns", 0), say("Real answer."), success("Real answer.", 7, 2)),
 	"fast_no_drain":                frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"fast_gated":                   fastGated,
+	"text_only":                    frames(say("Claude answer."), success("Claude answer.", 7, 2)),
 	"error":                        frames(failed(11, 3, "fake failure")),
 	"logged_out":                   frames(result("success", true, "Not logged in · Please run /login", 0, 0)),
 	"rate_limit_error":             frames(failed(6, 1, "rate_limit_error: please retry later")),

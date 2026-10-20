@@ -464,16 +464,20 @@ func isToollessGenerate(r harnesstest.Request) bool { return isGenerate(r) && le
 
 func notGenerate(r harnesstest.Request) bool { return !isGenerate(r) }
 
-// ownsLoopConfig adds a claude-code provider, whose models run their own agent loop.
+// ownsLoopConfig adds a claude-code provider over fakeclaude, whose models run their own agent loop,
+// and records the argv of each CLI spawn.
 func ownsLoopConfig(cfg map[string]any) func(*testing.T, host, string) driver {
 	return func(t *testing.T, h host, modelURL string) driver {
 		t.Helper()
 		c := maps.Clone(cfg)
+		stateDir := t.TempDir()
+		logs := claudeLogs{stateDir: stateDir, argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl")}
 		c["providers"] = map[string]any{
-			"anthropic":   map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL},
-			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath()},
+			"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL},
+			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(),
+				"extra_args": fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "text_only", "FAKE_CLAUDE_LOG": logs.argvLog, "FAKE_CLAUDE_STDIN_LOG": logs.stdinLog})},
 		}
-		return h.newDriver(t, modelURL, c)
+		return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, scenarioConfig(c)), nil), claudeLogs: logs}
 	}
 }
 
@@ -606,11 +610,11 @@ func TestContractPluginGenerate(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name:    "plugin_generate_refuses_a_model_that_runs_its_own_agent_loop",
+			name:    "plugin_generate_serves_a_model_that_runs_its_own_agent_loop",
 			config:  cfg,
 			driver:  ownsLoopConfig(cfg),
-			model:   toolChain(ftTool("fixture_generate", ftArgs("model", "claude-code/sonnet", "text", "hi"))),
-			actions: oneTurn,
+			model:   toolChain(ftTool("fixture_generate", ftArgs("model", "claude-code/sonnet", "system", generateSystem, "text", "say hi"))),
+			actions: append(append([]action{}, oneTurn...), claudeInvocations{as: "cli"}, claudeInputs{as: "stdin"}, claudeSystemPrompt{as: "system", contains: generateSystem}),
 		},
 		{
 			name:   "plugin_exit_during_generate_ends_the_call",

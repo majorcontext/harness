@@ -53,7 +53,7 @@ func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 
 func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
-	req.AcceptCut = true
+	req.AcceptCut, req.OneShot = true, true
 	if b.Capabilities(req.Model).OwnsLoop {
 		lim.Retries = 0
 	}

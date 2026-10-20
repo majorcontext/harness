@@ -87,6 +87,7 @@ type Request struct {
 	Call func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult
 	// MaxTokens caps the response of a call. Zero: the backend default.
 	MaxTokens int
+	OneShot   bool // the call belongs to no session, so a backend that owns the loop keeps none
 	// AcceptCut makes a response that MaxTokens cut off the answer. Otherwise
 	// the backend records no item for it and fails with a retryable error.
 	AcceptCut bool

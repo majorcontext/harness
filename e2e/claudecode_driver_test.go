@@ -206,6 +206,9 @@ func argvFacts(argv []string) map[string]any {
 		"disallowed_tools":  value("--disallowedTools"),
 		"strict_mcp_config": slices.Contains(argv, "--strict-mcp-config"),
 	}
+	if slices.Contains(argv, "--no-session-persistence") {
+		facts["no_session_persistence"] = true
+	}
 	if e := value("--effort"); e != nil {
 		facts["effort"] = e
 	}
