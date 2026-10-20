@@ -93,7 +93,11 @@ func serverInstructions() string {
 		}
 		if text := init.Result.Instructions; text != "" {
 			if units := utf16.Encode([]rune(text)); len(units) > cliInstructionsMax {
-				text = string(utf16.Decode(units[:cliInstructionsMax])) + cliCutMarker
+				units = units[:cliInstructionsMax]
+				if last := units[len(units)-1]; last >= 0xd800 && last < 0xdc00 {
+					units = units[:len(units)-1] // the CLI drops a high surrogate that the cut leaves alone
+				}
+				text = string(utf16.Decode(units)) + cliCutMarker
 			}
 			out[name] = text
 		}
