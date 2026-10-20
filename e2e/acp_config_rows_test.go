@@ -445,6 +445,22 @@ var acpConfigScenarios = []acpScenario{
 		},
 	},
 	{
+		name:  "slash_rename_sets_the_title_and_reports_it",
+		cite:  "A client renames the session with the prompt `/rename <title>` (see Slash commands), and the update of the title answers it.",
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpPrompt{as: "a", text: "/rename New name", stop: "end_turn"},
+			acpCheck(func(t *testing.T, c *acpConn) {
+				got := acpUpdatesOf(c, "session_info_update")
+				if len(got) == 0 || got[0]["title"] != "New name" || got[0]["updatedAt"] == nil {
+					t.Errorf("session_info_update = %v, want the title New name first", got)
+				}
+			}),
+			acpList{want: []string{"a"}, titles: []string{"New name"}},
+		},
+	},
+	{
 		name:  "slash_model_changes_the_model_and_reports_it",
 		cite:  "This includes a change by `/model`, by `/thinking`, and by the `model` tool.",
 		model: acpRepeatText("ok"),

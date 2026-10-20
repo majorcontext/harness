@@ -27,6 +27,7 @@ const (
 	OpSetModel       Op = "set_model"
 	OpSetThinking    Op = "set_thinking"
 	OpSetServiceTier Op = "set_service_tier"
+	OpRename         Op = "rename"
 	OpAbort          Op = "abort"
 	OpSetGoal        Op = "set_goal"
 	OpClearGoal      Op = "clear_goal"

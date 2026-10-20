@@ -83,6 +83,12 @@ func builtins() []*Spec {
 			Source:              "builtin",
 		},
 		{
+			Name: "rename", Kind: KindControl, Op: OpRename,
+			Summary: "Rename the session", ArgHint: "<title>",
+			Args:     []ArgSpec{{Name: "title", Type: ArgRest}},
+			Category: CategorySession, AvailableDuringTask: true, Source: "builtin",
+		},
+		{
 			Name: "thinking", Kind: KindControl, Op: OpSetThinking,
 			Summary: "Set the reasoning effort", ArgHint: "<effort>",
 			Args:     []ArgSpec{{Name: "effort", Type: ArgString}},

@@ -52,7 +52,7 @@ var Table = []Route{
 	{Name: "getSession", Method: "GET", Path: "/sessions/{id}", Response: protocol.Session{}, Status: 200, Read: true, Ops: []command.Op{command.OpStatus}},
 	{Name: "endSession", Method: "DELETE", Path: "/sessions/{id}", Status: 204},
 	{Name: "updateSession", Method: "PATCH", Path: "/sessions/{id}", Request: protocol.SettingsPatch{}, Response: protocol.Session{}, Status: 200,
-		Ops: []command.Op{command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier}},
+		Ops: []command.Op{command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier, command.OpRename}},
 	{Name: "submitInput", Method: "POST", Path: "/sessions/{id}/inputs", Request: protocol.Input{}, Response: protocol.Admitted{}, Status: 201},
 	{Name: "repeatInput", Method: "POST", Path: "/sessions/{id}/inputs", Request: protocol.Input{}, Response: protocol.Admitted{}, Status: 200},
 	{Name: "listInputs", Method: "GET", Path: "/sessions/{id}/inputs", Response: []protocol.QueuedInput{}, Status: 200, Read: true, Ops: []command.Op{command.OpQueueList}},
