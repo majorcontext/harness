@@ -12,7 +12,7 @@ program.
 
 ## Before you start
 
-- Go 1.27.1 or later, to install the CLI and to build Go plugins and programs.
+- Go 1.27.3 or later, to install the CLI and to build Go plugins and programs.
 - A ChatGPT account, or a Claude account with Claude Code
   installed. Harness signs in with the subscription, so no API key is needed.
   An API key also works, as [Choose a model](#choose-a-model) shows.

@@ -1,6 +1,6 @@
 module github.com/majorcontext/harness/examples/embed-server
 
-go 1.27.1
+go 1.27.3
 
 require github.com/majorcontext/gatekeeper v0.28.0
 
