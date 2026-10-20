@@ -83,6 +83,7 @@
         "status": "running",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "first",
         "turn_id": "turn#1",
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -107,6 +108,7 @@
         "status": "running",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "first",
         "turn_id": "turn#1",
         "updated_at": "\u003ctime\u003e",
         "usage": {

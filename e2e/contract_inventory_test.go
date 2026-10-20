@@ -121,6 +121,7 @@ var boxesFeatures = []struct {
 	{"PATCH /sessions/{id} model", []string{"session_settings_validation_and_persistence"}},
 	{"PATCH /sessions/{id} effort", []string{"session_settings_validation_and_persistence"}},
 	{"PATCH /sessions/{id} service_tier", []string{"session_settings_validation_and_persistence"}},
+	{"PATCH /sessions/{id} title", []string{"session_rename_beats_the_derived_title_and_survives_a_restart", "session_title_that_is_empty_has_a_line_break_or_is_too_long_is_invalid_request"}},
 	{"PUT /sessions/{id}/goal", []string{
 		"goal_met_first_turn",
 		"goal_update_while_busy",

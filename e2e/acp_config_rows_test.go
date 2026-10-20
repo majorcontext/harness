@@ -521,7 +521,7 @@ var acpConfigScenarios = []acpScenario{
 	},
 	{
 		name:  "turn_end_sends_a_session_info_update",
-		cite:  "A `session_info_update` with `updatedAt` follows each `turn.ended` event.",
+		cite:  "A `session_info_update` with `updatedAt` and no `title` follows each `turn.ended` event.",
 		model: acpRepeatText("ok"),
 		steps: []acpStep{
 			acpNew{as: "a"},
@@ -529,10 +529,21 @@ var acpConfigScenarios = []acpScenario{
 			acpPrompt{as: "a", text: "two", stop: "end_turn"},
 			acpCheck(func(t *testing.T, c *acpConn) {
 				got := acpUpdatesOf(c, "session_info_update")
-				if len(got) != 2 || got[0]["updatedAt"] == nil || got[0]["title"] != nil {
-					t.Errorf("session_info_update = %v, want two with updatedAt and no title", got)
+				if len(got) != 3 || got[0]["updatedAt"] == nil || got[0]["title"] != "one" || got[1]["title"] != nil || got[2]["title"] != nil {
+					t.Errorf("session_info_update = %v, want the title of the first prompt, then one with updatedAt and no title after each turn", got)
 				}
 			}),
+		},
+	},
+	{
+		name:  "the_first_prompt_titles_the_session_in_the_list",
+		cite:  "The `title` is the title of the session, or null when it has none.",
+		model: acpRepeatText("ok"),
+		steps: []acpStep{
+			acpNew{as: "a"},
+			acpList{want: []string{"a"}, titles: []string{""}},
+			acpPrompt{as: "a", text: "name  this session\nsecond line", stop: "end_turn"},
+			acpList{want: []string{"a"}, titles: []string{"name this session"}},
 		},
 	},
 	{

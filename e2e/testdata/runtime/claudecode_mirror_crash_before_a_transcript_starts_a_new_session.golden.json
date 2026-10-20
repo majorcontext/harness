@@ -105,6 +105,7 @@
           "windows": []
         },
         "synced_seq": 0,
+        "title": "reply with ok",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 1,

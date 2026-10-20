@@ -19,6 +19,7 @@ type sessionRow struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	Messages  uint64    `json:"messages"`
+	Title     string    `json:"title"`
 }
 
 func sessionsCmd(args []string) error {
@@ -55,14 +56,14 @@ func sessionsCmd(args []string) error {
 	}
 	var b strings.Builder
 	for _, r := range rows {
-		fmt.Fprintf(&b, "%s\t%s\t%d\n", r.ID, r.CreatedAt.Format(time.RFC3339), r.Messages)
+		fmt.Fprintf(&b, "%s\t%s\t%d\t%s\n", r.ID, r.CreatedAt.Format(time.RFC3339), r.Messages, r.Title)
 	}
 	fmt.Print(b.String())
 	return nil
 }
 
 // listSessions returns each session of the store in creation order, with the
-// number of its messages. An empty store returns an empty list.
+// number of its messages and its title. An empty store returns an empty list.
 func listSessions(ctx context.Context, rt *harness.Runtime, store harness.Store) ([]sessionRow, error) {
 	rows := []sessionRow{}
 	for after := ""; ; {
@@ -79,7 +80,7 @@ func listSessions(ctx context.Context, rt *harness.Runtime, store harness.Store)
 			if err != nil {
 				return nil, err
 			}
-			rows = append(rows, sessionRow{ID: s.ID, CreatedAt: s.CreatedAt, Messages: msgs.Total})
+			rows = append(rows, sessionRow{ID: s.ID, CreatedAt: s.CreatedAt, Messages: msgs.Total, Title: s.Title})
 		}
 		if page.Next == "" {
 			return rows, nil

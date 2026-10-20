@@ -96,16 +96,17 @@ func TestContractCLIRunSavesAndContinuesTheSession(t *testing.T) {
 	id := sessionID(t, errOut)
 
 	list, _, _ := h.run("sessions")
-	if fields := strings.Split(strings.TrimSpace(list), "\t"); len(fields) != 3 || fields[0] != id || fields[2] != "2" {
-		t.Errorf("sessions = %q, want the session with 2 messages", list)
+	if fields := strings.Split(strings.TrimSpace(list), "\t"); len(fields) != 4 || fields[0] != id || fields[2] != "2" || fields[3] != "hi" {
+		t.Errorf("sessions = %q, want the session with 2 messages and the title hi", list)
 	}
 	raw, _, _ := h.run("sessions", "--json")
 	var rows []struct {
 		ID       string `json:"id"`
 		Messages int    `json:"messages"`
+		Title    string `json:"title"`
 	}
-	if err := json.Unmarshal([]byte(raw), &rows); err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Messages != 2 {
-		t.Errorf("sessions --json = %q (%v), want one session with 2 messages", raw, err)
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Messages != 2 || rows[0].Title != "hi" {
+		t.Errorf("sessions --json = %q (%v), want one session with 2 messages and the title hi", raw, err)
 	}
 
 	for _, args := range [][]string{{"run", "-c", "-p", "again"}, {"run", "-r", id, "-p", "third"}} {

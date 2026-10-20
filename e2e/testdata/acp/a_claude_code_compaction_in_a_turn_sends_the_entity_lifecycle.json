@@ -274,6 +274,21 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "go",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
             "compactionId": "\u003ccompaction:1\u003e",
             "sessionUpdate": "compaction_update",
             "status": "in_progress"

@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,7 @@ type Summary struct {
 	Origin    string
 	WorkDir   string
 	Model     string
+	Title     string
 	Status    protocol.Status
 	Goal      protocol.GoalState
 	HeadSeq   uint64
@@ -86,25 +88,27 @@ const (
 
 // State is the durable session state. Apply is its only mutator.
 type State struct {
-	created   bool
-	parentID  string
-	agent     string
-	origin    string
-	workDir   string
-	model     string
-	settings  protocol.Settings
-	allowed   []string
-	createdAt time.Time
-	updatedAt time.Time
-	inputs    map[string]input
-	prog      protocol.Progress
-	turn      Turn
-	turnIDs   map[string]bool
-	lastEnded protocol.TurnEnded
-	calls     []OpenToolCall
-	requests  map[string]pendingRequest
-	resolved  map[string]protocol.RequestResolved
-	asked     map[string]json.RawMessage
+	created  bool
+	parentID string
+	agent    string
+	origin   string
+	workDir  string
+	model    string
+	// renamed is the newest session.titled title, and derived is the title of the first prompt.
+	renamed, derived string
+	settings         protocol.Settings
+	allowed          []string
+	createdAt        time.Time
+	updatedAt        time.Time
+	inputs           map[string]input
+	prog             protocol.Progress
+	turn             Turn
+	turnIDs          map[string]bool
+	lastEnded        protocol.TurnEnded
+	calls            []OpenToolCall
+	requests         map[string]pendingRequest
+	resolved         map[string]protocol.RequestResolved
+	asked            map[string]json.RawMessage
 	// evaluated is the last turn that the goal judged, or the last turn that ended before goal.set.
 	evaluated string
 	usage     protocol.Usage
@@ -359,6 +363,9 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }
 
+// Title is the newest rename, else the title of the first prompt, else empty.
+func (s *State) Title() string { return cmp.Or(s.renamed, s.derived) }
+
 // Summary returns the list entry of the session.
 func (s *State) Summary() Summary {
 	return Summary{
@@ -366,6 +373,7 @@ func (s *State) Summary() Summary {
 		Origin:    s.origin,
 		WorkDir:   s.workDir,
 		Model:     s.model,
+		Title:     s.Title(),
 		Status:    s.Status(),
 		Goal:      s.goalState(),
 		HeadSeq:   s.prog.Seq,
@@ -418,6 +426,8 @@ func (s *State) step(env Envelope) error {
 		return nil
 	case protocol.SettingsChanged:
 		return s.applySettings(e)
+	case protocol.SessionTitled:
+		return s.applyTitled(e)
 	case protocol.InputAdmitted:
 		return s.applyAdmitted(e, env.Seq)
 	case protocol.InputPromoted:

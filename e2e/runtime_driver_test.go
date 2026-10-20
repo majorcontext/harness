@@ -554,6 +554,11 @@ func (d *runtimeDriver) SetServiceTier(t *testing.T, id, tier string) callResult
 	return d.patch(t, id, "service_tier", tier)
 }
 
+func (d *runtimeDriver) SetTitle(t *testing.T, id, title string) callResult {
+	t.Helper()
+	return d.patch(t, id, "title", title)
+}
+
 func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
 	t.Helper()
 	return d.call(t, http.MethodDelete, "/sessions/"+id, nil)

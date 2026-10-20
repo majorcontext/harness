@@ -32,6 +32,9 @@ func (s *State) applyAdmitted(e protocol.InputAdmitted, seq uint64) error {
 		return illegal("input %s has delivery %q", e.InputID, e.Delivery)
 	}
 	s.inputs[e.InputID] = input{state: inputAdmitted, seq: seq, event: e}
+	if s.derived == "" {
+		s.derived = derivedTitle(e.Parts)
+	}
 	return nil
 }
 

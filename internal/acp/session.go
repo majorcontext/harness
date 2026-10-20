@@ -168,6 +168,8 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 		return h.resolved(e, st)
 	case protocol.KindSettingsChanged:
 		return h.configUpdate(st)
+	case protocol.KindSessionTitled, protocol.KindInputAdmitted:
+		return h.titleUpdate(st)
 	case protocol.KindStatus:
 		return h.compactionStatus(e, st)
 	case protocol.KindCompactionApplied:

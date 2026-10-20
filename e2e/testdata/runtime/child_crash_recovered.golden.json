@@ -320,6 +320,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "delegate",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 15,
@@ -345,6 +346,7 @@
         "status": "running",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "child work",
         "turn_id": "turn#1",
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -376,6 +378,7 @@
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
+        "title": "child work",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 0,

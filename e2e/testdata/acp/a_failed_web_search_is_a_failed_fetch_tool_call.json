@@ -233,6 +233,21 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "find the release",
+            "updatedAt": "\u003ctime\u003e"
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
             "content": {
               "text": "I could not search.",
               "type": "text"

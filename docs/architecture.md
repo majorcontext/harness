@@ -458,6 +458,7 @@ The Go types of `protocol` own the payload of each kind: the field names, the JS
 | `session.created` | `protocol.SessionCreated` |
 | `owner.acquired` | `protocol.OwnerAcquired` |
 | `settings.changed` | `protocol.SettingsChanged` |
+| `session.titled` | `protocol.SessionTitled` |
 | `input.admitted` | `protocol.InputAdmitted` |
 | `input.promoted` | `protocol.InputPromoted` |
 | `input.withdrawn` | `protocol.InputWithdrawn` |
@@ -496,9 +497,10 @@ func Advance(p protocol.Progress, e protocol.Event) (protocol.Progress, error)
 
 `protocol.Progress` is the status, running turn, queued input IDs, open request IDs, goal, and last turn that a log folds to at `Seq`. It is plain JSON, so a reader stores it with a cursor and resumes with `harness.Advance` in place of a replay. `State.Apply` computes these fields with `Advance`, so a stored `Progress` and a replay reach the same value. `Advance` assumes a legal log: `Check` has enforced the transitions, and `Advance` only needs the event to follow `p.Seq`. An ephemeral frame, an unknown kind, and an event out of order fail, and `p` stays as it was.
 
+- `State.Title` is the newest `session.titled` title. With none, it is the title that the first prompt gives: the first `input.admitted`, of any source, whose first text part, trimmed, is not empty and does not start with `/`. The title is the first line of that text, cut to 8 words that are joined with one space, then cut to 100 bytes on a UTF-8 boundary. An input with no text part gives no title, and the next input may. A derived title never changes once it is set. The log holds no record of it, so live code and replay agree.
 - `State.History` holds the summary message of the newest compaction and the messages after it. The text of that message is the compaction banner `[compacted summary of earlier conversation]`, a blank line, the plain `summary` of the record, and, when the record has an `index`, a blank line and the `index`. Only `State.History` adds the banner and the index. The record, `State.Transcript`, the message page, the events, and ACP hold the plain summary. `client/session.messages` of a plugin reads `State.History`, so a plugin sees the banner and the index, as the model does. `State.ModelHistory` is `State.History` with each pinned segment (see Settle) at its place, and the model reads it.
 - `State.Transcript` is what a reader sees. It keeps the messages that each compaction folded, with the summary of each compaction in its place as a divider between the messages it folded and the messages kept. The model never reads the folded messages again.
-- The summary for `GET /sessions` is `State.Summary()`.
+- The summary for `GET /sessions` is `State.Summary()`. It holds the title.
 
 Usage is part of the fold:
 
@@ -529,7 +531,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Submit(input)` | Append `input.admitted`; start a turn, queue, or steer |
 | `Interrupt(turnID?)` | Cancel the turn; reply when it has stopped |
 | `Cancel()` | Append `input.withdrawn` for each queued input, then cancel the turn, in one step; reply when it has stopped |
-| `Update(settings)` | Check the model; append `settings.changed`. A running turn takes the new model and settings at its next model call. When the new model has another kind of backend (one that owns its loop, or one that does not), the turn fails at its next model call, and the error says the model needs another kind of backend |
+| `Update(settings)` | Check the model; append `settings.changed` for a setting that changes and `session.titled` for a `title` that changes, in one batch. A `title` is trimmed; an empty title, a title with a line break, or a title over 200 bytes is `invalid_request`. A rename works on any session, also while a turn runs. A running turn takes the new model and settings at its next model call. When the new model has another kind of backend (one that owns its loop, or one that does not), the turn fails at its next model call, and the error says the model needs another kind of backend |
 | `SetGoal(...)`, `StartGoal(...)`, `AdjustGoal(...)`, `ClearGoal()` | Append goal events |
 | `Compact(keep)` | Run a compaction as the run of the actor; `keep` replaces `compaction_keep_turns` |
 | `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool; a child that has not settled appends nothing |
@@ -726,7 +728,7 @@ One `sync.WaitGroup` per runtime tracks every goroutine that the runtime starts.
 POST   /sessions                              create; client id optional
 GET    /sessions?after=&limit=                list in creation order
 GET    /sessions/{id}                         view
-PATCH  /sessions/{id}                         model, effort, service_tier
+PATCH  /sessions/{id}                         model, effort, service_tier, title
 DELETE /sessions/{id}                         end; 204; the log stays
 POST   /sessions/{id}/inputs                  submit
 GET    /sessions/{id}/inputs                  queued inputs, each with its parts
@@ -968,7 +970,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - The agent runs the `session/load`, `session/resume`, and `session/close` requests of one session one after the other, in the order they arrive. A request waits until the answer of the one before it is sent, and the updates that the pump of that request queued. So a load that follows a close opens the session after the release, and two loads of one session start one pump.
 - A session that has a parent is a task child of another session. `session/load` and `session/resume` of it are `-32602`.
 - A `session/resume` of a session that the connection holds returns the held session and sends nothing. A `session/load` of it waits until the event pump has sent every update through the head of a new view, replays that view, sends no command update, and answers. The replay does not change the state of the pump. A `cwd` other than the one of the held session is `-32602`, and so are `mcpServers` in either request, because the held session keeps the servers it has.
-- `session/list` takes an optional `cwd` and an optional `cursor`. It lists the root sessions of the store in creation order. A session that has a parent is a task child of another session and is not listed. A session that has no `work_dir` is not listed. With a `cwd`, only the sessions whose `work_dir` equals it are listed. A `cwd` that is not an absolute path is `-32602`. A listed session has `sessionId`, `cwd`, a `title` that is null, and `updatedAt`. The agent reads 50 sessions of the store for each step and continues until the page holds a session or the store ends. `nextCursor` is present when more sessions can follow. A `cursor` that names no session is `-32602`. One call reads at most 4 steps. A call that reads them all and finds no match answers no session and a `nextCursor`. Without a `cwd`, the agent lists through a runtime that it holds, else through the runtime of the work directory of the process.
+- `session/list` takes an optional `cwd` and an optional `cursor`. It lists the root sessions of the store in creation order. A session that has a parent is a task child of another session and is not listed. A session that has no `work_dir` is not listed. With a `cwd`, only the sessions whose `work_dir` equals it are listed. A `cwd` that is not an absolute path is `-32602`. A listed session has `sessionId`, `cwd`, a `title`, and `updatedAt`. The `title` is the title of the session, or null when it has none. The agent reads 50 sessions of the store for each step and continues until the page holds a session or the store ends. `nextCursor` is present when more sessions can follow. A `cursor` that names no session is `-32602`. One call reads at most 4 steps. A call that reads them all and finds no match answers no session and a `nextCursor`. Without a `cwd`, the agent lists through a runtime that it holds, else through the runtime of the work directory of the process.
 - `session/close` cancels the prompts of the session as `session/cancel` does, waits for their answers and for their updates, stops the event pump, and releases the session. The log stays, so the session can be loaded again. A prompt that was in flight answers `cancelled`. A `sessionId` that the connection does not hold is `-32002`.
 
 ### Prompts
@@ -1010,7 +1012,8 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 ### Usage and session info
 
 - A `usage_update` has `used` and `size` from the context of the session. The agent sends it when `used`, `size`, or the cost changes at a `context.measured`, `compaction.applied`, or `turn.ended` event. It sends none while the context window is not known. The `cost` is the session cost in `USD`, and is omitted when the session reports none.
-- A `session_info_update` with `updatedAt` follows each `turn.ended` event. It has no `title`.
+- A `session_info_update` with `updatedAt` and no `title` follows each `turn.ended` event.
+- When the title of the session changes, the agent sends a `session_info_update` with the `title` and `updatedAt`. This is a `session.titled` event, or the first prompt that gives the title. An event that leaves the title as it was sends none.
 
 ### Compaction
 

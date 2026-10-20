@@ -296,6 +296,7 @@
           "windows": []
         },
         "synced_seq": 0,
+        "title": "run it",
         "updated_at": "\u003ctime\u003e",
         "usage": {
           "cache_read_tokens": 7,
@@ -331,6 +332,7 @@
           "windows": []
         },
         "synced_seq": 0,
+        "title": "run it",
         "turn_id": "turn#2",
         "updated_at": "\u003ctime\u003e",
         "usage": {

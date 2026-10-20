@@ -115,7 +115,7 @@ type SubscriptionOverage struct {
 	ResetsAt int64  `json:"resets_at"`
 }
 
-// Session is a view of one session at HeadSeq. Usage sums every model and
+// Session is a view of one session at HeadSeq. Title is the newest rename, else the title that the first prompt gives, else empty. Usage sums every model and
 // summary call, but no goal evaluator call. SubscriptionUsage is null until a
 // call carries a snapshot. Plugins lists each configured plugin as the runtime
 // that serves the view knows it; the log does not hold it. Agent is the agent
@@ -127,6 +127,7 @@ type Session struct {
 	Origin            string             `json:"origin"`
 	WorkDir           string             `json:"work_dir,omitempty"`
 	Model             string             `json:"model"`
+	Title             string             `json:"title,omitempty"`
 	Effort            string             `json:"effort,omitempty"`
 	ServiceTier       string             `json:"service_tier,omitempty"`
 	Status            Status             `json:"status"`
@@ -355,11 +356,12 @@ type Model struct {
 }
 
 // SettingsPatch changes each non-nil setting of a session. A running turn
-// uses the new settings from its next model call.
+// uses the new settings from its next model call. Title renames the session.
 type SettingsPatch struct {
 	Model       *string `json:"model,omitempty"`
 	Effort      *string `json:"effort,omitempty"`
 	ServiceTier *string `json:"service_tier,omitempty"`
+	Title       *string `json:"title,omitempty"`
 }
 
 // EventPage is one page of durable events. Next is the after of the next

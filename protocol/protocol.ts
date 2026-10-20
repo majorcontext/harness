@@ -493,6 +493,7 @@ export interface Session {
   origin: string;
   work_dir?: string;
   model: string;
+  title?: string;
   effort?: string;
   service_tier?: string;
   status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed" | "compaction_canceled";
@@ -526,6 +527,10 @@ export interface SessionPage {
   next?: string;
 }
 
+export interface SessionTitled {
+  title: string;
+}
+
 export interface Settings {
   effort?: string;
   service_tier?: string;
@@ -541,6 +546,7 @@ export interface SettingsPatch {
   model?: string;
   effort?: string;
   service_tier?: string;
+  title?: string;
 }
 
 export interface StatusFrame {
