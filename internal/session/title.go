@@ -53,19 +53,19 @@ func (a *Actor) askTitle(text string) {
 	})
 }
 
-// titled records the title that a model wrote. A failed or empty answer logs
-// one line and keeps the derived title.
+// titled records the title that a model wrote, and the usage of the call. A
+// failed or empty answer logs one line and keeps the derived title.
 func (a *Actor) titled(answer string, usage protocol.Usage, err error) {
 	title := eventlog.ModelTitle(answer)
 	if err != nil || title == "" {
 		a.log().Warn("harness: session title call", "session", a.cfg.ID, "model", a.cfg.TitleModel, "err", err, "empty", title == "")
+		_ = a.recordUsage(usage)
 		return
 	}
-	events := []protocol.Payload{protocol.SessionTitled{Title: title, Source: protocol.TitleModel}}
-	if usage != (protocol.Usage{}) {
-		events = append(events, protocol.ContextMeasured{Usage: usage})
+	if err := a.append(protocol.SessionTitled{Title: title, Source: protocol.TitleModel}); err != nil {
+		a.log().Warn("harness: session title record", "session", a.cfg.ID, "err", err)
 	}
-	_ = a.append(events...)
+	_ = a.recordUsage(usage)
 }
 
 // cutUTF8 cuts s to at most n bytes on a UTF-8 boundary.

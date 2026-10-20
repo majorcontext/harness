@@ -220,14 +220,13 @@ func New(opts Options) (*Runtime, error) {
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
-		sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1), titleModel: titleRef(opts.Config),
-		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
+		sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
+		titleModel: modelRef(opts.Config, opts.Config.TitleModel),
+		threshold:  positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log}
-	if opts.Config.GoalEvaluatorModel != "" {
-		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
-	}
+	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
 	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
@@ -358,10 +357,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	if err := cmp.Or(r.startPlugins(ctx, false), r.checkSessionTools(l.mcp)); err != nil {
-		return nil, err
-	}
-	if err := r.yieldCatchUp(ctx, id); err != nil {
+	if err := r.beforeStart(ctx, id, l); err != nil {
 		return nil, err
 	}
 	own, err := r.owner.Acquire(ctx, id)
@@ -391,23 +387,24 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Version:         r.version,
 		AskUserQuestion: r.questions,
 		WebSearch:       r.webSearch,
-		Evaluator:       r.evaluator, TitleModel: r.titleModel,
-		Source:    r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
-		Record:    sp.Recording,
-		Retain:    r.workDir != "",
-		Prompt:    sp.System,
-		Skills:    sp.SkillList(),
-		Sent:      sp.Sent,
-		Appended:  r.appended(id, plug),
-		Params:    chatParams(plug),
-		Sync:      r.sync,
-		Log:       r.log,
-		Limits:    r.limits,
-		MaxTokens: r.maxTokens,
-		Threshold: r.threshold,
-		KeepTurns: r.keep,
-		Base:      r.base,
-		Go:        r.group.Go,
+		Evaluator:       r.evaluator,
+		TitleModel:      r.titleModel,
+		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
+		Record:          sp.Recording,
+		Retain:          r.workDir != "",
+		Prompt:          sp.System,
+		Skills:          sp.SkillList(),
+		Sent:            sp.Sent,
+		Appended:        r.appended(id, plug),
+		Params:          chatParams(plug),
+		Sync:            r.sync,
+		Log:             r.log,
+		Limits:          r.limits,
+		MaxTokens:       r.maxTokens,
+		Threshold:       r.threshold,
+		KeepTurns:       r.keep,
+		Base:            r.base,
+		Go:              r.group.Go,
 		Done: func(closeDone func()) {
 			if a != nil && a.Rejected() {
 				r.syncStopped.Store(true)

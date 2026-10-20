@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/session"
@@ -87,4 +88,12 @@ func (r *Runtime) lineageOf(ctx context.Context, own session.Ownership, id strin
 		session.Discard(own, id, r.log)
 	}
 	return c, root, depth, err
+}
+
+// modelRef resolves the optional model key ref of c through its aliases. An empty key gives no model.
+func modelRef(c config.Config, ref string) string {
+	if ref == "" {
+		return ""
+	}
+	return c.ResolveModel(ref)
 }
