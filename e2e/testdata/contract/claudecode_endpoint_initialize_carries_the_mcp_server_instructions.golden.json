@@ -69,10 +69,10 @@
           "capabilities": {
             "tools": {}
           },
-          "instructions": "\u003cmcp_instructions\u003e\n\u003cserver name=\"weather\" tools=\"mcp__weather__alerts, mcp__weather__echo, mcp__weather__flaky, mcp__weather__forecast, mcp__weather__strict\"\u003e\nCall forecast before alerts.\n\u003c/server\u003e\n\u003c/mcp_instructions\u003e",
+          "instructions": "Call forecast before alerts.",
           "protocolVersion": "2025-11-25",
           "serverInfo": {
-            "name": "harness",
+            "name": "weather",
             "version": ""
           }
         }

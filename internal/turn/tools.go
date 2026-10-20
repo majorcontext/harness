@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -28,7 +29,7 @@ type Toolset struct {
 	// Prompt follows the system prompt.
 	Prompt string
 	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
-	MCPInstructions string
+	MCPInstructions MCPInstructions
 	// Tail is engine context for this call alone, after the last message and outside any cached prefix.
 	Tail string
 	// Notices are statuses that the model reads inside the conversation, and
@@ -36,6 +37,15 @@ type Toolset struct {
 	Notices []Notice
 	// Hooks run around each tool call. nil: none.
 	Hooks Hooks
+}
+
+// MCPInstructions are the usage guidance of the MCP servers, for a backend
+// that serves the tools to an external harness.
+type MCPInstructions struct {
+	// Common is the guidance on the tools that are not the tools of one server.
+	Common string
+	// Servers holds the instructions of each server by its name.
+	Servers map[string]string
 }
 
 // Notice is a status that the model reads inside the conversation. Each model
@@ -89,7 +99,7 @@ type Sources []Source
 // Toolset implements Source.
 func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) Toolset {
 	var out Toolset
-	var prompts, tails, mcps []string
+	var prompts, tails, common []string
 	var hooks chain
 	for _, src := range s {
 		ts := src.Toolset(ctx, history, allowed, model)
@@ -97,9 +107,13 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		if ts.Prompt != "" {
 			prompts = append(prompts, ts.Prompt)
 		}
-		if ts.MCPInstructions != "" {
-			mcps = append(mcps, ts.MCPInstructions)
+		if ts.MCPInstructions.Common != "" {
+			common = append(common, ts.MCPInstructions.Common)
 		}
+		if len(ts.MCPInstructions.Servers) > 0 && out.MCPInstructions.Servers == nil {
+			out.MCPInstructions.Servers = map[string]string{}
+		}
+		maps.Copy(out.MCPInstructions.Servers, ts.MCPInstructions.Servers)
 		if ts.Tail != "" {
 			tails = append(tails, ts.Tail)
 		}
@@ -108,7 +122,7 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 			hooks = append(hooks, ts.Hooks)
 		}
 	}
-	out.Prompt, out.Tail, out.MCPInstructions = strings.Join(prompts, "\n\n"), strings.Join(tails, "\n\n"), strings.Join(mcps, "\n\n")
+	out.Prompt, out.Tail, out.MCPInstructions.Common = strings.Join(prompts, "\n\n"), strings.Join(tails, "\n\n"), strings.Join(common, "\n\n")
 	switch len(hooks) {
 	case 0:
 	case 1:

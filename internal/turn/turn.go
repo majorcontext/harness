@@ -72,7 +72,7 @@ type Request struct {
 	// Instructions is the system prompt of the call.
 	Instructions string
 	// MCPInstructions are the usage guidance of the MCP servers alone, for a backend that serves the tools to an external harness.
-	MCPInstructions string
+	MCPInstructions MCPInstructions
 	// Skills is the skill segment of the session prompt, for a backend that builds its own prompt.
 	Skills string
 	// Sent receives the system prompt that a backend sent, when it builds its own prompt. nil: none.
