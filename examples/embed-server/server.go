@@ -59,6 +59,7 @@ type server struct {
 	store    *tokenStore
 	proxy    *proxy.Proxy
 	flows    *flows
+	wasm     *wasmModule
 }
 
 func newServer(cfg config) (*server, error) {
@@ -72,6 +73,11 @@ func newServer(cfg config) (*server, error) {
 	s := &server{cfg: cfg, sessions: newSessions(cfg.SecureCookie), store: newTokenStore(cfg.Issuer, cfg.HTTP), flows: &flows{m: map[string]*flow{}}}
 	if cfg.TokenFile != "" && cfg.TokenFile == cfg.SessionFile {
 		return nil, errors.New("-token-file and -session-file name the same file")
+	}
+	if cfg.WasmPath != "" {
+		if s.wasm, err = newWasmModule(cfg.WasmPath); err != nil {
+			return nil, err
+		}
 	}
 	s.store.file = cfg.TokenFile
 	s.sessions.file = cfg.SessionFile
@@ -131,7 +137,9 @@ func (s *server) handler() http.Handler {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		_, _ = w.Write(styleCSS)
 	})
-	mux.HandleFunc("GET /harness.wasm", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.WasmPath) })
+	if s.wasm != nil {
+		mux.Handle("GET /harness.wasm", s.wasm)
+	}
 	mux.HandleFunc("GET /wasm_exec.js", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.WasmExecPath) })
 	mux.Handle("GET /embed/", http.StripPrefix("/embed/", http.FileServer(http.Dir(s.cfg.EmbedDir))))
 	mux.HandleFunc("GET /login", s.loginPage)

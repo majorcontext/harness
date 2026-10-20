@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,11 +13,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/andybalholm/brotli"
 )
 
 func jwt(t *testing.T, exp time.Time, account string) string {
@@ -630,5 +636,57 @@ func TestMCPProxyInjectsTheTokenAndReachesOnlyConfiguredServers(t *testing.T) {
 	}
 	if got.Load() != nil {
 		t.Error("a refused request reached the upstream")
+	}
+}
+
+func TestWasmModuleIsServedCompressedWithAnETag(t *testing.T) {
+	module := bytes.Repeat([]byte("\x00asm module bytes "), 200)
+	path := filepath.Join(t.TempDir(), "harness.wasm")
+	if err := os.WriteFile(path, module, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := newServer(config{Upstream: "http://upstream.invalid", WasmPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-srv.wasm.done
+	front := httptest.NewServer(srv.handler())
+	defer front.Close()
+
+	get := func(encoding, etag string) (*http.Response, []byte) {
+		req, _ := http.NewRequest("GET", front.URL+"/harness.wasm", nil)
+		req.Header.Set("Accept-Encoding", encoding)
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp, body
+	}
+	for _, c := range []struct{ accept, encoding string }{{"gzip, br", "br"}, {"gzip", "gzip"}, {"", ""}} {
+		resp, body := get(c.accept, "")
+		if got := resp.Header.Get("Content-Encoding"); got != c.encoding {
+			t.Fatalf("Accept-Encoding %q: Content-Encoding %q, want %q", c.accept, got, c.encoding)
+		}
+		switch c.encoding {
+		case "br":
+			body, _ = io.ReadAll(brotli.NewReader(bytes.NewReader(body)))
+		case "gzip":
+			zr, err := gzip.NewReader(bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ = io.ReadAll(zr)
+		}
+		if !bytes.Equal(body, module) {
+			t.Fatalf("Accept-Encoding %q: body is not the module", c.accept)
+		}
+		if again, _ := get(c.accept, resp.Header.Get("ETag")); again.StatusCode != http.StatusNotModified {
+			t.Fatalf("Accept-Encoding %q: repeat with the ETag got %d, want 304", c.accept, again.StatusCode)
+		}
 	}
 }
