@@ -94,21 +94,21 @@ type State struct {
 	origin   string
 	workDir  string
 	model    string
-	// renamed is the newest session.titled title, and derived is the title of the first prompt.
-	renamed, derived string
-	settings         protocol.Settings
-	allowed          []string
-	createdAt        time.Time
-	updatedAt        time.Time
-	inputs           map[string]input
-	prog             protocol.Progress
-	turn             Turn
-	turnIDs          map[string]bool
-	lastEnded        protocol.TurnEnded
-	calls            []OpenToolCall
-	requests         map[string]pendingRequest
-	resolved         map[string]protocol.RequestResolved
-	asked            map[string]json.RawMessage
+	// renamed is the newest title of a person, modeled the newest title of a model, and derived the title of the first prompt.
+	renamed, modeled, derived string
+	settings                  protocol.Settings
+	allowed                   []string
+	createdAt                 time.Time
+	updatedAt                 time.Time
+	inputs                    map[string]input
+	prog                      protocol.Progress
+	turn                      Turn
+	turnIDs                   map[string]bool
+	lastEnded                 protocol.TurnEnded
+	calls                     []OpenToolCall
+	requests                  map[string]pendingRequest
+	resolved                  map[string]protocol.RequestResolved
+	asked                     map[string]json.RawMessage
 	// evaluated is the last turn that the goal judged, or the last turn that ended before goal.set.
 	evaluated string
 	usage     protocol.Usage
@@ -363,8 +363,11 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }
 
-// Title is the newest rename, else the title of the first prompt, else empty.
-func (s *State) Title() string { return cmp.Or(s.renamed, s.derived) }
+// Renamed is the newest title of a person, or empty.
+func (s *State) Renamed() string { return s.renamed }
+
+// Title is the title of a person, else the title of a model, else the title of the first prompt, else empty.
+func (s *State) Title() string { return cmp.Or(s.renamed, s.modeled, s.derived) }
 
 // Summary returns the list entry of the session.
 func (s *State) Summary() Summary {

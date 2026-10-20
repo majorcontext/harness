@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -87,4 +89,30 @@ func (r *Runtime) lineageOf(ctx context.Context, own session.Ownership, id strin
 		session.Discard(own, id, r.log)
 	}
 	return c, root, depth, err
+}
+
+// modelRef resolves the optional model key ref of c through its aliases. An empty key gives no model.
+func modelRef(c config.Config, ref string) string {
+	if ref == "" {
+		return ""
+	}
+	return c.ResolveModel(ref)
+}
+
+// checkOptions adds tools to the runtime and refuses a tool name that is empty,
+// repeated, or reserved, a bad plugin, and a title_model that runs its own agent loop, as generate does.
+func (r *Runtime) checkOptions(tools []turn.Tool, opts Options) error {
+	for _, t := range tools {
+		if name := t.Spec().Name; name == "" || r.known("", name) && (!r.shadowable(name) || r.owns(name)) {
+			return fmt.Errorf("harness: tool name %q is empty, repeated, or reserved", name)
+		}
+		r.tools = append(r.tools, t)
+	}
+	if err := r.checkPlugins(opts.Config.Plugins, opts.Plugins); err != nil {
+		return err
+	}
+	if r.titleModel != "" && r.models.Capabilities(r.titleModel).OwnsLoop {
+		return fmt.Errorf("harness: title_model %s runs its own agent loop; use a model API provider", r.titleModel)
+	}
+	return nil
 }

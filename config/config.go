@@ -67,6 +67,9 @@ type Config struct {
 	// GoalEvaluatorModel is the model ref or alias that judges goals. It has no
 	// default: goals and the goal tool need it. Resolve it with ResolveModel.
 	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
+	// TitleModel is the model ref or alias that writes the title of a session
+	// from its first prompt. Empty: no model title. Resolve it with ResolveModel.
+	TitleModel string `json:"title_model,omitempty"`
 	// MaxTaskDepth bounds the nesting of the child sessions of the task tool.
 	MaxTaskDepth int `json:"max_task_depth,omitempty"`
 	// MaxConcurrentTasks bounds the unsettled child sessions of one session tree.

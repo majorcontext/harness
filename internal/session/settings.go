@@ -9,7 +9,7 @@ import (
 )
 
 // Update appends the settings in ch that differ from the session settings, and
-// the title when it differs from the session title. Config.Check validates a
+// the title when it differs from the title of a person. Config.Check validates a
 // new model first.
 func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *string) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
@@ -21,7 +21,7 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *
 		if ch.Model != nil && a.cfg.Check != nil {
 			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
-		title = changed(title, a.state.Title())
+		title = changed(title, a.state.Renamed())
 		if err == nil && (ch != protocol.SettingsChanged{} || title != nil) {
 			var events []protocol.Payload
 			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
@@ -32,7 +32,7 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *
 				events = append(events, ch)
 			}
 			if title != nil {
-				events = append(events, protocol.SessionTitled{Title: *title})
+				events = append(events, protocol.SessionTitled{Title: *title, Source: protocol.TitleUser})
 			}
 			err = a.append(events...)
 			if err == nil && dismissed > 0 && a.run == nil {

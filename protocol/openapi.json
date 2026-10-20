@@ -1858,11 +1858,19 @@
         "properties": {
           "title": {
             "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user",
+              "model"
+            ]
           }
         },
         "type": "object",
         "required": [
-          "title"
+          "title",
+          "source"
         ]
       },
       "Settings": {

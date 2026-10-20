@@ -112,6 +112,15 @@ const (
 	VerdictImpossible Verdict = "impossible"
 )
 
+// TitleSource says who wrote a session title.
+type TitleSource string
+
+// Title sources.
+const (
+	TitleUser  TitleSource = "user"
+	TitleModel TitleSource = "model"
+)
+
 // Outcome is how a child session settled.
 type Outcome string
 
@@ -245,9 +254,11 @@ type SettingsChanged struct {
 	ServiceTier *string `json:"service_tier,omitempty"`
 }
 
-// SessionTitled renames the session. The title is not empty and has no control character, such as a tab or a line break.
+// SessionTitled sets the session title. The title is not empty and has no control character, such as a tab or a line break.
+// A title from a person always replaces the title; a title from a model applies only while no person has titled the session.
 type SessionTitled struct {
-	Title string `json:"title"`
+	Title  string      `json:"title"`
+	Source TitleSource `json:"source"`
 }
 
 // InputAdmitted queues an input.

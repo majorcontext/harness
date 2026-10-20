@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"cmp"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -498,6 +499,8 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 	if sc.concurrent {
 		reqs = groupByConversation(reqs)
 	}
+	// A title call runs beside the turn, so its arrival order is not fixed.
+	slices.SortStableFunc(reqs, func(a, b harnesstest.Request) int { return cmp.Compare(b2i(isTitleRequest(a)), b2i(isTitleRequest(b))) })
 	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
@@ -590,4 +593,11 @@ func TestScenarioRunsTwiceIdentically(t *testing.T) {
 	if string(mustJSON(t, first)) != string(mustJSON(t, second)) {
 		t.Fatalf("observations differ between runs:\n%s", lineDiff(string(mustJSON(t, first)), string(mustJSON(t, second))))
 	}
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
