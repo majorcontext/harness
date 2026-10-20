@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -37,6 +38,30 @@ func (a *Actor) startTitle(events []protocol.Payload) {
 	}
 }
 
+// withDerivedTitle adds the derived title of the first input that gives one, so the
+// record joins the batch of that input. A batch that creates a child adds none.
+func withDerivedTitle(events []protocol.Payload) []protocol.Payload {
+	for _, e := range events {
+		if c, ok := e.(protocol.SessionCreated); ok && c.ParentID != "" {
+			return events
+		}
+	}
+	for _, e := range events {
+		if in, ok := e.(protocol.InputAdmitted); ok {
+			if title := eventlog.DerivedTitle(in.Parts); title != "" {
+				return append(slices.Clone(events), protocol.SessionTitled{Title: title, Source: protocol.TitleDerived})
+			}
+		}
+	}
+	return events
+}
+
+func (a *Actor) appendDerivedTitle() {
+	if err := a.append(protocol.SessionTitled{Title: a.state.Title(), Source: protocol.TitleDerived}); err != nil {
+		a.log().Warn("harness: session title record", "session", a.cfg.ID, "err", err)
+	}
+}
+
 func (a *Actor) askTitle(text string) {
 	ctx, cancel := context.WithTimeout(a.cfg.Base, titleTimeout)
 	a.titleCancel = cancel
@@ -54,11 +79,14 @@ func (a *Actor) askTitle(text string) {
 }
 
 // titled records the title that a model wrote, and the usage of the call. A
-// failed or empty answer logs one line and keeps the derived title.
+// failed or empty answer logs one line and records the derived title.
 func (a *Actor) titled(answer string, usage protocol.Usage, err error) {
 	title := eventlog.ModelTitle(answer)
 	if err != nil || title == "" {
 		a.log().Warn("harness: session title call", "session", a.cfg.ID, "model", a.cfg.TitleModel, "err", err, "empty", title == "")
+		if a.state.Renamed() == "" {
+			a.appendDerivedTitle()
+		}
 		_ = a.recordUsage(usage)
 		return
 	}

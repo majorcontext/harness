@@ -333,7 +333,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 8,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -369,7 +369,7 @@
           "turns": 1,
           "verdict": "met"
         },
-        "head_seq": 22,
+        "head_seq": 23,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -393,7 +393,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 9
+        "seq": 10
       }
     }
   }

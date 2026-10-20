@@ -243,9 +243,9 @@ func TestClaudeCodeStreamsDeltas(t *testing.T) {
 			break
 		}
 	}
-	want := []string{"2 owner.acquired", "3 input.admitted", "4 turn.started", "5 backend.state",
-		"5 item.started i1", "5 item.delta i1 reasoning Reasoning under a reserved id.",
-		"5 item.delta i1 text Answer under the same reserved id.", "6 item.completed i1", "7 context.measured", "8 turn.ended"}
+	want := []string{"2 owner.acquired", "3 input.admitted", "4 turn.started", "5 session.titled", "6 backend.state",
+		"6 item.started i1", "6 item.delta i1 reasoning Reasoning under a reserved id.",
+		"6 item.delta i1 text Answer under the same reserved id.", "7 item.completed i1", "8 context.measured", "9 turn.ended"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
@@ -277,7 +277,7 @@ func TestClaudeCodeAppliesTheAllowedToolsOfASession(t *testing.T) {
 			r := claudeRuntime(t, st, newProbe("echo", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
-			wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)
+			wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a", "session.titled"}, tc.want...)...)
 			argv := jsonLines[[]string](t, argvLog)
 			if len(argv) != 1 {
 				t.Fatalf("CLI runs = %d, want 1", len(argv))

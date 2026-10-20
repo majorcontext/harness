@@ -124,7 +124,7 @@
     "answer_question.a": {
       "status": 202,
       "body": {
-        "seq": 11,
+        "seq": 12,
         "status": "started"
       }
     },
@@ -191,7 +191,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -225,7 +225,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
+        "head_seq": 11,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -262,7 +262,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 23,
+        "head_seq": 24,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -298,7 +298,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 23,
+        "head_seq": 24,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -330,7 +330,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 10
+        "seq": 11
       }
     }
   }

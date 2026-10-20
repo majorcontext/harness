@@ -52,7 +52,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	}
 	defer closeRuntime(t, r)
 	turnOf(t, createClaude(t, r, []string{"echo", "mcp__gateway__ping"}), text("a", "hi"))
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m", "item.completed tool toolu_m", "item.completed assistant done", "context.measured", "turn.ended completed")
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "backend.state", "item.completed assistant toolu_m", "item.completed tool toolu_m", "item.completed assistant done", "context.measured", "turn.ended completed")
 	runs := jsonLines[mcpRun](t, mcpLog)
 	if len(runs) != 1 || !slices.Equal(runs[0].Tools, []string{"echo", hist}) {
 		t.Fatalf("bridge runs = %+v, want one that offers echo and %s", runs, hist)
@@ -172,7 +172,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			r := claudeRuntime(t, st, echo, newProbe("hidden", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
-			wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "backend.state", "item.completed assistant toolu_m",
 				`item.completed tool toolu_m echo {"q":"hi"}`, "item.completed assistant done", "context.measured", "turn.ended completed")
 			runs := jsonLines[mcpRun](t, mcpLog)
 			if len(runs) != 1 || !slices.Equal(runs[0].Tools, tc.offered) {
@@ -222,7 +222,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-ended
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "backend.state", "item.completed assistant toolu_m",
 		"context.measured", "item.completed tool toolu_m "+interrupted, "turn.ended interrupted stopped")
 	if c := endedCall(t, block, jsonLines[mcpRun](t, mcpLog)[0], jsonLines[[]string](t, argvLog)[0]); c.ID != "toolu_m" {
 		t.Errorf("call = %+v, want ID toolu_m", c)

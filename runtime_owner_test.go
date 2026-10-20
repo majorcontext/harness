@@ -87,7 +87,7 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 				}
 				next.emit(say("rest"))
 				next.end()
-				want := append(append([]string{"input.admitted a", "turn.started a"}, tc.want...), "turn.suspended handoff",
+				want := append(append([]string{"input.admitted a", "turn.started a", "session.titled"}, tc.want...), "turn.suspended handoff",
 					"owner.acquired 1", "turn.resumed 1", "item.completed assistant rest", "turn.ended completed")
 				wantLog(t, openStore(), 2, want...)
 				closeRuntime(t, r2)
@@ -112,7 +112,7 @@ func TestLostStopsTheActorBeforeItsNextAppend(t *testing.T) {
 		close(k.lost)
 		close(st.hold)
 		noRun(t, f)
-		wantLog(t, st, 2, "input.admitted a", "turn.started a", "input.admitted b", "turn.ended completed")
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "input.admitted b", "turn.ended completed")
 		closeRuntime(t, r)
 	})
 }
@@ -141,7 +141,7 @@ func TestCloseWithAnEndedContextDoesNotWaitForAStuckTurn(t *testing.T) {
 		}
 		close(f.stuck)
 		synctest.Wait()
-		wantLog(t, st, 2, "input.admitted a", "turn.started a")
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled")
 	})
 }
 
@@ -159,7 +159,7 @@ func TestCloseWithAnEndedContextNeverHandsOff(t *testing.T) {
 				t.Fatalf("Close = %v, want Canceled", err)
 			}
 			synctest.Wait()
-			wantLog(t, st, 2, "input.admitted a", "turn.started a")
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled")
 		})
 	}
 }
@@ -208,7 +208,7 @@ func TestOpenViewReadsWithoutAppending(t *testing.T) {
 			}
 			kinds = append(kinds, e.Kind)
 		}
-		if want := []string{"input.admitted", "turn.started"}; !slices.Equal(kinds, want) {
+		if want := []string{"input.admitted", "turn.started", "session.titled"}; !slices.Equal(kinds, want) {
 			t.Fatalf("View.Events(2) = %v, want %v", kinds, want)
 		}
 		if page, err := r.List(bg, protocol.ListSessions{}); err != nil || len(page.Sessions) != 1 || page.Sessions[0].Status != protocol.StatusRunning {
@@ -218,7 +218,7 @@ func TestOpenViewReadsWithoutAppending(t *testing.T) {
 			t.Fatalf("OpenView of a missing session = %v, want ErrSessionNotFound", err)
 		}
 		run.end()
-		wantLog(t, st, 3, "turn.started a", "turn.ended completed")
+		wantLog(t, st, 3, "turn.started a", "session.titled", "turn.ended completed")
 		closeRuntime(t, r)
 	})
 }

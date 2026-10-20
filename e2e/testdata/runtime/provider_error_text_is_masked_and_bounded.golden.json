@@ -65,7 +65,7 @@
           "state": "failed",
           "turns": 0
         },
-        "head_seq": 7,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "error": "[permanent] anthropic: bad request, Authorization: Bearer [REDACTED] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...[truncated]",

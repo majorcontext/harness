@@ -524,7 +524,7 @@
           "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 18,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -552,7 +552,7 @@
           "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 16,
+        "head_seq": 17,
         "id": "ses:b",
         "last_turn": {
           "error": "turn: context overflow: context exhausted: prompt 205102 tokens \u003e limit 200000",

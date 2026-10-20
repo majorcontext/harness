@@ -38,7 +38,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "error": "claudecode: the turn failed (error_during_execution): fake failure",

@@ -211,7 +211,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "max",
-        "head_seq": 10,
+        "head_seq": 11,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -264,7 +264,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "minimal",
-        "head_seq": 11,
+        "head_seq": 12,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

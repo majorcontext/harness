@@ -181,7 +181,7 @@
       "body": {
         "command": "accepted",
         "input_id": "in3",
-        "seq": 13
+        "seq": 14
       }
     },
     "command_records.a": {
@@ -193,7 +193,7 @@
           "result": {
             "folded": true,
             "from_seq": 1,
-            "to_seq": 8
+            "to_seq": 9
           },
           "status": "succeeded",
           "text": "/compact succeeded"

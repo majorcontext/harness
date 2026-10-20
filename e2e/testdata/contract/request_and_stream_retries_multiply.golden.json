@@ -160,7 +160,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 5,
+        "head_seq": 6,
         "id": "ses:a",
         "last_turn": {
           "error": "[retryable:server_error] anthropic: upstream broke 4 (api_error, HTTP 500)",

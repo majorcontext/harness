@@ -353,13 +353,27 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 13
+        "to_seq": 14
       }
     },
     "journal_page.a": {
       "status": 200,
       "body": {
         "events": [
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 11,
+            "t": "\u003ctime\u003e"
+          },
           {
             "d": {
               "item_id": "item#1",
@@ -375,7 +389,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 11,
+            "seq": 12,
             "t": "\u003ctime\u003e"
           },
           {
@@ -384,7 +398,7 @@
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
-            "seq": 12,
+            "seq": 13,
             "t": "\u003ctime\u003e"
           },
           {
@@ -400,7 +414,7 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 13,
+            "seq": 14,
             "t": "\u003ctime\u003e"
           },
           {
@@ -411,7 +425,7 @@
               "turn_id": "turn#2"
             },
             "k": "turn.started",
-            "seq": 14,
+            "seq": 15,
             "t": "\u003ctime\u003e"
           },
           {
@@ -425,7 +439,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 15,
+            "seq": 16,
             "t": "\u003ctime\u003e"
           },
           {
@@ -443,7 +457,7 @@
               "turn_id": "turn#2"
             },
             "k": "item.completed",
-            "seq": 16,
+            "seq": 17,
             "t": "\u003ctime\u003e"
           },
           {
@@ -452,7 +466,7 @@
               "turn_id": "turn#2"
             },
             "k": "turn.ended",
-            "seq": 17,
+            "seq": 18,
             "t": "\u003ctime\u003e"
           },
           {
@@ -460,14 +474,14 @@
               "by_backend": false,
               "from_seq": 1,
               "summary": "gist",
-              "to_seq": 13,
+              "to_seq": 14,
               "usage": {
                 "input_tokens": 5,
                 "output_tokens": 3
               }
             },
             "k": "compaction.applied",
-            "seq": 18,
+            "seq": 19,
             "t": "\u003ctime\u003e"
           }
         ]

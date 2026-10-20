@@ -84,7 +84,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 8,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -102,6 +102,124 @@
           "output_tokens": 10
         },
         "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "journal_page.a": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "model": "anthropic/claude-fable-5",
+              "origin": "",
+              "settings": {},
+              "work_dir": "\u003cworkdir\u003e"
+            },
+            "k": "session.created",
+            "seq": 1,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "epoch": 1,
+              "owner": "\u003cowner\u003e"
+            },
+            "k": "owner.acquired",
+            "seq": 2,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in1",
+              "parts": [
+                {
+                  "text": "please look at why login is flaky",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 3,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in1"
+              ],
+              "turn_id": "turn#1"
+            },
+            "k": "turn.started",
+            "seq": 4,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#1",
+              "message": {
+                "parts": [
+                  {
+                    "text": "ok",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "derived",
+              "title": "please look at why login is flaky"
+            },
+            "k": "session.titled",
+            "seq": 8,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "",
+              "tokens": 0,
+              "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7
+              },
+              "window": 0
+            },
+            "k": "context.measured",
+            "seq": 9,
+            "t": "\u003ctime\u003e"
+          }
+        ]
       }
     }
   }

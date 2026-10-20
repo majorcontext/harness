@@ -142,7 +142,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -176,7 +176,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 18,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

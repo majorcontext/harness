@@ -12,6 +12,7 @@ import (
 // sessionTitleRows is the disposition of the rows of TestContractSessionTitle.
 var sessionTitleRows = map[string]runtimeRow{
 	"session_title_is_the_derived_title_of_the_first_prompt":                         sameAsServe(),
+	"session_title_of_a_prompt_with_an_escape_sequence_has_no_control_character":     sameAsServe(),
 	"session_rename_beats_the_derived_title_and_survives_a_restart":                  sameAsServe(),
 	"session_title_that_is_empty_has_a_line_break_or_is_too_long_is_invalid_request": sameAsServe(),
 	"session_title_model_writes_the_title_after_the_first_prompt":                    sameAsServe(),
@@ -72,6 +73,21 @@ func TestContractSessionTitle(t *testing.T) {
 				submit{as: "a", text: "\n  fix the flaky   login test, then rerun the whole suite twice\nsecond line"},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
+				journalPage{as: "a"},
+				submit{as: "a", text: "second prompt"},
+				waitIdle{as: "a"},
+				journalPage{as: "a"},
+			},
+		},
+		{
+			name:  "session_title_of_a_prompt_with_an_escape_sequence_has_no_control_character",
+			model: []harnesstest.Step{rest},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "\x1b[31merror\x1b[0m in build"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+				journalPage{as: "a"},
 			},
 		},
 		{
@@ -140,14 +156,18 @@ func TestContractSessionTitleModel(t *testing.T) {
 			config:     map[string]any{"title_model": "anthropic/title-model"},
 			model: []harnesstest.Step{
 				turn,
-				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "\n\"Fix the flaky login test.\"\nignored second line"}},
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "\n\"Fix the flaky login test.\"\nignored second line", Block: true, Usage: harnesstest.Usage{Input: 11, Output: 7}}},
 			},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "please look at why login is flaky"},
 				waitIdle{as: "a"},
+				awaitRequests{n: 2},
+				release{step: "title"},
 				awaitTitle{as: "a", title: "Fix the flaky login test"},
+				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
+				journalPage{as: "a"},
 			},
 		},
 		{
@@ -175,15 +195,17 @@ func TestContractSessionTitleModel(t *testing.T) {
 			config:     map[string]any{"title_model": "anthropic/title-model"},
 			model: []harnesstest.Step{
 				turn,
-				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "", Usage: harnesstest.Usage{Input: 11, Output: 7}}},
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "", Block: true, Usage: harnesstest.Usage{Input: 11, Output: 7}}},
 			},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "please look at why login is flaky"},
 				waitIdle{as: "a"},
 				awaitRequests{n: 2},
+				release{step: "title"},
 				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
+				journalPage{as: "a"},
 			},
 		},
 	})

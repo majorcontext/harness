@@ -318,7 +318,7 @@
     "answer_question.a": {
       "status": 202,
       "body": {
-        "seq": 10,
+        "seq": 11,
         "status": "started"
       }
     },
@@ -330,7 +330,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 8,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -358,7 +358,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 19,
+        "head_seq": 20,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -382,7 +382,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 9
+        "seq": 10
       }
     }
   }

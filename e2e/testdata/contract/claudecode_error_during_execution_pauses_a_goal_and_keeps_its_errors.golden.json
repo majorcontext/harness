@@ -46,7 +46,7 @@
           "state": "paused",
           "turns": 0
         },
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "error": "claudecode: the turn failed (error_during_execution): fake failure",

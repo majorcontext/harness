@@ -444,6 +444,8 @@ func TestSessionTitle(t *testing.T) {
 		{"a rename beats the derived title", with(base, in("a", text("first")), protocol.SessionTitled{Title: "Named", Source: protocol.TitleUser}), "Named"},
 		{"a model title after a person title is ignored", with(base, protocol.SessionTitled{Title: "Named", Source: protocol.TitleUser}, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}), "Named"},
 		{"a person title after a model title wins", with(base, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}, protocol.SessionTitled{Title: "Named", Source: protocol.TitleUser}), "Named"},
+		{"a derived record leaves the derived title", with(base, in("a", text("first")), protocol.SessionTitled{Title: "first", Source: protocol.TitleDerived}), "first"},
+		{"a model title beats a derived record", with(base, in("a", text("first")), protocol.SessionTitled{Title: "first", Source: protocol.TitleDerived}, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}), "Model"},
 		{"a model title beats the derived title", with(base, protocol.SessionTitled{Title: "Model", Source: protocol.TitleModel}, in("a", text("first"))), "Model"},
 		{"the newest rename wins", with(base, protocol.SessionTitled{Title: "One", Source: protocol.TitleUser}, protocol.SessionTitled{Title: "Two", Source: protocol.TitleUser}, in("a", text("first"))), "Two"},
 	}

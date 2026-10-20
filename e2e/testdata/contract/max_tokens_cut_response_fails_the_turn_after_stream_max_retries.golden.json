@@ -92,7 +92,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "error": "[retryable:stream_truncated] provider stream ended before completion: incomplete response returned, reason: max_tokens",

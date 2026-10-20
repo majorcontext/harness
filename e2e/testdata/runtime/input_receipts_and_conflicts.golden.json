@@ -136,14 +136,14 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 5
+        "seq": 6
       }
     },
     "repeat_input.a": {
       "status": 200,
       "body": {
         "input_id": "in2",
-        "seq": 5
+        "seq": 6
       }
     },
     "repeat_input.a#2": {

@@ -48,7 +48,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "error": "claudecode: the CLI did not apply the tool restriction: tool Bash ran",

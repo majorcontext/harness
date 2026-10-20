@@ -13,9 +13,9 @@ const (
 	derivedTitleBytes = 100
 )
 
-// derivedTitle is the title that an input gives: the first line of its first
+// DerivedTitle is the title that an input gives: the first line of its first
 // text part, cut to a few words. A slash command and an input with no text give none.
-func derivedTitle(parts []protocol.LogPart) string {
+func DerivedTitle(parts []protocol.LogPart) string {
 	for _, p := range parts {
 		if p.Type != protocol.LogPartText {
 			continue
@@ -32,7 +32,7 @@ func derivedTitle(parts []protocol.LogPart) string {
 // cutTitle cuts the first line of text to the words and bytes of a derived title.
 func cutTitle(text string) string {
 	line, _, _ := strings.Cut(text, "\n")
-	words := strings.Fields(line)
+	words := strings.FieldsFunc(line, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 	title := strings.Join(words[:min(len(words), derivedTitleWords)], " ")
 	if len(title) > derivedTitleBytes {
 		cut := derivedTitleBytes
@@ -46,7 +46,7 @@ func cutTitle(text string) string {
 
 // TitleInput returns the first text part of parts when the input gives a derived title, else "".
 func TitleInput(parts []protocol.LogPart) string {
-	if derivedTitle(parts) == "" {
+	if DerivedTitle(parts) == "" {
 		return ""
 	}
 	for _, p := range parts {
@@ -80,6 +80,7 @@ func (s *State) applyTitled(e protocol.SessionTitled) error {
 		if s.renamed == "" {
 			s.modeled = e.Title
 		}
+	case protocol.TitleDerived:
 	default:
 		return illegal("session.titled has source %q", e.Source)
 	}

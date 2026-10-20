@@ -92,7 +92,7 @@
           "turns": 1,
           "verdict": "impossible"
         },
-        "head_seq": 10,
+        "head_seq": 11,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

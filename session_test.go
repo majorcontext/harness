@@ -82,9 +82,9 @@ func TestEventsStreamCodexDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantEvents(t, watch(t, sess, 1, 0, text("a", "hi"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
-		"~4 item.started i1", "~4 item.delta i1 reasoning plan", "~4 item.delta i1 text hello",
-		"5 context.measured", "6 item.completed i1", "7 turn.ended")
+	wantEvents(t, watch(t, sess, 1, 0, text("a", "hi"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started", "5 session.titled",
+		"~5 item.started i1", "~5 item.delta i1 reasoning plan", "~5 item.delta i1 text hello",
+		"6 context.measured", "7 item.completed i1", "8 turn.ended")
 }
 
 func deltas(n int, text string) func(turn.Sink) error {
@@ -104,14 +104,14 @@ func TestEventsLiveFrames(t *testing.T) {
 		}
 		r := runtime(t, store.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
 		s := create(t, r)
-		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
-			"~4 item.started i1", "~4 item.delta i1 text z", "~4 item.discarded i1", "~4 status retrying 1", "~4 status running",
-			"~4 item.started i2", "~4 item.delta i2 text x", "~4 item.delta i2 text x", "5 item.completed i2", "6 turn.ended")
+		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started", "5 session.titled",
+			"~5 item.started i1", "~5 item.delta i1 text z", "~5 item.discarded i1", "~5 status retrying 1", "~5 status running",
+			"~5 item.started i2", "~5 item.delta i2 text x", "~5 item.delta i2 text x", "6 item.completed i2", "7 turn.ended")
 
-		got := watch(t, s, 4, 6, text("b", "two"), true)
+		got := watch(t, s, 4, 7, text("b", "two"), true)
 		durable := slices.DeleteFunc(slices.Clone(got), func(e protocol.Event) bool { return e.Ephemeral })
-		wantEvents(t, durable, "5 item.completed i1", "6 turn.ended", "7 input.admitted", "8 turn.started", "9 item.completed i2", "10 turn.ended")
-		wantEvents(t, got[4:6], "~8 item.started i1", "~8 item.delta i1 text y")
+		wantEvents(t, durable, "5 session.titled", "6 item.completed i1", "7 turn.ended", "8 input.admitted", "9 turn.started", "10 item.completed i2", "11 turn.ended")
+		wantEvents(t, got[5:7], "~9 item.started i1", "~9 item.delta i1 text y")
 		if live := len(got) - len(durable); live >= 1001 {
 			t.Fatalf("a stalled reader got all %d frames, want deltas dropped", live)
 		}
@@ -167,8 +167,8 @@ func TestEventsAutoCompactionFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := compactingRuntime(t, func(out turn.Sink) error { return out.Item(say("gist")) })
 		head := s.Snapshot().HeadSeq
-		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "13 compaction.applied", "~13 status idle",
-			"14 turn.started", "15 item.completed i1", "16 turn.ended")
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "13 input.admitted", "~13 status compacting", "14 compaction.applied", "~14 status idle",
+			"15 turn.started", "16 item.completed i1", "17 turn.ended")
 	})
 }
 
@@ -204,7 +204,7 @@ func TestEventsInterruptedCompactionFrames(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		wantEvents(t, got, "12 input.admitted", "~12 status compacting", "~12 status compaction_canceled")
+		wantEvents(t, got, "13 input.admitted", "~13 status compacting", "~13 status compaction_canceled")
 	})
 }
 
@@ -215,7 +215,7 @@ func TestEventsReleasedCompactionFrames(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		wantEvents(t, got, "12 input.admitted", "~12 status compacting", "~12 status compaction_failed")
+		wantEvents(t, got, "13 input.admitted", "~13 status compacting", "~13 status compaction_failed")
 	})
 }
 
@@ -223,7 +223,7 @@ func TestEventsFailedCompactionFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := compactingRuntime(t, func(turn.Sink) error { return errors.New("summary failed") })
 		head := s.Snapshot().HeadSeq
-		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "12 input.admitted", "~12 status compacting", "~12 status compaction_failed",
-			"13 turn.started", "14 item.completed i1", "15 turn.ended")
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "13 input.admitted", "~13 status compacting", "~13 status compaction_failed",
+			"14 turn.started", "15 item.completed i1", "16 turn.ended")
 	})
 }

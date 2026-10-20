@@ -198,7 +198,7 @@
           "turns": 1,
           "verdict": "not_met"
         },
-        "head_seq": 17,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

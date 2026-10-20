@@ -342,7 +342,7 @@
           "state": "cleared",
           "turns": 0
         },
-        "head_seq": 7,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "cause": "goal_cleared",
@@ -378,7 +378,7 @@
           "turns": 3,
           "verdict": "met"
         },
-        "head_seq": 29,
+        "head_seq": 30,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
