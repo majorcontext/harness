@@ -206,7 +206,8 @@ func (reg *Registry) dispatch(ctx context.Context, method string, params json.Ra
 		// No pagination: every Registry in this repo holds a small, fixed
 		// tool set (see this package's own doc comment), so there is
 		// nothing to page through and NextCursor is always left empty.
-		return ListToolsResult{Tools: append([]Tool(nil), reg.tools...)}, nil
+		// The schema requires an array, also for a Registry with no tools.
+		return ListToolsResult{Tools: append([]Tool{}, reg.tools...)}, nil
 
 	case methodToolsCall:
 		var req callToolRequest

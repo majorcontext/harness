@@ -286,6 +286,7 @@ func TestContractClaudeCodePlugins(t *testing.T) {
 // that runtimeRows does not list.
 var claudeMCPRows = map[string]runtimeRow{
 	"claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one": sameAsServe(),
+	"claudecode_mcp_server_with_no_allowed_tool_keeps_its_instructions":  sameAsServe(),
 }
 
 func TestContractClaudeCodeMCPServers(t *testing.T) {
@@ -314,6 +315,16 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 			"alpha": strings.Repeat("a", 3900) + "ALPHA END",
 			"zeta":  "Call forecast before alerts.",
 		}}),
+	}, {
+		name: "claudecode_mcp_server_with_no_allowed_tool_keeps_its_instructions",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := mcpSetup(nil, mcpServerDef{name: "alpha", spec: mcpWeather("")}, mcpServerDef{name: "zeta", spec: mcpWeather("Call forecast before alerts.")})(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "server_instructions", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: []action{
+			create{as: "a", allowed: []string{"bash", "mcp__alpha__forecast"}}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
+			claudeServerInstructions{as: "a", has: map[string]string{"zeta": "Call forecast before alerts."}},
+		},
 	}})
 }
 

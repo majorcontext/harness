@@ -69,7 +69,9 @@ const (
 
 // serverInstructions returns, as one JSON object, the instructions of each
 // server of --mcp-config by name as the CLI gives them to its model: the
-// instructions of the initialize reply, cut as the CLI cuts them.
+// instructions of the initialize reply, cut as the CLI cuts them. The CLI drops
+// a server whose tools/list result has no tools array, so such a server has the
+// text of that failure.
 func serverInstructions() string {
 	out := map[string]string{}
 	for name, srv := range hostedServers() {
@@ -79,6 +81,14 @@ func serverInstructions() string {
 		raw, err := hostedPost(srv, "initialize", obj{"protocolVersion": "2025-06-18", "capabilities": obj{}, "clientInfo": obj{"name": "fakeclaude", "version": "1"}})
 		if err != nil || json.Unmarshal(raw, &init) != nil {
 			out[name] = fmt.Sprintf("initialize failed: %v", err)
+			continue
+		}
+		var list struct {
+			Result struct{ Tools json.RawMessage }
+		}
+		raw, err = hostedPost(srv, "tools/list", obj{})
+		if err != nil || json.Unmarshal(raw, &list) != nil || !bytes.HasPrefix(list.Result.Tools, []byte("[")) {
+			out[name] = fmt.Sprintf("tools/list failed schema validation: tools is %s", list.Result.Tools)
 			continue
 		}
 		if text := init.Result.Instructions; text != "" {
