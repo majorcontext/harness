@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -42,12 +41,4 @@ func (r *Runtime) SetPlugins(ctx context.Context, plugins []config.PluginSpec) (
 		return nil, err
 	}
 	return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
-}
-
-// beforeStart starts the plugins, checks the session tools, and waits for a catch-up of the session.
-func (r *Runtime) beforeStart(ctx context.Context, id string, l launch) error {
-	if err := cmp.Or(r.startPlugins(ctx, false), r.checkSessionTools(l.mcp)); err != nil {
-		return err
-	}
-	return r.yieldCatchUp(ctx, id)
 }

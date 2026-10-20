@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ var sessionTitleRows = map[string]runtimeRow{
 	"session_rename_beats_the_derived_title_and_survives_a_restart":                  sameAsServe(),
 	"session_title_that_is_empty_has_a_line_break_or_is_too_long_is_invalid_request": sameAsServe(),
 	"session_title_model_writes_the_title_after_the_first_prompt":                    sameAsServe(),
+	"session_title_model_that_answers_empty_keeps_the_derived_title":                 sameAsServe(),
 	"session_title_without_a_title_model_sends_no_title_request":                     sameAsServe(),
 }
 
@@ -49,24 +51,7 @@ func (noTitleRequest) run(t *testing.T, r *run) {
 
 func TestContractSessionTitle(t *testing.T) {
 	rest := agentStep("rest", "ok", true)
-	turn := harnesstest.Step{Name: "turn", Match: notTitleRequest, Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}
 	runScenarios(t, []scenario{
-		{
-			name:       "session_title_model_writes_the_title_after_the_first_prompt",
-			concurrent: true,
-			config:     map[string]any{"title_model": "anthropic/title-model"},
-			model: []harnesstest.Step{
-				turn,
-				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "\n\"Fix the flaky login test.\"\nignored second line"}},
-			},
-			actions: []action{
-				create{as: "a"},
-				submit{as: "a", text: "please look at why login is flaky"},
-				waitIdle{as: "a"},
-				awaitTitle{as: "a", title: "Fix the flaky login test"},
-				getSession{as: "a"},
-			},
-		},
 		{
 			name:  "session_title_without_a_title_model_sends_no_title_request",
 			model: []harnesstest.Step{rest},
@@ -109,6 +94,61 @@ func TestContractSessionTitle(t *testing.T) {
 				setTitle{as: "a", title: "two\nlines"},
 				setTitle{as: "a", title: "a\ttab"},
 				setTitle{as: "a", title: strings.Repeat("x", 201)},
+				getSession{as: "a"},
+			},
+		},
+	})
+}
+
+// awaitUsage polls the view of the session until its usage input tokens reach input.
+type awaitUsage struct {
+	as    string
+	input int
+}
+
+func (a awaitUsage) run(t *testing.T, r *run) {
+	t.Helper()
+	id := r.id(t, a.as)
+	testpoll.Until(t, waitBound, "the usage did not reach the title call", func() bool {
+		body, _ := r.drv.GetSession(t, id).Body.(map[string]any)
+		u, _ := body["usage"].(map[string]any)
+		return u != nil && fmt.Sprint(u["input_tokens"]) == fmt.Sprint(a.input)
+	})
+}
+
+func TestContractSessionTitleModel(t *testing.T) {
+	turn := harnesstest.Step{Name: "turn", Match: notTitleRequest, Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}
+	runScenarios(t, []scenario{
+		{
+			name:       "session_title_model_writes_the_title_after_the_first_prompt",
+			concurrent: true,
+			config:     map[string]any{"title_model": "anthropic/title-model"},
+			model: []harnesstest.Step{
+				turn,
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "\n\"Fix the flaky login test.\"\nignored second line"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "please look at why login is flaky"},
+				waitIdle{as: "a"},
+				awaitTitle{as: "a", title: "Fix the flaky login test"},
+				getSession{as: "a"},
+			},
+		},
+		{
+			name:       "session_title_model_that_answers_empty_keeps_the_derived_title",
+			concurrent: true,
+			config:     map[string]any{"title_model": "anthropic/title-model"},
+			model: []harnesstest.Step{
+				turn,
+				{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "", Usage: harnesstest.Usage{Input: 11, Output: 7}}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "please look at why login is flaky"},
+				waitIdle{as: "a"},
+				awaitRequests{n: 2},
+				awaitUsage{as: "a", input: 16},
 				getSession{as: "a"},
 			},
 		},
