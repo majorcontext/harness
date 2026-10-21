@@ -1649,6 +1649,9 @@
             ]
           },
           "answer": true,
+          "response": {
+            "type": "string"
+          },
           "source": {
             "type": "string"
           },
@@ -1670,6 +1673,9 @@
           "answer": true,
           "dismiss": {
             "type": "boolean"
+          },
+          "response": {
+            "type": "string"
           },
           "source": {
             "type": "string"

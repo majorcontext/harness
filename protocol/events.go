@@ -356,6 +356,7 @@ type RequestResolved struct {
 	RequestID   string          `json:"request_id"`
 	Resolution  ResolutionKind  `json:"resolution"`
 	Answer      json.RawMessage `json:"answer,omitempty"`
+	Response    string          `json:"response,omitempty"`
 	Source      string          `json:"source,omitempty"`
 	SourceID    string          `json:"source_id,omitempty"`
 	SourceLabel string          `json:"source_label,omitempty"`

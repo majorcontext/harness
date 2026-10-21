@@ -72,7 +72,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },
@@ -99,7 +99,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },
@@ -109,7 +109,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },
@@ -119,7 +119,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },
@@ -129,7 +129,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },
@@ -139,7 +139,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },
@@ -169,7 +169,7 @@
         "error": {
           "code": "invalid_request",
           "details": {},
-          "message": "a resolution holds one answer, or a dismissal"
+          "message": "a resolution holds one answer, one response, or a dismissal"
         }
       }
     },

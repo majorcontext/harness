@@ -85,15 +85,20 @@ func (a *Actor) Resolve(ctx context.Context, id string, res protocol.Resolution)
 			reply(protocol.Resolved{}, ErrRequestNotPending)
 			return
 		}
-		if !dismiss {
-			if err := checkAnswer(a.state.Requests()[i].RequestKind, answer); err != nil {
+		kind := a.state.Requests()[i].RequestKind
+		switch {
+		case res.Response != "" && kind != protocol.RequestQuestion:
+			reply(protocol.Resolved{}, ErrBadAnswer)
+			return
+		case !dismiss && res.Response == "":
+			if err := checkAnswer(kind, answer); err != nil {
 				reply(protocol.Resolved{}, err)
 				return
 			}
 		}
 		ev := protocol.RequestResolved{RequestID: id, Resolution: protocol.ResolutionDismissed, Source: res.Source, SourceID: res.SourceID, SourceLabel: res.SourceLabel}
 		if !dismiss {
-			ev.Resolution, ev.Answer = protocol.ResolutionAnswered, answer
+			ev.Resolution, ev.Answer, ev.Response = protocol.ResolutionAnswered, answer, res.Response
 		}
 		got := protocol.Resolved{Seq: a.state.Head() + 1, Status: protocol.ResolvedDismissed}
 		if dismiss {

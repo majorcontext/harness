@@ -134,10 +134,13 @@ func checkAsk(args json.RawMessage) error {
 	return nil
 }
 
-// answerText is the result of an answered question: each question of args
-// with its answer, then each answer for a question that args lacks. It names
-// the source label of res when res has one.
+// answerText is the result of an answered question: the response of res, or
+// each question of args with its answer, then each answer for a question that
+// args lacks. It names the source label of res when res has one.
 func answerText(args json.RawMessage, res protocol.RequestResolved) string {
+	if res.Response != "" {
+		return cmp.Or(res.SourceLabel, "The user") + " responded: " + res.Response
+	}
 	var in askInput
 	var got map[string]string
 	_ = json.Unmarshal(args, &in)

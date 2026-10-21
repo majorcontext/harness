@@ -36,6 +36,8 @@ var boxReplyRows = map[string]runtimeRow{
 	"model_api_question_answered_from_a_named_source_names_it_in_the_result":              sameAsServe(),
 	"model_api_question_dismissed_from_a_named_source_names_it_in_the_result":             sameAsServe(),
 	"model_api_box_reply_queued_before_the_question_opens_names_the_box_in_the_dismissal": sameAsServe(),
+	"model_api_question_answered_with_a_response_from_a_named_source_names_it_once":       sameAsServe(),
+	"model_api_question_answered_with_a_response_reads_that_the_user_responded":           sameAsServe(),
 }
 
 func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {

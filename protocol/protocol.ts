@@ -470,6 +470,7 @@ export interface RequestResolved {
   request_id: string;
   resolution: "answered" | "dismissed";
   answer?: unknown;
+  response?: string;
   source?: string;
   source_id?: string;
   source_label?: string;
@@ -478,6 +479,7 @@ export interface RequestResolved {
 export interface Resolution {
   answer?: unknown;
   dismiss?: boolean;
+  response?: string;
   source?: string;
   source_id?: string;
   source_label?: string;

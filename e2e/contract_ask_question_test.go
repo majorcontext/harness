@@ -54,6 +54,14 @@ func (a answerQuestion) run(t *testing.T, r *run) {
 	r.record(t, "answer_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{answer: string(body), from: a.from}))
 }
 
+// respondQuestion answers the open question call callID with the raw response
+// and source fields of with.
+type respondQuestion struct{ as, callID, with string }
+
+func (a respondQuestion) run(t *testing.T, r *run) {
+	r.record(t, "respond_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{from: a.with}))
+}
+
 // dismissQuestion dismisses the open question call callID, from the raw
 // source fields of from when it is set.
 type dismissQuestion struct{ as, callID, from string }
@@ -102,6 +110,18 @@ func TestContractModelAPIQuestions(t *testing.T) {
 			driver:  askLane(true),
 			model:   askSteps(),
 			actions: withActions(asked, answerQuestion{as: "a", callID: "toolu_ask", answers: answers, from: boxFrom}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:    "model_api_question_answered_with_a_response_from_a_named_source_names_it_once",
+			driver:  askLane(true),
+			model:   askSteps(),
+			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"response":"use SQLite",` + boxFrom}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:    "model_api_question_answered_with_a_response_reads_that_the_user_responded",
+			driver:  askLane(true),
+			model:   askSteps(),
+			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"response":"use SQLite"`}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
 			name:    "model_api_question_dismissed_from_a_named_source_names_it_in_the_result",
