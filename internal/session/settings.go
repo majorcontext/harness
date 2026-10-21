@@ -46,7 +46,11 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil
 	if ch.Model != nil && a.cfg.Check != nil {
 		if err := a.cfg.Check(prev, *ch.Model, a.state.AllowedTools()); err != nil {
-			return err
+			if len(before) == 0 {
+				return err
+			}
+			a.log().Warn("harness: deferred model validation failed", "session", a.cfg.ID, "err", err)
+			return a.appendCtx(ctx, before...)
 		}
 	}
 	title = changed(title, a.state.Renamed())
@@ -58,7 +62,7 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	}
 	events := before
 	if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
-		events = append(events, a.dismissRequests()...)
+		events = append(events, a.dismissRequests(before...)...)
 	}
 	if hasSettings {
 		events = append(events, ch)
@@ -75,16 +79,22 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	return nil
 }
 
-// DeferModel validates ref and replaces the model change of the running turn.
-func (a *Actor) DeferModel(ctx context.Context, ref string) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+type modelState struct{ model, pending string }
+
+func (a *Actor) modelState() modelState {
+	return modelState{a.state.Model(), a.pendingModel}
+}
+
+// DeferModel validates ref and returns the current and pending model in one command.
+func (a *Actor) DeferModel(ctx context.Context, ref string) (string, string, error) {
+	v, err := call(ctx, a, func(reply func(modelState, error)) {
 		if a.run == nil || a.run.kind != kindTurn || !a.run.ownsLoop {
-			reply(struct{}{}, ErrBusy)
+			reply(modelState{}, ErrTurnMismatch)
 			return
 		}
 		if a.cfg.Check != nil {
 			if err := a.cfg.Check(a.state.Model(), ref, a.state.AllowedTools()); err != nil {
-				reply(struct{}{}, err)
+				reply(modelState{}, err)
 				return
 			}
 		}
@@ -92,14 +102,15 @@ func (a *Actor) DeferModel(ctx context.Context, ref string) error {
 		if ref == a.state.Model() {
 			a.pendingModel = ""
 		}
-		reply(struct{}{}, nil)
+		reply(a.modelState(), nil)
 	})
-	return err
+	return v.model, v.pending, err
 }
 
-// PendingModel returns the model change that waits for the end of the turn.
-func (a *Actor) PendingModel(ctx context.Context) (string, error) {
-	return call(ctx, a, func(reply func(string, error)) { reply(a.pendingModel, nil) })
+// ModelState returns the current and pending model in one actor read.
+func (a *Actor) ModelState(ctx context.Context) (string, string, error) {
+	v, err := call(ctx, a, func(reply func(modelState, error)) { reply(a.modelState(), nil) })
+	return v.model, v.pending, err
 }
 
 func changed(v *string, current string) *string {

@@ -42,7 +42,8 @@ const modelSchema = `{
 
 const modelDeferredDescription = "Inspect or change this session's model. status reports the current model and any pending_model, plus configured aliases and providers. " +
 	"set(model) validates a provider/model ref or alias now and queues it for the NEXT TURN, after this turn ends, even on failure or cancellation. " +
-	"It never changes the running turn or its backend process. A later set replaces the pending model; setting the current model clears it and does nothing. " +
+	"It never changes the running turn or its backend process. Changing provider dismisses open questions at turn end. " +
+	"A later set replaces the pending model; setting the current model clears it and does nothing. " +
 	"list reports configured providers (with subscription or api billing) and aliases without session state."
 
 const (
@@ -135,64 +136,62 @@ func (t Model) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResul
 	case in.Action == "list":
 		return jsonResult(modelList{Providers: t.catalog.providerInfos(), Aliases: t.catalog.aliasCopy()})
 	case in.Action == "status":
-		return t.status(ctx, s, "")
+		return t.status(ctx, s)
 	case in.Action == "set":
 		v, err := t.set(ctx, s, in.Model)
 		if err != nil {
 			return protocol.ToolResult{}, err
 		}
-		if t.deferred {
-			return t.status(ctx, s, "next_turn")
-		}
-		return jsonResult(t.catalog.modelStatus(v.Model))
+		return jsonResult(v)
 	}
 	return protocol.ToolResult{}, fmt.Errorf("model: unknown action %q (valid actions: status, set, list — there is no clear action)", in.Action)
 }
 
-func (t Model) status(ctx context.Context, s Session, effect string) (protocol.ToolResult, error) {
-	v := t.catalog.modelStatus(s.Snapshot().Model)
-	if t.deferred {
-		var err error
-		v.PendingModel, err = s.PendingModel(ctx)
-		if err != nil {
-			return protocol.ToolResult{}, err
-		}
-		if effect != "" {
-			v.Effect = effect
-			if v.PendingModel == "" {
-				v.Effect = "unchanged"
-			}
-		}
+func (t Model) status(ctx context.Context, s Session) (protocol.ToolResult, error) {
+	if !t.deferred {
+		return jsonResult(t.catalog.modelStatus(s.Snapshot().Model))
 	}
+	model, pending, err := s.ModelState(ctx)
+	if err != nil {
+		return protocol.ToolResult{}, err
+	}
+	v := t.catalog.modelStatus(model)
+	v.PendingModel = pending
 	return jsonResult(v)
 }
 
 // set moves s to the model that ref names, or to the model of the alias ref.
-func (t Model) set(ctx context.Context, s Session, ref string) (protocol.Session, error) {
+func (t Model) set(ctx context.Context, s Session, ref string) (modelStatus, error) {
 	if ref == "" {
-		return protocol.Session{}, fmt.Errorf("model: set requires a non-empty model (%s)", t.catalog.modelChoices())
+		return modelStatus{}, fmt.Errorf("model: set requires a non-empty model (%s)", t.catalog.modelChoices())
 	}
 	if target, ok := t.catalog.Aliases[ref]; ok {
 		ref = target
 	}
 	parsed, err := modelref.ParseModelRef(ref)
 	if err != nil {
-		return protocol.Session{}, fmt.Errorf("model: %w (%s)", err, t.catalog.modelChoices())
+		return modelStatus{}, fmt.Errorf("model: %w (%s)", err, t.catalog.modelChoices())
 	}
 	if err := t.catalog.servesProvider(parsed); err != nil {
-		return protocol.Session{}, fmt.Errorf("model: %w", err)
+		return modelStatus{}, fmt.Errorf("model: %w", err)
 	}
 	if t.deferred {
-		if err := s.DeferModel(ctx, ref); err != nil {
-			return protocol.Session{}, fmt.Errorf("model: %w", err)
+		model, pending, err := s.DeferModel(ctx, ref)
+		if err != nil {
+			return modelStatus{}, fmt.Errorf("model: %w", err)
 		}
-		return s.Snapshot(), nil
+		v := t.catalog.modelStatus(model)
+		v.PendingModel, v.Effect = pending, "next_turn"
+		if pending == "" {
+			v.Effect = "unchanged"
+		}
+		return v, nil
 	}
 	v, err := s.Update(ctx, protocol.SettingsPatch{Model: &ref})
 	if err != nil {
-		return protocol.Session{}, fmt.Errorf("model: %w", err)
+		return modelStatus{}, fmt.Errorf("model: %w", err)
 	}
-	return v, nil
+	return t.catalog.modelStatus(v.Model), nil
 }
 
 func jsonResult(v any) (protocol.ToolResult, error) {

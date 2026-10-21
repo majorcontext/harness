@@ -140,6 +140,7 @@ func question(f *fake) {
 		normalTurn(f)
 		return
 	}
+	turnCalls(f)
 	_ = os.WriteFile(asked, nil, 0o644)
 	late := f.mode == "question_late_sibling"
 	if late {

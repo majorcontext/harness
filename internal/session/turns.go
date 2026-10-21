@@ -396,9 +396,15 @@ func (a *Actor) closeOpen(turnID, text string, keep bool) []protocol.Payload {
 	return events
 }
 
-func (a *Actor) dismissRequests() []protocol.Payload {
+func (a *Actor) dismissRequests(before ...protocol.Payload) []protocol.Payload {
 	var events []protocol.Payload
 	for _, r := range a.state.Requests() {
+		if slices.ContainsFunc(before, func(p protocol.Payload) bool {
+			resolved, ok := p.(protocol.RequestResolved)
+			return ok && resolved.RequestID == r.RequestID
+		}) {
+			continue
+		}
 		events = append(events, protocol.RequestResolved{RequestID: r.RequestID, Resolution: protocol.ResolutionDismissed})
 	}
 	return events

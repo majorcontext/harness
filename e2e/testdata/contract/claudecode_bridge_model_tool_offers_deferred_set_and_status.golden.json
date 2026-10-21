@@ -63,7 +63,7 @@
     "offered_model_tool.a": {
       "status": 200,
       "body": {
-        "description": "Inspect or change this session's model. status reports the current model and any pending_model, plus configured aliases and providers. set(model) validates a provider/model ref or alias now and queues it for the NEXT TURN, after this turn ends, even on failure or cancellation. It never changes the running turn or its backend process. A later set replaces the pending model; setting the current model clears it and does nothing. list reports configured providers (with subscription or api billing) and aliases without session state.",
+        "description": "Inspect or change this session's model. status reports the current model and any pending_model, plus configured aliases and providers. set(model) validates a provider/model ref or alias now and queues it for the NEXT TURN, after this turn ends, even on failure or cancellation. It never changes the running turn or its backend process. Changing provider dismisses open questions at turn end. A later set replaces the pending model; setting the current model clears it and does nothing. list reports configured providers (with subscription or api billing) and aliases without session state.",
         "inputSchema": {
           "properties": {
             "action": {

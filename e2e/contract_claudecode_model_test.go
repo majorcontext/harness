@@ -7,11 +7,12 @@ import (
 )
 
 var deferredModelRows = map[string]runtimeRow{
-	"claudecode_deferred_model_applies_after_failure":       sameAsServe(),
-	"claudecode_deferred_model_applies_after_cancellation":  sameAsServe(),
-	"claudecode_deferred_model_runs_the_next_turn":          sameAsServe(),
-	"claudecode_deferred_model_replaces_and_clears_pending": sameAsServe(),
-	"claudecode_deferred_model_rejects_invalid_targets":     sameAsServe(),
+	"claudecode_deferred_model_dismisses_question_at_turn_end": sameAsServe(),
+	"claudecode_deferred_model_applies_after_failure":          sameAsServe(),
+	"claudecode_deferred_model_applies_after_cancellation":     sameAsServe(),
+	"claudecode_deferred_model_runs_the_next_turn":             sameAsServe(),
+	"claudecode_deferred_model_replaces_and_clears_pending":    sameAsServe(),
+	"claudecode_deferred_model_rejects_invalid_targets":        sameAsServe(),
 }
 
 type requireSessionModel struct{ as, model string }
@@ -31,6 +32,12 @@ func TestContractClaudeCodeDeferredModel(t *testing.T) {
 	}
 	status := []turnCall{{"model", map[string]any{"action": "status"}}}
 	runScenarios(t, []scenario{{
+		name: "claudecode_deferred_model_dismisses_question_at_turn_end",
+		driver: claudeLane{mode: "question", ask: true, signals: true,
+			turnCalls: [][]turnCall{set("anthropic/claude-fable-5")}}.newDriver,
+		actions: withActions(claudeOneTurn, requireSessionModel{as: "a", model: "anthropic/claude-fable-5"},
+			claudeJournalEvents{as: "a", prefix: ""}, claudeTurnEnds{as: "a"}),
+	}, {
 		name:    "claudecode_deferred_model_applies_after_failure",
 		driver:  claudeLane{mode: "turn_calls_error", turnCalls: [][]turnCall{set("anthropic/claude-fable-5")}}.newDriver,
 		actions: withActions(claudeOneTurn, requireSessionModel{as: "a", model: "anthropic/claude-fable-5"}, claudeTurnEnds{as: "a"}),
