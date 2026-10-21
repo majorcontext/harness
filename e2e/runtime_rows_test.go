@@ -366,7 +366,7 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"claudecode_queued_prompt_and_child_report_share_a_turn":                                     reGolden(specQueue, specChildReport, specChildClaude),
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                                         sameAsServe(),
 	"claudecode_bridge_marks_exactly_the_read_only_tools_with_read_only_hint":                    sameAsServe(),
-	"claudecode_bridge_loads_ask_user_question_upfront":                                          sameAsServe(),
+	"claudecode_bridge_loads_ask_user_question_and_the_file_and_shell_tools_upfront":             sameAsServe(),
 	"question_tool_description_says_to_ask_with_the_tool_and_not_in_text":                        sameAsServe(),
 	"claudecode_bridge_passes_the_read_only_hint_of_an_mcp_tool_through":                         sameAsServe(),
 	"claudecode_bridge_model_tool_offers_list_only":                                              sameAsServe(),
@@ -797,4 +797,4 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"git_changes_refusals": reGolden(specGitOracle, specErrors, specInvalidReason),
 
 	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor": reGolden(specCmdMenuRoutes, specCmdUnsupport),
-}, cancelRows)
+}, cancelRows, upfrontRows)

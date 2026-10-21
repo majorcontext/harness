@@ -671,7 +671,7 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
 		actions: withActions(claudeOneTurn, claudeReadOnlyTools{as: "a"}),
 	}, {
-		name:    "claudecode_bridge_loads_ask_user_question_upfront",
+		name:    "claudecode_bridge_loads_ask_user_question_and_the_file_and_shell_tools_upfront",
 		driver:  claudeLane{mode: "normal", ask: true, listTools: true}.newDriver,
 		actions: withActions(claudeOneTurn, claudeAlwaysLoadTools{as: "a"}),
 	}, {

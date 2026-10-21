@@ -63,7 +63,14 @@
     "always_load_tools.a": {
       "status": 200,
       "body": [
-        "ask_user_question"
+        "ask_user_question",
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "read_file",
+        "write_file"
       ]
     }
   }

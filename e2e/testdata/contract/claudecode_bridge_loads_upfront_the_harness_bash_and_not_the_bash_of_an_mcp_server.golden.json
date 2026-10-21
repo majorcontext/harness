@@ -1,0 +1,35 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Working on it."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "always_load_tools.a": {
+      "status": 200,
+      "body": [
+        "bash"
+      ]
+    }
+  }
+}
