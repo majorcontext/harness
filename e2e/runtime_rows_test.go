@@ -797,4 +797,4 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"git_changes_refusals": reGolden(specGitOracle, specErrors, specInvalidReason),
 
 	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor": reGolden(specCmdMenuRoutes, specCmdUnsupport),
-}, cancelRows, upfrontRows)
+}, cancelRows, upfrontRows, boxReplyRows)

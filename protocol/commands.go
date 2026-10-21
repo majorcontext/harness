@@ -9,6 +9,10 @@ const SourceCommand = "command"
 // SourceUser is the source that the admission step stores for an input with no source.
 const SourceUser = "user"
 
+// SourceBox marks an input that the agent of another box sent as a reply. It
+// closes an open request as the input of a person does.
+const SourceBox = "box"
+
 // Slash command statuses.
 const (
 	CommandAccepted    = "accepted"

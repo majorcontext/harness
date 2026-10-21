@@ -7,10 +7,10 @@ import (
 )
 
 // sendFrom posts text as an input of source while a question is open.
-type sendFrom struct{ as, text, source, delivery string }
+type sendFrom struct{ as, text, source, delivery, label string }
 
 func (a sendFrom) run(t *testing.T, r *run) {
-	r.record(t, "send_from_"+a.source, a.as, laneOf(t, r).sendFrom(t, r.id(t, a.as), a.text, a.source, a.delivery))
+	r.record(t, "send_from_"+a.source, a.as, laneOf(t, r).sendFrom(t, r.id(t, a.as), a.text, a.source, a.delivery, a.label))
 }
 
 // awaitChild waits until the first child of the session has settled.
@@ -20,6 +20,25 @@ func (a awaitChild) run(t *testing.T, r *run) {
 	t.Helper()
 	parent := r.id(t, a.as)
 	r.drv.AwaitChildSettled(t, parent, r.drv.Child(t, parent, 0))
+}
+
+// blockedAsk is askSteps with the question held until the scenario releases it.
+func blockedAsk() []harnesstest.Step {
+	steps := askSteps()
+	steps[0].Reply.Block = true
+	return steps
+}
+
+// boxReplyRows are the dispositions of the rows where another box answers a
+// question.
+var boxReplyRows = map[string]runtimeRow{
+	"model_api_box_input_dismisses_the_question_and_runs_with_the_queued_machine_input":   sameAsServe(),
+	"model_api_question_answered_from_a_named_source_names_it_in_the_result":              sameAsServe(),
+	"model_api_question_dismissed_from_a_named_source_names_it_in_the_result":             sameAsServe(),
+	"model_api_box_reply_queued_before_the_question_opens_names_the_box_in_the_dismissal": sameAsServe(),
+	"model_api_question_answered_with_a_response_from_a_named_source_names_it_once":       sameAsServe(),
+	"model_api_question_answered_with_a_response_reads_that_the_user_responded":           sameAsServe(),
+	"model_api_question_with_a_blank_response_takes_only_a_valid_answer":                  sameAsServe(),
 }
 
 func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
@@ -66,6 +85,22 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 			},
 			actions: withActions(asked, sendFrom{as: "a", text: "ci failed", source: "github"},
 				setGoal{as: "a", condition: "say ok", maxTurns: 3}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:   "model_api_box_input_dismisses_the_question_and_runs_with_the_queued_machine_input",
+			driver: askLane(true),
+			model:  askSteps(),
+			actions: withActions(asked, sendFrom{as: "a", text: "ci failed", source: "github"}, sendFrom{as: "a", text: "use SQLite", source: "box", label: "builder (box of ann)"},
+				waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:       "model_api_box_reply_queued_before_the_question_opens_names_the_box_in_the_dismissal",
+			concurrent: true,
+			driver:     askLane(true),
+			model:      blockedAsk(),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitRequests{n: 1},
+				sendFrom{as: "a", text: "use SQLite", source: "box", delivery: "queue", label: "builder (box of ann)"},
+				release{step: "ask"}, waitIdle{as: "a"}, getSession{as: "a"}},
 		},
 		{
 			name:   "model_api_typed_input_dismisses_the_question_and_runs_with_the_queued_machine_input",

@@ -165,12 +165,21 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 // the request.resolved record and says whether a turn started. A request that is not open
 // fails with ErrRequestNotPending. For a question of Claude Code the request
 // ID is the call ID of the question item, and the answer maps each
-// question to the chosen label or free text.
+// question to the chosen label or free text. res.Source, res.SourceID, and
+// res.SourceLabel name who resolved it, with the checks of an Input.
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error) {
+	if strings.TrimSpace(res.Response) == "" {
+		res.Response = ""
+	}
 	if err := res.Validate(); err != nil {
 		return protocol.Resolved{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	got, err := s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
+	label, err := admit.Provenance(res.SourceID, res.SourceLabel)
+	if err != nil {
+		return protocol.Resolved{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	res.SourceLabel = label
+	got, err := s.a.Resolve(ctx, requestID, res)
 	if errors.Is(err, session.ErrBadAnswer) {
 		return protocol.Resolved{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}

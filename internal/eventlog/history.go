@@ -33,6 +33,10 @@ type entry struct {
 	// pinned marks a segment that the model reads at this place in every
 	// later call and that the history readers never see.
 	pinned bool
+	// readerOnly marks a message that the readers see and the model never
+	// reads: the response that answered a question, which the model reads
+	// once, in the result of the question.
+	readerOnly bool
 }
 
 // ReportTrigger is the text of a turn that only reports of children start,
@@ -162,7 +166,7 @@ func (s *State) messages(pinned bool) []protocol.LogMessage {
 		out = append(out, protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: modelSummary(c)}}})
 	}
 	for _, e := range s.history {
-		if e.pinned && !pinned {
+		if e.pinned && !pinned || e.readerOnly {
 			continue
 		}
 		out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
@@ -318,7 +322,7 @@ func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok b
 	h := s.History()
 	var seqs []uint64
 	for _, e := range s.history {
-		if !e.pinned {
+		if !e.pinned && !e.readerOnly {
 			seqs = append(seqs, e.seq)
 		}
 	}
@@ -340,8 +344,8 @@ func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok b
 }
 
 // dismissal is the result of the tool call that a dismissed request held
-// open: what the model reads in the history.
-func dismissal(c OpenToolCall) protocol.LogMessage {
+// open: what the model reads in the history. It names label when label is set.
+func dismissal(c OpenToolCall, label string) protocol.LogMessage {
 	return protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{{Type: protocol.LogPartToolResult, CallID: c.CallID, Name: c.Name,
-		Text: protocol.DismissedQuestionText, IsError: true}}}
+		Text: protocol.DismissalText(label), IsError: true}}}
 }

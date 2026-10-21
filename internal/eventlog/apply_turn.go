@@ -191,8 +191,13 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 	if k := slices.IndexFunc(calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID }); k >= 0 {
 		if e.Resolution == protocol.ResolutionAnswered {
 			calls[k].answered = true
+			if e.Response != "" {
+				s.history = append(s.history, entry{seq: seq, at: at, id: "msg_response_" + e.RequestID, by: s.turnBy, turn: s.turnN, readerOnly: true,
+					msg:  protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: e.Response}}},
+					from: provenance{e.Source, e.SourceID, e.SourceLabel}})
+			}
 		} else {
-			s.say(seq, at, "msg_resolved_"+calls[k].CallID, dismissal(calls[k]))
+			s.say(seq, at, "msg_resolved_"+calls[k].CallID, dismissal(calls[k], e.SourceLabel))
 			calls = slices.Delete(calls, k, k+1)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -244,23 +245,32 @@ type Compacted struct {
 
 // Resolution answers an open request with the answer of the user as JSON, or
 // dismisses it. Exactly one is set. A question takes a map of question to choice.
+// Source, SourceID, and SourceLabel name who resolved it, as for an Input.
+// Response is free text in place of the answers, as in Claude Code.
 type Resolution struct {
-	Answer  json.RawMessage `json:"answer,omitempty"`
-	Dismiss bool            `json:"dismiss,omitempty"`
+	Answer      json.RawMessage `json:"answer,omitempty"`
+	Dismiss     bool            `json:"dismiss,omitempty"`
+	Response    string          `json:"response,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	SourceID    string          `json:"source_id,omitempty"`
+	SourceLabel string          `json:"source_label,omitempty"`
 }
 
-// Validate reports a Resolution that holds both an answer and a dismissal, or
-// neither, or an answer that is not valid JSON. An answer of null, {}, or ""
-// counts as no answer.
+// Validate reports a Resolution that does not hold exactly one of an answer,
+// a response, and a dismissal, or an answer that is not valid JSON. An answer
+// of null, {}, or "" counts as no answer, and a response of blanks as no response.
 func (r Resolution) Validate() error {
-	if r.Dismiss {
-		if hasAnswer(r.Answer) {
-			return errors.New("a resolution holds one answer, or a dismissal")
+	n := 0
+	for _, set := range []bool{r.Dismiss, hasAnswer(r.Answer), strings.TrimSpace(r.Response) != ""} {
+		if set {
+			n++
 		}
-		return nil
+	}
+	if n != 1 {
+		return errors.New("a resolution holds one answer, one response, or a dismissal")
 	}
 	if !hasAnswer(r.Answer) {
-		return errors.New("a resolution holds one answer, or a dismissal")
+		return nil
 	}
 	if !json.Valid(r.Answer) {
 		return errors.New("the answer of a resolution is not valid JSON")

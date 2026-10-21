@@ -196,7 +196,7 @@ func (h *held) resolved(e protocol.Event, st *pumpState) error {
 		return nil
 	}
 	return h.send("session/update", map[string]any{"sessionId": h.id, "update": toolUpdateBody{Kind: "tool_call_update", ID: res.RequestID,
-		Status: "failed", RawOutput: protocol.DismissedQuestionText, Content: []any{textItem(protocol.DismissedQuestionText)}}})
+		Status: "failed", RawOutput: protocol.DismissalText(res.SourceLabel), Content: []any{textItem(protocol.DismissalText(res.SourceLabel))}}})
 }
 
 func removeAsk(asks []ask, id string) []ask {

@@ -1,7 +1,11 @@
 package protocol
 
-// CapabilityDeltaRowIdentity says that each item.delta frame names its item.
-const CapabilityDeltaRowIdentity = "delta_row_identity"
+const (
+	// CapabilityDeltaRowIdentity says that each item.delta frame names its item.
+	CapabilityDeltaRowIdentity = "delta_row_identity"
+	// CapabilityResolutionSource says that a Resolution takes source, source_id, source_label, and response.
+	CapabilityResolutionSource = "resolution_source"
+)
 
 // Health is the answer of GET /health: the build, the durability mode, and the start of the process.
 type Health struct {

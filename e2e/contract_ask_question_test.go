@@ -39,10 +39,11 @@ func (a awaitCall) run(t *testing.T, r *run) {
 	laneOf(t, r).awaitToolCall(t, r.id(t, a.as), a.callID)
 }
 
-// answerQuestion answers the open question call callID with answers.
+// answerQuestion answers the open question call callID with answers, from
+// the raw source fields of from when it is set.
 type answerQuestion struct {
-	as, callID string
-	answers    map[string]string
+	as, callID, from string
+	answers          map[string]string
 }
 
 func (a answerQuestion) run(t *testing.T, r *run) {
@@ -50,14 +51,23 @@ func (a answerQuestion) run(t *testing.T, r *run) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.record(t, "answer_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{answer: string(body)}))
+	r.record(t, "answer_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{answer: string(body), from: a.from}))
 }
 
-// dismissQuestion dismisses the open question call callID.
-type dismissQuestion struct{ as, callID string }
+// respondQuestion answers the open question call callID with the raw response
+// and source fields of with.
+type respondQuestion struct{ as, callID, with string }
+
+func (a respondQuestion) run(t *testing.T, r *run) {
+	r.record(t, "respond_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{from: a.with}))
+}
+
+// dismissQuestion dismisses the open question call callID, from the raw
+// source fields of from when it is set.
+type dismissQuestion struct{ as, callID, from string }
 
 func (a dismissQuestion) run(t *testing.T, r *run) {
-	r.record(t, "dismiss_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{dismiss: true}))
+	r.record(t, "dismiss_question", a.as, laneOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{dismiss: true, from: a.from}))
 }
 
 func askSteps() []harnesstest.Step {
@@ -76,6 +86,9 @@ func askSteps() []harnesstest.Step {
 	}
 }
 
+// boxFrom names a resolution from another box.
+const boxFrom = `"source":"box","source_id":"box:box_b","source_label":"builder (box of ann)"`
+
 func TestContractModelAPIQuestions(t *testing.T) {
 	asked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, getSession{as: "a"}}
 	answers := map[string]string{"Which database?": "SQLite"}
@@ -91,6 +104,37 @@ func TestContractModelAPIQuestions(t *testing.T) {
 			driver:  askLane(true),
 			model:   askSteps(),
 			actions: withActions(asked, dismissQuestion{as: "a", callID: "toolu_ask"}, getSession{as: "a"}, submit{as: "a", text: "go on"}, waitIdle{as: "a"}),
+		},
+		{
+			name:    "model_api_question_answered_from_a_named_source_names_it_in_the_result",
+			driver:  askLane(true),
+			model:   askSteps(),
+			actions: withActions(asked, answerQuestion{as: "a", callID: "toolu_ask", answers: answers, from: boxFrom}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:    "model_api_question_answered_with_a_response_from_a_named_source_names_it_once",
+			driver:  askLane(true),
+			model:   askSteps(),
+			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"response":"use SQLite",` + boxFrom}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:   "model_api_question_with_a_blank_response_takes_only_a_valid_answer",
+			driver: askLane(true),
+			model:  askSteps(),
+			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"answer":["SQLite"],"response":" \n\t"`},
+				respondQuestion{as: "a", callID: "toolu_ask", with: `"answer":{"Which database?":"SQLite"},"response":" \n\t"`}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:    "model_api_question_answered_with_a_response_reads_that_the_user_responded",
+			driver:  askLane(true),
+			model:   askSteps(),
+			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"response":"use SQLite"`}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:    "model_api_question_dismissed_from_a_named_source_names_it_in_the_result",
+			driver:  askLane(true),
+			model:   askSteps(),
+			actions: withActions(asked, dismissQuestion{as: "a", callID: "toolu_ask", from: boxFrom}, getSession{as: "a"}, submit{as: "a", text: "go on"}, waitIdle{as: "a"}),
 		},
 		{
 			name:    "model_api_question_dismissed_by_next_prompt",

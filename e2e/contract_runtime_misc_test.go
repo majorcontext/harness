@@ -33,9 +33,9 @@ func TestContractRuntimeHealth(t *testing.T) {
 				t.Errorf("/health started_at = %v (%v), want the start of the host", body["started_at"], err)
 			}
 		}},
-		{"health_reports_the_delta_row_identity_capability", func(t *testing.T, body map[string]any, _ time.Time) {
-			if caps, _ := body["capabilities"].([]any); len(caps) != 1 || caps[0] != "delta_row_identity" {
-				t.Errorf("/health capabilities = %v, want [delta_row_identity]", body["capabilities"])
+		{"health_reports_the_delta_row_identity_and_resolution_source_capabilities", func(t *testing.T, body map[string]any, _ time.Time) {
+			if caps, _ := body["capabilities"].([]any); len(caps) != 2 || caps[0] != "delta_row_identity" || caps[1] != "resolution_source" {
+				t.Errorf("/health capabilities = %v, want [delta_row_identity resolution_source]", body["capabilities"])
 			}
 		}},
 	}

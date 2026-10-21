@@ -134,13 +134,17 @@ func checkAsk(args json.RawMessage) error {
 	return nil
 }
 
-// answerText is the result of an answered question: each question of args
-// with its answer, then each answer for a question that args lacks.
-func answerText(args, answer json.RawMessage) string {
+// answerText is the result of an answered question: the response of res, or
+// each question of args with its answer, then each answer for a question that
+// args lacks. It names the source label of res when res has one.
+func answerText(args json.RawMessage, res protocol.RequestResolved) string {
+	if res.Response != "" {
+		return cmp.Or(res.SourceLabel, "The user") + " responded: " + res.Response
+	}
 	var in askInput
 	var got map[string]string
 	_ = json.Unmarshal(args, &in)
-	_ = json.Unmarshal(answer, &got)
+	_ = json.Unmarshal(res.Answer, &got)
 	var pairs []string
 	for _, q := range in.Questions {
 		if a, ok := got[q.Question]; ok {
@@ -150,6 +154,9 @@ func answerText(args, answer json.RawMessage) string {
 	}
 	for _, q := range slices.Sorted(maps.Keys(got)) {
 		pairs = append(pairs, fmt.Sprintf("%q=%q", q, got[q]))
+	}
+	if res.SourceLabel != "" {
+		return res.SourceLabel + " has answered your questions: " + strings.Join(pairs, ", ") + ". You can now continue with these answers in mind."
 	}
 	return "User has answered your questions: " + strings.Join(pairs, ", ") + ". You can now continue with the user's answers in mind."
 }
@@ -266,7 +273,7 @@ func answerAsks(ctx context.Context, t runner, to Sink, req *Request, record fun
 				args = p.Arguments
 			}
 			c := protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: args}
-			r := protocol.ToolResult{Text: answerText(args, res.Answer)}
+			r := protocol.ToolResult{Text: answerText(args, res)}
 			if t.hooks != nil {
 				r = t.hooks.After(ctx, c, r)
 			}

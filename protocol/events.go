@@ -88,6 +88,14 @@ const (
 // DismissedQuestionText is the text of the error result that closes the call of a dismissed question.
 const DismissedQuestionText = "The user dismissed this question without answering."
 
+// DismissalText is the text of the error result of a question that label dismissed, or DismissedQuestionText for no label.
+func DismissalText(label string) string {
+	if label == "" {
+		return DismissedQuestionText
+	}
+	return label + " dismissed this question without answering."
+}
+
 // GoalState is the state of the session goal.
 type GoalState string
 
@@ -343,10 +351,15 @@ type RequestOpened struct {
 }
 
 // RequestResolved closes an open request; an answer leaves its tool call open.
+// Source, SourceID, and SourceLabel name who resolved it, when the resolution named them.
 type RequestResolved struct {
-	RequestID  string          `json:"request_id"`
-	Resolution ResolutionKind  `json:"resolution"`
-	Answer     json.RawMessage `json:"answer,omitempty"`
+	RequestID   string          `json:"request_id"`
+	Resolution  ResolutionKind  `json:"resolution"`
+	Answer      json.RawMessage `json:"answer,omitempty"`
+	Response    string          `json:"response,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	SourceID    string          `json:"source_id,omitempty"`
+	SourceLabel string          `json:"source_label,omitempty"`
 }
 
 // GoalSet replaces the goal. Its turn count starts at Turns, which an adjust keeps.

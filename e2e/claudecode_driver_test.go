@@ -366,8 +366,8 @@ func (claudeCloseWindow) run(t *testing.T, r *run) {
 // resolution is the body of a call that resolves an open question: the JSON
 // text of an answer, with an empty text for none, or a dismissal.
 type resolution struct {
-	answer  string
-	dismiss bool
+	answer, from string
+	dismiss      bool
 }
 
 // claudeAnswer posts an answer to a parked question. The answer starts a
@@ -604,6 +604,9 @@ func (d *runtimeDriver) resolveQuestion(t *testing.T, id, callID string, res res
 	if res.answer != "" {
 		fields = append(fields, `"answer":`+res.answer)
 	}
+	if res.from != "" {
+		fields = append(fields, res.from)
+	}
 	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, rawBody("{"+strings.Join(fields, ",")+"}"))
 }
 
@@ -762,9 +765,12 @@ func (a claudeCompactKeeping) run(t *testing.T, r *run) {
 }
 
 // sendFrom posts an input that names source and delivery.
-func (d *runtimeDriver) sendFrom(t *testing.T, id, text, source, delivery string) callResult {
+func (d *runtimeDriver) sendFrom(t *testing.T, id, text, source, delivery, label string) callResult {
 	t.Helper()
 	path, body := d.input(id, text, delivery, source)
+	if label != "" {
+		body["source_id"], body["source_label"] = source+":e2e", label
+	}
 	return d.call(t, http.MethodPost, path, body)
 }
 
