@@ -112,7 +112,7 @@ func TestCodexRequestsUseOnlyTheSelectedSessionProxyAccount(t *testing.T) {
 			http.Error(w, "upstream failed", http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		for k, values := range resp.Header {
 			for _, value := range values {
 				w.Header().Add(k, value)

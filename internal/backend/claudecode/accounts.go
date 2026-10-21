@@ -9,9 +9,6 @@ import (
 	"github.com/majorcontext/harness/internal/provider"
 )
 
-// anthropicAPI is the endpoint of the CLI when ANTHROPIC_BASE_URL is unset.
-const anthropicAPI = "https://api.anthropic.com"
-
 // RouteAccounts sets the routing of the accounts of the vendor of the entry: a turn whose session selects an account
 // for that vendor runs the CLI behind the proxy of the account. nil routing, or a nil getenv, makes such a turn fail.
 func (b *Backend) RouteAccounts(routing *config.AccountRouting, getenv func(string) string) {
