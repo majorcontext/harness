@@ -37,7 +37,7 @@ test internal/gates TestRepository 12
 
 # The first test of the package to start a runtime builds the fake CLI (12 s on CI, budget 1.5 times).
 test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
-# Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 8 s alone and 16-27 s on CI, where it runs beside the whole parallel package.
+# Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 5 s alone and 16-39 s on CI, where it runs beside the whole parallel package.
 test e2e TestContractRuntimeClaudeCodeStateChunks 40
 # Rows that build a large transcript for a goal evaluator (7-12 s on CI).
 test e2e TestContractGoalEvaluatorTranscript 18

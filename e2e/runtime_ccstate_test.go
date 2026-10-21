@@ -47,9 +47,12 @@ func TestContractRuntimeClaudeCodeStateChunks(t *testing.T) {
 	}
 }
 
+// ccEntry returns a JSON entry of about size bytes. tag holds only letters and
+// digits, so no byte needs a JSON escape; quoting a pad of megabytes with fmt
+// takes seconds under the race detector.
 func ccEntry(tag string, size int) string {
 	pad := max(size-len(tag)-24, 0)
-	return fmt.Sprintf(`{"tag":%q,"pad":%q}`, tag, strings.Repeat(tag[len(tag)-1:], pad))
+	return `{"tag":"` + tag + `","pad":"` + strings.Repeat(tag[len(tag)-1:], pad) + `"}`
 }
 
 func ccEntries(prefix string, n, size int) []string {
