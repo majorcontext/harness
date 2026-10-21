@@ -35,11 +35,9 @@ func (a *Actor) Spawn(ctx context.Context, child, agent string) (protocol.Sessio
 }
 
 // Settle appends the outcome of an unsettled child, and admits rep as an
-// input with source child when rep is not nil. A report joins a busy turn at
-// its next item boundary, except for a backend that owns the loop: that
-// report waits in the queue and reaches the model when the next turn starts.
-// A child that is not unsettled changes nothing, so a repeated report is
-// safe.
+// input with source child when rep is not nil. A report is a steer input, so
+// a busy turn takes it at its next item boundary. A child that is not
+// unsettled changes nothing, so a repeated report is safe.
 func (a *Actor) Settle(ctx context.Context, s protocol.ChildSettled, rep *Report) error {
 	var big bigResult
 	if rep != nil {
@@ -53,7 +51,7 @@ func (a *Actor) Settle(ctx context.Context, s protocol.ChildSettled, rep *Report
 			reply(struct{}{}, a.append(s))
 		default:
 			text, retained := a.shown(rep, big)
-			_, err := a.admit(a.reportInput(rep, text), "", append(append(a.resumed(), s), retained...)...)
+			_, err := a.admit(reportInput(rep, text), "", append(append(a.resumed(), s), retained...)...)
 			reply(struct{}{}, err)
 		}
 	})
@@ -73,7 +71,7 @@ func (a *Actor) Relay(ctx context.Context, rep *Report) error {
 			return
 		}
 		text, retained := a.shown(rep, big)
-		in := a.reportInput(rep, text)
+		in := reportInput(rep, text)
 		in.InputID = id
 		_, err := a.admit(in, "", append(a.resumed(), retained...)...)
 		reply(struct{}{}, err)
@@ -81,12 +79,8 @@ func (a *Actor) Relay(ctx context.Context, rep *Report) error {
 	return err
 }
 
-func (a *Actor) reportInput(rep *Report, text string) protocol.InputAdmitted {
-	delivery := protocol.DeliverySteer
-	if a.ownsLoop() {
-		delivery = protocol.DeliveryQueue
-	}
-	return protocol.InputAdmitted{InputID: newID("input"), Delivery: delivery, Source: sourceChild, Parts: rep.Parts(text)}
+func reportInput(rep *Report, text string) protocol.InputAdmitted {
+	return protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliverySteer, Source: sourceChild, Parts: rep.Parts(text)}
 }
 
 // Report is the outcome of a child as its parent reads it.

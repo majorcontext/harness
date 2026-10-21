@@ -211,6 +211,12 @@ func TestContractClaudeCodePartialMessages(t *testing.T) {
 	})
 }
 
+// claudeChildReportRows are the runtime rows of the child report rows of the
+// Claude Code lane that runtimeRows does not list.
+var claudeChildReportRows = map[string]runtimeRow{
+	"claudecode_busy_parent_reads_a_child_report_at_the_next_tool_result": sameAsServe(),
+}
+
 func TestContractClaudeCodeChildReport(t *testing.T) {
 	settled := []action{waitIdle{as: "a"}, claudeInputs{as: "a"}}
 	reported := func(n int) []action {
@@ -224,12 +230,17 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 	}
 	runScenarios(t, []scenario{
 		{
-			name:    "claudecode_child_report_waits_for_the_next_turn",
+			name:    "claudecode_busy_parent_reads_a_child_report_at_the_next_tool_result",
+			driver:  claudeLaneDriver("child_report_at_tool"),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "delegate"}, waitIdle{as: "a"}, claudeSession{as: "a"}, claudeInputs{as: "a"}},
+		},
+		{
+			name:    "claudecode_child_report_with_no_tool_call_in_flight_waits_for_the_next_turn",
 			driver:  claudeLaneDriver("child_report"),
 			actions: reported(1),
 		},
 		{
-			name:    "claudecode_child_reports_share_the_next_turn",
+			name:    "claudecode_child_reports_with_no_tool_call_in_flight_share_the_next_turn",
 			driver:  claudeLaneDriver("child_reports"),
 			actions: reported(2),
 		},

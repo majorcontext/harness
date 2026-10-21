@@ -30,6 +30,7 @@ var childModes = map[string]mode{
 	"child_reports":             childParent(childPrompt+" a", childPrompt+" b"),
 	"child_report_after_prompt": childParent(childPrompt + " " + slowSuffix),
 	"child_report_long":         childParent(childPrompt + " " + longSuffix),
+	"child_report_at_tool":      childAtTool,
 }
 
 // childParent is the parent of children that end while the parent runs. The
@@ -63,6 +64,36 @@ func childParent(prompts ...string) mode {
 			f.emit(say("ok"), success("ok", 1, 1))
 		}
 	}
+}
+
+// childAtTool is the parent of a child that ends while a tool call of the
+// parent runs. The parent reads one input line before the tool result, as the
+// CLI takes a queued message at the next tool result, and says whether that
+// line held the report. A child and a later turn act as in childParent.
+func childAtTool(f *fake) {
+	if text, _ := queuedContent(f.first); !strings.Contains(text, delegateText) {
+		childParent(childPrompt)(f)
+		return
+	}
+	slowTool(f, "toolu_w")
+	srv, ok := hostedServer("")
+	if !ok {
+		f.emit(failed(0, 0, "no harness server in --mcp-config"))
+		return
+	}
+	id, err := spawnChild(srv, childPrompt)
+	if err == nil {
+		err = awaitEnded(srv, id)
+	}
+	if err != nil {
+		f.emit(failed(0, 0, err.Error()))
+		return
+	}
+	answer := "no report at the tool result"
+	if content, ok := awaitQueued(f); ok && strings.Contains(content, reportMarker) {
+		answer = "read the report at the tool result"
+	}
+	f.emit(user(toolResult("toolu_w", "slept", false)), say(answer), success(answer, 1, 1))
 }
 
 func gateOpen(name string) bool {
