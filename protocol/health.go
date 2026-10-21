@@ -3,7 +3,7 @@ package protocol
 const (
 	// CapabilityDeltaRowIdentity says that each item.delta frame names its item.
 	CapabilityDeltaRowIdentity = "delta_row_identity"
-	// CapabilityResolutionSource says that a Resolution takes source, source_id, and source_label.
+	// CapabilityResolutionSource says that a Resolution takes source, source_id, source_label, and response.
 	CapabilityResolutionSource = "resolution_source"
 )
 
