@@ -112,7 +112,10 @@ func (t *Tree) allowsTask(depth int) bool { return depth < t.cfg.MaxDepth }
 // Choice is what a spawn takes from its caller beside the agent and the task:
 // the model of the child, or "" for the model of its profile and then of its
 // parent, and the effort of the child, or "" for the default of its provider.
-type Choice struct{ Model, Effort string }
+type Choice struct {
+	Model, Effort string
+	Accounts      map[string]string
+}
 
 // spawn appends child.spawned to parent, then creates the child with task
 // as its first input. A child that fails to start settles failed at once.
@@ -151,6 +154,13 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 		c.Model = model
 	}
 	c.Settings.Effort = string(effort)
+	if len(ch.Accounts) > 0 {
+		c.Settings.Accounts = maps.Clone(c.Settings.Accounts)
+		if c.Settings.Accounts == nil {
+			c.Settings.Accounts = make(map[string]string)
+		}
+		maps.Copy(c.Settings.Accounts, ch.Accounts)
+	}
 	c.Origin, c.AllowedTools = "task", t.available(c.Model, narrow(p.Tools, c.AllowedTools))
 	first := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliveryQueue, Source: "parent",
 		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: task}}}

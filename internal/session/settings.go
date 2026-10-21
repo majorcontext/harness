@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"maps"
 
 	"github.com/majorcontext/harness/protocol"
 
@@ -17,18 +18,22 @@ func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *
 		ch.Model = changed(ch.Model, prev)
 		ch.Effort = changed(ch.Effort, set.Effort)
 		ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
+		if ch.Accounts != nil && maps.Equal(ch.Accounts, set.Accounts) {
+			ch.Accounts = nil
+		}
+		hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil
 		var err error
 		if ch.Model != nil && a.cfg.Check != nil {
 			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
 		title = changed(title, a.state.Renamed())
-		if err == nil && (ch != protocol.SettingsChanged{} || title != nil) {
+		if err == nil && (hasSettings || title != nil) {
 			var events []protocol.Payload
 			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
 				events = a.dismissRequests()
 			}
 			dismissed := len(events)
-			if ch != (protocol.SettingsChanged{}) {
+			if hasSettings {
 				events = append(events, ch)
 			}
 			if title != nil {

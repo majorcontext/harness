@@ -15,6 +15,9 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{name: "the zero config"},
+		{name: "account routing requires proxy environment", cfg: Config{AccountRouting: &AccountRouting{Separator: "|"}}, want: "proxy_url_env"},
+		{name: "account routing requires separator", cfg: Config{AccountRouting: &AccountRouting{ProxyURLEnv: "HTTPS_PROXY"}}, want: "separator"},
+		{name: "account routing accepts the configured environment and separator", cfg: Config{AccountRouting: &AccountRouting{ProxyURLEnv: "HTTPS_PROXY", Separator: "|"}}},
 		{name: "an openrouter entry that names only api_key_env", cfg: Config{Providers: map[string]Provider{"openrouter": {APIKeyEnv: "X"}}}, want: "type is required"},
 		{name: "an openai entry without base_url", cfg: Config{Providers: map[string]Provider{"work": {Type: TypeOpenAI}}}, want: "base_url is required"},
 		{name: "an unknown provider type", cfg: Config{Providers: map[string]Provider{"work": {Type: "bogus"}}}, want: "unknown type"},

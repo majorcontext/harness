@@ -1884,6 +1884,12 @@
           },
           "service_tier": {
             "type": "string"
+          },
+          "accounts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "type": "object"
@@ -1898,6 +1904,12 @@
           },
           "service_tier": {
             "type": "string"
+          },
+          "accounts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "type": "object"
@@ -1912,6 +1924,12 @@
           },
           "service_tier": {
             "type": "string"
+          },
+          "accounts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
           },
           "title": {
             "type": "string"
@@ -1973,6 +1991,9 @@
       "SubscriptionUsage": {
         "properties": {
           "provider": {
+            "type": "string"
+          },
+          "account": {
             "type": "string"
           },
           "plan": {

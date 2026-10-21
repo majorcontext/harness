@@ -90,7 +90,7 @@ These are the compatibility surface.
 | `harness/store` | `DiskStore`, `MemStore`, `CheckName`, `CheckRecords`: the stores that ship with harness | embedders, CLI |
 | `harness/httpapi` | `Handler` over a `Runtime`, `ReadHandler` over a `Store`, `ReadOptions`, `Queue`: the HTTP API, built on the exported methods of `harness` | control planes, CLI |
 | `harness/httpsync` | `New`, the `Sync` that posts batches over HTTP, and `ApplySync`, the rules of its receiver | box harness, control planes |
-| `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`, `Load`, `Parse`, `LoadProject`, `MergeProject`, `Config.WithProxyBase`; imports only the standard library | boot code that writes a config |
+| `harness/config` | `Config`, `AccountRouting`, `Provider`, `Defaults`, `Validate`, `ApplyEnv`, `Load`, `Parse`, `LoadProject`, `MergeProject`, `Config.WithProxyBase`; imports only the standard library | boot code that writes a config |
 | `harness/plugin` | `Plugin`, `ToolBefore`, `Tool`, `Client`, `Serve`, `ServeConn`, and the wire records of each hook, event, tool, and client call, with `Manifest`, `Part`, and `Message`: the Go API for a plugin, as a process or as a value in a runtime | plugin authors |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated `openapi.json` and `protocol.ts` | servers, web clients, CLIs |
 | `harness/storetest` | Conformance suite for a `Store` | store implementations |
@@ -449,7 +449,10 @@ The runtime reads no other on-disk format.
 
 `protocol.Payload` is a Go interface with `Kind() string`, and `protocol` holds one struct for each durable kind. `protocol.Event.Payload` decodes the data of an event into a pointer to the struct of its kind, such as `*protocol.TurnEnded`. `eventlog` encodes and decodes the envelope with the same registry. An unknown kind fails the load loudly.
 
+`Settings.accounts` maps provider vendor names to opaque account IDs. It is copied to children and can be changed with an absolute map in `settings.changed` or `Session.Update`.
+
 ### Event kinds
+
 
 The Go types of `protocol` own the payload of each kind: the field names, the JSON tags, and the typed enums (`Status`, `Delivery`, `StopReason`, `Cause`, `ErrorClass`, `ResolutionKind`, `GoalState`, `Verdict`, and `Outcome`). `protocol/openapi.json` and `protocol/protocol.ts` generate from them. `protocol.Kind*` names each kind. A golden test in `internal/eventlog` pins the JSON bytes of every kind.
 

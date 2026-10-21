@@ -536,18 +536,21 @@ export interface SessionTitled {
 export interface Settings {
   effort?: string;
   service_tier?: string;
+  accounts?: Record<string, string>;
 }
 
 export interface SettingsChanged {
   model?: string;
   effort?: string;
   service_tier?: string;
+  accounts?: Record<string, string>;
 }
 
 export interface SettingsPatch {
   model?: string;
   effort?: string;
   service_tier?: string;
+  accounts?: Record<string, string>;
   title?: string;
 }
 
@@ -566,6 +569,7 @@ export interface SubscriptionOverage {
 
 export interface SubscriptionUsage {
   provider: string;
+  account?: string;
   plan: string;
   windows: SubscriptionUsageWindow[];
   overage?: SubscriptionOverage;

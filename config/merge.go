@@ -17,6 +17,10 @@ func merge(base, over *Config) *Config {
 }
 
 func mergeScalars(out, over *Config) {
+	if over.AccountRouting != nil {
+		routing := *over.AccountRouting
+		out.AccountRouting = &routing
+	}
 	if over.Model != "" {
 		out.Model = over.Model
 	}

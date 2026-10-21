@@ -10,6 +10,11 @@ import (
 
 // Validate returns the first rule that c breaks. It never changes c.
 func (c *Config) Validate() error {
+	if c.AccountRouting != nil {
+		if c.AccountRouting.ProxyURLEnv == "" || c.AccountRouting.Separator == "" {
+			return fmt.Errorf("account_routing requires proxy_url_env and separator")
+		}
+	}
 	if err := cmp.Or(c.validateFile(), validateProviders(c.Providers), validateAppendSystemPromptArgs(c)); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}

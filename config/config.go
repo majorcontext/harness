@@ -3,8 +3,13 @@
 // process and makes no network call.
 package config
 
-// Config is the parsed harness configuration. The zero value is valid and
-// represents "no configuration": every method degrades to built-in defaults.
+// AccountRouting configures how a selected session account reaches the network.
+type AccountRouting struct {
+	ProxyURLEnv string `json:"proxy_url_env,omitempty"`
+	Separator   string `json:"separator,omitempty"`
+}
+
+// Config is the parsed harness configuration. The zero value is valid and represents no configuration.
 type Config struct {
 	// Model is the default model ref ("provider/model") or an alias key.
 	Model string `json:"model,omitempty"`
@@ -16,6 +21,8 @@ type Config struct {
 	SessionDir string `json:"session_dir,omitempty"`
 	// Providers configures each provider family by name (e.g. "anthropic").
 	Providers map[string]Provider `json:"providers,omitempty"`
+	// AccountRouting configures proxy username routing for session accounts.
+	AccountRouting *AccountRouting `json:"account_routing,omitempty"`
 	// Instructions, when set to false, disables project-instruction
 	// (AGENTS.md) injection into the system prompt. A nil value (the field
 	// omitted) leaves injection enabled — a *bool so "unset" and "false" are

@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"maps"
 	"slices"
 	"time"
 
@@ -41,6 +42,9 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 	}
 	if e.ServiceTier != nil {
 		s.settings.ServiceTier = *e.ServiceTier
+	}
+	if e.Accounts != nil {
+		s.settings.Accounts = maps.Clone(e.Accounts)
 	}
 	return nil
 }

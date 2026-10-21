@@ -102,6 +102,8 @@ func (c Config) WithProxyBase(base string) Config {
 
 // Provider is per-family provider configuration.
 type Provider struct {
+	// Vendor links this provider entry to an opaque per-session subscription account.
+	Vendor string `json:"vendor,omitempty"`
 	// Type selects the adapter to build for this entry.
 	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.

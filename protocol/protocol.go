@@ -93,6 +93,7 @@ type LastTurn struct {
 // or codex, and CapturedAt is in Unix seconds.
 type SubscriptionUsage struct {
 	Provider       string                    `json:"provider"`
+	Account        string                    `json:"account,omitempty"`
 	Plan           string                    `json:"plan"`
 	Windows        []SubscriptionUsageWindow `json:"windows"`
 	Overage        *SubscriptionOverage      `json:"overage,omitempty"`
@@ -358,10 +359,11 @@ type Model struct {
 // SettingsPatch changes each non-nil setting of a session. A running turn
 // uses the new settings from its next model call. Title renames the session.
 type SettingsPatch struct {
-	Model       *string `json:"model,omitempty"`
-	Effort      *string `json:"effort,omitempty"`
-	ServiceTier *string `json:"service_tier,omitempty"`
-	Title       *string `json:"title,omitempty"`
+	Model       *string           `json:"model,omitempty"`
+	Effort      *string           `json:"effort,omitempty"`
+	ServiceTier *string           `json:"service_tier,omitempty"`
+	Accounts    map[string]string `json:"accounts,omitempty"`
+	Title       *string           `json:"title,omitempty"`
 }
 
 // EventPage is one page of durable events. Next is the after of the next

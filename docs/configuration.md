@@ -17,7 +17,10 @@ are for API keys.
 
 `harness serve` and the Go API take the API default, unless the embedder sets `Config.SubscriptionDefault`. `harness login codex` and `harness login claude-code` write `model` to the user config when it has none, and print a line that says so. They never change a `model` that is set.
 
-## Session titles
+## Account routing
+
+The optional top-level `account_routing` object requires `proxy_url_env` and `separator`. The environment variable holds the base proxy URL. A provider entry's non-empty `vendor` selects the key in a session's `Settings.accounts`. Harness appends `separator` and the opaque account ID to the proxy URL username. Missing or invalid routing, or a target that `NO_PROXY` would bypass, fails the model call. Password, host, and `NO_PROXY` are unchanged. Claude Code receives the qualified URL in the upper- and lower-case HTTP and HTTPS proxy variables.
+
 
 A session has a title: the first line of its first prompt, cut to 8 words. Set `title_model` (a model ref or an alias) to let a model write it instead. After the first prompt of a root session, one short request goes to that model beside the turn. A title that you set with a rename always wins. If the request fails, the title of the first prompt stays.
 

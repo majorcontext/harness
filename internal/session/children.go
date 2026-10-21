@@ -192,7 +192,7 @@ func failGuidance(id string, last protocol.TurnEnded) string {
 	if last.RecoverHint != "" {
 		when = " after " + last.RecoverHint
 	}
-	return " — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child" + when + " with task send on session_id " + id
+	return " — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child" + when + " with task send on session_id " + id + " and accounts to choose another account"
 }
 
 // line is the line of the child in the task segment: its agent, its outcome
