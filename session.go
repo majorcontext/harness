@@ -168,6 +168,9 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 // question to the chosen label or free text. res.Source, res.SourceID, and
 // res.SourceLabel name who resolved it, with the checks of an Input.
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error) {
+	if strings.TrimSpace(res.Response) == "" {
+		res.Response = ""
+	}
 	if err := res.Validate(); err != nil {
 		return protocol.Resolved{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}

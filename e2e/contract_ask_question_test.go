@@ -118,6 +118,13 @@ func TestContractModelAPIQuestions(t *testing.T) {
 			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"response":"use SQLite",` + boxFrom}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
+			name:   "model_api_question_with_a_blank_response_takes_only_a_valid_answer",
+			driver: askLane(true),
+			model:  askSteps(),
+			actions: withActions(asked, respondQuestion{as: "a", callID: "toolu_ask", with: `"answer":["SQLite"],"response":" \n\t"`},
+				respondQuestion{as: "a", callID: "toolu_ask", with: `"answer":{"Which database?":"SQLite"},"response":" \n\t"`}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
 			name:    "model_api_question_answered_with_a_response_reads_that_the_user_responded",
 			driver:  askLane(true),
 			model:   askSteps(),
