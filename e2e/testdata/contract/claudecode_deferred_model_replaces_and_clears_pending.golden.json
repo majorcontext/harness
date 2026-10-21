@@ -1,0 +1,175 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "anthropic/claude-fable-5"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"pending_model\":\"anthropic/claude-fable-5\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "claude-code/opus"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "{\"pending_model\":\"claude-code/opus\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "model",
+            "arguments": {
+              "action": "status"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "{\"pending_model\":\"claude-code/opus\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "claude-code/sonnet"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "content": "{\"effect\":\"unchanged\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "model",
+            "arguments": {
+              "action": "status"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "{\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "journal_events.a": {
+      "status": 200,
+      "body": []
+    },
+    "session_model.a": {
+      "status": 200,
+      "body": "claude-code/sonnet"
+    }
+  }
+}

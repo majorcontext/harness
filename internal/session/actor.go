@@ -216,11 +216,12 @@ type Actor struct {
 	// fenced is the seq of the owner.acquired record of this actor.
 	fenced uint64
 	// chunks counts the state chunks that this ownership wrote for each backend.
-	chunks    map[string]int
-	run       *running
-	latched   bool
-	releasing []func(struct{}, error)
-	stopped   bool
+	chunks       map[string]int
+	run          *running
+	pendingModel string
+	latched      bool
+	releasing    []func(struct{}, error)
+	stopped      bool
 	// endCause is the cause that a requested stop gives, and cause is the
 	// first cause of the stop. Only the actor goroutine writes them, before
 	// done closes.

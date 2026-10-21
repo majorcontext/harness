@@ -1,0 +1,161 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "anthropic/claude-fable-5"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"pending_model\":\"anthropic/claude-fable-5\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "ask_user_question",
+            "arguments": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "The user dismissed this question without answering."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "journal_events.a": {
+      "status": 200,
+      "body": [
+        {
+          "by_backend": false,
+          "type": "session.created"
+        },
+        {
+          "by_backend": false,
+          "type": "owner.acquired"
+        },
+        {
+          "by_backend": false,
+          "type": "input.admitted"
+        },
+        {
+          "by_backend": false,
+          "type": "turn.started"
+        },
+        {
+          "by_backend": false,
+          "type": "session.titled"
+        },
+        {
+          "by_backend": false,
+          "type": "backend.state"
+        },
+        {
+          "by_backend": false,
+          "type": "item.completed"
+        },
+        {
+          "by_backend": false,
+          "type": "item.completed"
+        },
+        {
+          "by_backend": false,
+          "type": "item.completed"
+        },
+        {
+          "by_backend": false,
+          "type": "request.opened"
+        },
+        {
+          "by_backend": false,
+          "type": "context.measured"
+        },
+        {
+          "by_backend": false,
+          "type": "turn.ended"
+        },
+        {
+          "by_backend": false,
+          "type": "request.resolved"
+        },
+        {
+          "by_backend": false,
+          "type": "settings.changed"
+        }
+      ]
+    },
+    "session_model.a": {
+      "status": 200,
+      "body": "anthropic/claude-fable-5"
+    },
+    "turn_ends.a": {
+      "status": 200,
+      "body": [
+        {
+          "stop_reason": "awaiting_input",
+          "turn_id": "turn#1"
+        }
+      ]
+    }
+  }
+}

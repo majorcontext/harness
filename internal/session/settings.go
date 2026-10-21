@@ -9,9 +9,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 )
 
-// Update appends the settings in ch that differ from the session settings, and
-// the title when it differs from the title of a person. Config.Check validates a
-// new model first.
+// Update appends settings and title changes after validation.
 func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *string) error {
 	return a.update(ctx, ch, title, false)
 }
@@ -27,42 +25,92 @@ func (a *Actor) update(ctx context.Context, ch protocol.SettingsChanged, title *
 			reply(struct{}{}, ErrBusy)
 			return
 		}
-		set, prev := a.state.Settings(), a.state.Model()
-		ch.Model = changed(ch.Model, prev)
-		ch.Effort = changed(ch.Effort, set.Effort)
-		ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
-		if ch.Accounts != nil && maps.Equal(*ch.Accounts, set.Accounts) {
-			ch.Accounts = nil
-		}
-		hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil
-		var err error
-		if ch.Model != nil && a.cfg.Check != nil {
-			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
-		}
-		title = changed(title, a.state.Renamed())
-		if err == nil && (hasSettings || title != nil) {
-			var events []protocol.Payload
-			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
-				events = a.dismissRequests()
-			}
-			dismissed := len(events)
-			if hasSettings {
-				events = append(events, ch)
-			}
-			if title != nil {
-				events = append(events, protocol.SessionTitled{Title: *title, Source: protocol.TitleUser})
-			}
-			err = a.append(events...)
-			if err == nil && dismissed > 0 && a.run == nil {
-				err = a.next(true)
-			}
-			if err == nil && ch.Model != nil && a.cfg.Backend.Capabilities(*ch.Model).ContextWindow != a.cfg.Backend.Capabilities(prev).ContextWindow {
-				a.latched = false
-			}
+		n := len(a.state.Requests())
+		err := a.applySettings(a.cfg.Base, ch, title)
+		if err == nil && n > len(a.state.Requests()) && a.run == nil {
+			err = a.next(true)
 		}
 		reply(struct{}{}, err)
 	})
 	return err
+}
+
+func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, title *string, before ...protocol.Payload) error {
+	set, prev := a.state.Settings(), a.state.Model()
+	ch.Model = changed(ch.Model, prev)
+	ch.Effort = changed(ch.Effort, set.Effort)
+	ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
+	if ch.Accounts != nil && maps.Equal(*ch.Accounts, set.Accounts) {
+		ch.Accounts = nil
+	}
+	hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil
+	if ch.Model != nil && a.cfg.Check != nil {
+		if err := a.cfg.Check(prev, *ch.Model, a.state.AllowedTools()); err != nil {
+			if len(before) == 0 {
+				return err
+			}
+			a.log().Warn("harness: deferred model validation failed", "session", a.cfg.ID, "err", err)
+			return a.appendCtx(ctx, before...)
+		}
+	}
+	title = changed(title, a.state.Renamed())
+	if !hasSettings && title == nil {
+		if len(before) == 0 {
+			return nil
+		}
+		return a.appendCtx(ctx, before...)
+	}
+	events := before
+	if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
+		events = append(events, a.dismissRequests(before...)...)
+	}
+	if hasSettings {
+		events = append(events, ch)
+	}
+	if title != nil {
+		events = append(events, protocol.SessionTitled{Title: *title, Source: protocol.TitleUser})
+	}
+	if err := a.appendCtx(ctx, events...); err != nil {
+		return err
+	}
+	if ch.Model != nil && a.cfg.Backend.Capabilities(*ch.Model).ContextWindow != a.cfg.Backend.Capabilities(prev).ContextWindow {
+		a.latched = false
+	}
+	return nil
+}
+
+type modelState struct{ model, pending string }
+
+func (a *Actor) modelState() modelState {
+	return modelState{a.state.Model(), a.pendingModel}
+}
+
+// DeferModel validates ref and returns the current and pending model in one command.
+func (a *Actor) DeferModel(ctx context.Context, ref string) (string, string, error) {
+	v, err := call(ctx, a, func(reply func(modelState, error)) {
+		if a.run == nil || a.run.kind != kindTurn || !a.run.ownsLoop {
+			reply(modelState{}, ErrTurnMismatch)
+			return
+		}
+		if a.cfg.Check != nil {
+			if err := a.cfg.Check(a.state.Model(), ref, a.state.AllowedTools()); err != nil {
+				reply(modelState{}, err)
+				return
+			}
+		}
+		a.pendingModel = ref
+		if ref == a.state.Model() {
+			a.pendingModel = ""
+		}
+		reply(a.modelState(), nil)
+	})
+	return v.model, v.pending, err
+}
+
+// ModelState returns the current and pending model in one actor read.
+func (a *Actor) ModelState(ctx context.Context) (string, string, error) {
+	v, err := call(ctx, a, func(reply func(modelState, error)) { reply(a.modelState(), nil) })
+	return v.model, v.pending, err
 }
 
 func changed(v *string, current string) *string {

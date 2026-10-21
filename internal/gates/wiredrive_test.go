@@ -211,6 +211,7 @@ const (
 // driver sends SIGINT after their first frame, so the frames of the
 // interrupted turn reach the gate.
 var fakeClaudeHangs = map[string]bool{
+	"turn_calls_hang": true,
 	"hang_after_text": true, "hang_after_listing": true, "hang_in_tool": true,
 	"abandon_tool": true, "hold_tool": true, "drop_tool": true,
 	"tool_on_interrupt": true, "tool_result_on_interrupt": true, "success_on_interrupt": true,
@@ -220,7 +221,7 @@ var fakeClaudeHangs = map[string]bool{
 
 // fakeClaudeExitsByDesign holds the modes that end with an error or print no
 // frame on purpose, or that need an MCP server this driver does not run.
-var fakeClaudeExitsByDesign = map[string]bool{"crash": true, "crash_before_init": true, "mcp": true}
+var fakeClaudeExitsByDesign = map[string]bool{"turn_calls_error": true, "crash": true, "crash_before_init": true, "mcp": true}
 
 // claudeSpawn is one process of a scenario: the lines it reads on stdin, and
 // whether the driver interrupts it after its first frame.

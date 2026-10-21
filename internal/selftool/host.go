@@ -17,6 +17,8 @@ type Sessions interface {
 type Session interface {
 	Snapshot() protocol.Session
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
+	DeferModel(ctx context.Context, ref string) (string, string, error)
+	ModelState(ctx context.Context) (string, string, error)
 	StartGoal(ctx context.Context, condition string) error
 	AdjustGoal(ctx context.Context, condition string) error
 }

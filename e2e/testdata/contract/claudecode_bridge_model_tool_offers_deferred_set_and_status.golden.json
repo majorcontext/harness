@@ -63,14 +63,20 @@
     "offered_model_tool.a": {
       "status": 200,
       "body": {
-        "description": "List the provider families and aliases configured on this box, each provider tagged with a \"billing\" of \"subscription\" or \"api\". Use this to pick a family for task's own spawn(model:...) override when delegating to a child session. This surface exposes ONLY the list action — inspecting or changing THIS session's own current model is not available here; task's model override is the way to select a model, for a CHILD session, not this one.",
+        "description": "Inspect or change this session's model. status reports the current model and any pending_model, plus configured aliases and providers. set(model) validates a provider/model ref or alias now and queues it for the NEXT TURN, after this turn ends, even on failure or cancellation. It never changes the running turn or its backend process. Changing provider dismisses open questions at turn end. A later set replaces the pending model; setting the current model clears it and does nothing. list reports configured providers (with subscription or api billing) and aliases without session state.",
         "inputSchema": {
           "properties": {
             "action": {
-              "description": "The operation to perform; only \"list\" is exposed on this surface",
+              "description": "The operation to perform",
               "enum": [
+                "status",
+                "set",
                 "list"
               ],
+              "type": "string"
+            },
+            "model": {
+              "description": "The target model: a \"provider/model\" ref or a configured alias (required for set)",
               "type": "string"
             }
           },
