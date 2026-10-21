@@ -29,7 +29,7 @@ const askDescription = "Ask the user one to four multiple-choice questions durin
 	"To recommend an option, make it the first option and end its label with \" (Recommended)\". " +
 	"Use preview on an option only for a concrete artifact that the user must compare side by side, such as a code snippet, a mockup, or a diagram; a preview works only when multiSelect is false. " +
 	"Each question text must be unique, and each option label must be unique within its question. " +
-	"Do not use this tool to ask whether a plan is ready or whether to proceed. " +
+	"When you need the user's answer to continue, use this tool, not your reply text. A question in your reply text does not show the user that you are waiting. " +
 	"The call ends your turn until the user answers; the result holds the answer to each question."
 
 const askSchema = `{

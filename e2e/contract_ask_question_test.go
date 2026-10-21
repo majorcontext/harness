@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -337,4 +338,29 @@ func TestContractModelAPIQuestionStops(t *testing.T) {
 			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitFile{path: "tool-running"}, restart{}, waitIdle{as: "a"}, getSession{as: "a"}},
 		},
 	})
+}
+
+// claudeAskDescription records the description of ask_user_question that the
+// hosted MCP server offered the CLI after its newest run.
+type claudeAskDescription struct{ as string }
+
+func (a claudeAskDescription) run(t *testing.T, r *run) {
+	body, _ := claudeDriverOf(t, r).lastToolCall(t).Body.(map[string]any)
+	result, _ := body["result"].(map[string]any)
+	list, _ := result["tools"].([]any)
+	for _, tool := range list {
+		if m, _ := tool.(map[string]any); m["name"] == "ask_user_question" {
+			r.record(t, "ask_description", a.as, callResult{Status: http.StatusOK, Body: m["description"]})
+			return
+		}
+	}
+	t.Fatal("the hosted MCP server did not offer ask_user_question")
+}
+
+func TestContractQuestionToolDescription(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:    "question_tool_description_says_to_ask_with_the_tool_and_not_in_text",
+		driver:  claudeLane{mode: "normal", ask: true, listTools: true}.newDriver,
+		actions: withActions(claudeOneTurn, claudeAskDescription{as: "a"}),
+	}})
 }
