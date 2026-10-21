@@ -21,7 +21,7 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.L
 	for _, p := range m.Parts {
 		switch p.Type {
 		case protocol.LogPartText:
-			out.Parts = append(out.Parts, &message.Text{Text: p.Text, Citations: citations(p.Citations)})
+			out.Parts = append(out.Parts, &message.Text{Text: p.Text, Citations: citations(p.Citations), ProviderData: p.ProviderData})
 		case protocol.LogPartWebSearch:
 			w := &message.WebSearch{ID: p.CallID, Query: p.Query, ProviderData: p.ProviderData}
 			if p.IsError {
@@ -40,7 +40,7 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.L
 			if p.ArgumentsText != "" {
 				args = json.RawMessage(p.ArgumentsText)
 			}
-			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: args})
+			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: args, ProviderData: p.ProviderData})
 		case protocol.LogPartToolResult:
 			content := message.Parts{&message.Text{Text: p.Text}}
 			for _, b := range p.Blobs {
@@ -81,7 +81,7 @@ func fromMessage(m *message.Message) protocol.LogMessage {
 	for _, p := range m.Parts {
 		switch p := p.(type) {
 		case *message.Text:
-			part := protocol.LogPart{Type: protocol.LogPartText, Text: p.Text}
+			part := protocol.LogPart{Type: protocol.LogPartText, Text: p.Text, ProviderData: p.ProviderData}
 			for _, c := range p.Citations {
 				part.Citations = append(part.Citations, protocol.Citation(c))
 			}
@@ -102,7 +102,7 @@ func fromMessage(m *message.Message) protocol.LogMessage {
 			if !json.Valid(args) {
 				args = nil
 			}
-			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args, ArgumentsText: argumentsText(args)})
+			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args, ArgumentsText: argumentsText(args), ProviderData: p.ProviderData})
 		}
 	}
 	return out

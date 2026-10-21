@@ -284,6 +284,7 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 	idx := 0
 	if parts := o.opts.Replies[step.Name].Reasoning; len(parts) > 0 {
 		frames = append(frames, reasoningFrames(idx, id, parts)...)
+		o.issue("rs_" + id)
 		idx++
 	}
 	if ws := rep.WebSearch; ws != nil {
@@ -295,9 +296,11 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 		if rep.WebSearch != nil {
 			content["annotations"] = annotations(rep.WebSearch)
 		}
-		msg := obj{"type": "message", "role": "assistant", "content": []obj{content}}
+		msgID := fmt.Sprintf("msg_%s_%d", id, idx)
+		o.issue(msgID)
+		msg := obj{"type": "message", "id": msgID, "status": "completed", "role": "assistant", "content": []obj{content}}
 		frames = append(frames,
-			newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"type": "message", "role": "assistant", "content": []obj{}}}),
+			newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"type": "message", "id": msgID, "status": "in_progress", "role": "assistant", "content": []obj{}}}),
 			newFrame(frameTextDelta, obj{"output_index": idx, "delta": rep.Text}),
 			newFrame("response.output_item.done", obj{"output_index": idx, "item": msg}),
 		)
@@ -308,9 +311,11 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 		o.wmu.Lock()
 		o.callNames[tc.ID] = tc.Name
 		o.wmu.Unlock()
-		item := obj{"type": "function_call", "call_id": tc.ID, "name": tc.Name, "arguments": string(args)}
+		fcID := fmt.Sprintf("fc_%s_%d", id, idx)
+		o.issue(fcID)
+		item := obj{"type": "function_call", "id": fcID, "status": "completed", "call_id": tc.ID, "name": tc.Name, "arguments": string(args)}
 		frames = append(frames,
-			newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"type": "function_call", "call_id": tc.ID, "name": tc.Name, "arguments": ""}}),
+			newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"type": "function_call", "id": fcID, "status": "in_progress", "call_id": tc.ID, "name": tc.Name, "arguments": ""}}),
 			newFrame("response.output_item.done", obj{"output_index": idx, "item": item}),
 		)
 		idx++

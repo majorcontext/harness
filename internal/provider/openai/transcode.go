@@ -243,6 +243,34 @@ type apiMessageItem struct {
 	Type    string           `json:"type"` // "message"
 	Role    string           `json:"role"`
 	Content []apiContentPart `json:"content"`
+	itemMeta
+}
+
+// itemMeta is what a request sends back of an output item, as the Codex CLI
+// does: the server's id and status, and the phase of a message. A full request
+// that holds them matches the cached prefix of the server.
+type itemMeta struct {
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status,omitempty"`
+	Phase  string `json:"phase,omitempty"`
+}
+
+// itemMetaOf returns the itemMeta of an output item, or nil when it has no id.
+func itemMetaOf(id, status, phase string) json.RawMessage {
+	if id == "" {
+		return nil
+	}
+	raw, _ := json.Marshal(itemMeta{ID: id, Status: status, Phase: phase})
+	return raw
+}
+
+// metaOf decodes the itemMeta of family from pd. It is zero when pd holds none.
+func metaOf(pd message.ProviderData, family string) itemMeta {
+	var m itemMeta
+	if raw, ok := pd.Get(family); ok {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m
 }
 
 type apiContentPart struct {
@@ -258,6 +286,8 @@ type apiFunctionCall struct {
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+	ID        string `json:"id,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 type apiFunctionCallOutput struct {
@@ -487,8 +517,18 @@ func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([
 			if v.Text == "" {
 				continue
 			}
+			var meta itemMeta
+			if role == "assistant" {
+				meta = metaOf(v.ProviderData, family)
+			}
+			// A text that carries the id of its output item is that item alone.
+			if meta.ID != "" {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+			}
 			if pending == nil {
-				pending = &apiMessageItem{Type: "message", Role: role}
+				pending = &apiMessageItem{Type: "message", Role: role, itemMeta: meta}
 			}
 			ct := "input_text"
 			if role == "assistant" {
@@ -499,6 +539,11 @@ func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([
 			// (see message.EngineContext). Only the *message.EngineContext
 			// case below emits it.
 			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: prompt.NeutralizeEngineContextSentinel(v.Text)})
+			if meta.ID != "" {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+			}
 
 		case *message.EngineContext:
 			if v.Text == "" {
@@ -551,11 +596,14 @@ func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([
 			if args == "" {
 				args = "{}"
 			}
+			meta := metaOf(v.ProviderData, family)
 			raw, err := json.Marshal(apiFunctionCall{
 				Type:      "function_call",
 				CallID:    wireCallID(v.CallID),
 				Name:      v.Name,
 				Arguments: args,
+				ID:        meta.ID,
+				Status:    meta.Status,
 			})
 			if err != nil {
 				return nil, err

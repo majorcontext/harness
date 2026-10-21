@@ -264,7 +264,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexItemIDRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -493,9 +493,33 @@ func codexChainRows() []codexScenario {
 	}
 }
 
+func codexItemIDRows() []codexScenario {
+	return []codexScenario{
+		{
+			// A full request sends each output item back with the id and status that the server gave it.
+			scenario: scenario{
+				name: "codex_http_resends_the_server_ids_of_output_items",
+				model: []harnesstest.Step{
+					{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{Text: "looking", ToolCalls: []harnesstest.ToolCall{
+						{ID: "call_1", Name: "bash", Input: map[string]any{"command": "echo codex"}},
+					}}},
+					{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: codexText("ran")},
+				},
+				actions: codexSession(codexTurn("a", "run"), []action{recordWire{}}),
+			},
+			opts: codexReasoning(),
+		},
+	}
+}
+
 // codexChainRowKinds is the disposition of the rows that check the chain of a Codex websocket session.
 var codexChainRowKinds = map[string]runtimeRow{
 	"codex_ws_chains_the_turn_after_a_tool_call": reGolden(specItems, specWarm),
+}
+
+// codexItemIDRowKinds is the disposition of the rows that check the ids of the output items that a request sends back.
+var codexItemIDRowKinds = map[string]runtimeRow{
+	"codex_http_resends_the_server_ids_of_output_items": reGolden(specItems),
 }
 
 func codexTurnStep(name, user, reply string) harnesstest.Step {

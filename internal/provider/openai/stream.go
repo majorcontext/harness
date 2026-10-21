@@ -27,6 +27,7 @@ type assembledItem struct {
 	name   string
 	args   json.RawMessage
 	raw    json.RawMessage // reasoning, web_search_call: the entire item JSON, replayed verbatim
+	meta   json.RawMessage // message, function_call: the itemMeta that a request sends back
 	// query, id and cites are the search of a web_search_call item and the sources a message cites.
 	query, id string
 	failed    bool
@@ -453,6 +454,7 @@ func (s *stream) handle(name string, data []byte) error {
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 			Status    string `json:"status"`
+			Phase     string `json:"phase"`
 			Action    struct {
 				Query string `json:"query"`
 			} `json:"action"`
@@ -470,6 +472,9 @@ func (s *stream) handle(name string, data []byte) error {
 		it, err := s.itemAt(ev.OutputIndex)
 		if err != nil {
 			return err
+		}
+		if head.Type == "function_call" || head.Type == "message" {
+			it.meta = itemMetaOf(head.ID, head.Status, head.Phase)
 		}
 		switch head.Type {
 		case "function_call":
@@ -693,7 +698,7 @@ func (s *stream) assemble() *message.Message {
 		switch it.kind {
 		case "message":
 			if it.text.Len() > 0 {
-				msg.Parts = append(msg.Parts, &message.Text{Text: it.text.String(), Citations: it.cites})
+				msg.Parts = append(msg.Parts, &message.Text{Text: it.text.String(), Citations: it.cites, ProviderData: s.providerData(it.meta)})
 			}
 		case "web_search_call":
 			w := &message.WebSearch{ID: it.id, Query: it.query}
@@ -712,8 +717,18 @@ func (s *stream) assemble() *message.Message {
 				ProviderData: message.ProviderData{familyOrDefault(s.family): it.raw},
 			})
 		case "function_call":
-			msg.Parts = append(msg.Parts, it.toolCall())
+			c := it.toolCall()
+			c.ProviderData = s.providerData(it.meta)
+			msg.Parts = append(msg.Parts, c)
 		}
 	}
 	return msg
+}
+
+// providerData returns meta under the family of the stream, or nil for no meta.
+func (s *stream) providerData(meta json.RawMessage) message.ProviderData {
+	if len(meta) == 0 {
+		return nil
+	}
+	return message.ProviderData{familyOrDefault(s.family): meta}
 }
