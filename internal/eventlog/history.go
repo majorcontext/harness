@@ -342,10 +342,6 @@ func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok b
 // dismissal is the result of the tool call that a dismissed request held
 // open: what the model reads in the history. It names label when label is set.
 func dismissal(c OpenToolCall, label string) protocol.LogMessage {
-	text := protocol.DismissedQuestionText
-	if label != "" {
-		text = label + " dismissed this question without answering."
-	}
 	return protocol.LogMessage{Role: protocol.RoleTool, Parts: []protocol.LogPart{{Type: protocol.LogPartToolResult, CallID: c.CallID, Name: c.Name,
-		Text: text, IsError: true}}}
+		Text: protocol.DismissalText(label), IsError: true}}}
 }

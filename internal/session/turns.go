@@ -266,7 +266,7 @@ func (a *Actor) next(check bool) error {
 		return nil
 	}
 	id, ids := newID("turn"), a.startInputs(q)
-	if err := a.append(append(a.dismissRequests(), protocol.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
+	if err := a.append(append(a.dismissFrom(q), protocol.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
 		return err
 	}
 	a.start(id, ids)

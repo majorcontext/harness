@@ -22,12 +22,20 @@ func (a awaitChild) run(t *testing.T, r *run) {
 	r.drv.AwaitChildSettled(t, parent, r.drv.Child(t, parent, 0))
 }
 
+// blockedAsk is askSteps with the question held until the scenario releases it.
+func blockedAsk() []harnesstest.Step {
+	steps := askSteps()
+	steps[0].Reply.Block = true
+	return steps
+}
+
 // boxReplyRows are the dispositions of the rows where another box answers a
 // question.
 var boxReplyRows = map[string]runtimeRow{
-	"model_api_box_input_dismisses_the_question_and_runs_with_the_queued_machine_input": sameAsServe(),
-	"model_api_question_answered_from_a_named_source_names_it_in_the_result":            sameAsServe(),
-	"model_api_question_dismissed_from_a_named_source_names_it_in_the_result":           sameAsServe(),
+	"model_api_box_input_dismisses_the_question_and_runs_with_the_queued_machine_input":   sameAsServe(),
+	"model_api_question_answered_from_a_named_source_names_it_in_the_result":              sameAsServe(),
+	"model_api_question_dismissed_from_a_named_source_names_it_in_the_result":             sameAsServe(),
+	"model_api_box_reply_queued_before_the_question_opens_names_the_box_in_the_dismissal": sameAsServe(),
 }
 
 func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
@@ -81,6 +89,15 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 			model:  askSteps(),
 			actions: withActions(asked, sendFrom{as: "a", text: "ci failed", source: "github"}, sendFrom{as: "a", text: "use SQLite", source: "box", label: "builder (box of ann)"},
 				waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:       "model_api_box_reply_queued_before_the_question_opens_names_the_box_in_the_dismissal",
+			concurrent: true,
+			driver:     askLane(true),
+			model:      blockedAsk(),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitRequests{n: 1},
+				sendFrom{as: "a", text: "use SQLite", source: "box", delivery: "queue", label: "builder (box of ann)"},
+				release{step: "ask"}, waitIdle{as: "a"}, getSession{as: "a"}},
 		},
 		{
 			name:   "model_api_typed_input_dismisses_the_question_and_runs_with_the_queued_machine_input",

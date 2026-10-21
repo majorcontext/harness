@@ -88,6 +88,14 @@ const (
 // DismissedQuestionText is the text of the error result that closes the call of a dismissed question.
 const DismissedQuestionText = "The user dismissed this question without answering."
 
+// DismissalText is the text of the error result of a question that label dismissed, or DismissedQuestionText for no label.
+func DismissalText(label string) string {
+	if label == "" {
+		return DismissedQuestionText
+	}
+	return label + " dismissed this question without answering."
+}
+
 // GoalState is the state of the session goal.
 type GoalState string
 
