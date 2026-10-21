@@ -10,7 +10,7 @@ type Pin struct {
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
-// changes only when a compaction moves it. The pins live in memory: a new
+// changes only when a compaction moves or retires it. The pins live in memory: a new
 // process makes them again at its first model call, and the banner, which
 // comes from the log, comes out the same. The session actor owns Pins.
 type Pins struct {
@@ -43,11 +43,19 @@ func (p *Pins) Set(kind, text, cleared string, at int) {
 	p.pins = append(p.pins, Pin{Kind: kind, Text: text, At: at})
 }
 
-// Move puts every pin after the first n messages of the history.
+// Move puts the newest pin of each kind after the first n messages of the
+// history and drops the older pins of that kind, so a compaction retires each
+// superseded text.
 func (p *Pins) Move(n int) {
-	for i := range p.pins {
-		p.pins[i].At = n
+	kept := p.pins[:0]
+	for i, q := range p.pins {
+		if slices.ContainsFunc(p.pins[i+1:], func(r Pin) bool { return r.Kind == q.Kind }) {
+			continue
+		}
+		q.At = n
+		kept = append(kept, q)
 	}
+	p.pins = kept
 }
 
 // Pinned returns a copy of the pins in the order the model reads them.

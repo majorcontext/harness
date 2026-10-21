@@ -19,7 +19,7 @@ A plugin speaks a versioned JSON-RPC protocol. It runs in one of two modes. As a
 | `event` | async, fire-and-forget | full event stream (batched) |
 | `chat.params` | sync, mutating | model, temperature, etc. per request |
 | `chat.message` | sync, mutating | messages before they enter the log |
-| `system.transform` | sync, additive | add segments after the last message of the model call (runs after `chat.params`) |
+| `system.transform` | sync, additive | add segments: the joined text is pinned after the last message of the call where it changes and stays at that place; a compaction keeps only the newest text; a failed plugin or an empty answer adds nothing (runs after `chat.params`) |
 | `shell.env` | sync, mutating | inject env vars into shell/tool commands |
 | `tool.execute.before` | sync, mutating/blocking | rewrite args or block with `{deny: "message"}` |
 | `tool.execute.after` | sync, mutating | rewrite/annotate tool results |

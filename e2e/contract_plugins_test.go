@@ -182,6 +182,48 @@ func TestContractPluginTools(t *testing.T) {
 	})
 }
 
+// holdsText matches a request whose blocks hold substr, or hold it nowhere when want is false.
+func holdsText(substr string, want bool) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if strings.Contains(p.Text, substr) {
+					return want
+				}
+			}
+		}
+		return !want
+	}
+}
+
+func TestContractPluginCompaction(t *testing.T) {
+	config := pluginConfig(t, map[string]any{"recall": true})
+	config["compaction_keep_turns"] = 1
+	turn := func(user string, m ...harnesstest.Matcher) harnesstest.Step {
+		return harnesstest.Step{Name: user, Match: matchAll(append([]harnesstest.Matcher{harnesstest.LastUserText(user)}, m...)...), Reply: harnesstest.Reply{Text: "ok " + user}}
+	}
+	runScenarios(t, []scenario{{
+		name:   "plugin_segment_that_changes_keeps_only_its_newest_version_after_a_compaction",
+		config: config,
+		model: []harnesstest.Step{
+			turn("one", holdsText("LAST-USER: one", true)),
+			turn("two", holdsText("LAST-USER: one", true), holdsText("LAST-USER: two", true)),
+			{Name: "summary", Reply: harnesstest.Reply{Text: "gist"}},
+			turn("three", holdsText("LAST-USER: one", false), holdsText("LAST-USER: two", true), holdsText("LAST-USER: three", true)),
+		},
+		actions: []action{
+			create{as: "a"},
+			submit{as: "a", text: "one"},
+			waitIdle{as: "a"},
+			submit{as: "a", text: "two"},
+			waitIdle{as: "a"},
+			compact{as: "a"},
+			submit{as: "a", text: "three"},
+			waitIdle{as: "a"},
+		},
+	}})
+}
+
 func TestContractPluginSession(t *testing.T) {
 	cfg := pluginConfig(t, nil)
 	runScenarios(t, []scenario{

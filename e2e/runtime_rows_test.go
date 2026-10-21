@@ -137,7 +137,7 @@ const (
 	specNoRoute        = "A path or method that no route serves answers 404 or 405 with `invalid_request`."
 	specGitOracle      = "workspace-changes-rows"
 	specBannerPrefix   = "each request of the session is a prefix of the next, also across processes and after a compaction in the middle of a turn"
-	specPinsMove       = "A compaction moves every pin, the banner and each notice, to the end of the history that it leaves"
+	specPinsMove       = "A compaction moves the newest pin of each kind, the banner and each notice, to the end of the history that it leaves"
 )
 
 // Reasons that the session rows give.
@@ -602,6 +602,7 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"no_goal_evaluator_means_no_goal":                                                    reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
 	"plugin_inventory_reports_not_spawned_then_running":                                  reGolden(specView),
 	"plugin_sees_the_model_of_each_call":                                                 reGolden(specUpdate),
+	"plugin_segment_that_changes_keeps_only_its_newest_version_after_a_compaction":       sameAsServe(),
 	"restart_lets_a_running_tool_finish_and_cuts_the_next_alone_call":                    reGolden(specView, specHandoff),
 	"bifrost_max_tokens_cut_response_is_retried":                                         sameAsServe(),
 	"max_tokens_cut_response_fails_the_turn_after_stream_max_retries":                    sameAsServe(),
