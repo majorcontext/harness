@@ -164,6 +164,9 @@ func TestContractMCPLiveSet(t *testing.T) {
 	unlisted := docs
 	unlisted.unlisted = true
 	add := putMCP{servers: []string{"weather", "docs"}}
+	changed := putMCP{servers: []string{"weather"}, edit: map[string]func(map[string]any){
+		"weather": func(e map[string]any) { e["connect_timeout_s"] = 20 },
+	}}
 	runScenarios(t, []scenario{
 		{
 			name:  "mcp_put_adds_a_server_whose_tools_arrive_deferred",
@@ -195,9 +198,7 @@ func TestContractMCPLiveSet(t *testing.T) {
 				mcpAction("action", "connect", "server", "weather"),
 				mcpTool("weather", "forecast", "city", "Oslo"),
 			),
-			actions: append(liveTurns(putMCP{servers: []string{"weather"}, edit: map[string]func(map[string]any){
-				"weather": func(e map[string]any) { e["connect_timeout_s"] = 20 },
-			}}), expectMCPInitializes{server: "weather", n: 2}),
+			actions: append(liveTurns(changed, awaitMCPConnected{put: changed}), expectMCPInitializes{server: "weather", n: 2}),
 		},
 		{
 			name:  "mcp_put_with_the_same_spec_keeps_the_client_and_the_call_in_flight",
