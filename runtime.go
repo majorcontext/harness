@@ -348,6 +348,8 @@ type launch struct {
 	profile *prompt.Profile
 	// mcp holds the session MCP servers of WithSessionMCP.
 	mcp map[string]config.MCPServerSpec
+	// accounts applies session account selections before an opened turn resumes.
+	accounts *map[string]string
 }
 
 func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
@@ -413,6 +415,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	}
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
+	} else if l.accounts != nil {
+		a, err = session.OpenWithAccounts(ctx, cfg, *l.accounts)
 	} else {
 		a, err = session.Open(ctx, cfg)
 	}

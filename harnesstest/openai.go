@@ -493,7 +493,12 @@ func (o *OpenAI) pick(req Request) (Step, bool) {
 		o.mu.Unlock()
 		return Step{}, false
 	}
-	return o.steps[i], true
+	step := o.steps[i]
+	if step.Reply.Calls != nil {
+		step.Reply.ToolCalls = step.Reply.Calls(req)
+		step.Reply.Calls = nil
+	}
+	return step, true
 }
 
 func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {

@@ -247,6 +247,16 @@
     },
     "cancel_tree.a": {
       "status": 204
+    },
+    "proxy_accounts": {
+      "status": 200,
+      "body": [
+        "subject|box",
+        "subject|box",
+        "subject|box|acct_parent",
+        "subject|box|acct_parent",
+        "subject|box|acct_parent"
+      ]
     }
   }
 }

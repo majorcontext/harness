@@ -669,6 +669,19 @@
           "kind": "settings.changed"
         }
       ]
+    },
+    "proxy_accounts": {
+      "status": 200,
+      "body": [
+        "subject|box",
+        "subject|box",
+        "subject|box",
+        "subject|box",
+        "subject|box",
+        "subject|box",
+        "subject|box|acct_parent",
+        "subject|box|acct_resumed"
+      ]
     }
   }
 }

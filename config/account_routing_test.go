@@ -55,6 +55,16 @@ func TestAccountRoutingProxyURLNeedsGetenv(t *testing.T) {
 	}
 }
 
+func TestNoProxyListBypassAllowsLoopbackWhenTheListDoesNotMatch(t *testing.T) {
+	target, err := url.Parse("http://127.0.0.1:9000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NoProxyListBypass("", target); err != nil {
+		t.Fatalf("loopback target bypass = %v, want none for a custom proxy", err)
+	}
+}
+
 func TestNoProxyBypass(t *testing.T) {
 	tests := []struct {
 		name    string

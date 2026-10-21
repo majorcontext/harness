@@ -39,7 +39,7 @@ func accountRun(t *testing.T, routing *config.AccountRouting, accounts map[strin
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	if accounts != nil {
-		if _, err := s.Update(bg, protocol.SettingsPatch{Accounts: accounts}); err != nil {
+		if _, err := s.Update(bg, protocol.SettingsPatch{Accounts: &accounts}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -109,7 +109,7 @@ func TestClaudeCodeFailsBeforeStartWhenTheAccountCannotBeRouted(t *testing.T) {
 		env     []string
 		want    string
 	}{
-		{name: "no routing", want: "has no routing"},
+		{name: "no routing", want: "account routing is not configured"},
 		{name: "proxy variable unset", routing: &config.AccountRouting{ProxyURLEnv: "MISSING_PROXY", Separator: ":"}, want: "MISSING_PROXY is empty"},
 		{name: "NO_PROXY lists the API host", routing: testRouting, env: []string{"NO_PROXY", "anthropic.com"}, want: "would bypass the proxy"},
 		{name: "base URL is loopback", routing: testRouting, env: []string{"ANTHROPIC_BASE_URL", "http://127.0.0.1:9"}, want: "would bypass the proxy"},

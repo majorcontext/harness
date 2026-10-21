@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -38,8 +39,9 @@ func (accountRunSink) Resolution(string) (protocol.RequestResolved, bool) {
 func (accountRunSink) Asked(string) (json.RawMessage, bool) { return nil, false }
 
 type fakeAccountBackend struct {
-	id string
-	rt http.RoundTripper
+	id     string
+	rt     http.RoundTripper
+	closed *atomic.Int32
 }
 
 func (f *fakeAccountBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
@@ -51,6 +53,12 @@ func (f *fakeAccountBackend) Run(_ context.Context, _ turn.Request, out turn.Sin
 
 func (f *fakeAccountBackend) Models(context.Context) []modelmeta.Model {
 	return []modelmeta.Model{{ID: "model-of-" + f.id}}
+}
+
+func (f *fakeAccountBackend) Close() {
+	if f.closed != nil {
+		f.closed.Add(1)
+	}
 }
 
 type telemetrySink struct {
@@ -79,7 +87,7 @@ func accountFixture(t *testing.T, noProxy string, routing *config.AccountRouting
 		transport: func() http.RoundTripper { return nil },
 		build: func(tr func(string) http.RoundTripper) turn.Backend {
 			built.Add(1)
-			return &fakeAccountBackend{id: "built", rt: tr("p")}
+			return &fakeAccountBackend{id: "built", rt: tr("p"), closed: new(atomic.Int32)}
 		}}
 	return a, built, seen
 }
@@ -209,13 +217,53 @@ func TestAccountBackendKeepsOneBackendForEachAccount(t *testing.T) {
 	}
 }
 
+func TestCloseAccountClosesItsBackendAndTransport(t *testing.T) {
+	backendClosed, transportClosed := new(atomic.Int32), new(atomic.Int32)
+	closeAccounts([]*accountClient{{backend: &fakeAccountBackend{closed: backendClosed}, transport: closeTrackingTransport{closed: transportClosed}}})
+	if backendClosed.Load() != 1 || transportClosed.Load() != 1 {
+		t.Fatalf("close counts = backend %d transport %d", backendClosed.Load(), transportClosed.Load())
+	}
+}
+
+type closeTrackingTransport struct{ closed *atomic.Int32 }
+
+func (t closeTrackingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, nil }
+func (t closeTrackingTransport) CloseIdleConnections()                           { t.closed.Add(1) }
+
+func TestAccountCacheEvictsIdleClientsWithoutClosingAnInFlightClient(t *testing.T) {
+	a, _, _ := accountFixture(t, "", anyRouting)
+	for i := 0; i < maxAccountBackends; i++ {
+		if _, err := a.backendOf(fmt.Sprintf("acct_%02d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idle := a.accounts["acct_01"]
+	active, err := a.account("acct_00", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.backendOf("acct_new"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.accounts) > maxAccountBackends {
+		t.Fatalf("cached accounts = %d, cap = %d", len(a.accounts), maxAccountBackends)
+	}
+	if idle.backend.(*fakeAccountBackend).closed.Load() != 1 {
+		t.Fatal("least-recently-used idle backend stayed open")
+	}
+	if active.client.backend.(*fakeAccountBackend).closed.Load() != 0 {
+		t.Fatal("in-flight backend was closed")
+	}
+	active.release()
+}
+
 func TestAccountBackendFailsWhenTheSelectedAccountCannotBeRouted(t *testing.T) {
 	tests := []struct {
 		name    string
 		routing *config.AccountRouting
 		want    string
 	}{
-		{name: "no routing", want: "has no routing"},
+		{name: "no routing", want: "account routing is not configured"},
 		{name: "proxy variable unset", routing: &config.AccountRouting{ProxyURLEnv: "MISSING", Separator: ":"}, want: "MISSING is empty"},
 	}
 	for _, tc := range tests {

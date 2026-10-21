@@ -19,7 +19,7 @@ func (b *Backend) RouteAccounts(routing *config.AccountRouting, getenv func(stri
 // no routing, when the proxy URL is unusable, or when NO_PROXY of env lets a target of the CLI bypass the proxy.
 func (b *Backend) accountEnv(env []string, account string) ([]string, error) {
 	if b.routing == nil {
-		return nil, provider.MarkPermanent(fmt.Errorf("claudecode: account %q of vendor %q has no routing: set account_routing in the config", account, b.p.Vendor))
+		return nil, provider.MarkPermanent(fmt.Errorf("claudecode: account routing is not configured for vendor %q; set account_routing in the config", b.p.Vendor))
 	}
 	u, err := b.routing.ProxyURL(b.getenv, account)
 	if err != nil {

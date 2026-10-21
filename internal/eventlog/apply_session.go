@@ -46,7 +46,7 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 		s.settings.ServiceTier = *e.ServiceTier
 	}
 	if e.Accounts != nil {
-		s.settings.Accounts = maps.Clone(e.Accounts)
+		s.settings.Accounts = maps.Clone(*e.Accounts)
 	}
 	return nil
 }

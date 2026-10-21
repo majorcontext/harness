@@ -43,6 +43,8 @@ type Sessions interface {
 	// Open acquires and runs session id, and returns it as is when the
 	// runtime already runs it.
 	Open(ctx context.Context, id string) (Node, error)
+	// OpenWithAccounts applies selections before an opened turn resumes.
+	OpenWithAccounts(ctx context.Context, id string, accounts map[string]string) (Node, error)
 	// Create starts session id with its first input. profile is the agent
 	// profile that the caller has read for it.
 	Create(ctx context.Context, id string, created protocol.SessionCreated, first protocol.InputAdmitted, profile prompt.Profile) error

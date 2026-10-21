@@ -44,24 +44,35 @@ func (r AccountRouting) ProxyURL(getenv func(string) string, account string) (*u
 	return u, nil
 }
 
-// NoProxyBypass returns an error that names the first target that a proxy of the environment would not carry:
-// a loopback host, or a host that noProxy lists. noProxy has the format of NO_PROXY: a comma-separated list of "*",
-// IP addresses, CIDR blocks, domain names (a leading dot matches subdomains only), and host:port pairs.
+// NoProxyBypass returns an error that names a target a standard environment proxy would bypass: loopback or a NO_PROXY match.
 func NoProxyBypass(noProxy string, targets ...*url.URL) error {
 	for _, t := range targets {
-		if t != nil && bypassed(noProxy, t) {
+		if t != nil && loopback(t) {
 			return fmt.Errorf("account routing: %s would bypass the proxy (loopback or NO_PROXY), so the call would not carry the account", t.Hostname())
+		}
+	}
+	return NoProxyListBypass(noProxy, targets...)
+}
+
+// NoProxyListBypass returns an error for a target listed by NO_PROXY. A custom transport proxy still carries loopback URLs.
+func NoProxyListBypass(noProxy string, targets ...*url.URL) error {
+	for _, t := range targets {
+		if t != nil && listedByNoProxy(noProxy, t) {
+			return fmt.Errorf("account routing: %s would bypass the proxy via NO_PROXY, so the call would not carry the account", t.Hostname())
 		}
 	}
 	return nil
 }
 
-func bypassed(noProxy string, t *url.URL) bool {
+func loopback(t *url.URL) bool {
 	host := strings.ToLower(t.Hostname())
 	ip := net.ParseIP(host)
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()) {
-		return true
-	}
+	return host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback())
+}
+
+func listedByNoProxy(noProxy string, t *url.URL) bool {
+	host := strings.ToLower(t.Hostname())
+	ip := net.ParseIP(host)
 	port := t.Port()
 	if port == "" {
 		port = map[string]string{"http": "80", "ws": "80", "https": "443", "wss": "443"}[t.Scheme]

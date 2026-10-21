@@ -34,6 +34,7 @@ type runtimeDriver struct {
 	webSeam        harness.WebTestSeam
 	getenv         func(string) string
 	cfg            config.Config
+	modelTransport func(string) http.RoundTripper
 	rt             *harness.Runtime
 	srv            *httptest.Server
 	// serve is true when the driver runs the serve binary, as proc, which it
@@ -85,6 +86,17 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 		t.Fatalf("apply env: %v", err)
 	}
 	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, webSeam: webSeamOf(env), getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	if proxy := env["E2E_MODEL_PROXY"]; proxy != "" {
+		u, err := url.Parse(proxy)
+		if err != nil {
+			t.Fatalf("parse E2E_MODEL_PROXY: %v", err)
+		}
+		d.modelTransport = func(string) http.RoundTripper {
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.Proxy = http.ProxyURL(u)
+			return transport
+		}
+	}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -115,7 +127,7 @@ func (d *runtimeDriver) start(t *testing.T) {
 		return
 	}
 	mcpsrc.HoldRetries()
-	rt, err := newWired(t, harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, AskUserQuestion: d.ask, WebTest: d.webSeam})
+	rt, err := newWired(t, harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, ModelTransport: d.modelTransport, AskUserQuestion: d.ask, WebTest: d.webSeam})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
@@ -552,6 +564,11 @@ func (d *runtimeDriver) SetThinking(t *testing.T, id, level string) callResult {
 func (d *runtimeDriver) SetServiceTier(t *testing.T, id, tier string) callResult {
 	t.Helper()
 	return d.patch(t, id, "service_tier", tier)
+}
+
+func (d *runtimeDriver) SetAccounts(t *testing.T, id string, accounts map[string]string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPatch, "/sessions/"+id, map[string]any{"accounts": accounts})
 }
 
 func (d *runtimeDriver) SetTitle(t *testing.T, id, title string) callResult {

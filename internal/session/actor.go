@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -268,11 +269,18 @@ func Create(ctx context.Context, cfg Config, c protocol.SessionCreated, first *p
 	return a, nil
 }
 
-// Open fences every earlier owner, replays the log through the fence,
-// resumes a suspended turn or ends a crashed one, and starts the next
-// queued input when no turn resumes. Run runs the session.
+// Open fences earlier owners, replays the log, and resumes it.
 func Open(ctx context.Context, cfg Config) (*Actor, error) {
-	a, err := open(ctx, cfg)
+	return OpenWithAccounts(ctx, cfg, nil)
+}
+
+// OpenWithAccounts opens a session with account selections before it resumes.
+func OpenWithAccounts(ctx context.Context, cfg Config, accounts map[string]string) (*Actor, error) {
+	var update *map[string]string
+	if accounts != nil {
+		update = &accounts
+	}
+	a, err := open(ctx, cfg, update)
 	if err != nil {
 		Discard(cfg.Ownership, cfg.ID, cfg.Log)
 		return nil, err
@@ -301,7 +309,7 @@ func (a *Actor) Run() {
 	})
 }
 
-func open(ctx context.Context, cfg Config) (*Actor, error) {
+func open(ctx context.Context, cfg Config, accounts *map[string]string) (*Actor, error) {
 	head, err := fence(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -312,6 +320,11 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	}
 	a := newActor(cfg, s)
 	a.fenced = head
+	if accounts != nil && !maps.Equal(*accounts, s.Settings().Accounts) {
+		if err := a.appendCtx(ctx, protocol.SettingsChanged{Accounts: accounts}); err != nil {
+			return nil, err
+		}
+	}
 	if err := a.endCommands(ctx); err != nil {
 		return nil, err
 	}

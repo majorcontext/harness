@@ -19,7 +19,7 @@ are for API keys.
 
 ## Account routing
 
-The optional top-level `account_routing` object requires `proxy_url_env` and `separator`. The environment variable holds the base proxy URL. A provider entry's non-empty `vendor` selects the key in a session's `Settings.accounts`. Harness appends `separator` and the opaque account ID to the proxy URL username. Missing or invalid routing, or a target that `NO_PROXY` would bypass, fails the model call. Password, host, and `NO_PROXY` are unchanged. Claude Code receives the qualified URL in the upper- and lower-case HTTP and HTTPS proxy variables.
+The optional top-level `account_routing` object has required `proxy_url_env` and `separator` fields. The environment variable named by `proxy_url_env` must hold a proxy URL with a username. A provider entry may set a non-empty `vendor`; Harness does not infer a vendor from its provider key. For each model call, Harness reads the `vendor` of the provider entry that serves the model and selects `Settings.accounts[vendor]`. A missing vendor or empty ID sends the request through the unqualified process route. With a selected ID, Harness appends `separator` and the opaque ID to the proxy username and preserves the password, host, and other URL fields. The model call fails if routing is not configured, the proxy variable is missing or invalid, or `NO_PROXY` lists the target. The Claude Code CLI receives the qualified URL in `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy`; its other environment values do not change. The host supplies account IDs to the `task` tool as a `vendor` to ID map. Model catalogs remain unqualified and shared per provider.
 
 ## Session titles
 

@@ -188,7 +188,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, map[string]runtimeRow{
+var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, accountRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -760,8 +760,6 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"codex_ws_restart_warms_the_websocket_again":                                          reGolden(specItems, specWarm),
 	"codex_ws_restart_prewarms_with_a_tool_the_log_selected":                              reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":                      sameAsServe(),
-	"task_accounts_inherit_to_grandchild":                                                 sameAsServe(),
-	"task_send_changes_the_child_account":                                                 sameAsServe(),
 	"a_failed_summary_keeps_its_usage_in_the_session":                                     reGolden(specView, specOverflowFails),
 
 	"claudecode_history_bridge_after_a_mid_turn_model_change":                     reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),

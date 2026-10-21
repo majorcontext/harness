@@ -1,12 +1,107 @@
 package e2e
 
 import (
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
+
+type accountProxyCapture struct {
+	mu    sync.Mutex
+	users []string
+}
+
+func newAccountProxy(t *testing.T, modelURL string) (string, *accountProxyCapture) {
+	t.Helper()
+	target, err := url.Parse(modelURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverse := httputil.NewSingleHostReverseProxy(target)
+	director := reverse.Director
+	reverse.Director = func(r *http.Request) {
+		r.Header.Del("Proxy-Authorization")
+		director(r)
+	}
+	capture := new(accountProxyCapture)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		value := strings.TrimPrefix(r.Header.Get("Proxy-Authorization"), "Basic ")
+		if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
+			user, _, _ := strings.Cut(string(decoded), ":")
+			capture.mu.Lock()
+			capture.users = append(capture.users, user)
+			capture.mu.Unlock()
+		}
+		reverse.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	return (&url.URL{Scheme: "http", User: url.UserPassword("subject|box", "test-password"), Host: strings.TrimPrefix(proxy.URL, "http://")}).String(), capture
+}
+
+type accountProxyDriver struct {
+	laneHost
+	capture *accountProxyCapture
+}
+
+func newAccountProxyDriver(t *testing.T, h host, modelURL string) driver {
+	t.Helper()
+	proxyURL, capture := newAccountProxy(t, modelURL)
+	entry := map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://subscription-api.test", "vendor": "codex"}
+	configPath := writeGoalConfigWith(t, "http://subscription-api.test", map[string]any{
+		"providers":       map[string]any{"anthropic": entry},
+		"account_routing": map[string]any{"proxy_url_env": "ACCOUNT_PROXY", "separator": "|"},
+	})
+	env := map[string]string{"HTTP_PROXY": proxyURL, "HTTPS_PROXY": proxyURL, "http_proxy": proxyURL, "https_proxy": proxyURL,
+		"ACCOUNT_PROXY": proxyURL, "NO_PROXY": "localhost,127.0.0.1", "E2E_MODEL_PROXY": proxyURL}
+	return &accountProxyDriver{laneHost: h.open(t, configPath, env), capture: capture}
+}
+
+type recordProxyAccounts struct {
+	expected    []string
+	unqualified bool
+}
+
+func accountProxyUsers(t *testing.T, capture *accountProxyCapture, expected []string, unqualified bool) []string {
+	t.Helper()
+	capture.mu.Lock()
+	users := slices.Clone(capture.users)
+	capture.mu.Unlock()
+	slices.Sort(users)
+	seen := map[string]bool{}
+	parents := 0
+	for _, user := range users {
+		seen[user] = true
+		if user == "subject|box" {
+			parents++
+		}
+	}
+	if unqualified && parents == 0 {
+		t.Fatalf("proxy usernames = %v, want an unqualified parent request", users)
+	}
+	for _, account := range expected {
+		if !seen["subject|box|"+account] {
+			t.Fatalf("proxy usernames = %v, want account %q", users, account)
+		}
+	}
+	return users
+}
+
+func (a recordProxyAccounts) run(t *testing.T, r *run) {
+	d, ok := r.drv.(*accountProxyDriver)
+	if !ok {
+		t.Fatalf("account proxy driver = %T", r.drv)
+	}
+	users := accountProxyUsers(t, d.capture, a.expected, a.unqualified)
+	r.record(t, "proxy_accounts", "", callResult{Status: http.StatusOK, Body: users})
+}
 
 func TestContractTaskActions(t *testing.T) {
 	general := "general-purpose"
@@ -172,46 +267,81 @@ func (a recordAccountSettings) run(t *testing.T, r *run) {
 }
 
 func TestContractTaskAccounts(t *testing.T) {
+	runScenarios(t, []scenario{taskAccountClearRow(), taskAccountMissingRouteRow(), taskAccountGrandchildRow(), taskAccountRunningSendRow(), taskAccountSettledSendRow()})
+}
+
+func taskAccountClearRow() scenario {
+	return scenario{
+		name: "task_accounts_clear_and_replay", entry: map[string]any{"vendor": "codex"}, driver: newAccountProxyDriver,
+		model: []harnesstest.Step{{Name: "request", Match: userStarts("route"), Reply: harnesstest.Reply{Text: "unqualified route"}}},
+		actions: []action{create{as: "a"}, setAccounts{as: "a", accounts: map[string]string{"codex": "acct_old"}},
+			setAccounts{as: "a", accounts: map[string]string{}}, restart{kill: true}, submit{as: "a", text: "route"},
+			awaitRequests{n: 1}, waitIdle{as: "a"}, recordAccountSettings{as: "a"}, recordProxyAccounts{unqualified: true}},
+	}
+}
+
+func taskAccountMissingRouteRow() scenario {
+	return scenario{
+		name: "account_routing_missing_fails_loudly", entry: map[string]any{"vendor": "codex"},
+		actions: []action{create{as: "a"}, setAccounts{as: "a", accounts: map[string]string{"codex": "acct_missing_route"}},
+			submit{as: "a", text: "probe"}, waitIdle{as: "a"}, getSession{as: "a"}},
+	}
+}
+
+func taskAccountGrandchildRow() scenario {
 	general := "general-purpose"
 	spawnChild := spawn(general, "child work")
 	spawnChild["accounts"] = map[string]string{"codex": "acct_parent"}
-	runScenarios(t, []scenario{
-		{
-			name:       "task_accounts_inherit_to_grandchild",
-			concurrent: true,
-			entry:      map[string]any{"vendor": "other"},
-			model: []harnesstest.Step{
-				taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
-				taskStep("grandchild", userStarts("child work"), fixed(spawn(general, "grandchild work"))),
-				{Name: "grandchild_wait", Match: userStarts("grandchild work"), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
-				{Name: "child_wait", Match: matchAll(rootStarts("child work"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
-				{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
-			},
-			actions: []action{
-				hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 5},
-				bindChild{as: "kid", parent: "a"}, bindChild{as: "grandchild", parent: "kid"},
-				recordAccountSettings{as: "kid"}, recordAccountSettings{as: "grandchild"}, cancelTree{as: "a"},
-			},
+	return scenario{
+		name: "task_accounts_inherit_to_grandchild", concurrent: true, entry: map[string]any{"vendor": "codex"}, driver: newAccountProxyDriver,
+		model: []harnesstest.Step{
+			taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
+			taskStep("grandchild", userStarts("child work"), fixed(spawn(general, "grandchild work"))),
+			{Name: "grandchild_wait", Match: userStarts("grandchild work"), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
+			{Name: "child_wait", Match: matchAll(rootStarts("child work"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
+			{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
 		},
-		{
-			name:       "task_send_changes_the_child_account",
-			concurrent: true,
-			entry:      map[string]any{"vendor": "other"},
-			model: []harnesstest.Step{
-				taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
-				{Name: "child_done", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "child done"}},
-				{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
-				taskStep("send", userStarts("update"), onKid(func(kid string) []map[string]any {
-					return []map[string]any{onSession("send", kid, "prompt", "child resume", "accounts", map[string]string{"codex": "acct_resumed"})}
-				})),
-				{Name: "parent_done", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
-			},
-			actions: []action{
-				hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 4},
-				bindChild{as: "kid", parent: "a"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
-				submit{as: "a", text: "update"}, awaitRequests{n: 7}, waitIdle{as: "kid"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
-				recordAccountSettings{as: "kid"},
-			},
+		actions: []action{hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 5},
+			bindChild{as: "kid", parent: "a"}, bindChild{as: "grandchild", parent: "kid"},
+			recordAccountSettings{as: "kid"}, recordAccountSettings{as: "grandchild"},
+			recordProxyAccounts{expected: []string{"acct_parent"}, unqualified: true}, cancelTree{as: "a"}},
+	}
+}
+
+func taskAccountRunningSendRow() scenario {
+	general := "general-purpose"
+	return scenario{
+		name: "task_send_with_accounts_rejects_a_running_child", concurrent: true, entry: map[string]any{"vendor": "codex"}, driver: newAccountProxyDriver,
+		model: []harnesstest.Step{
+			taskStep("spawn", userStarts("delegate"), fixed(spawn(general, "child work"))),
+			{Name: "child_wait", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
+			taskStep("send", matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), onKid(func(kid string) []map[string]any {
+				return []map[string]any{onSession("send", kid, "prompt", "child resume", "accounts", map[string]string{"codex": "acct_new"})}
+			})),
+			{Name: "send_rejected", Match: lastResultHas("accounts can only change between turns"), Reply: harnesstest.Reply{Text: "account update rejected"}},
 		},
-	})
+		actions: []action{hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 4}, waitIdle{as: "a"},
+			bindChild{as: "kid", parent: "a"}, recordAccountSettings{as: "kid"}, recordProxyAccounts{unqualified: true}, cancelTree{as: "a"}},
+	}
+}
+
+func taskAccountSettledSendRow() scenario {
+	spawnChild := spawn("general-purpose", "child work")
+	spawnChild["accounts"] = map[string]string{"codex": "acct_parent"}
+	return scenario{
+		name: "task_send_changes_the_child_account", concurrent: true, entry: map[string]any{"vendor": "codex"}, driver: newAccountProxyDriver,
+		model: []harnesstest.Step{
+			taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
+			{Name: "child_done", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "child done"}},
+			{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
+			taskStep("send", userStarts("update"), onKid(func(kid string) []map[string]any {
+				return []map[string]any{onSession("send", kid, "prompt", "child resume", "accounts", map[string]string{"codex": "acct_resumed"})}
+			})),
+			{Name: "parent_done", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
+		},
+		actions: []action{hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 4},
+			bindChild{as: "kid", parent: "a"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
+			submit{as: "a", text: "update"}, awaitRequests{n: 7}, waitIdle{as: "kid"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
+			recordAccountSettings{as: "kid"}, recordProxyAccounts{expected: []string{"acct_parent", "acct_resumed"}, unqualified: true}},
+	}
 }
