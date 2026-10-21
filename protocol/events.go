@@ -163,8 +163,9 @@ const (
 
 // Settings are the session settings other than the model.
 type Settings struct {
-	Effort      string `json:"effort,omitempty"`
-	ServiceTier string `json:"service_tier,omitempty"`
+	Effort      string            `json:"effort,omitempty"`
+	ServiceTier string            `json:"service_tier,omitempty"`
+	Accounts    map[string]string `json:"accounts,omitempty"`
 }
 
 // Log part types.
@@ -250,11 +251,12 @@ type OwnerAcquired struct {
 	Owner string `json:"owner"`
 }
 
-// SettingsChanged changes each non-nil setting.
+// SettingsChanged changes each non-nil setting; an empty accounts map clears every selection.
 type SettingsChanged struct {
-	Model       *string `json:"model,omitempty"`
-	Effort      *string `json:"effort,omitempty"`
-	ServiceTier *string `json:"service_tier,omitempty"`
+	Model       *string            `json:"model,omitempty"`
+	Effort      *string            `json:"effort,omitempty"`
+	ServiceTier *string            `json:"service_tier,omitempty"`
+	Accounts    *map[string]string `json:"accounts,omitempty"`
 }
 
 // SessionTitled sets the session title. The title is not empty and has no control character, such as a tab or a line break.

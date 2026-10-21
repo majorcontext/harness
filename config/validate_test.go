@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+func TestProviderRejectsAnEmptyVendor(t *testing.T) {
+	cfg, err := Parse("config.json", []byte(`{"providers":{"gateway":{"type":"openai-compat","base_url":"https://gateway.test","vendor":""}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "providers.gateway.vendor must be a non-empty string") {
+		t.Fatalf("Validate() = %v, want empty vendor error", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	cc := map[string]Provider{"cc": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--append-system-prompt"}}}
 	for _, tc := range []struct {
@@ -15,6 +25,9 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{name: "the zero config"},
+		{name: "account routing requires proxy environment", cfg: Config{AccountRouting: &AccountRouting{Separator: "|"}}, want: "proxy_url_env"},
+		{name: "account routing requires separator", cfg: Config{AccountRouting: &AccountRouting{ProxyURLEnv: "HTTPS_PROXY"}}, want: "separator"},
+		{name: "account routing accepts the configured environment and separator", cfg: Config{AccountRouting: &AccountRouting{ProxyURLEnv: "HTTPS_PROXY", Separator: "|"}}},
 		{name: "an openrouter entry that names only api_key_env", cfg: Config{Providers: map[string]Provider{"openrouter": {APIKeyEnv: "X"}}}, want: "type is required"},
 		{name: "an openai entry without base_url", cfg: Config{Providers: map[string]Provider{"work": {Type: TypeOpenAI}}}, want: "base_url is required"},
 		{name: "an unknown provider type", cfg: Config{Providers: map[string]Provider{"work": {Type: "bogus"}}}, want: "unknown type"},

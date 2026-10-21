@@ -198,6 +198,10 @@ type compact struct{ as string }
 type setModel struct{ as, model string }
 type setThinking struct{ as, level string }
 type setServiceTier struct{ as, tier string }
+type setAccounts struct {
+	as       string
+	accounts map[string]string
+}
 type setTitle struct{ as, title string }
 type endSession struct{ as string }
 
@@ -313,6 +317,9 @@ func (a setThinking) run(t *testing.T, r *run) {
 }
 func (a setServiceTier) run(t *testing.T, r *run) {
 	r.record(t, "set_service_tier", a.as, r.drv.SetServiceTier(t, r.id(t, a.as), a.tier))
+}
+func (a setAccounts) run(t *testing.T, r *run) {
+	r.record(t, "set_accounts", a.as, r.drv.SetAccounts(t, r.id(t, a.as), a.accounts))
 }
 func (a setTitle) run(t *testing.T, r *run) {
 	r.record(t, "set_title", a.as, r.drv.SetTitle(t, r.id(t, a.as), a.title))

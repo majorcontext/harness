@@ -43,6 +43,8 @@ type Sessions interface {
 	// Open acquires and runs session id, and returns it as is when the
 	// runtime already runs it.
 	Open(ctx context.Context, id string) (Node, error)
+	// OpenWithAccounts applies selections before an opened turn resumes.
+	OpenWithAccounts(ctx context.Context, id string, accounts map[string]string) (Node, error)
 	// Create starts session id with its first input. profile is the agent
 	// profile that the caller has read for it.
 	Create(ctx context.Context, id string, created protocol.SessionCreated, first protocol.InputAdmitted, profile prompt.Profile) error
@@ -72,6 +74,8 @@ type Config struct {
 	Profiles   func() (map[string]prompt.Profile, error)
 	Resolve    func(string) string
 	CheckModel func(model string) error
+	// Vendor returns the configured vendor of the provider that serves model.
+	Vendor func(model string) string
 	// Suffix returns a fresh random suffix for an ID.
 	Suffix func() string
 	// Log receives the log lines of the tree. nil: slog.Default().
@@ -112,7 +116,11 @@ func (t *Tree) allowsTask(depth int) bool { return depth < t.cfg.MaxDepth }
 // Choice is what a spawn takes from its caller beside the agent and the task:
 // the model of the child, or "" for the model of its profile and then of its
 // parent, and the effort of the child, or "" for the default of its provider.
-type Choice struct{ Model, Effort string }
+type Choice struct {
+	Model, Effort string
+	// Accounts are merged over the inherited vendor-to-account selections.
+	Accounts map[string]string
+}
 
 // spawn appends child.spawned to parent, then creates the child with task
 // as its first input. A child that fails to start settles failed at once.
@@ -142,6 +150,10 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	if !ok {
 		return "", session.ErrNotOwned
 	}
+	// The child gets the current model of the parent, so the vendor check reads it, not the creation record.
+	if err := t.checkAccounts(cmp.Or(model, ps.Actor.View().Session.Model), ch.Accounts); err != nil {
+		return "", err
+	}
 	id := "ses_" + t.cfg.Suffix()
 	c, err := t.SpawnChild(ctx, ps, id, agent)
 	if err != nil {
@@ -150,7 +162,18 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	if model != "" {
 		c.Model = model
 	}
+	// A settings change can land between the check and the spawn; the model of the record decides.
+	if err := t.checkAccounts(c.Model, ch.Accounts); err != nil {
+		return "", errors.Join(err, ps.Actor.Settle(context.WithoutCancel(ctx), protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil))
+	}
 	c.Settings.Effort = string(effort)
+	if len(ch.Accounts) > 0 {
+		c.Settings.Accounts = maps.Clone(c.Settings.Accounts)
+		if c.Settings.Accounts == nil {
+			c.Settings.Accounts = make(map[string]string)
+		}
+		maps.Copy(c.Settings.Accounts, ch.Accounts)
+	}
 	c.Origin, c.AllowedTools = "task", t.available(c.Model, narrow(p.Tools, c.AllowedTools))
 	first := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliveryQueue, Source: "parent",
 		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: task}}}
@@ -159,6 +182,19 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 		return "", errors.Join(err, ps.Actor.Settle(ctx, protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil))
 	}
 	return id, nil
+}
+
+// checkAccounts refuses a selection with an account when the provider of model has no vendor.
+func (t *Tree) checkAccounts(model string, accounts map[string]string) error {
+	if t.cfg.Vendor != nil && t.cfg.Vendor(model) != "" {
+		return nil
+	}
+	for _, account := range accounts {
+		if account != "" {
+			return fmt.Errorf("child model %q provider has no vendor for the requested account selection", model)
+		}
+	}
+	return nil
 }
 
 // SpawnChild appends child.spawned to parent ps and returns the

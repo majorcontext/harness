@@ -444,7 +444,7 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 		}
 		title = &t
 	}
-	err := s.a.Update(ctx, protocol.SettingsChanged{Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier}, title)
+	err := s.a.Update(ctx, protocol.SettingsChanged{Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, Accounts: p.Accounts}, title)
 	if err != nil {
 		return protocol.Session{}, err
 	}

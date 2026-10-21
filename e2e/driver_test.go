@@ -61,6 +61,7 @@ type driver interface {
 	SetModel(t *testing.T, id, model string) callResult
 	SetThinking(t *testing.T, id, level string) callResult
 	SetServiceTier(t *testing.T, id, tier string) callResult
+	SetAccounts(t *testing.T, id string, accounts map[string]string) callResult
 	SetTitle(t *testing.T, id, title string) callResult
 	EndSession(t *testing.T, id string) callResult
 	Send(t *testing.T, id, text string) callResult

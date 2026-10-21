@@ -66,7 +66,7 @@ func (a *Actor) askTitle(text string) {
 	ctx, cancel := context.WithTimeout(a.cfg.Base, titleTimeout)
 	a.titleCancel = cancel
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: newID("title"), Model: a.cfg.TitleModel, Instructions: titlePrompt,
-		Settings: protocol.Settings{Effort: evaluatorEffort}, MaxTokens: titleMaxTokens,
+		Settings: protocol.Settings{Effort: evaluatorEffort, Accounts: a.state.Settings().Accounts}, MaxTokens: titleMaxTokens,
 		History: []protocol.LogMessage{{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}}}
 	a.spawn(func() {
 		defer cancel()

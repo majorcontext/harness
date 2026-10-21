@@ -3,6 +3,14 @@
 // process and makes no network call.
 package config
 
+// AccountRouting configures how a selected session account reaches the network.
+type AccountRouting struct {
+	// ProxyURLEnv names the environment variable that holds the base proxy URL.
+	ProxyURLEnv string `json:"proxy_url_env,omitempty"`
+	// Separator is appended between the proxy username and account ID.
+	Separator string `json:"separator,omitempty"`
+}
+
 // Config is the parsed harness configuration. The zero value is valid and
 // represents "no configuration": every method degrades to built-in defaults.
 type Config struct {
@@ -16,6 +24,8 @@ type Config struct {
 	SessionDir string `json:"session_dir,omitempty"`
 	// Providers configures each provider family by name (e.g. "anthropic").
 	Providers map[string]Provider `json:"providers,omitempty"`
+	// AccountRouting configures proxy username routing for session accounts.
+	AccountRouting *AccountRouting `json:"account_routing,omitempty"`
 	// Instructions, when set to false, disables project-instruction
 	// (AGENTS.md) injection into the system prompt. A nil value (the field
 	// omitted) leaves injection enabled — a *bool so "unset" and "false" are

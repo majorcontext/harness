@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"maps"
 
 	"github.com/majorcontext/harness/protocol"
 
@@ -12,23 +13,40 @@ import (
 // the title when it differs from the title of a person. Config.Check validates a
 // new model first.
 func (a *Actor) Update(ctx context.Context, ch protocol.SettingsChanged, title *string) error {
+	return a.update(ctx, ch, title, false)
+}
+
+// UpdateAccountsIfIdle sets account selections only when no turn is active.
+func (a *Actor) UpdateAccountsIfIdle(ctx context.Context, accounts map[string]string) error {
+	return a.update(ctx, protocol.SettingsChanged{Accounts: &accounts}, nil, true)
+}
+
+func (a *Actor) update(ctx context.Context, ch protocol.SettingsChanged, title *string, accountsIdle bool) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+		if accountsIdle && a.run != nil {
+			reply(struct{}{}, ErrBusy)
+			return
+		}
 		set, prev := a.state.Settings(), a.state.Model()
 		ch.Model = changed(ch.Model, prev)
 		ch.Effort = changed(ch.Effort, set.Effort)
 		ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
+		if ch.Accounts != nil && maps.Equal(*ch.Accounts, set.Accounts) {
+			ch.Accounts = nil
+		}
+		hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil
 		var err error
 		if ch.Model != nil && a.cfg.Check != nil {
 			err = a.cfg.Check(prev, *ch.Model, a.state.AllowedTools())
 		}
 		title = changed(title, a.state.Renamed())
-		if err == nil && (ch != protocol.SettingsChanged{} || title != nil) {
+		if err == nil && (hasSettings || title != nil) {
 			var events []protocol.Payload
 			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
 				events = a.dismissRequests()
 			}
 			dismissed := len(events)
-			if ch != (protocol.SettingsChanged{}) {
+			if hasSettings {
 				events = append(events, ch)
 			}
 			if title != nil {

@@ -1,6 +1,5 @@
 package e2e
 
-// Reasons that the re-golden and deleted rows give.
 const (
 	specClaudeCompactSummary    = "Compaction summary. The adapter logs the summary text of the CLI"
 	specView                    = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
@@ -189,7 +188,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, map[string]runtimeRow{
+var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, accountRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -763,15 +762,14 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":                      sameAsServe(),
 	"a_failed_summary_keeps_its_usage_in_the_session":                                     reGolden(specView, specOverflowFails),
 
-	"claudecode_history_bridge_after_a_mid_turn_model_change":             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
-	"claudecode_history_bridge_after_a_turn_whose_cli_never_started":      reGolden(specUpdate, specView, specClaudeGauge),
-	"claudecode_restart_mid_turn_stops_the_cli_and_resumes":               reGolden(specView, specExternal, specHandoffResume, specOneResult, specClaudeGauge),
-	"claudecode_crash_mid_turn_waits_for_input":                           reGolden(specView, specExternal, specCrash, specCrashQueue, specCrashMarker, specHistoryBridge, specClaudeGauge),
-	"claudecode_mirror_continues_a_turn_that_the_cli_took":                reGolden(specView, specBackendState, specMirrorBlob, specHandoffResume, specClaudeGauge),
-	"claudecode_mirror_restart_before_a_transcript_starts_the_turn_again": reGolden(specView, specBackendState, specMirrorBlob, specHandoffResume, specClaudeGauge),
-	"claudecode_mirror_resumes_after_a_restart":                           reGolden(specBackendState, specMirrorBlob),
-	"claudecode_mirror_crash_before_a_transcript_starts_a_new_session":    reGolden(specView, specBackendState, specMirrorBlob, specCrash, specCrashQueue, specClaudeGauge),
-
+	"claudecode_history_bridge_after_a_mid_turn_model_change":                     reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
+	"claudecode_history_bridge_after_a_turn_whose_cli_never_started":              reGolden(specUpdate, specView, specClaudeGauge),
+	"claudecode_restart_mid_turn_stops_the_cli_and_resumes":                       reGolden(specView, specExternal, specHandoffResume, specOneResult, specClaudeGauge),
+	"claudecode_crash_mid_turn_waits_for_input":                                   reGolden(specView, specExternal, specCrash, specCrashQueue, specCrashMarker, specHistoryBridge, specClaudeGauge),
+	"claudecode_mirror_continues_a_turn_that_the_cli_took":                        reGolden(specView, specBackendState, specMirrorBlob, specHandoffResume, specClaudeGauge),
+	"claudecode_mirror_restart_before_a_transcript_starts_the_turn_again":         reGolden(specView, specBackendState, specMirrorBlob, specHandoffResume, specClaudeGauge),
+	"claudecode_mirror_resumes_after_a_restart":                                   reGolden(specBackendState, specMirrorBlob),
+	"claudecode_mirror_crash_before_a_transcript_starts_a_new_session":            reGolden(specView, specBackendState, specMirrorBlob, specCrash, specCrashQueue, specClaudeGauge),
 	"claudecode_interrupt_keeps_the_usage_of_the_result_after_the_signal":         reGolden(specView, specStopped, specClaudeGauge),
 	"claudecode_running_tool_call_is_in_the_messages_before_its_result":           reGolden(specView, specToolCallsAtOnce, specStopped, specOneResult),
 	"claudecode_interrupt_closes_a_tool_call_that_the_cli_left_open":              reGolden(specView, specStopped, specOneResult, specClaudeGauge),

@@ -17,6 +17,10 @@ func merge(base, over *Config) *Config {
 }
 
 func mergeScalars(out, over *Config) {
+	if over.AccountRouting != nil {
+		routing := *over.AccountRouting
+		out.AccountRouting = &routing
+	}
 	if over.Model != "" {
 		out.Model = over.Model
 	}
@@ -170,6 +174,9 @@ func copyProvider(v Provider) Provider {
 }
 
 func overlayProvider(ex, v Provider) Provider {
+	if v.vendorSet {
+		ex.Vendor, ex.vendorSet = v.Vendor, true
+	}
 	if v.Type != "" {
 		ex.Type = v.Type
 	}

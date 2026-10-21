@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -37,7 +38,10 @@ type codexScenario struct {
 	// env is added to the environment of the host.
 	env map[string]string
 	// listModels is the models list of the codex entry.
-	listModels []string
+	listModels            []string
+	accountProxy          bool
+	expectedProxyAccounts []string
+	expectedProxyCounts   map[string]int
 	// entry sets keys of the codex entry after the default config. A nil value deletes the key.
 	entry map[string]any
 }
@@ -115,7 +119,10 @@ func (noModelRequests) runWire(t *testing.T, _ *run, o *harnesstest.OpenAI) {
 
 // getSessionUsage records GET /session/{id} without subscription_usage.captured_at,
 // which is the harness clock at capture time.
-type getSessionUsage struct{ as string }
+type getSessionUsage struct {
+	as      string
+	account string
+}
 
 func (getSessionUsage) run(t *testing.T, _ *run) {
 	t.Fatal("getSessionUsage runs only under runCodexScenario")
@@ -125,7 +132,14 @@ func (a getSessionUsage) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 	if body, ok := res.Body.(map[string]any); ok {
 		if usage, ok := body["subscription_usage"].(map[string]any); ok {
 			delete(usage, "captured_at")
+			if a.account != "" && usage["account"] != a.account {
+				t.Fatalf("subscription usage account = %v, want %q; journal=%+v", usage["account"], a.account, r.drv.JournalPage(t, r.id(t, a.as), 0, 1000).Body)
+			}
+		} else if a.account != "" {
+			t.Fatalf("session has no subscription usage: %+v", res.Body)
 		}
+	} else if a.account != "" {
+		t.Fatalf("session response has type %T, want object", res.Body)
 	}
 	r.record(t, "get_session", a.as, res)
 }
@@ -148,7 +162,32 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 		sc.opts.Credentials, sc.opts.AccountID = ca.accepts, codexAccount
 	}
 	o := harnesstest.NewOpenAI(t, sc.opts, sc.model...)
+	cfg, env, proxyUsers := configureCodexScenario(t, sc, o, ca)
+	drv := codexDriver(t, h, ca, env, o.URL(), cfg)
+	r := &run{codex: ca, drv: drv, fake: o.Server, ids: map[string]string{}, noIdle: map[string]bool{}, keys: map[string]int{}}
+	return codexObservation(t, sc, r, o, proxyUsers)
+}
+
+func configureCodexScenario(t *testing.T, sc codexScenario, o *harnesstest.OpenAI, ca *codexAuthRun) (map[string]any, map[string]string, *accountProxyCapture) {
+	var proxyUsers *accountProxyCapture
+	env := maps.Clone(sc.env)
+	if sc.accountProxy {
+		proxyURL, capture := newAccountProxy(t, o.URL())
+		proxyUsers = capture
+		if env == nil {
+			env = make(map[string]string)
+		}
+		env["HTTP_PROXY"], env["HTTPS_PROXY"] = proxyURL, proxyURL
+		env["http_proxy"], env["https_proxy"] = proxyURL, proxyURL
+		env["ACCOUNT_PROXY"], env["NO_PROXY"], env["E2E_MODEL_PROXY"] = proxyURL, "localhost,127.0.0.1", proxyURL
+	}
 	extra := maps.Clone(sc.config)
+	if sc.accountProxy {
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		extra["account_routing"] = map[string]any{"proxy_url_env": "ACCOUNT_PROXY", "separator": "|"}
+	}
 	if sc.mcpSchema != "" {
 		if extra == nil {
 			extra = map[string]any{}
@@ -156,7 +195,11 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 		extra["mcp_tool_loading"] = cmp.Or(sc.mcpLoading, "eager")
 		extra["mcp_servers"] = map[string]any{"srv": map[string]any{"url": serveMCPTool(t, sc.mcpSchema)}}
 	}
-	cfg := codexConfig(o.URL(), sc.websocket, extra)
+	baseURL := o.URL()
+	if sc.accountProxy {
+		baseURL = "http://subscription-api.test/backend-api/codex"
+	}
+	cfg := codexConfig(baseURL, sc.websocket, extra)
 	if sc.bareKey {
 		cfg = bareOpenAIKey(cfg)
 	}
@@ -167,51 +210,63 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	if ca != nil {
 		ca.configure(cfg)
 	}
-	for k, v := range sc.entry {
-		e := cfg["providers"].(map[string]any)["codex"].(map[string]any)
-		if v == nil {
-			delete(e, k)
+	for key, value := range sc.entry {
+		entry := cfg["providers"].(map[string]any)["codex"].(map[string]any)
+		if value == nil {
+			delete(entry, key)
 		} else {
-			e[k] = v
+			entry[key] = value
 		}
+	}
+	if sc.accountProxy {
+		entry := cfg["providers"].(map[string]any)["codex"].(map[string]any)
+		entry["vendor"], entry["base_url"] = "codex", baseURL
 	}
 	if sc.listModels != nil {
 		cfg["providers"].(map[string]any)["codex"].(map[string]any)["models"] = sc.listModels
 	}
-	drv := codexDriver(t, h, ca, sc.env, o.URL(), cfg)
-	r := &run{
-		codex:  ca,
-		drv:    drv,
-		fake:   o.Server,
-		ids:    map[string]string{},
-		noIdle: map[string]bool{},
-		keys:   map[string]int{},
-	}
-	for _, a := range sc.actions {
-		if w, ok := a.(wireAction); ok {
-			w.runWire(t, r, o)
+	return cfg, env, proxyUsers
+}
+
+func codexObservation(t *testing.T, sc codexScenario, r *run, o *harnesstest.OpenAI, proxyUsers *accountProxyCapture) observation {
+	for _, action := range sc.actions {
+		if wire, ok := action.(wireAction); ok {
+			wire.runWire(t, r, o)
 			continue
 		}
-		a.run(t, r)
+		action.run(t, r)
+	}
+	if proxyUsers != nil {
+		users := accountProxyUsers(t, proxyUsers, sc.expectedProxyAccounts, true)
+		counts := map[string]int{}
+		for _, user := range users {
+			counts[user]++
+		}
+		for account, expected := range sc.expectedProxyCounts {
+			if got := counts["subject|box|"+account]; got != expected {
+				t.Fatalf("proxy requests for account %q = %d, want %d (users %v)", account, got, expected, users)
+			}
+		}
+		r.record(t, "proxy_accounts", "", callResult{Status: http.StatusOK, Body: users})
 	}
 	sessions := map[string][]transcriptMessage{}
 	for _, alias := range r.aliases {
 		r.drv.WaitIdle(t, r.ids[alias])
 		sessions[alias] = r.drv.Messages(t, r.ids[alias])
-		for _, v := range messageViolations(sessions[alias]) {
-			t.Errorf("session %s: %s", alias, v)
+		for _, violation := range messageViolations(sessions[alias]) {
+			t.Errorf("session %s: %s", alias, violation)
 		}
 	}
-	for _, j := range r.drv.Journals(t) {
-		for _, v := range journalViolations(j) {
-			t.Errorf("journal: %s", v)
+	for _, journal := range r.drv.Journals(t) {
+		for _, violation := range journalViolations(journal) {
+			t.Errorf("journal: %s", violation)
 		}
 	}
-	reqs := o.Requests()
+	requests := o.Requests()
 	if sc.concurrent {
-		slices.SortStableFunc(reqs, func(a, b harnesstest.Request) int { return strings.Compare(a.LastUserText(), b.LastUserText()) })
+		slices.SortStableFunc(requests, func(a, b harnesstest.Request) int { return strings.Compare(a.LastUserText(), b.LastUserText()) })
 	}
-	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
+	return normalizeRun(requests, sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runCodexScenarios(t *testing.T, table []codexScenario) {

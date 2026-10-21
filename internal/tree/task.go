@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -24,6 +25,7 @@ const taskSchema = `{
 		"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 		"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
 		"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, high, xhigh, or max; omitted means the provider default"},
+		"accounts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Optional vendor-to-account IDs from the host; spawn merges over inherited selections and send merges over the child's selections before delivery. An empty ID clears that vendor selection. Send with accounts fails while a turn is active; change accounts between turns."},
 		"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
 		"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 	}
@@ -37,7 +39,7 @@ const taskDescription = "Delegate work to a child session, or manage one you alr
 	"\"general-purpose\" (full tool set, can itself spawn children), \"explore\" (read-only, for fast code search), and \"plan\" " +
 	"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more, and this project's " +
 	"current full roster (built-ins plus any custom types) is listed in the error if you call this tool with an agent name it does " +
-	"not recognize. model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. " +
+	"not recognize. model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. accounts IDs come from the host, not from a tool. Spawn merges the account map over inherited selections. Send merges it over the child's current selections and applies it before delivery; a send with accounts fails while the child has an active turn. Use an empty ID to clear one vendor selection. " +
 	"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
 	"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
 	"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
@@ -64,7 +66,8 @@ func (t *Tree) Tool() turn.Tool { return taskTool{tree: t} }
 type taskToolArgs struct {
 	Action, Agent, Prompt string
 	Model, Effort         string
-	SessionID             string `json:"session_id"`
+	Accounts              map[string]string `json:"accounts"`
+	SessionID             string            `json:"session_id"`
 	Tail                  int
 }
 
@@ -157,7 +160,7 @@ func (t taskTool) spawn(ctx context.Context, in taskToolArgs) (any, error) {
 		return nil, errors.New("prompt is required")
 	}
 	in.Agent = cmp.Or(in.Agent, prompt.GeneralPurpose)
-	id, err := t.tree.spawn(ctx, t.parent, in.Agent, in.Prompt, Choice{in.Model, in.Effort})
+	id, err := t.tree.spawn(ctx, t.parent, in.Agent, in.Prompt, Choice{Model: in.Model, Effort: in.Effort, Accounts: in.Accounts})
 	return struct {
 		SessionID string `json:"session_id"`
 		Agent     string `json:"agent"`
@@ -207,7 +210,7 @@ func (t taskTool) send(ctx context.Context, in taskToolArgs, up []string) (any, 
 	if text == "" {
 		return nil, errors.New(`prompt is required for action "send"`)
 	}
-	queued, err := t.tree.send(ctx, up, in.SessionID, text)
+	queued, err := t.tree.send(ctx, up, in.SessionID, text, in.Accounts)
 	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; " +
 		"check back with task status on this session_id if you want to confirm it actually started"
 	if queued {
@@ -303,8 +306,8 @@ func (t *Tree) live(ctx context.Context, up []string, fallback string) (string, 
 // child reports the turn that text starts. A report of child that is in flight
 // settles first, so that the parent decides on a settled child. queued reports
 // a running turn.
-func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool, error) {
-	c, err := t.s.Open(ctx, child)
+func (t *Tree) send(ctx context.Context, up []string, child, text string, accounts map[string]string) (bool, error) {
+	c, err := t.sendTarget(ctx, child, accounts)
 	if err != nil {
 		return false, err
 	}
@@ -351,4 +354,40 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool,
 		}
 		return false, err
 	}
+}
+
+func (t *Tree) sendTarget(ctx context.Context, child string, accounts map[string]string) (Node, error) {
+	if accounts == nil {
+		return t.s.Open(ctx, child)
+	}
+	var settings protocol.Settings
+	var model string
+	if err := t.s.Read(ctx, child, func(st *eventlog.State) {
+		settings, model = st.Settings(), st.Model()
+	}); err != nil {
+		return Node{}, err
+	}
+	if t.cfg.Vendor == nil || t.cfg.Vendor(model) == "" {
+		for _, account := range accounts {
+			if account != "" {
+				return Node{}, fmt.Errorf("child model %q provider has no vendor for the requested account selection", model)
+			}
+		}
+	}
+	settings.Accounts = maps.Clone(settings.Accounts)
+	if settings.Accounts == nil {
+		settings.Accounts = make(map[string]string)
+	}
+	maps.Copy(settings.Accounts, accounts)
+	if live, ok := t.s.Running(child); ok {
+		if err := live.Actor.UpdateAccountsIfIdle(ctx, settings.Accounts); err != nil {
+			return Node{}, fmt.Errorf("task send: accounts can only change between turns: %w", err)
+		}
+		return live, nil
+	}
+	c, err := t.s.OpenWithAccounts(ctx, child, settings.Accounts)
+	if errors.Is(err, session.ErrBusy) {
+		return Node{}, fmt.Errorf("task send: accounts can only change between turns: %w", err)
+	}
+	return c, err
 }

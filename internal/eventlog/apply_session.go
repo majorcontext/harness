@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"maps"
 	"slices"
 	"time"
 
@@ -15,7 +16,9 @@ func (s *State) applyCreated(e protocol.SessionCreated, t time.Time) error {
 		return illegal("session.created has an empty model")
 	}
 	s.created = true
-	s.parentID, s.agent, s.origin, s.model, s.settings, s.allowed = e.ParentID, e.Agent, e.Origin, e.Model, e.Settings, e.AllowedTools
+	s.parentID, s.agent, s.origin, s.model, s.allowed = e.ParentID, e.Agent, e.Origin, e.Model, e.AllowedTools
+	s.settings = e.Settings
+	s.settings.Accounts = maps.Clone(e.Settings.Accounts)
 	s.workDir = e.WorkDir
 	s.createdAt = t
 	s.inputs = map[string]input{}
@@ -41,6 +44,9 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 	}
 	if e.ServiceTier != nil {
 		s.settings.ServiceTier = *e.ServiceTier
+	}
+	if e.Accounts != nil {
+		s.settings.Accounts = maps.Clone(*e.Accounts)
 	}
 	return nil
 }

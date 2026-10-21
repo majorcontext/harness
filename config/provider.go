@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -102,6 +104,8 @@ func (c Config) WithProxyBase(base string) Config {
 
 // Provider is per-family provider configuration.
 type Provider struct {
+	// Vendor links this provider entry to an opaque per-session subscription account.
+	Vendor string `json:"vendor,omitempty"`
 	// Type selects the adapter to build for this entry.
 	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.
@@ -144,7 +148,26 @@ type Provider struct {
 	// session state holds the transcript and another host can resume it.
 	SessionMirror bool `json:"session_mirror,omitempty"`
 
-	keyless bool
+	keyless   bool
+	vendorSet bool
+}
+
+// UnmarshalJSON records whether vendor was explicitly set, so an empty value can fail validation.
+func (p *Provider) UnmarshalJSON(data []byte) error {
+	type providerJSON Provider
+	var decoded providerJSON
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, decoded.vendorSet = fields["vendor"]
+	*p = Provider(decoded)
+	return nil
 }
 
 // Keyless reports that only the project file defines the entry, so it reads no API key. Only MergeProject sets it.
@@ -252,6 +275,9 @@ func omitResponseParams() []string {
 // validateProviders rejects an unknown Type, an empty Type on a key that is not native, and a missing BaseURL.
 func validateProviders(providers map[string]Provider) error {
 	for name, p := range providers {
+		if p.vendorSet && p.Vendor == "" {
+			return fmt.Errorf("providers.%s.vendor must be a non-empty string", name)
+		}
 		switch p.Type {
 		case "":
 			if _, ok := nativeProviderKeys[name]; !ok {

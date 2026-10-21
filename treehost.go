@@ -41,6 +41,14 @@ func (h host) Open(ctx context.Context, id string) (tree.Node, error) {
 	return node(s), nil
 }
 
+func (h host) OpenWithAccounts(ctx context.Context, id string, accounts map[string]string) (tree.Node, error) {
+	s, err := h.r.openWithAccounts(ctx, id, accounts)
+	if err != nil {
+		return tree.Node{}, err
+	}
+	return node(s), nil
+}
+
 func (h host) Create(ctx context.Context, id string, c protocol.SessionCreated, first protocol.InputAdmitted, p prompt.Profile) error {
 	_, err := h.r.create(ctx, id, launch{created: &c, first: &first, profile: &p})
 	return err

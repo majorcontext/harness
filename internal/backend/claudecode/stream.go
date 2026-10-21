@@ -54,6 +54,8 @@ type run struct {
 	// limits is the newest subscription snapshot of the run; the result
 	// reports it with the usage of its call.
 	limits *protocol.SubscriptionUsage
+	// account is the account that the session selected for the vendor of the entry. Empty: none.
+	account string
 	// refused is the newest rate_limit_event of the run when its limit
 	// refuses the requests of the run.
 	refused *rateLimitInfo
@@ -596,6 +598,11 @@ func (r *run) telemetry(env envelope) {
 	cost := max(0, env.TotalCostUSD-r.cost)
 	r.cost = env.TotalCostUSD
 	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &cost, Call: callMetrics(env)}
+	if r.limits != nil && r.account != "" {
+		limits := *r.limits
+		limits.Account = r.account
+		t.SubscriptionUsage = &limits
+	}
 	if r.compactPostTokens > 0 {
 		t.Context.Tokens = r.compactPostTokens
 	} else {

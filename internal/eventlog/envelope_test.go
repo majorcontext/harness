@@ -138,7 +138,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}
-	if got := live.Settings(); got != (protocol.Settings{Effort: "high", ServiceTier: "flex"}) {
+	if got := live.Settings(); got.Effort != "high" || got.ServiceTier != "flex" || len(got.Accounts) != 0 {
 		t.Fatalf("Settings = %+v", got)
 	}
 	if live.Usage().InputTokens != 10 || live.Context().Tokens != 900 || backendBlob(live) != "b1" || len(live.Retained()) != 1 {

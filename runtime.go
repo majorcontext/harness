@@ -237,7 +237,11 @@ func New(opts Options) (*Runtime, error) {
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },
-		Resolve: opts.Config.ResolveModel, CheckModel: catalog.CheckChild, Suffix: newSuffix, Log: r.log})
+		Resolve: opts.Config.ResolveModel, CheckModel: catalog.CheckChild,
+		Vendor: func(model string) string {
+			provider, _, _ := strings.Cut(model, "/")
+			return opts.Config.ProviderEntries()[provider].Vendor
+		}, Suffix: newSuffix, Log: r.log})
 	tools := make([]turn.Tool, len(opts.Tools))
 	for i, t := range opts.Tools {
 		tools[i] = embedded{t}
@@ -344,6 +348,8 @@ type launch struct {
 	profile *prompt.Profile
 	// mcp holds the session MCP servers of WithSessionMCP.
 	mcp map[string]config.MCPServerSpec
+	// accounts applies session account selections before an opened turn resumes.
+	accounts *map[string]string
 }
 
 func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
@@ -409,6 +415,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	}
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
+	} else if l.accounts != nil {
+		a, err = session.OpenWithAccounts(ctx, cfg, *l.accounts)
 	} else {
 		a, err = session.Open(ctx, cfg)
 	}

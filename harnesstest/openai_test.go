@@ -49,6 +49,17 @@ func codexTurn(t testing.TB, c *openai.Client, req *provider.Request) provider.E
 	return done(t, drain(t, st))
 }
 
+func TestOpenAICallsBuildToolCallsFromTheRequest(t *testing.T) {
+	step := Step{Name: "call", Match: LastUserText("delegate"), Reply: Reply{Calls: func(r Request) []ToolCall {
+		return []ToolCall{{ID: "call_1", Name: "task", Input: map[string]any{"prompt": r.LastUserText()}}}
+	}}}
+	o := NewOpenAI(t, OpenAIOptions{}, step)
+	got, ok := o.pick(Request{Messages: []Message{{Role: "user", Parts: []Part{{Kind: "text", Text: "delegate child work"}}}}})
+	if !ok || len(got.Reply.ToolCalls) != 1 || got.Reply.ToolCalls[0].Input["prompt"] != "delegate child work" {
+		t.Fatalf("tool calls = %+v, matched = %v", got.Reply.ToolCalls, ok)
+	}
+}
+
 func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 	s := NewOpenAI(t, OpenAIOptions{},
 		Step{Name: "call", Match: LastUserText("run"), Reply: Reply{ToolCalls: []ToolCall{{ID: "call_1", Name: "bash", Input: map[string]any{"command": "ls"}}}}},

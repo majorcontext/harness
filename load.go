@@ -6,16 +6,26 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+
+	"github.com/majorcontext/harness/internal/storecheck"
 )
 
 type entry struct {
-	ready chan struct{}
+	ready   chan struct{}
+	started chan struct{}
 	// mcp holds the names of the session MCP servers.
 	mcp []string
 	// create is set when the load creates the session.
 	create bool
 	s      *Session
 	err    error
+}
+
+func (r *Runtime) openWithAccounts(ctx context.Context, id string, accounts map[string]string) (*Session, error) {
+	if err := storecheck.Name(id); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return r.load(ctx, id, launch{accounts: &accounts})
 }
 
 func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, error) {
@@ -31,7 +41,7 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 				r.mu.Unlock()
 				return nil, fmt.Errorf("%w: session MCP server %q has the name of a runtime server", ErrInvalidRequest, name)
 			}
-			e = &entry{ready: make(chan struct{}), create: l.created != nil, mcp: slices.Sorted(maps.Keys(l.mcp))}
+			e = &entry{ready: make(chan struct{}), started: make(chan struct{}), create: l.created != nil, mcp: slices.Sorted(maps.Keys(l.mcp))}
 			r.sessions[id] = e
 			r.group.Add(1)
 			r.mu.Unlock()
@@ -43,6 +53,7 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 			if e.err == nil {
 				r.run(e.s, l.created != nil)
 			}
+			close(e.started)
 			r.group.Done()
 			return e.s, e.err
 		}
@@ -70,6 +81,16 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 			return nil, e.err
 		}
 		if !e.s.a.View().Stopped {
+			if l.accounts != nil {
+				select {
+				case <-e.started:
+				default:
+					return nil, fmt.Errorf("account selections cannot be applied while the child is opening; retry task send after it loads")
+				}
+				if err := e.s.a.UpdateAccountsIfIdle(ctx, *l.accounts); err != nil {
+					return nil, err
+				}
+			}
 			return e.s, nil
 		}
 		select {
