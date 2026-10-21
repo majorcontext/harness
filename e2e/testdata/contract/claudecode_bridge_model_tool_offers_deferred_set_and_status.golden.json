@@ -1,0 +1,91 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "offered_model_tool.a": {
+      "status": 200,
+      "body": {
+        "description": "Inspect or change this session's model. status reports the current model and any pending_model, plus configured aliases and providers. set(model) validates a provider/model ref or alias now and queues it for the NEXT TURN, after this turn ends, even on failure or cancellation. It never changes the running turn or its backend process. A later set replaces the pending model; setting the current model clears it and does nothing. list reports configured providers (with subscription or api billing) and aliases without session state.",
+        "inputSchema": {
+          "properties": {
+            "action": {
+              "description": "The operation to perform",
+              "enum": [
+                "status",
+                "set",
+                "list"
+              ],
+              "type": "string"
+            },
+            "model": {
+              "description": "The target model: a \"provider/model\" ref or a configured alias (required for set)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -23,6 +23,14 @@ func (s ownedSession) StartGoal(ctx context.Context, condition string) error {
 	return s.a.StartGoal(ctx, condition)
 }
 
+func (s ownedSession) DeferModel(ctx context.Context, ref string) error {
+	return s.a.DeferModel(ctx, ref)
+}
+
+func (s ownedSession) PendingModel(ctx context.Context) (string, error) {
+	return s.a.PendingModel(ctx)
+}
+
 func (s ownedSession) AdjustGoal(ctx context.Context, condition string) error {
 	return s.a.AdjustGoal(ctx, condition)
 }

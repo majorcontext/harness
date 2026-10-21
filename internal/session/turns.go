@@ -312,6 +312,14 @@ func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text stri
 		events = append(events, protocol.ItemCompleted{ItemID: newID("item"), TurnID: ended.TurnID, Message: marker})
 	}
 	events = append(events, ended)
+	if a.pendingModel != "" {
+		ref := a.pendingModel
+		if err := a.applySettings(ctx, protocol.SettingsChanged{Model: &ref}, nil, append(events, after...)...); err != nil {
+			return err
+		}
+		a.pendingModel = ""
+		return nil
+	}
 	return a.appendCtx(ctx, append(events, after...)...)
 }
 

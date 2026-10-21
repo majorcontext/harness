@@ -40,18 +40,10 @@ const modelSchema = `{
 	"required": ["action"]
 }`
 
-const modelListDescription = "List the provider families and aliases configured on this box, each provider tagged with a \"billing\" of \"subscription\" or \"api\". " +
-	"Use this to pick a family for task's own spawn(model:...) override when delegating to a child session. " +
-	"This surface exposes ONLY the list action — inspecting or changing THIS session's own current model is not available here; " +
-	"task's model override is the way to select a model, for a CHILD session, not this one."
-
-const modelListSchema = `{
-	"type": "object",
-	"properties": {
-		"action": {"type": "string", "enum": ["list"], "description": "The operation to perform; only \"list\" is exposed on this surface"}
-	},
-	"required": ["action"]
-}`
+const modelDeferredDescription = "Inspect or change this session's model. status reports the current model and any pending_model, plus configured aliases and providers. " +
+	"set(model) validates a provider/model ref or alias now and queues it for the NEXT TURN, after this turn ends, even on failure or cancellation. " +
+	"It never changes the running turn or its backend process. A later set replaces the pending model; setting the current model clears it and does nothing. " +
+	"list reports configured providers (with subscription or api billing) and aliases without session state."
 
 const (
 	billingSubscription = "subscription"
@@ -75,9 +67,11 @@ func billing(provider string) string {
 }
 
 type modelStatus struct {
-	Model     string            `json:"model"`
-	Aliases   map[string]string `json:"aliases,omitempty"`
-	Providers []providerInfo    `json:"providers,omitempty"`
+	PendingModel string            `json:"pending_model,omitempty"`
+	Effect       string            `json:"effect,omitempty"`
+	Model        string            `json:"model"`
+	Aliases      map[string]string `json:"aliases,omitempty"`
+	Providers    []providerInfo    `json:"providers,omitempty"`
 }
 
 type modelList struct {
@@ -93,30 +87,27 @@ type Catalog struct {
 	Providers func() []string
 }
 
-// Model is the model tool. It lets the model inspect and swap the model of
-// its session. The runtime binds session when the session starts. A backend
-// that owns its loop gets the list action alone, because set would move the
-// model of the turn that calls it.
+// Model is the model tool for the session to which the runtime binds it.
 type Model struct {
 	host     Sessions
 	catalog  Catalog
 	session  string
-	listOnly bool
+	deferred bool
 }
 
 // NewModel returns the model tool, unbound, over host and catalog.
 func NewModel(host Sessions, catalog Catalog) Model { return Model{host: host, catalog: catalog} }
 
-// ListOnly returns the tool with the list action alone.
-func (t Model) ListOnly() Model {
-	t.listOnly = true
+// Deferred returns the tool whose model change waits for the next turn.
+func (t Model) Deferred() Model {
+	t.deferred = true
 	return t
 }
 
 // Spec returns the specification of the model tool.
 func (t Model) Spec() protocol.ToolSpec {
-	if t.listOnly {
-		return protocol.ToolSpec{Name: ModelName, Description: modelListDescription, InputSchema: json.RawMessage(modelListSchema)}
+	if t.deferred {
+		return protocol.ToolSpec{Name: ModelName, Description: modelDeferredDescription, InputSchema: json.RawMessage(modelSchema)}
 	}
 	return protocol.ToolSpec{Name: ModelName, Description: modelDescription, InputSchema: json.RawMessage(modelSchema)}
 }
@@ -143,18 +134,37 @@ func (t Model) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResul
 	switch {
 	case in.Action == "list":
 		return jsonResult(modelList{Providers: t.catalog.providerInfos(), Aliases: t.catalog.aliasCopy()})
-	case t.listOnly:
-		return protocol.ToolResult{}, fmt.Errorf("model: action %q is not available on this surface (only \"list\" is exposed here — use task's own model override to select a model for a child session)", in.Action)
 	case in.Action == "status":
-		return jsonResult(t.catalog.modelStatus(s.Snapshot().Model))
+		return t.status(ctx, s, "")
 	case in.Action == "set":
 		v, err := t.set(ctx, s, in.Model)
 		if err != nil {
 			return protocol.ToolResult{}, err
 		}
+		if t.deferred {
+			return t.status(ctx, s, "next_turn")
+		}
 		return jsonResult(t.catalog.modelStatus(v.Model))
 	}
 	return protocol.ToolResult{}, fmt.Errorf("model: unknown action %q (valid actions: status, set, list — there is no clear action)", in.Action)
+}
+
+func (t Model) status(ctx context.Context, s Session, effect string) (protocol.ToolResult, error) {
+	v := t.catalog.modelStatus(s.Snapshot().Model)
+	if t.deferred {
+		var err error
+		v.PendingModel, err = s.PendingModel(ctx)
+		if err != nil {
+			return protocol.ToolResult{}, err
+		}
+		if effect != "" {
+			v.Effect = effect
+			if v.PendingModel == "" {
+				v.Effect = "unchanged"
+			}
+		}
+	}
+	return jsonResult(v)
 }
 
 // set moves s to the model that ref names, or to the model of the alias ref.
@@ -171,6 +181,12 @@ func (t Model) set(ctx context.Context, s Session, ref string) (protocol.Session
 	}
 	if err := t.catalog.servesProvider(parsed); err != nil {
 		return protocol.Session{}, fmt.Errorf("model: %w", err)
+	}
+	if t.deferred {
+		if err := s.DeferModel(ctx, ref); err != nil {
+			return protocol.Session{}, fmt.Errorf("model: %w", err)
+		}
+		return s.Snapshot(), nil
 	}
 	v, err := s.Update(ctx, protocol.SettingsPatch{Model: &ref})
 	if err != nil {

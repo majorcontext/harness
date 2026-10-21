@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Deferred model changes in Claude Code** (`internal/selftool`, `internal/session`, `harness`) — the `model` tool now allows `status` and `set` on a backend that owns its loop. `set` validates a ref or alias at once and returns `effect: next_turn`; `status` includes any `pending_model`. The pending model applies through the session settings path when the turn completes, fails, or is canceled, without changing the running turn or its backend process. A later set replaces the pending model, and a set to the current model clears it. Pending changes are live turn state and do not survive a handoff or process exit. Model API sessions keep immediate changes. The tool leaves effort unchanged.
+
 - **Per-session subscription accounts** (`config`, `protocol`, `internal/tree`, `internal/session`) — sessions store vendor-to-account IDs in settings, children inherit them, and the `task` tool accepts account overrides on spawn and send. Configured account routing appends the opaque ID to the proxy username; unavailable routing fails the model call.
 
 - **Derived title as a record** (`protocol`, `internal/eventlog`, `internal/session`) — a root session with no model title now records its derived title as `session.titled` with `source` `derived`: without `title_model`, after the first prompt; with `title_model`, when the title call fails and no person has titled the session. A `derived` record changes no state, so a reader of the log finds a title in every titled root session.

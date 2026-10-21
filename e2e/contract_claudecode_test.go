@@ -682,13 +682,13 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		actions: []action{create{as: "a", allowed: []string{"mcp__notes__find", "mcp__notes__add"}}, submit{as: "a", text: "run it"}, claudeAwaitText{as: "a", text: "Working on it."},
 			claudeReadOnlyTools{as: "a"}, interrupt{as: "a"}, waitIdle{as: "a"}},
 	}, {
-		name:    "claudecode_bridge_model_tool_offers_list_only",
+		name:    "claudecode_bridge_model_tool_offers_deferred_set_and_status",
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
 		actions: withActions(claudeOneTurn, claudeOfferedModelTool{as: "a"}),
 	}, {
-		name:    "claudecode_bridge_refuses_set_on_the_model_tool",
-		driver:  claudeLane{mode: "normal", callTool: "model", callArgs: setArgs}.newDriver,
-		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+		name:    "claudecode_bridge_defers_set_on_the_model_tool",
+		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"model", setArgs}}, {{"model", map[string]any{"action": "status"}}}}}.newDriver,
+		actions: withActions(claudeOneTurn, requireSessionModel{as: "a", model: "anthropic/claude-fable-5"}, claudeJournalEvents{as: "a", prefix: "settings."}),
 	}, {
 		name:    "claudecode_plugin_hook_denies_a_bash_call_of_the_cli",
 		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "echo block-me"}}}}, extra: pluginConfig(t, nil)}.newDriver,

@@ -188,7 +188,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, claudeChildReportRows, accountRows, map[string]runtimeRow{
+var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, claudeChildReportRows, accountRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -369,8 +369,8 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"claudecode_bridge_loads_ask_user_question_and_the_file_and_shell_tools_upfront":             sameAsServe(),
 	"question_tool_description_says_to_ask_with_the_tool_and_not_in_text":                        sameAsServe(),
 	"claudecode_bridge_passes_the_read_only_hint_of_an_mcp_tool_through":                         sameAsServe(),
-	"claudecode_bridge_model_tool_offers_list_only":                                              sameAsServe(),
-	"claudecode_bridge_refuses_set_on_the_model_tool":                                            sameAsServe(),
+	"claudecode_bridge_model_tool_offers_deferred_set_and_status":                                sameAsServe(),
+	"claudecode_bridge_defers_set_on_the_model_tool":                                             sameAsServe(),
 	"claudecode_large_read_file_result_is_a_preview_with_a_handle_that_read_tool_result_reads":   sameAsServe(),
 	"claudecode_session_info_lists_the_tools_that_the_call_offered":                              sameAsServe(),
 	"claudecode_system_prompt_names_the_harness_tools_and_lists_the_skills":                      sameAsServe(),

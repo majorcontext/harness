@@ -163,6 +163,15 @@ var basicModes = map[string]mode{
 		turnCalls(f)
 		f.emit(say("Done."), success("Done.", 0, 0))
 	},
+	"turn_calls_error": func(f *fake) {
+		turnCalls(f)
+		os.Exit(1)
+	},
+	"turn_calls_hang": func(f *fake) {
+		turnCalls(f)
+		f.emit(say("Pending model set."))
+		hang(f)
+	},
 	"per_call_usage":               perCallUsage,
 	"compact_after_window":         perCallUsage,
 	"compact_boundary":             compactBoundary,

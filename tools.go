@@ -104,10 +104,10 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		}})
 	}
 	if model != nil {
-		full, listed := turn.Fixed{*model}, turn.Fixed{model.ListOnly()}
+		full, deferred := turn.Fixed{*model}, turn.Fixed{model.Deferred()}
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if c.OwnsLoop {
-				return listed
+				return deferred
 			}
 			return full
 		}})
