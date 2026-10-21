@@ -451,10 +451,6 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
-            },
-            {
-              "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[mcp: every configured server is connected again.]\n\u003c/harness-engine-context\u003e"
             },
             {
@@ -542,10 +538,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             },
             {
               "kind": "text",

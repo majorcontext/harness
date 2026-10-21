@@ -235,7 +235,7 @@ func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOp
 	// transcoders, not this one.
 	// imageLimits.RecurseToolResults is false: tool-result images are omitted
 	// on the wire (see toolResultOutput), so clamping them would be wasted work.
-	messages := imageclamp.Clamp(message.NormalizeForWire(req.WithTail()), imageLimits)
+	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 
 	for i := range messages {
 		m := &messages[i]

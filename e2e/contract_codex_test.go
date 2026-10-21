@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http/httptest"
 	"slices"
@@ -302,13 +303,72 @@ func codexNoToolCallRows() []codexScenario {
 func codexPluginRows(t *testing.T) []codexScenario {
 	return []codexScenario{{
 		scenario: scenario{
-			name:    "codex_ws_prewarm_leaves_the_plugin_segment_to_the_tail_of_the_request",
+			name:    "codex_ws_prewarm_leaves_the_plugin_segment_to_the_first_request",
 			config:  pluginConfig(t, nil),
 			model:   codexHi,
 			actions: codexSession(codexTurn("a", "hello"), []action{recordPrewarmHas{contains: fixtureSegment}, recordWire{}}),
 		},
 		websocket: true,
+	}, {
+		scenario: scenario{
+			name:       "codex_ws_task_child_with_a_plugin_segment_chains_each_model_call",
+			concurrent: true,
+			config:     pluginConfig(t, nil),
+			model: []harnesstest.Step{
+				{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "call_p1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"}},
+				}}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: codexText("waiting")},
+				{Name: "child_bash", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "call_c1", Name: "bash", Input: map[string]any{"command": "echo one"}},
+				}}},
+				{Name: "child_ls", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "call_c2", Name: "ls", Input: map[string]any{"path": "."}},
+				}}},
+				{Name: "child_done", Match: harnesstest.LastToolResult("ls"), Reply: codexText("child done")},
+				{Name: "parent", Match: harnesstest.LastUserText("child done"), Reply: codexText("parent done")},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 6},
+				waitIdle{as: "a"},
+				recordChains{},
+			},
+		},
+		websocket: true,
+		opts:      harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"child_bash": {Reasoning: []string{"plan"}}, "child_ls": {Reasoning: []string{"check"}}}},
 	}}
+}
+
+// codexPluginRowKinds is the disposition of the rows of codexPluginRows.
+var codexPluginRowKinds = map[string]runtimeRow{
+	"codex_ws_prewarm_leaves_the_plugin_segment_to_the_first_request":  reGolden(specItems, specWarm),
+	"codex_ws_task_child_with_a_plugin_segment_chains_each_model_call": reGolden(specItems, specWarm),
+}
+
+// recordChains records each model request of the Responses server as
+// "chained <n>" when it names a previous response, else "full <n>", with n
+// its input items, in sorted order, so concurrent sessions record the same.
+type recordChains struct{}
+
+func (recordChains) run(t *testing.T, _ *run) {
+	t.Fatal("recordChains runs only under runCodexScenario")
+}
+func (recordChains) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	chains := []string{}
+	for _, e := range o.WireEvents() {
+		if e.Event != "request" {
+			continue
+		}
+		mode := "full"
+		if e.PreviousResponseID != "" {
+			mode = "chained"
+		}
+		chains = append(chains, fmt.Sprintf("%s %d", mode, e.InputItems))
+	}
+	slices.Sort(chains)
+	r.record(t, "codex_chains", "", callResult{Status: 200, Body: chains})
 }
 
 func codexWarmRows() []codexScenario {

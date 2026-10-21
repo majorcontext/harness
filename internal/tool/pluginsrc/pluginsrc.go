@@ -32,6 +32,10 @@ import (
 
 const probeTimeout = 30 * time.Second
 
+// segmentKind is the notice kind of the system.transform segments. A pin keeps each text in place, so the next
+// request of the session extends this one and a Responses request chains from it.
+const segmentKind = "plugin"
+
 // History returns the conversation of a session.
 type History func(ctx context.Context, sessionID string) ([]protocol.LogMessage, error)
 
@@ -365,7 +369,7 @@ func (s *Session) toolOf(name string) turn.Tool {
 }
 
 // Toolset gives the plugin tools that the session sent at its first tool read and allowed keeps, and the
-// system.transform segments of this model call as its tail.
+// system.transform segments of this model call as a notice.
 func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	h := s.p.live.Load().host
 	ref, _ := modelref.ParseModelRef(model)
@@ -374,7 +378,7 @@ func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed 
 	for _, n := range s.first().names {
 		tools = append(tools, s.toolOf(n))
 	}
-	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Tail: strings.Join(segs, "\n\n"), Hooks: s}
+	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Notices: []turn.Notice{{Kind: segmentKind, Text: strings.Join(segs, "\n\n")}}, Hooks: s}
 }
 
 // Late returns the plugin tools that the first tool read of the session did not reach, in name order: the tools

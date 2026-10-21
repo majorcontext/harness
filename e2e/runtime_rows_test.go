@@ -137,7 +137,7 @@ const (
 	specNoRoute        = "A path or method that no route serves answers 404 or 405 with `invalid_request`."
 	specGitOracle      = "workspace-changes-rows"
 	specBannerPrefix   = "each request of the session is a prefix of the next, also across processes and after a compaction in the middle of a turn"
-	specPinsMove       = "A compaction moves every pin, the banner and each notice, to the end of the history that it leaves"
+	specPinsMove       = "A compaction moves the newest pin of each kind, the banner and each notice, to the end of the history that it leaves"
 )
 
 // Reasons that the session rows give.
@@ -189,7 +189,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, sessionTitleRows, claudeMCPRows, map[string]runtimeRow{
+var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, sessionTitleRows, claudeMCPRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -602,6 +602,7 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, sess
 	"no_goal_evaluator_means_no_goal":                                                    reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
 	"plugin_inventory_reports_not_spawned_then_running":                                  reGolden(specView),
 	"plugin_sees_the_model_of_each_call":                                                 reGolden(specUpdate),
+	"plugin_segment_that_changes_keeps_only_its_newest_version_after_a_compaction":       sameAsServe(),
 	"restart_lets_a_running_tool_finish_and_cuts_the_next_alone_call":                    reGolden(specView, specHandoff),
 	"bifrost_max_tokens_cut_response_is_retried":                                         sameAsServe(),
 	"max_tokens_cut_response_fails_the_turn_after_stream_max_retries":                    sameAsServe(),
@@ -759,7 +760,6 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, sess
 	"claudecode_child_and_goal_sessions_ask_no_question":                                  sameAsServe(),
 	"codex_ws_restart_warms_the_websocket_again":                                          reGolden(specItems, specWarm),
 	"codex_ws_restart_prewarms_with_a_tool_the_log_selected":                              reGolden(specItems, specWarm),
-	"codex_ws_prewarm_leaves_the_plugin_segment_to_the_tail_of_the_request":               reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":                      sameAsServe(),
 	"a_failed_summary_keeps_its_usage_in_the_session":                                     reGolden(specView, specOverflowFails),
 

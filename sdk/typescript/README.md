@@ -131,7 +131,7 @@ behalf. Request/response field names match the wire protocol exactly
 | `onEvent(ctx, events)` | async, fire-and-forget event stream | (nothing; no response) |
 | `chatParams(ctx, req)` | before a model request | `{ params }` |
 | `chatMessage(ctx, req)` | before a message enters the session log | `{ message }` |
-| `systemTransform(ctx, req)` | model call tail (additive) | `{ segments: [...] }` |
+| `systemTransform(ctx, req)` | before each model call (additive; pinned where the text changes, older text kept until a compaction) | `{ segments: [...] }` |
 | `shellEnv(ctx, req)` | before a shell command runs | `{ env: {...} }` |
 | `toolExecuteBefore(ctx, req)` | before any tool call | `{ args }` to rewrite, or `{ deny: "..." }` to block |
 | `toolExecuteAfter(ctx, req)` | after any tool call | `{ output }` (canonical `message.Parts`) |
