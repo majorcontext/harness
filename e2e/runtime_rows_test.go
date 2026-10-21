@@ -366,6 +366,7 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"claudecode_queued_prompt_and_child_report_share_a_turn":                                     reGolden(specQueue, specChildReport, specChildClaude),
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                                         sameAsServe(),
 	"claudecode_bridge_marks_exactly_the_read_only_tools_with_read_only_hint":                    sameAsServe(),
+	"claudecode_bridge_loads_ask_user_question_upfront":                                          sameAsServe(),
 	"claudecode_bridge_passes_the_read_only_hint_of_an_mcp_tool_through":                         sameAsServe(),
 	"claudecode_bridge_model_tool_offers_list_only":                                              sameAsServe(),
 	"claudecode_bridge_refuses_set_on_the_model_tool":                                            sameAsServe(),

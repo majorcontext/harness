@@ -113,6 +113,12 @@ func cliName(name string) string {
 	return mcpPrefix + external.ToolServer + "__" + name
 }
 
+// alwaysLoad is the _meta of a tools/list entry that makes the CLI load the
+// tool upfront when ToolSearch defers the other MCP tools. A deferred
+// ask_user_question is only a name that the model must search for, so the
+// model asks in its text and the session never reads waiting.
+var alwaysLoad = json.RawMessage(`{"anthropic/alwaysLoad":true}`)
+
 // toolUseMeta is the _meta field of an MCP tool call that holds the CLI tool use ID.
 const toolUseMeta = "claudecode/toolUseId"
 
@@ -341,7 +347,7 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
 // instructions of its own server, because the CLI cuts the instructions of
 // each server by itself, and shows them under the name of that server.
 func groupsOf(tools []protocol.ToolSpec, instructions turn.MCPInstructions) []external.Group {
-	harness := external.Group{Server: external.ToolServer, Instructions: instructions.Common}
+	harness := external.Group{Server: external.ToolServer, Meta: map[string]json.RawMessage{turn.AskTool: alwaysLoad}, Instructions: instructions.Common}
 	byServer := map[string]*external.Group{}
 	group := func(server string) *external.Group {
 		g := byServer[server]
