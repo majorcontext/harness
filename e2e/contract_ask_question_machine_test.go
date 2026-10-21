@@ -7,10 +7,10 @@ import (
 )
 
 // sendFrom posts text as an input of source while a question is open.
-type sendFrom struct{ as, text, source, delivery string }
+type sendFrom struct{ as, text, source, delivery, label string }
 
 func (a sendFrom) run(t *testing.T, r *run) {
-	r.record(t, "send_from_"+a.source, a.as, laneOf(t, r).sendFrom(t, r.id(t, a.as), a.text, a.source, a.delivery))
+	r.record(t, "send_from_"+a.source, a.as, laneOf(t, r).sendFrom(t, r.id(t, a.as), a.text, a.source, a.delivery, a.label))
 }
 
 // awaitChild waits until the first child of the session has settled.
@@ -20,6 +20,14 @@ func (a awaitChild) run(t *testing.T, r *run) {
 	t.Helper()
 	parent := r.id(t, a.as)
 	r.drv.AwaitChildSettled(t, parent, r.drv.Child(t, parent, 0))
+}
+
+// boxReplyRows are the dispositions of the rows where another box answers a
+// question.
+var boxReplyRows = map[string]runtimeRow{
+	"model_api_box_input_dismisses_the_question_and_runs_with_the_queued_machine_input": sameAsServe(),
+	"model_api_question_answered_from_a_named_source_names_it_in_the_result":            sameAsServe(),
+	"model_api_question_dismissed_from_a_named_source_names_it_in_the_result":           sameAsServe(),
 }
 
 func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
@@ -66,6 +74,13 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 			},
 			actions: withActions(asked, sendFrom{as: "a", text: "ci failed", source: "github"},
 				setGoal{as: "a", condition: "say ok", maxTurns: 3}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:   "model_api_box_input_dismisses_the_question_and_runs_with_the_queued_machine_input",
+			driver: askLane(true),
+			model:  askSteps(),
+			actions: withActions(asked, sendFrom{as: "a", text: "ci failed", source: "github"}, sendFrom{as: "a", text: "use SQLite", source: "box", label: "builder (box of ann)"},
+				waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
 			name:   "model_api_typed_input_dismisses_the_question_and_runs_with_the_queued_machine_input",

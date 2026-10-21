@@ -244,9 +244,13 @@ type Compacted struct {
 
 // Resolution answers an open request with the answer of the user as JSON, or
 // dismisses it. Exactly one is set. A question takes a map of question to choice.
+// Source, SourceID, and SourceLabel name who resolved it, as for an Input.
 type Resolution struct {
-	Answer  json.RawMessage `json:"answer,omitempty"`
-	Dismiss bool            `json:"dismiss,omitempty"`
+	Answer      json.RawMessage `json:"answer,omitempty"`
+	Dismiss     bool            `json:"dismiss,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	SourceID    string          `json:"source_id,omitempty"`
+	SourceLabel string          `json:"source_label,omitempty"`
 }
 
 // Validate reports a Resolution that holds both an answer and a dismissal, or

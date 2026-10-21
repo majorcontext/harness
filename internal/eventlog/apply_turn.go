@@ -192,7 +192,7 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 		if e.Resolution == protocol.ResolutionAnswered {
 			calls[k].answered = true
 		} else {
-			s.say(seq, at, "msg_resolved_"+calls[k].CallID, dismissal(calls[k]))
+			s.say(seq, at, "msg_resolved_"+calls[k].CallID, dismissal(calls[k], e.SourceLabel))
 			calls = slices.Delete(calls, k, k+1)
 		}
 	}

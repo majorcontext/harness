@@ -343,10 +343,14 @@ type RequestOpened struct {
 }
 
 // RequestResolved closes an open request; an answer leaves its tool call open.
+// Source, SourceID, and SourceLabel name who resolved it, when the resolution named them.
 type RequestResolved struct {
-	RequestID  string          `json:"request_id"`
-	Resolution ResolutionKind  `json:"resolution"`
-	Answer     json.RawMessage `json:"answer,omitempty"`
+	RequestID   string          `json:"request_id"`
+	Resolution  ResolutionKind  `json:"resolution"`
+	Answer      json.RawMessage `json:"answer,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	SourceID    string          `json:"source_id,omitempty"`
+	SourceLabel string          `json:"source_label,omitempty"`
 }
 
 // GoalSet replaces the goal. Its turn count starts at Turns, which an adjust keeps.

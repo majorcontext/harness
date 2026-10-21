@@ -12,7 +12,7 @@ import (
 func healthOf(version string, started time.Time) protocol.Health {
 	rev, at := buildInfo()
 	return protocol.Health{Status: "ok", Version: version, VCSRevision: rev, VCSTime: at,
-		StartedAt: started.UTC().Format(time.RFC3339), Capabilities: []string{protocol.CapabilityDeltaRowIdentity}}
+		StartedAt: started.UTC().Format(time.RFC3339), Capabilities: []string{protocol.CapabilityDeltaRowIdentity, protocol.CapabilityResolutionSource}}
 }
 
 // pseudoVersion matches the timestamp and the commit that end a Go module

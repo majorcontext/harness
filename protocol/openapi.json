@@ -1648,7 +1648,16 @@
               "dismissed"
             ]
           },
-          "answer": true
+          "answer": true,
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          }
         },
         "type": "object",
         "required": [
@@ -1661,6 +1670,15 @@
           "answer": true,
           "dismiss": {
             "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
           }
         },
         "additionalProperties": false,
