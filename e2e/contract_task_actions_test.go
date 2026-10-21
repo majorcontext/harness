@@ -131,3 +131,87 @@ func TestContractTaskRefusedActions(t *testing.T) {
 		actions: slices.Concat(spawned, []action{submit{as: "a", text: "actions"}, waitIdle{as: "a"}}),
 	}})
 }
+
+type hiddenCreate struct{ as string }
+
+func (a hiddenCreate) run(t *testing.T, r *run) {
+	r.ids[a.as] = r.drv.Create(t)
+}
+
+type recordAccountSettings struct{ as string }
+
+func (a recordAccountSettings) run(t *testing.T, r *run) {
+	page := r.drv.JournalPage(t, r.id(t, a.as), 0, 1000)
+	body, ok := page.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("journal page body = %T", page.Body)
+	}
+	events, ok := body["events"].([]any)
+	if !ok {
+		t.Fatalf("journal page events = %T", body["events"])
+	}
+	var records []any
+	for _, raw := range events {
+		event := raw.(map[string]any)
+		kind, _ := event["k"].(string)
+		data, _ := event["d"].(map[string]any)
+		var accounts any
+		switch kind {
+		case "session.created":
+			if settings, ok := data["settings"].(map[string]any); ok {
+				accounts = settings["accounts"]
+			}
+		case "settings.changed":
+			accounts = data["accounts"]
+		}
+		if kind == "session.created" || kind == "settings.changed" {
+			records = append(records, map[string]any{"kind": kind, "accounts": accounts})
+		}
+	}
+	r.record(t, "account_settings", a.as, callResult{Status: page.Status, Body: records})
+}
+
+func TestContractTaskAccounts(t *testing.T) {
+	general := "general-purpose"
+	spawnChild := spawn(general, "child work")
+	spawnChild["accounts"] = map[string]string{"codex": "acct_parent"}
+	runScenarios(t, []scenario{
+		{
+			name:       "task_accounts_inherit_to_grandchild",
+			concurrent: true,
+			entry:      map[string]any{"vendor": "other"},
+			model: []harnesstest.Step{
+				taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
+				taskStep("grandchild", userStarts("child work"), fixed(spawn(general, "grandchild work"))),
+				{Name: "grandchild_wait", Match: userStarts("grandchild work"), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
+				{Name: "child_wait", Match: matchAll(rootStarts("child work"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
+				{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
+			},
+			actions: []action{
+				hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 5},
+				bindChild{as: "kid", parent: "a"}, bindChild{as: "grandchild", parent: "kid"},
+				recordAccountSettings{as: "kid"}, recordAccountSettings{as: "grandchild"}, cancelTree{as: "a"},
+			},
+		},
+		{
+			name:       "task_send_changes_the_child_account",
+			concurrent: true,
+			entry:      map[string]any{"vendor": "other"},
+			model: []harnesstest.Step{
+				taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
+				{Name: "child_done", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "child done"}},
+				{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
+				taskStep("send", userStarts("update"), onKid(func(kid string) []map[string]any {
+					return []map[string]any{onSession("send", kid, "prompt", "child resume", "accounts", map[string]string{"codex": "acct_resumed"})}
+				})),
+				{Name: "parent_done", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
+			},
+			actions: []action{
+				hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 4},
+				bindChild{as: "kid", parent: "a"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
+				submit{as: "a", text: "update"}, awaitRequests{n: 7}, waitIdle{as: "kid"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
+				recordAccountSettings{as: "kid"},
+			},
+		},
+	})
+}

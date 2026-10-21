@@ -257,7 +257,11 @@ func (s *State) LastEnded() protocol.TurnEnded { return s.lastEnded }
 func (s *State) Model() string { return s.model }
 
 // Settings returns the session settings other than the model.
-func (s *State) Settings() protocol.Settings { return s.settings }
+func (s *State) Settings() protocol.Settings {
+	settings := s.settings
+	settings.Accounts = maps.Clone(settings.Accounts)
+	return settings
+}
 
 // AllowedTools returns the tool names of the session: the embedder tools,
 // and the built-in tools of a delegated backend. nil allows every tool.

@@ -88,20 +88,22 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 			if env.NoProcess {
 				continue
 			}
-			backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPToolLoading)
+			cb := claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPToolLoading)
+			cb.RouteAccounts(cfg.AccountRouting, env.Getenv)
+			backends[name] = cb
 		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
-			be := modelapi.New(c, cfg.ContextWindowTokens, env.Log)
-			if rc, ok := c.(*responses.Client); ok && p.ModelsFrom == config.ModelsFromChatGPT {
-				cb := &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return "" }}
-				switch e := env.Logins.Of(name, p); {
-				case p.Auth == config.AuthChatGPT:
-					cb.credential = func() string { return codex().AccessToken() }
-				case e != nil:
-					cb.credential, cb.refusedRetry = func() string { return strconv.FormatUint(e.Generation(), 10) }, catalogRetry
-				}
-				backends[name] = cb
-			} else {
-				backends[name] = be
+			backends[name] = modelBackend(name, p, c, cfg.ContextWindowTokens, env, codex)
+			if p.Vendor != "" {
+				backends[name] = &accountBackend{base: backends[name], name: name, vendor: p.Vendor, routing: cfg.AccountRouting, getenv: env.Getenv,
+					transport: func() http.RoundTripper {
+						if transport == nil {
+							return nil
+						}
+						return transport(name)
+					},
+					build: func(tr func(string) http.RoundTripper) turn.Backend {
+						return modelBackend(name, p, client(name, p, tr, env, codex, cfg.RequestMaxRetriesValue()), cfg.ContextWindowTokens, env, codex)
+					}}
 			}
 			if env.NoLogin && p.Auth == config.AuthChatGPT {
 				hidden[name] = true
@@ -116,6 +118,23 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		}
 	}
 	return r
+}
+
+// modelBackend returns the backend of client c of entry name. An entry that reads its model list from the ChatGPT backend lists it through c.
+func modelBackend(name string, p config.Provider, c provider.Provider, contextWindow int, env Env, codex func() *codexauth.Source) turn.Backend {
+	be := modelapi.New(c, contextWindow, env.Log)
+	rc, ok := c.(*responses.Client)
+	if !ok || p.ModelsFrom != config.ModelsFromChatGPT {
+		return be
+	}
+	cb := &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return "" }}
+	switch e := env.Logins.Of(name, p); {
+	case p.Auth == config.AuthChatGPT:
+		cb.credential = func() string { return codex().AccessToken() }
+	case e != nil:
+		cb.credential, cb.refusedRetry = func() string { return strconv.FormatUint(e.Generation(), 10) }, catalogRetry
+	}
+	return cb
 }
 
 // client returns the model API client of entry name, or nil for an entry

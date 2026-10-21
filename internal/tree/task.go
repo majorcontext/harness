@@ -313,8 +313,18 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string, accoun
 	}
 	if accounts != nil {
 		var settings protocol.Settings
-		if err := c.Actor.Read(ctx, func(st *eventlog.State) { settings = st.Settings() }); err != nil {
+		var model string
+		if err := c.Actor.Read(ctx, func(st *eventlog.State) {
+			settings, model = st.Settings(), st.Model()
+		}); err != nil {
 			return false, err
+		}
+		if t.cfg.Vendor == nil || t.cfg.Vendor(model) == "" {
+			for _, account := range accounts {
+				if account != "" {
+					return false, fmt.Errorf("child model %q provider has no vendor for the requested account selection", model)
+				}
+			}
 		}
 		settings.Accounts = maps.Clone(settings.Accounts)
 		if settings.Accounts == nil {

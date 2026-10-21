@@ -128,6 +128,8 @@ type Backend struct {
 	workDir string
 	// toolLoading is the mcp_tool_loading mode of the config.
 	toolLoading string
+	routing     *config.AccountRouting
+	getenv      func(string) string
 }
 
 // New returns the Backend of provider entry p. The CLI keeps only the last
@@ -154,6 +156,9 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req),
 		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID,
 		askedCh: make(chan string, 1), askMsg: map[string]string{}}
+	if b.p.Vendor != "" {
+		r.account = req.Settings.Accounts[b.p.Vendor]
+	}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {
@@ -238,6 +243,11 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		req.Sent(system)
 	}
 	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading))
+	if account := req.Settings.Accounts[b.p.Vendor]; b.p.Vendor != "" && account != "" {
+		if env, err = b.accountEnv(env, account); err != nil {
+			return nil, err
+		}
+	}
 	if b.p.SessionMirror && !req.OneShot {
 		dir, err := scratch(r.mirror)
 		r.dir = dir

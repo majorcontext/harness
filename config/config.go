@@ -5,11 +5,14 @@ package config
 
 // AccountRouting configures how a selected session account reaches the network.
 type AccountRouting struct {
+	// ProxyURLEnv names the environment variable that holds the base proxy URL.
 	ProxyURLEnv string `json:"proxy_url_env,omitempty"`
-	Separator   string `json:"separator,omitempty"`
+	// Separator is appended between the proxy username and account ID.
+	Separator string `json:"separator,omitempty"`
 }
 
-// Config is the parsed harness configuration. The zero value is valid and represents no configuration.
+// Config is the parsed harness configuration. The zero value is valid and
+// represents "no configuration": every method degrades to built-in defaults.
 type Config struct {
 	// Model is the default model ref ("provider/model") or an alias key.
 	Model string `json:"model,omitempty"`

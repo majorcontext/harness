@@ -72,6 +72,8 @@ type Config struct {
 	Profiles   func() (map[string]prompt.Profile, error)
 	Resolve    func(string) string
 	CheckModel func(model string) error
+	// Vendor returns the configured vendor of the provider that serves model.
+	Vendor func(model string) string
 	// Suffix returns a fresh random suffix for an ID.
 	Suffix func() string
 	// Log receives the log lines of the tree. nil: slog.Default().
@@ -114,7 +116,8 @@ func (t *Tree) allowsTask(depth int) bool { return depth < t.cfg.MaxDepth }
 // parent, and the effort of the child, or "" for the default of its provider.
 type Choice struct {
 	Model, Effort string
-	Accounts      map[string]string
+	// Accounts are merged over the inherited vendor-to-account selections.
+	Accounts map[string]string
 }
 
 // spawn appends child.spawned to parent, then creates the child with task
@@ -139,6 +142,27 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	if model != "" {
 		if err := t.cfg.CheckModel(model); err != nil {
 			return "", err
+		}
+	}
+	if len(ch.Accounts) > 0 {
+		resolved := model
+		if resolved == "" {
+			created, err := t.s.Created(ctx, parent)
+			if err != nil {
+				return "", err
+			}
+			resolved = created.Model
+		}
+		vendor := ""
+		if t.cfg.Vendor != nil {
+			vendor = t.cfg.Vendor(resolved)
+		}
+		if vendor == "" {
+			for _, account := range ch.Accounts {
+				if account != "" {
+					return "", fmt.Errorf("child model %q provider has no vendor for the requested account selection", resolved)
+				}
+			}
 		}
 	}
 	ps, ok := t.s.Running(parent)

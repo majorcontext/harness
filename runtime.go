@@ -237,7 +237,11 @@ func New(opts Options) (*Runtime, error) {
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },
-		Resolve: opts.Config.ResolveModel, CheckModel: catalog.CheckChild, Suffix: newSuffix, Log: r.log})
+		Resolve: opts.Config.ResolveModel, CheckModel: catalog.CheckChild,
+		Vendor: func(model string) string {
+			provider, _, _ := strings.Cut(model, "/")
+			return opts.Config.ProviderEntries()[provider].Vendor
+		}, Suffix: newSuffix, Log: r.log})
 	tools := make([]turn.Tool, len(opts.Tools))
 	for i, t := range opts.Tools {
 		tools[i] = embedded{t}

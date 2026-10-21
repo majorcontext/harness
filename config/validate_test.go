@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+func TestProviderRejectsAnEmptyVendor(t *testing.T) {
+	cfg, err := Parse("config.json", []byte(`{"providers":{"gateway":{"type":"openai-compat","base_url":"https://gateway.test","vendor":""}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "providers.gateway.vendor must be a non-empty string") {
+		t.Fatalf("Validate() = %v, want empty vendor error", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	cc := map[string]Provider{"cc": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--append-system-prompt"}}}
 	for _, tc := range []struct {

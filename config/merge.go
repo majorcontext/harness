@@ -174,6 +174,9 @@ func copyProvider(v Provider) Provider {
 }
 
 func overlayProvider(ex, v Provider) Provider {
+	if v.vendorSet {
+		ex.Vendor, ex.vendorSet = v.Vendor, true
+	}
 	if v.Type != "" {
 		ex.Type = v.Type
 	}
