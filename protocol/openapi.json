@@ -920,6 +920,9 @@
             "type": "string"
           },
           "arguments": true,
+          "arguments_text": {
+            "type": "string"
+          },
           "is_error": {
             "type": "boolean"
           },

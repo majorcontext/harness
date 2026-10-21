@@ -266,6 +266,7 @@ export interface LogPart {
   call_id?: string;
   name?: string;
   arguments?: unknown;
+  arguments_text?: string;
   is_error?: boolean;
   media_type?: string;
   blob_key?: string;

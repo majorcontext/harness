@@ -1,6 +1,7 @@
 package harnesstest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -303,7 +304,7 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 		idx++
 	}
 	for _, tc := range rep.ToolCalls {
-		args, _ := json.Marshal(orEmpty(tc.Input))
+		args := modelArguments(orEmpty(tc.Input))
 		o.wmu.Lock()
 		o.callNames[tc.ID] = tc.Name
 		o.wmu.Unlock()
@@ -333,6 +334,32 @@ func reasoningFrames(idx int, respID string, parts []string) []frame {
 		frames = append(frames, newFrame("response.reasoning_summary_text.delta", obj{"output_index": idx, "summary_index": i, "delta": p}))
 	}
 	return append(frames, newFrame("response.output_item.done", obj{"output_index": idx, "item": item}))
+}
+
+// modelArguments encodes input as the Responses API writes function_call arguments (see
+// testdata/wire/responses.tool.sse): a space after each colon and comma, and no HTML escapes.
+func modelArguments(input map[string]any) []byte {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(input)
+	compact := bytes.TrimSpace(buf.Bytes())
+	out := make([]byte, 0, len(compact)+len(compact)/4)
+	inString, escaped := false, false
+	for _, c := range compact {
+		out = append(out, c)
+		switch {
+		case escaped:
+			escaped = false
+		case inString && c == '\\':
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case !inString && (c == ':' || c == ','):
+			out = append(out, ' ')
+		}
+	}
+	return out
 }
 
 func orEmpty(m map[string]any) map[string]any {
