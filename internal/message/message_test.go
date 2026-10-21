@@ -342,7 +342,7 @@ func TestToolCallEmptyArgumentsRoundTripMatchesTranscodeConvention(t *testing.T)
 func TestMarshalPartToolCallFieldsMatchStruct(t *testing.T) {
 	structKeys := jsonFieldKeys(t, reflect.TypeOf(ToolCall{}))
 
-	tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage(`{"a":1}`)}
+	tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage(`{"a":1}`), ProviderData: ProviderData{"codex": json.RawMessage(`{"id":"fc_1"}`)}}
 	raw, err := marshalPart(tc)
 	if err != nil {
 		t.Fatalf("marshalPart: %v", err)

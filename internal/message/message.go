@@ -143,21 +143,16 @@ func (m *Message) Normalize() {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *Reasoning:
-			for family, raw := range v.ProviderData {
-				if len(raw) == 0 || !json.Valid(raw) {
-					delete(v.ProviderData, family)
-				}
-			}
+			v.ProviderData.dropInvalid()
 		case *WebSearch:
-			for family, raw := range v.ProviderData {
-				if len(raw) == 0 || !json.Valid(raw) {
-					delete(v.ProviderData, family)
-				}
-			}
+			v.ProviderData.dropInvalid()
 		case *ToolCall:
 			if len(v.Arguments) > 0 && !json.Valid(v.Arguments) {
 				v.Arguments = nil
 			}
+			v.ProviderData.dropInvalid()
+		case *Text:
+			v.ProviderData.dropInvalid()
 		case *ToolResult:
 			if v.isEmpty() {
 				v.Content = Parts{&Text{Text: NoToolOutputText}}
@@ -189,7 +184,8 @@ type Text struct {
 	Text string `json:"text"`
 	// Citations are the sources that the provider cited for this text. They
 	// are a record for readers: a provider request carries the text alone.
-	Citations []Citation `json:"citations,omitempty"`
+	Citations    []Citation   `json:"citations,omitempty"`
+	ProviderData ProviderData `json:"provider_data,omitempty"` // what the same family sends back with the text, as Reasoning.ProviderData
 }
 
 // Citation is a source that a provider cited for a Text part. Quote is the
@@ -262,9 +258,10 @@ type ToolCall struct {
 	// CallID is harness-internal. Transcoders derive provider-compliant IDs
 	// from it deterministically (see ProviderCallID) so retranscoding a
 	// history yields byte-identical wire requests.
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	CallID       string          `json:"call_id"`
+	Name         string          `json:"name"`
+	Arguments    json.RawMessage `json:"arguments"`
+	ProviderData ProviderData    `json:"provider_data,omitempty"` // what the same family sends back with the call, as Reasoning.ProviderData
 }
 
 func (*ToolCall) partType() PartType { return PartToolCall }
@@ -502,6 +499,15 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // future — safe without that encoder having to know about this footgun.
 type ProviderData map[string]json.RawMessage
 
+// dropInvalid deletes each entry that is empty or not valid JSON.
+func (pd ProviderData) dropInvalid() {
+	for family, raw := range pd {
+		if len(raw) == 0 || !json.Valid(raw) {
+			delete(pd, family)
+		}
+	}
+}
+
 // maxProviderDataEntry bounds a single ProviderData entry's replayed size —
 // 256KiB is chosen to sit far above any signature or redacted_thinking
 // payload size observed in practice while still being a hard, structural
@@ -646,11 +652,12 @@ func marshalPart(p Part) ([]byte, error) {
 		// fields explicitly sidesteps that and applies the same
 		// empty-Arguments normalization inline.
 		return json.Marshal(struct {
-			Type      PartType        `json:"type"`
-			CallID    string          `json:"call_id"`
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		}{PartToolCall, v.CallID, v.Name, v.safeArguments()})
+			Type         PartType        `json:"type"`
+			CallID       string          `json:"call_id"`
+			Name         string          `json:"name"`
+			Arguments    json.RawMessage `json:"arguments"`
+			ProviderData ProviderData    `json:"provider_data,omitempty"`
+		}{PartToolCall, v.CallID, v.Name, v.safeArguments(), v.ProviderData})
 	case *ToolResult:
 		// Deliberately not embedding *ToolResult (mirroring the ToolCall
 		// case above, for the exact same reason): now that ToolResult

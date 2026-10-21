@@ -146,6 +146,9 @@ type WireEvent struct {
 	CredentialHeaders map[string]string `json:"credential_headers,omitempty"`
 	// SessionHeader reports a session-id header equal to the x-client-request-id header.
 	SessionHeader bool `json:"session_header,omitempty"`
+	// ItemsWithoutServerID counts the output items that the request sends back (assistant messages,
+	// function calls, and reasoning) whose id is not an id that the server gave.
+	ItemsWithoutServerID int `json:"items_without_server_id,omitempty"`
 }
 
 // stamp copies the identity headers of r into w.
@@ -195,6 +198,7 @@ type OpenAI struct {
 	responses     map[string]int    // by id prefix
 	callNames     map[string]string // call id -> tool name, for chained requests that omit the call
 	known         map[string]bool   // "conn/response id" of every completed response
+	issued        map[string]bool   // id of every output item the server sent
 	faults        []string
 	held          bool // a prewarm took the hold of HoldPrewarm
 
@@ -230,6 +234,7 @@ func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
 		responses: map[string]int{},
 		callNames: map[string]string{},
 		known:     map[string]bool{},
+		issued:    map[string]bool{},
 		Server:    newServer(steps),
 	}
 	if opts.Injected != nil {
@@ -506,6 +511,7 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wr := o.stamp(newWireEvent("sse", "request", 0, b), r)
+	wr.ItemsWithoutServerID = o.itemsWithoutServerID(b)
 	if o.opts.Injected != nil {
 		wr.PromptCacheKey = b.PromptCacheKey
 	}
@@ -604,6 +610,7 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 		event = "prewarm"
 	}
 	wev := newWireEvent("ws", event, n, b)
+	wev.ItemsWithoutServerID = o.itemsWithoutServerID(b)
 	if o.opts.Injected != nil {
 		wev.PromptCacheKey = b.PromptCacheKey
 	}
@@ -654,6 +661,33 @@ func writeFrames(ctx context.Context, conn *websocket.Conn, frames ...frame) boo
 		}
 	}
 	return true
+}
+
+// itemsWithoutServerID counts the output items of b whose id the server did not give.
+func (o *OpenAI) itemsWithoutServerID(b openAIBody) int {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	n := 0
+	for _, raw := range b.Input {
+		var it wireItem
+		if json.Unmarshal(raw, &it) != nil {
+			continue
+		}
+		output := it.Type == "function_call" || it.Type == "reasoning" || it.Type == "message" && it.Role == "assistant"
+		if output && !o.issued[it.ID] {
+			n++
+		}
+	}
+	return n
+}
+
+// issue records ids as ids of output items that the server gave.
+func (o *OpenAI) issue(ids ...string) {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	for _, id := range ids {
+		o.issued[id] = true
+	}
 }
 
 func (o *OpenAI) isKnown(conn int, id string) bool {

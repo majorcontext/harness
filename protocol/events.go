@@ -207,8 +207,8 @@ type LogPart struct {
 	BlobKey   string    `json:"blob_key,omitempty"`
 	Bytes     int       `json:"bytes,omitempty"`
 	Blobs     []LogPart `json:"blobs,omitempty"`
-	// ProviderData holds the opaque, provider-tagged payload of a reasoning
-	// or web_search part, which the provider replays on the next request.
+	// ProviderData holds the opaque, provider-tagged payload of a reasoning,
+	// web_search, text, or tool_call part, which the provider replays on the next request.
 	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`
 	Citations    []Citation                 `json:"citations,omitempty"`
 	// A web_search part holds its call ID in CallID, the error code of a failed search in Text with IsError set, and:

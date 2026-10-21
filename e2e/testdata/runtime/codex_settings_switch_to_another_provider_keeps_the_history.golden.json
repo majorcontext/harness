@@ -156,6 +156,7 @@
               "reasoning.encrypted_content"
             ],
             "input_items": 4,
+            "items_without_server_id": 1,
             "reasoning_effort": "high",
             "transport": "sse"
           }
