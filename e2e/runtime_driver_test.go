@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,9 +93,16 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 		if err != nil {
 			t.Fatalf("parse E2E_MODEL_PROXY: %v", err)
 		}
+		bypass := strings.Split(env["NO_PROXY"], ",")
 		d.modelTransport = func(string) http.RoundTripper {
 			transport := http.DefaultTransport.(*http.Transport).Clone()
-			transport.Proxy = http.ProxyURL(u)
+			// As the serve binary does, a host that NO_PROXY names goes direct.
+			transport.Proxy = func(r *http.Request) (*url.URL, error) {
+				if slices.Contains(bypass, r.URL.Hostname()) {
+					return nil, nil
+				}
+				return u, nil
+			}
 			return transport
 		}
 	}

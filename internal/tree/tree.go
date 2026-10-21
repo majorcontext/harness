@@ -146,30 +146,13 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 			return "", err
 		}
 	}
-	if len(ch.Accounts) > 0 {
-		resolved := model
-		if resolved == "" {
-			created, err := t.s.Created(ctx, parent)
-			if err != nil {
-				return "", err
-			}
-			resolved = created.Model
-		}
-		vendor := ""
-		if t.cfg.Vendor != nil {
-			vendor = t.cfg.Vendor(resolved)
-		}
-		if vendor == "" {
-			for _, account := range ch.Accounts {
-				if account != "" {
-					return "", fmt.Errorf("child model %q provider has no vendor for the requested account selection", resolved)
-				}
-			}
-		}
-	}
 	ps, ok := t.s.Running(parent)
 	if !ok {
 		return "", session.ErrNotOwned
+	}
+	// The child gets the current model of the parent, so the vendor check reads it, not the creation record.
+	if err := t.checkAccounts(cmp.Or(model, ps.Actor.View().Session.Model), ch.Accounts); err != nil {
+		return "", err
 	}
 	id := "ses_" + t.cfg.Suffix()
 	c, err := t.SpawnChild(ctx, ps, id, agent)
@@ -178,6 +161,10 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	}
 	if model != "" {
 		c.Model = model
+	}
+	// A settings change can land between the check and the spawn; the model of the record decides.
+	if err := t.checkAccounts(c.Model, ch.Accounts); err != nil {
+		return "", errors.Join(err, ps.Actor.Settle(context.WithoutCancel(ctx), protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil))
 	}
 	c.Settings.Effort = string(effort)
 	if len(ch.Accounts) > 0 {
@@ -195,6 +182,19 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 		return "", errors.Join(err, ps.Actor.Settle(ctx, protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil))
 	}
 	return id, nil
+}
+
+// checkAccounts refuses a selection with an account when the provider of model has no vendor.
+func (t *Tree) checkAccounts(model string, accounts map[string]string) error {
+	if t.cfg.Vendor != nil && t.cfg.Vendor(model) != "" {
+		return nil
+	}
+	for _, account := range accounts {
+		if account != "" {
+			return fmt.Errorf("child model %q provider has no vendor for the requested account selection", model)
+		}
+	}
+	return nil
 }
 
 // SpawnChild appends child.spawned to parent ps and returns the
