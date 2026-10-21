@@ -60,37 +60,37 @@ func flat(msgs []harnesstest.Message) []string {
 	return out
 }
 
-func isTail(p harnesstest.Part) bool {
+func isEngineContext(p harnesstest.Part) bool {
 	return p.Kind == "text" && strings.HasPrefix(p.Text, prompt.EngineContextOpenTag)
 }
 
-// expectTail checks request req: its last block is an engine-context block that holds has and lacks lacks, its system
-// prompt and its cache breakpoint hold no tail, and request prev without its own tail is a prefix of it.
-type expectTail struct {
+// expectPinned checks request req: its last block is an engine-context block that holds has and lacks lacks, its
+// system prompt holds neither and equals that of request prev, and request prev is a prefix of it.
+type expectPinned struct {
 	req, prev  int
 	has, lacks []string
 }
 
-func (a expectTail) run(t *testing.T, r *run) {
+func (a expectPinned) run(t *testing.T, r *run) {
 	t.Helper()
 	reqs := r.fake.Requests()
 	if a.req < 1 || a.req > len(reqs) || a.prev < 1 || a.prev > len(reqs) {
-		t.Fatalf("expectTail: requests %d and %d of %d", a.req, a.prev, len(reqs))
+		t.Fatalf("expectPinned: requests %d and %d of %d", a.req, a.prev, len(reqs))
 	}
 	req, prev := reqs[a.req-1], reqs[a.prev-1]
 	last := req.Messages[len(req.Messages)-1]
-	tail := last.Parts[len(last.Parts)-1]
-	if !isTail(tail) {
-		t.Fatalf("request %d does not end with an engine-context block: %q", a.req, tail.Text)
+	pin := last.Parts[len(last.Parts)-1]
+	if !isEngineContext(pin) {
+		t.Fatalf("request %d does not end with an engine-context block: %q", a.req, pin.Text)
 	}
 	for _, s := range a.has {
-		if !strings.Contains(tail.Text, s) {
-			t.Errorf("request %d tail lacks %q: %q", a.req, s, tail.Text)
+		if !strings.Contains(pin.Text, s) {
+			t.Errorf("request %d last block lacks %q: %q", a.req, s, pin.Text)
 		}
 	}
 	for _, s := range a.lacks {
-		if strings.Contains(tail.Text, s) {
-			t.Errorf("request %d tail holds %q: %q", a.req, s, tail.Text)
+		if strings.Contains(pin.Text, s) {
+			t.Errorf("request %d last block holds %q: %q", a.req, s, pin.Text)
 		}
 	}
 	for _, s := range append(a.has, a.lacks...) {
@@ -101,15 +101,9 @@ func (a expectTail) run(t *testing.T, r *run) {
 	if req.System != prev.System {
 		t.Errorf("request %d system prompt differs from request %d", a.req, a.prev)
 	}
-	if got, want := req.CacheBreakpoints[len(req.CacheBreakpoints)-1], (harnesstest.CacheBreakpoint{Message: len(req.Messages) - 1, Block: len(last.Parts) - 2}); got != want {
-		t.Errorf("request %d last cache breakpoint = %+v, want %+v (the last block before the tail)", a.req, got, want)
-	}
-	before := flat(prev.Messages)
-	if pl := prev.Messages[len(prev.Messages)-1]; isTail(pl.Parts[len(pl.Parts)-1]) {
-		before = before[:len(before)-1]
-	}
-	if got := flat(req.Messages); len(got) < len(before) || !slices.Equal(got[:len(before)], before) {
-		t.Errorf("request %d without its tail is not a prefix of request %d:\n%q\n---\n%q", a.prev, a.req, before, got)
+	before, got := flat(prev.Messages), flat(req.Messages)
+	if len(got) < len(before) || !slices.Equal(got[:len(before)], before) {
+		t.Errorf("request %d is not a prefix of request %d:\n%q\n---\n%q", a.prev, a.req, before, got)
 	}
 }
 
@@ -174,12 +168,12 @@ func TestContractPluginLiveSet(t *testing.T) {
 			actions: liveTurns(putPlugins{plugins: []map[string]any{pluginEntry(t, "fixture", map[string]any{"extra_tool": "mcp"})}, status: http.StatusBadRequest}),
 		},
 		{
-			name:   "plugin_put_mid_session_moves_the_system_transform_segment_to_the_tail_of_the_next_call",
+			name:   "plugin_put_mid_session_pins_the_new_system_transform_segment_at_the_next_call",
 			config: pluginConfig(t, map[string]any{"segment": "SEG-A"}),
 			model:  afterFirstTurn(),
 			actions: append(liveTurns(fixture(map[string]any{"segment": "SEG-B"})),
-				expectTail{req: 1, prev: 1, has: []string{"SEG-A"}, lacks: []string{"SEG-B"}},
-				expectTail{req: 2, prev: 1, has: []string{"SEG-B"}, lacks: []string{"SEG-A"}},
+				expectPinned{req: 1, prev: 1, has: []string{"SEG-A"}, lacks: []string{"SEG-B"}},
+				expectPinned{req: 2, prev: 1, has: []string{"SEG-B"}, lacks: []string{"SEG-A"}},
 			),
 		},
 		{
@@ -212,7 +206,7 @@ var pluginLiveRows = map[string]runtimeRow{
 	"plugin_put_adds_a_plugin_and_its_before_hook_runs_on_the_next_tool_call":                sameAsServe(),
 	"plugin_put_with_one_bad_manifest_is_invalid_and_the_old_set_still_guards":               sameAsServe(),
 	"plugin_put_with_a_tool_named_mcp_is_invalid_because_the_loader_has_that_name":           sameAsServe(),
-	"plugin_put_mid_session_moves_the_system_transform_segment_to_the_tail_of_the_next_call": sameAsServe(),
+	"plugin_put_mid_session_pins_the_new_system_transform_segment_at_the_next_call":          sameAsServe(),
 	"plugin_put_adds_a_tool_that_is_deferred_named_in_the_notice_and_loaded_with_mcp_select": sameAsServe(),
 	"plugin_put_removes_a_plugin_and_its_tool_answers_no_such_tool_available":                sameAsServe(),
 }

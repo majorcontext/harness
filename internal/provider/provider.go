@@ -11,7 +11,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"time"
 
 	"github.com/majorcontext/harness/internal/message"
@@ -29,12 +28,9 @@ type ToolDef struct {
 // owns all wire-format concerns, including prompt-cache markers (injected at
 // transcode time, never stored).
 type Request struct {
-	Model    modelref.ModelRef
-	System   []string // system prompt segments, in order
-	Messages []message.Message
-	// Tail holds messages that follow Messages in this request alone. A transcoder that marks a cache breakpoint
-	// marks the last of Messages, so a Tail is never part of a cached prefix.
-	Tail        []message.Message
+	Model       modelref.ModelRef
+	System      []string // system prompt segments, in order
+	Messages    []message.Message
 	Tools       []ToolDef
 	Temperature *float64
 	TopP        *float64
@@ -66,11 +62,6 @@ type Request struct {
 	SessionKey string
 	// CacheKey, when set, is the prompt-cache routing key in place of SessionKey. It leaves the raw session key out of the request.
 	CacheKey string
-}
-
-// WithTail returns the messages of the request followed by its Tail.
-func (r *Request) WithTail() []message.Message {
-	return append(slices.Clone(r.Messages), r.Tail...)
 }
 
 // StopReason is why the model stopped generating.

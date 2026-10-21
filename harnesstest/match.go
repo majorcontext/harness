@@ -15,7 +15,7 @@ func SystemContains(substr string) Matcher {
 	return func(r Request) bool { return strings.Contains(r.System, substr) }
 }
 
-// TailContains matches a request whose last content block holds substr, as the tail of a model call does.
+// TailContains matches a request whose last content block holds substr, as the pin of a model call that changed it does.
 func TailContains(substr string) Matcher {
 	return func(r Request) bool {
 		if len(r.Messages) == 0 {

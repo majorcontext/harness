@@ -372,11 +372,6 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	}
 	last := &out.Messages[len(out.Messages)-1]
 	last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
-	for i := range req.Tail {
-		if err := add(&req.Tail[i]); err != nil {
-			return nil, err
-		}
-	}
 
 	return out, nil
 }
