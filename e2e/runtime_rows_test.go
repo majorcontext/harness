@@ -26,7 +26,7 @@ const (
 	specChildHint               = "the recover hint is masked and cut at 120 runes"
 	specChildHandle             = "the parent retains the masked result as `tool_result.retained` in the append of `child.settled`"
 	specChildNoRead             = "the preview ends `… [truncated; full result unavailable]`"
-	specChildClaude             = "On a backend with `OwnsLoop`, the report is a `queue` input"
+	specChildClaude             = "on a backend with `OwnsLoop`, that turn reads every report that waits"
 	specChildNoGoal             = "a child session has none"
 	specChildAgent              = "`protocol.Session.agent` is the agent profile name that the child was spawned with"
 	specChildWording            = "child-report-segment"
@@ -188,7 +188,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, accountRows, map[string]runtimeRow{
+var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, claudeChildReportRows, accountRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -361,8 +361,8 @@ var runtimeRows = withRows(mcpLiveRows, pluginLiveRows, codexChainRowKinds, code
 	"child_long_error_reaches_a_busy_parent":                                                     reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
 	"child_long_result_reaches_a_busy_parent":                                                    reGolden(specChildReport, specChildLong, specChildWording),
 	"claudecode_compact_delegated":                                                               reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specClaudeCompactPostTokens, specRestartOpens),
-	"claudecode_child_report_waits_for_the_next_turn":                                            sameAsServe(),
-	"claudecode_child_reports_share_the_next_turn":                                               sameAsServe(),
+	"claudecode_child_report_with_no_tool_call_in_flight_waits_for_the_next_turn":                sameAsServe(),
+	"claudecode_child_reports_with_no_tool_call_in_flight_share_the_next_turn":                   sameAsServe(),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":                                     reGolden(specQueue, specChildReport, specChildClaude),
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":                                         sameAsServe(),
 	"claudecode_bridge_marks_exactly_the_read_only_tools_with_read_only_hint":                    sameAsServe(),

@@ -275,7 +275,8 @@ func (a *Actor) next(check bool) error {
 
 // startInputs returns the inputs of the turn that starts from q, which is not
 // empty: the first input, and, on a backend that owns the loop, every report
-// of a child, because that backend reads no report in a turn that it runs.
+// of a child, because that backend takes no steer input before its first
+// tool call.
 func (a *Actor) startInputs(q []protocol.InputAdmitted) []string {
 	ids := []string{q[0].InputID}
 	if !a.ownsLoop() {
