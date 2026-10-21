@@ -20,6 +20,8 @@ var (
 	mcpPortStart = sync.OnceFunc(func() { mcpNextPort.Store(rand.Uint32N(mcpPortSpan)) })
 )
 
+// Sequential ports below the default ephemeral range prevent bind(0) from reusing a closed fixture address.
+// A widened ephemeral range or a wildcard listener on macOS can break that isolation.
 func listenMCP() (net.Listener, func(), error) {
 	mcpPortStart()
 	var err error

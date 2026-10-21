@@ -10,11 +10,10 @@ import (
 )
 
 func listenMCP() (net.Listener, func(), error) {
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, syscall.IPPROTO_TCP)
 	if err != nil {
 		return nil, nil, err
 	}
-	syscall.CloseOnExec(fd)
 	release := func() { _ = syscall.Close(fd) }
 	fail := func(err error) (net.Listener, func(), error) {
 		release()
@@ -23,7 +22,7 @@ func listenMCP() (net.Listener, func(), error) {
 	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 0); err != nil {
 		return fail(err)
 	}
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1); err != nil {
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, mcpReusePortOption, 1); err != nil {
 		return fail(err)
 	}
 	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
@@ -46,7 +45,7 @@ func listenMCP() (net.Listener, func(), error) {
 func mcpReusePort(_, _ string, raw syscall.RawConn) error {
 	var optionErr error
 	err := raw.Control(func(fd uintptr) {
-		optionErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+		optionErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, mcpReusePortOption, 1)
 	})
 	if err != nil {
 		return err
