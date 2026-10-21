@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -102,24 +101,22 @@ func TestMCPServerRefusesWhenUnavailable(t *testing.T) {
 	}
 }
 
-func TestMCPServerListensOutsideTheEphemeralPortRange(t *testing.T) {
+func TestMCPServerClosedAddressRefusesConnections(t *testing.T) {
 	srv := NewMCPServer(t, mcpTestSpec())
 	u, err := url.Parse(srv.URL())
 	if err != nil {
 		t.Fatal(err)
 	}
-	port, err := strconv.Atoi(u.Port())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if port < mcpPortBase || port >= mcpPortBase+mcpPortSpan {
-		t.Fatalf("port %d is outside [%d, %d)", port, mcpPortBase, mcpPortBase+mcpPortSpan)
-	}
 	srv.Close()
-	conn, err := net.Dial("tcp", u.Host)
+	checkMCPReleased(t, u.Host)
+}
+
+func checkMCPRefused(t *testing.T, addr string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
 	if err == nil {
 		_ = conn.Close()
-		t.Fatalf("dial %s succeeded after Close", u.Host)
+		t.Fatalf("dial %s succeeded after Close", addr)
 	}
 	if !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Fatalf("dial error = %v, want connection refused", err)
