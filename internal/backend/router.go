@@ -102,7 +102,13 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 						return transport(name)
 					},
 					build: func(tr func(string) http.RoundTripper) turn.Backend {
-						return modelBackend(name, p, client(name, p, tr, env, codex, cfg.RequestMaxRetriesValue()), cfg.ContextWindowTokens, env, codex)
+						accountClient := client(name, p, tr, env, codex, cfg.RequestMaxRetriesValue())
+						if base, ok := c.(*responses.Client); ok {
+							if account, ok := accountClient.(*responses.Client); ok {
+								account.ShareLiveCatalog(base)
+							}
+						}
+						return modelBackend(name, p, accountClient, cfg.ContextWindowTokens, env, codex)
 					}}
 			}
 			if env.NoLogin && p.Auth == config.AuthChatGPT {

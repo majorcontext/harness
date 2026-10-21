@@ -98,7 +98,7 @@ func (c *Client) ListModels(ctx context.Context) ([]modelmeta.Model, error) {
 			lite[e.Slug] = e.UseResponsesLite
 		}
 	}
-	c.live.Store(&liveCatalog{efforts: levels, lite: lite})
+	c.liveCatalogValue().Store(&liveCatalog{efforts: levels, lite: lite})
 	return models, nil
 }
 

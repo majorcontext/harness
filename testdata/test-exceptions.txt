@@ -40,6 +40,6 @@ internal/tool/webfetch/webfetch_test.go the address classifier, the dial check w
 internal/injectedauth/injectedauth_test.go the body of a probe is dropped by a model call that the server rejects, by a reset, and by a failed read; a scenario cannot place a request between the probe and the catalog fetch of one session open, or cut a response body
 internal/tool/mcpsrc/live_test.go the live set needs an in-memory server with held answers, which a scenario cannot hold; a synctest bubble sees every wait
 internal/mcp/server_test.go the key of a JSON-RPC request id is a pure function of its spelling, which a scenario cannot vary: the CLI always sends one spelling
-internal/backend/accounts_test.go a fake account backend checks proxy routing, NO_PROXY refusal, usage stamping, LRU eviction, active-client protection, and close semantics; an HTTP Responses fixture checks the selected account and parent request at the proxy
+internal/backend/accounts_test.go internal LRU eviction, in-flight lease protection, and backend/transport close ownership cannot be reached by a contract row
 internal/backend/claudecode/accounts_test.go a fake CLI process inspects the exact proxy variables of a routed child process; a contract model server cannot observe the spawned process environment
 harnesstest/openai_test.go OpenAI is the Responses fixture; a pure step-selection test pins applying request-dependent Calls for Codex tool fixtures
