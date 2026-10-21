@@ -57,14 +57,6 @@ type accountBackend struct {
 	closeDone chan struct{}
 }
 
-func (a *accountBackend) of(req turn.Request) (turn.Backend, error) {
-	lease, err := a.account(req.Settings.Accounts[a.vendor], false)
-	if err != nil {
-		return nil, err
-	}
-	return lease.backend, nil
-}
-
 func (a *accountBackend) account(account string, inFlight bool) (*accountLease, error) {
 	if account == "" {
 		return &accountLease{backend: a.base}, nil

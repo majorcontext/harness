@@ -25,12 +25,10 @@ func newAccountProxy(t *testing.T, modelURL string) (string, *accountProxyCaptur
 	if err != nil {
 		t.Fatal(err)
 	}
-	reverse := httputil.NewSingleHostReverseProxy(target)
-	director := reverse.Director
-	reverse.Director = func(r *http.Request) {
-		r.Header.Del("Proxy-Authorization")
-		director(r)
-	}
+	reverse := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(target)
+		r.Out.Header.Del("Proxy-Authorization")
+	}}
 	capture := new(accountProxyCapture)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		value := strings.TrimPrefix(r.Header.Get("Proxy-Authorization"), "Basic ")
