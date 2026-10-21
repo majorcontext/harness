@@ -194,12 +194,13 @@ type SearchResult struct {
 
 // LogPart is one piece of message or input content in the log.
 type LogPart struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	CallID    string          `json:"call_id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	Type          string          `json:"type"`
+	Text          string          `json:"text,omitempty"`
+	CallID        string          `json:"call_id,omitempty"`
+	Name          string          `json:"name,omitempty"`
+	Arguments     json.RawMessage `json:"arguments,omitempty"`
+	ArgumentsText string          `json:"arguments_text,omitempty"` // the arguments as the model wrote them, when the JSON encoding of Arguments changes the bytes
+	IsError       bool            `json:"is_error,omitempty"`
 	// MediaType, BlobKey, and Bytes describe a blob part, whose bytes the
 	// Store holds under BlobKey. Blobs are the blob parts of a tool_result.
 	MediaType string    `json:"media_type,omitempty"`

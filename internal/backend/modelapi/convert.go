@@ -1,6 +1,7 @@
 package modelapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,7 +36,11 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.L
 		case protocol.LogPartReasoning:
 			out.Parts = append(out.Parts, &message.Reasoning{Text: p.Text, ProviderData: p.ProviderData})
 		case protocol.LogPartToolCall:
-			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
+			args := p.Arguments
+			if p.ArgumentsText != "" {
+				args = json.RawMessage(p.ArgumentsText)
+			}
+			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: args})
 		case protocol.LogPartToolResult:
 			content := message.Parts{&message.Text{Text: p.Text}}
 			for _, b := range p.Blobs {
@@ -97,10 +102,22 @@ func fromMessage(m *message.Message) protocol.LogMessage {
 			if !json.Valid(args) {
 				args = nil
 			}
-			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args})
+			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args, ArgumentsText: argumentsText(args)})
 		}
 	}
 	return out
+}
+
+// argumentsText returns args when the log encoding of args would change its bytes, else "". A Responses or
+// chat-completions request sends the arguments as a string, and the next request must send the bytes of the model.
+func argumentsText(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if encoded, err := json.Marshal(args); err == nil && bytes.Equal(encoded, args) {
+		return ""
+	}
+	return string(args)
 }
 
 func citations(cs []protocol.Citation) []message.Citation {

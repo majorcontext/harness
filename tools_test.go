@@ -75,7 +75,7 @@ func TestEmbedderTools(t *testing.T) {
 		ran     []string
 	}{
 		{name: "a tool call runs the tool and the next request carries its result",
-			called: "echo", want: `echo ran {"x":1}`, tools: []string{"echo", "secret"}, ran: []string{"call_1 echo"}},
+			called: "echo", want: `echo ran {"x": 1}`, tools: []string{"echo", "secret"}, ran: []string{"call_1 echo"}},
 		{name: "Restrict hides a tool and refuses a call to it", allowed: []string{"echo"},
 			called: "secret", want: noTool + "secret", failed: true, tools: []string{"echo"}},
 		{name: "an empty allow list hides every tool", allowed: []string{},

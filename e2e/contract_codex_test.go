@@ -263,7 +263,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -409,6 +409,33 @@ func codexWebSocketRows() []codexScenario {
 			opts:      harnesstest.OpenAIOptions{RefuseWebSocket: true},
 		},
 	}
+}
+
+func codexChainRows() []codexScenario {
+	wire := []action{recordWire{}}
+	return []codexScenario{
+		{
+			// The server writes arguments with spaces and a literal "&"; the next turn
+			// chains only when the history sends those bytes back.
+			scenario: scenario{
+				name: "codex_ws_chains_the_turn_after_a_tool_call",
+				model: []harnesstest.Step{
+					{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+						{ID: "call_1", Name: "bash", Input: map[string]any{"command": "echo a && echo b"}},
+					}}},
+					{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: codexText("ran")},
+					codexTurnStep("again", "again", "done"),
+				},
+				actions: codexSession(codexTurn("a", "run"), codexTurn("a", "again"), wire),
+			},
+			websocket: true,
+		},
+	}
+}
+
+// codexChainRowKinds is the disposition of the rows that check the chain of a Codex websocket session.
+var codexChainRowKinds = map[string]runtimeRow{
+	"codex_ws_chains_the_turn_after_a_tool_call": reGolden(specItems, specWarm),
 }
 
 func codexTurnStep(name, user, reply string) harnesstest.Step {
