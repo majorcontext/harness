@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand/v2"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -411,55 +409,28 @@ type MCPServer struct {
 	abandoned chan struct{}
 }
 
-// NewMCPServer starts a server that serves spec until t ends. It closes each
-// connection after its response, so a client has no pooled connection to
-// reuse once Close ran.
+// NewMCPServer starts a server that serves spec until t ends.
+// On Linux, a closed fixture's address stays reserved until the test ends.
+// Each response closes its connection so clients cannot reuse a pooled connection after Close.
 func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	t.Helper()
 	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{}, rootsReply: make(chan json.RawMessage, 1),
 		held: make(chan struct{}, 64), abandoned: make(chan struct{}, 64)}
 	s.h.roots = s.askRoots
 	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
-	ln, err := listenQuiet()
+	ln, release, err := listenMCP()
 	if err != nil {
-		t.Fatalf("harnesstest: no free MCP fixture port in [%d, %d): %v", mcpPortBase, mcpPortBase+mcpPortSpan, err)
+		t.Fatalf("harnesstest: listen for MCP fixture: %v", err)
 	}
 	_ = s.srv.Listener.Close()
 	s.srv.Listener = ln
 	s.srv.Config.SetKeepAlivesEnabled(false)
 	s.srv.Start()
-	t.Cleanup(s.srv.Close)
+	t.Cleanup(func() {
+		s.srv.Close()
+		release()
+	})
 	return s
-}
-
-const (
-	mcpPortBase = 20000
-	mcpPortSpan = 10000
-)
-
-var (
-	mcpNextPort  atomic.Uint32
-	mcpPortStart = sync.OnceFunc(func() { mcpNextPort.Store(rand.Uint32N(mcpPortSpan)) })
-)
-
-// listenQuiet listens on a loopback port below the default ephemeral range of
-// Linux and macOS. The process takes ports in sequence, and a listener that
-// the OS places with bind(0) never gets one, so no server of the process takes
-// the port of a closed server, and a later request is refused. A host that
-// widens ip_local_port_range to include this range loses that guarantee. On
-// macOS a bind of 127.0.0.1:N succeeds while another process listens on *:N,
-// so a published port in this range can make a closed fixture not refuse.
-func listenQuiet() (net.Listener, error) {
-	mcpPortStart()
-	var err error
-	for range 200 {
-		var ln net.Listener
-		ln, err = net.Listen("tcp4", "127.0.0.1:"+strconv.Itoa(mcpPortBase+int(mcpNextPort.Add(1)%mcpPortSpan)))
-		if err == nil {
-			return ln, nil
-		}
-	}
-	return nil, err
 }
 
 // URL is the MCP endpoint.
