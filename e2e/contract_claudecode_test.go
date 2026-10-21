@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -628,6 +629,25 @@ func TestContractClaudeCodeQuestionResults(t *testing.T) {
 	})
 }
 
+// claudeAlwaysLoadTools records the sorted names of the tools that the hosted
+// MCP server offered the CLI with the _meta field anthropic/alwaysLoad true.
+type claudeAlwaysLoadTools struct{ as string }
+
+func (a claudeAlwaysLoadTools) run(t *testing.T, r *run) {
+	body, _ := claudeDriverOf(t, r).lastToolCall(t).Body.(map[string]any)
+	result, _ := body["result"].(map[string]any)
+	list, _ := result["tools"].([]any)
+	names := []string{}
+	for _, tool := range list {
+		m, _ := tool.(map[string]any)
+		if meta, _ := m["_meta"].(map[string]any); meta["anthropic/alwaysLoad"] == true {
+			names = append(names, m["name"].(string))
+		}
+	}
+	slices.Sort(names)
+	r.record(t, "always_load_tools", a.as, callResult{Status: http.StatusOK, Body: names})
+}
+
 func TestContractClaudeCodeTools(t *testing.T) {
 	skipShort(t)
 	setArgs := map[string]any{"action": "set", "model": "anthropic/claude-fable-5"}
@@ -639,6 +659,10 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		name:    "claudecode_bridge_marks_exactly_the_read_only_tools_with_read_only_hint",
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
 		actions: withActions(claudeOneTurn, claudeReadOnlyTools{as: "a"}),
+	}, {
+		name:    "claudecode_bridge_loads_ask_user_question_upfront",
+		driver:  claudeLane{mode: "normal", ask: true, listTools: true}.newDriver,
+		actions: withActions(claudeOneTurn, claudeAlwaysLoadTools{as: "a"}),
 	}, {
 		name: "claudecode_bridge_passes_the_read_only_hint_of_an_mcp_tool_through",
 		driver: claudeLane{mode: "hang_after_listing", listTools: true, initTools: "[]", extra: mcpSetup(nil, mcpServerDef{name: "notes", spec: harnesstest.MCPSpec{Name: "notes",

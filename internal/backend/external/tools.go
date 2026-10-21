@@ -22,11 +22,13 @@ const ToolServer = "harness"
 var emptySchema = json.RawMessage(`{"type":"object"}`)
 
 // Group is one MCP server of the endpoint: the specs it lists, each under its
-// name without Prefix, and the usage guidance that its initialize reply carries.
+// name without Prefix, the _meta of a listed spec by spec name, and the usage
+// guidance that its initialize reply carries.
 type Group struct {
 	Server       string
 	Prefix       string
 	Specs        []protocol.ToolSpec
+	Meta         map[string]json.RawMessage
 	Instructions string
 }
 
@@ -67,7 +69,7 @@ func ServeTools(ctx context.Context, groups []Group, idMeta string,
 		reg := mcp.NewRegistry(g.Server, "")
 		reg.SetInstructions(g.Instructions)
 		for _, s := range g.Specs {
-			reg.RegisterTool(mcp.Tool{Name: strings.TrimPrefix(s.Name, g.Prefix), Description: s.Description, InputSchema: schemaOf(s), Annotations: annotations(s)},
+			reg.RegisterTool(mcp.Tool{Name: strings.TrimPrefix(s.Name, g.Prefix), Description: s.Description, InputSchema: schemaOf(s), Annotations: annotations(s), Meta: g.Meta[s.Name]},
 				t.handler(ctx, s.Name, idMeta, call))
 		}
 		path := base + "/" + strconv.Itoa(i) // a server name may hold pattern or URL syntax
