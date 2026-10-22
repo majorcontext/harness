@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Input admission check** (`harness`) — `harness.CheckInput(model, input)` runs the checks that `Session.Prompt` runs on an input (provenance, parts, attachment type, decode, and size, and image input for `model`) without a session, and stores nothing. It returns the same `invalid_request` error as `Prompt`, so an embedder can refuse a bad attachment when it queues the input. It checks a typed slash command as plain text.
+
 - **Tool allowlist replacement on open** (`harness`, `protocol`, `internal/session`, `internal/eventlog`) — `harness.WithAllowedTools(names)` lets an embedder replace a stored session's tool allowlist before `Runtime.Open` resumes it. The runtime records one `settings.changed` when the sets differ. Nil allows all tools; an empty list allows none. Replay, session views, children, and model validation use the replacement. The HTTP settings surface cannot change the allowlist.
 
 - **Deferred model changes in Claude Code** (`internal/selftool`, `internal/session`, `harness`) — the `model` tool now allows `status` and `set` on a backend that owns its loop. `set` validates a ref or alias at once and returns `effect: next_turn`; `status` includes any `pending_model`. The pending model applies through the session settings path when the turn completes, fails, or is canceled, without changing the running turn or its backend process. A later set replaces the pending model, and a set to the current model clears it. Pending changes are live turn state and do not survive a handoff or process exit. Model API sessions keep immediate changes. The tool leaves effort unchanged.

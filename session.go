@@ -113,7 +113,7 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 	if err != nil {
 		return protocol.Admitted{}, invalidInput(in.ID, err)
 	}
-	if err := s.checkImageInput(in); err != nil {
+	if err := checkImageModel(s.Snapshot().Model, in); err != nil {
 		return protocol.Admitted{}, err
 	}
 	for _, b := range blobs {
@@ -128,15 +128,27 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 	return protocol.Admitted{InputID: in.ID, Seq: seq, Repeat: repeat}, nil
 }
 
-// checkImageInput refuses an image attachment for a session whose model the
-// model facts list without image input. A model that the facts lack passes.
-func (s *Session) checkImageInput(in protocol.Input) error {
+// CheckInput runs the checks that Session.Prompt runs on an input before it stores
+// anything, and stores nothing. It returns the error that Prompt returns for
+// the same input, or nil. An empty model skips the check of image input.
+func CheckInput(model string, in protocol.Input) error {
+	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
+		return invalidInput(in.ID, err)
+	}
+	if _, _, err := admit.Input(in); err != nil {
+		return invalidInput(in.ID, err)
+	}
+	return checkImageModel(model, in)
+}
+
+// checkImageModel refuses an image attachment for a model that the model
+// facts list without image input. A model that the facts lack passes.
+func checkImageModel(model string, in protocol.Input) error {
 	if !slices.ContainsFunc(in.Parts, func(p protocol.Part) bool {
 		return p.Type == protocol.PartBlob && strings.HasPrefix(p.MediaType, "image/")
 	}) {
 		return nil
 	}
-	model := s.Snapshot().Model
 	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return nil

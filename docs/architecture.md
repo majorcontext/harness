@@ -86,7 +86,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `Turn`, `TurnResult`, `OpenView`, `ReadEvents`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `Advance`, `Tool`, `Call`, `AloneTool`, `KeyedTool`, sentinel errors | embedders, control planes, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `Turn`, `TurnResult`, `OpenView`, `ReadEvents`, `CheckInput`, `View`, `Reader`, `Blob`, `Store`, `Owner`, `Ownership`, `Sync`, `Advance`, `Tool`, `Call`, `AloneTool`, `KeyedTool`, sentinel errors | embedders, control planes, CLI |
 | `harness/store` | `DiskStore`, `MemStore`, `CheckName`, `CheckRecords`: the stores that ship with harness | embedders, CLI |
 | `harness/httpapi` | `Handler` over a `Runtime`, `ReadHandler` over a `Store`, `ReadOptions`, `Queue`: the HTTP API, built on the exported methods of `harness` | control planes, CLI |
 | `harness/httpsync` | `New`, the `Sync` that posts batches over HTTP, and `ApplySync`, the rules of its receiver | box harness, control planes |
@@ -279,6 +279,9 @@ func (r *Runtime) Read(ctx context.Context, id string) (Reader, error)
 
 // ReadEvents yields the stored events after `after`, through the head it reads first; it neither owns the session nor replays the log.
 func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error]
+
+// CheckInput runs the admission checks of Submit on an input, for model, and stores nothing.
+func CheckInput(model string, in protocol.Input) error
 
 // NewLocalOwner grants every session to this process at epoch, one grant at a time.
 func NewLocalOwner(epoch uint64) Owner
@@ -786,6 +789,8 @@ A restart opens no session by itself: the embedder opens each session that has w
 Request: `{id, parts, delivery?, source?, source_id?, source_label?, expected_turn_id?}`. The client mints `id`. `source` says who sent the input; `source_id` names the instance of that source (a Slack thread, a schedule) in at most 128 printable ASCII bytes, and `source_label` is a name for a reader, valid UTF-8, cut at 256 bytes with control, bidi override, and zero-width characters dropped. A `source_id` that is longer or holds another byte is `invalid_request` and leaves no trace, for a typed slash command too. Both are part of the body that a repeat compares, and `input.admitted` records them. `delivery` is `steer` when the request has none: a prompt that arrives while a turn runs joins that turn at its next item boundary. A `queue` input waits for the next turn. The runtime admits an internal goal input and `/compact` as `queue`.
 
 A part is `{type: "text", text}` or an attachment `{type: "blob", media_type, data}` with its bytes in `data` as base64. Attachments are png, jpeg, gif, webp, and pdf. An attachment is at most 20 MiB, its bytes must be the type that it claims (an image decodes as that image, a PDF begins with `%PDF-`), and a request body is at most 32 MiB (8 MiB for any other route). A part that fails one check is `invalid_request` and leaves no trace. The message of that error is the reason alone, and `details.input_id` is the ID of the input. An image attachment for a session whose model the model facts of `modelmeta` list without image input (the models.dev input modalities) is also `invalid_request`, and its message names the model; a model that the facts lack passes. The check reads the model at admission and runs after the checks of the part, so a bad attachment reports its own error; a later change of the model is not checked. The session, not the route, makes this check, so every caller gets it. The runtime stores the bytes with `Store.PutBlob` under `attachment-<sha256>` before it appends `input.admitted`, whose blob part holds `media_type`, `blob_key`, and `bytes` and never the bytes. `Sync` carries the blob in the batch of that record, as it carries `backend.state`. A turn reads a blob through `turn.Request.Blob`. `modelapi` sends it as an image or file part of the wire, and `claudecode` sends an `image` or `document` content block on stdin after the text block. A steer input keeps its blob parts. The blob is stored before the input is appended, so an input that then fails (a conflict, a turn mismatch, or no ownership) leaves its blob in the store; a retry with the same bytes reuses it.
+
+`harness.CheckInput(model, input)` runs these checks and the image check for `model` without a session and stores nothing. It returns the error that `Submit` returns, and an empty `model` skips the image check. It checks a typed slash command as plain text.
 
 | Case | Response |
 | --- | --- |
