@@ -34,7 +34,7 @@ func TestContractRuntimeProcesses(t *testing.T) {
 			run  func(t *testing.T, h host)
 		}{
 			{"process_tool_from_the_model", processToolFromModel},
-			{"process_status_line_follows_a_start_by_one_turn", processStatusLine},
+			{"process_status_pins_after_a_start", processStatusPin},
 		} {
 			t.Run(row.name, func(t *testing.T) {
 				t.Parallel()
@@ -177,9 +177,9 @@ func processStart(name string) harnesstest.ToolCall {
 	return harnesstest.ToolCall{ID: "toolu_" + name, Name: "process", Input: map[string]any{"action": "start", "name": name}}
 }
 
-var statusLineRE = regexp.MustCompile(`\n\n<harness-engine-context>\n\[processes: dev ready :3000 since \S+Z log=\.harness/proc/dev\.log\]\n</harness-engine-context>$`)
+var statusPinRE = regexp.MustCompile(`^<harness-engine-context>\n\[processes: dev ready :3000 since \S+Z log=\.harness/proc/dev\.log\]\n</harness-engine-context>$`)
 
-func processStatusLine(t *testing.T, h host) {
+func processStatusPin(t *testing.T, h host) {
 	d, fake := processHost(t, h,
 		harnesstest.Step{Name: "start", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{processStart("dev")}}},
 		harnesstest.Step{Name: "started", Match: harnesstest.LastToolResult("process"), Reply: harnesstest.Reply{Text: "started"}},
@@ -194,10 +194,23 @@ func processStatusLine(t *testing.T, h host) {
 	if len(reqs) != 4 {
 		t.Fatalf("model requests = %d, want 4", len(reqs))
 	}
-	system := func(i int) string { return reqs[i].System }
-	if strings.Contains(system(0), "[processes:") || system(1) != system(0) || !statusLineRE.MatchString(system(2)) || system(3) != system(2) {
-		t.Errorf("status lines = %q, want none in the turn of the start, and one in each later turn",
-			[]string{statusLineRE.FindString(system(0)), statusLineRE.FindString(system(1)), statusLineRE.FindString(system(2)), statusLineRE.FindString(system(3))})
+	pins := func(r harnesstest.Request) (n int) {
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == "text" && statusPinRE.MatchString(p.Text) {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	for i, r := range reqs {
+		if strings.Contains(r.System, "[processes:") || r.System != reqs[0].System {
+			t.Errorf("request %d system prompt = %q, want the system prompt of request 0 with no status", i, r.System)
+		}
+		if want := min(i, 1); pins(r) != want {
+			t.Errorf("request %d holds %d status pins, want %d", i, pins(r), want)
+		}
 	}
 }
 

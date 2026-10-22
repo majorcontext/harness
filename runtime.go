@@ -378,7 +378,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		return nil, err
 	}
 	plug := r.pluginSession(id)
-	sp := selftool.NewPrompt(r.prompt(), c.Agent, r.profile(c.Agent, l.profile), r.procs, r.workDir)
+	sp := selftool.NewPrompt(r.prompt(), c.Agent, r.profile(c.Agent, l.profile))
 	sm := r.sessionSource(l.mcp)
 	var a *session.Actor
 	cfg := session.Config{
