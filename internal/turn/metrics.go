@@ -28,14 +28,16 @@ func (m CallMetrics) Chained() bool {
 	return m.RequestMode == "incremental" && m.PreviousResponseUsed && !m.ChainRecovered
 }
 
-type Purpose string // Purpose names the operation of a model call.
+// Purpose keeps telemetry labels in one vocabulary.
+type Purpose string
 
+// These values prevent telemetry labels from drifting across callers.
 const (
-	PurposeTurn       Purpose = "turn"       // PurposeTurn names a user turn.
-	PurposeCompaction Purpose = "compaction" // PurposeCompaction names a compaction summary.
-	PurposeJudge      Purpose = "judge"      // PurposeJudge names a goal judgment.
-	PurposeTitle      Purpose = "title"      // PurposeTitle names a session title request.
-	PurposeGenerate   Purpose = "generate"   // PurposeGenerate names a generated call.
+	PurposeTurn       Purpose = "turn"
+	PurposeCompaction Purpose = "compaction"
+	PurposeJudge      Purpose = "judge"
+	PurposeTitle      Purpose = "title"
+	PurposeGenerate   Purpose = "generate"
 )
 
 // callInfo is the part of a model call request that its turn_metrics line names.
