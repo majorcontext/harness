@@ -174,7 +174,7 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			if a.run == r {
 				recordErr := a.recordUsage(usage)
-				a.latched = recordErr == nil && (soft || errors.Is(err, turn.ErrEmptySummary))
+				a.latched = recordErr == nil && ctx.Err() == nil && (soft || errors.Is(err, turn.ErrEmptySummary))
 				reply(struct{}{}, recordErr)
 				return
 			}

@@ -115,6 +115,20 @@ func TestFoldRunningTurn(t *testing.T) {
 	}
 }
 
+func TestFoldAfterACompactionInsideATurnCoversNewMessages(t *testing.T) {
+	steer := func(id string) []protocol.Payload {
+		return []protocol.Payload{says(id, protocol.DeliverySteer, id), promote(id, "t1")}
+	}
+	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), result("t1", "i2", "c1"))
+	events = with(with(events, steer("s1")...), call("t1", "i3", "c2"), result("t1", "i4", "c2"))
+	events = with(with(events, steer("s2")...), call("t1", "i5", "c3"), result("t1", "i6", "c3"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"})
+	for _, keep := range []int{1, 2} {
+		if _, to, ok := replay(t, events).Fold(keep); !ok || to <= 7 {
+			t.Fatalf("Fold(%d) = %d, %v; want a fold past to_seq 7", keep, to, ok)
+		}
+	}
+}
+
 func TestCompactionInsideATurnKeepsTheWordsOfThePerson(t *testing.T) {
 	steered := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), says("s", protocol.DeliverySteer, "two"), promote("s", "t1"),
 		result("t1", "i2", "c1"), call("t1", "i3", "c2"), result("t1", "i4", "c2"))

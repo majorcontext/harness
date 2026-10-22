@@ -348,8 +348,12 @@ func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok b
 			starts = append(starts, i)
 		}
 	}
+	carried := 0
+	for carried < len(es) && es[carried].carried {
+		carried++
+	}
 	if len(starts) > keep {
-		if end := starts[len(starts)-keep]; end > lead {
+		if end := starts[len(starts)-keep]; end > lead+carried {
 			return h[:end], es[end-lead].seq - 1, true
 		}
 	}
