@@ -68,7 +68,7 @@ type Request struct {
 	SessionID string
 	TurnID    string
 	Model     string
-	Purpose   string // Purpose names the operation that made this request.
+	Purpose   Purpose // Purpose names the operation that made this request.
 	Settings  protocol.Settings
 	// Instructions is the system prompt of the call.
 	Instructions string

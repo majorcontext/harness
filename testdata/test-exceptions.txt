@@ -26,7 +26,6 @@ plugin/serve_test.go no contract fixture has a hook that panics, and a context t
 internal/plugin/typescript_conformance_test.go the TypeScript SDK manifest needs a real node process running the SDK file, which no scenario row starts
 examples/guardrail/internal/guard/guard_test.go an example's matcher table; no contract row runs examples
 internal/turn/turn_test.go the window between the before hook and the context check of runTool cannot be scheduled from a contract row; the test needs a hook that cancels the turn context inside it; the one-at-a-time Join of Call and Ask needs a backend that runs both from many goroutines at once
-internal/turn/metrics_test.go turn_metrics from turn.Ask does not pass through the e2e turn runner, so no scenario asserts the model-call purpose field
 internal/workspace/workspace_test.go rows run in parallel, so each row needs its own git repository, and the serial rows need t.Chdir or t.Setenv; no contract row can start that many git repositories
 internal/imageclamp/imageclamp_test.go each test encodes large PNG fixtures, and the race detector makes each encode slow; a per-size fixture cache in a package-level variable shares one encode across the tests
 plugin/example_test.go the package examples are documentation that pkg.go.dev renders; only the Manifest example runs, and it checks pure encoding that no contract row isolates

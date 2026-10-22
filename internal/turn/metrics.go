@@ -28,10 +28,21 @@ func (m CallMetrics) Chained() bool {
 	return m.RequestMode == "incremental" && m.PreviousResponseUsed && !m.ChainRecovered
 }
 
+type Purpose string // Purpose names the operation of a model call.
+
+const (
+	PurposeTurn       Purpose = "turn"       // PurposeTurn names a user turn.
+	PurposeCompaction Purpose = "compaction" // PurposeCompaction names a compaction summary.
+	PurposeJudge      Purpose = "judge"      // PurposeJudge names a goal judgment.
+	PurposeTitle      Purpose = "title"      // PurposeTitle names a session title request.
+	PurposeGenerate   Purpose = "generate"   // PurposeGenerate names a generated call.
+)
+
 // callInfo is the part of a model call request that its turn_metrics line names.
 type callInfo struct {
-	sessionID, model, tier, effort, purpose string
-	systemLen, tools                        int
+	sessionID, model, tier, effort string
+	purpose                        Purpose
+	systemLen, tools               int
 	// retry counts the earlier attempts of the call that failed.
 	retry int
 }
@@ -61,7 +72,7 @@ func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 	args := []any{
 		"session_id", c.sessionID,
 		"model", c.model,
-		"purpose", c.purpose,
+		"purpose", string(c.purpose),
 		"ttft_ms", m.TTFT.Milliseconds(),
 		"stream_ms", m.Stream.Milliseconds(),
 		"input_tokens", t.Usage.InputTokens,

@@ -66,6 +66,8 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 			ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: map[string]any{"command": "echo hi"}}},
 			Usage:     harnesstest.Usage{Input: 11, Output: 7}}},
 		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "done", Usage: harnesstest.Usage{Input: 13, Output: 5}}},
+		agentStep("goal work", "done", false),
+		evaluatorStep("judge", "MET: said done", false),
 	)
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := d.Create(t)
@@ -78,7 +80,7 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	if n := len(logLines(d.Stderr(), "startup_prewarm")); n != 0 {
 		t.Errorf("startup_prewarm lines = %d, want 0: a backend that cannot warm logs none\n%s", n, d.Stderr())
 	}
-	common := map[string]any{"session_id": id, "model": "anthropic/claude-fable-5", "cache_read_tokens": 0.0, "cache_write_tokens": 0.0}
+	common := map[string]any{"session_id": id, "model": "anthropic/claude-fable-5", "purpose": "turn", "cache_read_tokens": 0.0, "cache_write_tokens": 0.0}
 	wantFields(t, "first call", lines[0], map[string]any{"retry": 1.0, "input_tokens": 11.0, "output_tokens": 7.0})
 	wantFields(t, "second call", lines[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0})
 	for i, rec := range lines {
@@ -90,6 +92,14 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 		}
 		wantAbsent(t, what, rec, "service_tier", "effort", "request_mode", "chain_refusal")
 	}
+	d.SetGoal(t, id, "say done", 1, false)
+	d.WaitIdle(t, id)
+	judged := awaitLogLines(t, d, "turn_metrics", 4)
+	if len(judged) != 4 {
+		t.Fatalf("turn_metrics lines = %d, want 4 including the goal turn and judgment\n%s", len(judged), d.Stderr())
+	}
+	wantFields(t, "goal turn", judged[2], map[string]any{"purpose": "turn"})
+	wantFields(t, "judge", judged[3], map[string]any{"session_id": id, "model": "anthropic/eval-model", "purpose": "judge"})
 }
 
 func TestContractTurnMetricsNamesTheTierAndTheEffortOfTheCall(t *testing.T) {
