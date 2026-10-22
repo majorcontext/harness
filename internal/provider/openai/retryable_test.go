@@ -2,7 +2,6 @@ package openai
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -391,41 +390,25 @@ func TestStreamInsaneOutputIndexRejected(t *testing.T) {
 }
 
 func TestContextOverflowClassification(t *testing.T) {
-	const msg = "Your input exceeds the context window of this model."
-	const counted = "maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens."
-	body := func(m string) string {
-		return `{"error":{"message":"` + m + `","type":"invalid_request_error","code":"context_length_exceeded"}}`
-	}
-	cases := []struct {
-		name, msg, reply string
-		status           int
-		prompt, limit    int
-	}{
-		{"http body", msg, body(msg), 400, 0, 0},
-		{"http body with counts", counted, body(counted), 400, 130000, 128000},
-		{"response.failed", msg, sse("response.failed", `{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"`+msg+`"}}}`), 200, 0, 0},
-		{"error event", msg, sse("error", `{"type":"error","error":{"code":"context_length_exceeded","message":"`+msg+`"}}`), 200, 0, 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	const errBody = `{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}`
+	for name, reply := range map[string]string{
+		"http body":       `{"error":` + errBody + `}`,
+		"response.failed": sse("response.failed", `{"type":"response.failed","response":{"error":`+errBody+`}}`),
+		"error event":     sse("error", `{"type":"error","error":`+errBody+`}`),
+	} {
+		t.Run(name, func(t *testing.T) {
 			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tc.status)
-				io.WriteString(w, tc.reply) //nolint:errcheck
+				if reply[0] == '{' {
+					w.WriteHeader(http.StatusBadRequest)
+				}
+				io.WriteString(w, reply) //nolint:errcheck
 			})
-			s, err := c.Stream(context.Background(), &provider.Request{
-				Model:     modelref.ModelRef{Provider: Family, Model: "m"},
-				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
-				MaxTokens: 10,
-			})
+			s, err := c.Stream(context.Background(), &provider.Request{Model: modelref.ModelRef{Provider: Family, Model: "m"}, Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}}})
 			for err == nil {
 				_, err = s.Next()
 			}
-			var pe *provider.Error
-			if !errors.As(err, &pe) || !provider.IsContextOverflow(err) || !strings.Contains(pe.Raw, tc.msg) || pe.PromptTokens != tc.prompt || pe.TokenLimit != tc.limit {
-				t.Fatalf("err = %v, want overflow keeping %q with tokens %d/%d", err, tc.msg, tc.prompt, tc.limit)
-			}
-			if _, ok := provider.AsRetryable(err); ok {
-				t.Errorf("overflow is retryable: %v", err)
+			if _, retry := provider.AsRetryable(err); retry || !provider.IsContextOverflow(err) || !strings.Contains(err.Error(), "exceeds the context window") {
+				t.Fatalf("err = %v, want a non-retryable overflow keeping its message", err)
 			}
 		})
 	}

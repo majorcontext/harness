@@ -649,6 +649,19 @@ func codexRetryRows() []codexScenario {
 		},
 		{
 			scenario: scenario{
+				name:   "codex_http_context_overflow_compacts_and_runs_the_turn_again",
+				config: map[string]any{"compaction_keep_turns": 1},
+				model: []harnesstest.Step{
+					turn("alpha", "alpha", "re alpha"), turn("bravo", "bravo", "re bravo"),
+					{Name: "overflow", Match: harnesstest.LastUserText("charlie"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "Your input exceeds the context window of this model.", ErrorCode: "context_length_exceeded"}},
+					{Name: "summary", Match: summaryRequest, Reply: codexText("gist"), Repeat: true},
+					{Name: "charlie", Match: harnesstest.LastUserText("charlie"), Reply: codexText("re charlie"), Repeat: true},
+				},
+				actions: codexSession(codexTurn("a", "alpha"), codexTurn("a", "bravo"), codexTurn("a", "charlie"), []action{getSession{as: "a"}}),
+			},
+		},
+		{
+			scenario: scenario{
 				name:    "codex_http_incomplete_content_filter_is_retried",
 				model:   []harnesstest.Step{turn("filtered", "one", "partial"), turn("one", "one", "1")},
 				actions: codexSession(codexTurn("a", "one"), []action{getSession{as: "a"}}),

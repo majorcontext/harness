@@ -287,7 +287,7 @@ func streamError(code, message, typ string) error {
 	if code != "" {
 		msg = fmt.Sprintf("openai: %s (%s)", message, code)
 	}
-	if pe, ok := contextOverflow(code, message, msg); ok {
+	if pe, ok := contextOverflow(code, msg); ok {
 		return pe
 	}
 	if hint, ok := parseUsageExhaustion(0, message, typ, code); ok {

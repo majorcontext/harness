@@ -172,8 +172,7 @@ const (
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
 
-// reGolden gives each reason that decides a difference of the row, and each
-// finding that owns the rest.
+// reGolden gives each reason or finding that decides a difference of the row.
 func reGolden(cites ...string) runtimeRow { return runtimeRow{kind: rowRegolden, cites: cites} }
 
 // runtimeOnly marks a row that only the runtime host runs, for the reason id that its determinism needs
@@ -659,6 +658,7 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"codex_login_rejected_websocket_fails_the_turn_without_the_http_fallback":            sameAsServe(),
 	"codex_login_malformed_refresh_answer_fails_the_turn_with_guidance":                  sameAsServe(),
 	"codex_http_5xx_is_retried_by_the_request":                                           sameAsServe(),
+	"codex_http_context_overflow_compacts_and_runs_the_turn_again":                       sameAsServe(),
 	"compact_summary_is_retried_after_a_refusal":                                         sameAsServe(),
 	"retried_call_with_a_tool_call_alone_completes_under_a_new_item":                     sameAsServe(),
 	"retried_call_discards_the_item_that_the_failed_call_streamed":                       sameAsServe(),
