@@ -67,7 +67,9 @@ type Client struct {
 	// request. The websocket path sends the already-transcoded body.
 	UseWebSocketTransport bool
 	// HashCacheKey sends a stable hash of the session key as prompt_cache_key, so the raw key never leaves. The websocket pool keeps the raw key.
-	HashCacheKey   bool
+	HashCacheKey bool
+	// SessionHeaders sends the session key as the session_id and x-client-request-id headers, on which the ChatGPT backend routes the prompt cache.
+	SessionHeaders bool
 	RequestRetries int // see provider.Do
 
 	wsPoolOnce sync.Once
@@ -176,6 +178,10 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 	headers.Set("Accept", "text/event-stream")
 	if c.APIKey != "" {
 		headers.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	if c.SessionHeaders && req.SessionKey != "" {
+		headers["session_id"] = []string{req.SessionKey}
+		headers.Set("x-client-request-id", req.SessionKey)
 	}
 	return &preparedRequest{
 		body:    body,
