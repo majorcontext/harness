@@ -48,6 +48,7 @@ func (r *Runtime) generate(ctx context.Context, model string, req turn.Request) 
 	}
 	defer done()
 	req.Model = ref.String()
+	req.Purpose = "generate"
 	if req.MaxTokens == 0 {
 		req.MaxTokens = r.maxTokens
 	}

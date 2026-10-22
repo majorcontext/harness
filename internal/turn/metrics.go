@@ -30,8 +30,8 @@ func (m CallMetrics) Chained() bool {
 
 // callInfo is the part of a model call request that its turn_metrics line names.
 type callInfo struct {
-	sessionID, model, tier, effort string
-	systemLen, tools               int
+	sessionID, model, tier, effort, purpose string
+	systemLen, tools                        int
 	// retry counts the earlier attempts of the call that failed.
 	retry int
 }
@@ -40,10 +40,10 @@ type callInfo struct {
 // and no tier or effort.
 func callOf(req Request, retry int, ownsLoop bool) callInfo {
 	if ownsLoop {
-		return callInfo{sessionID: req.SessionID, model: req.Model, retry: retry}
+		return callInfo{sessionID: req.SessionID, model: req.Model, purpose: req.Purpose, retry: retry}
 	}
 	return callInfo{sessionID: req.SessionID, model: req.Model, tier: req.Settings.ServiceTier, effort: req.Settings.Effort,
-		systemLen: len(req.Instructions), tools: len(req.Tools), retry: retry}
+		purpose: req.Purpose, systemLen: len(req.Instructions), tools: len(req.Tools), retry: retry}
 }
 
 // Telemetry logs the turn_metrics line of a completed model call, then passes t on.
@@ -61,6 +61,7 @@ func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 	args := []any{
 		"session_id", c.sessionID,
 		"model", c.model,
+		"purpose", c.purpose,
 		"ttft_ms", m.TTFT.Milliseconds(),
 		"stream_ms", m.Stream.Milliseconds(),
 		"input_tokens", t.Usage.InputTokens,
