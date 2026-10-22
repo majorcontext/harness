@@ -73,6 +73,7 @@ First tagged release.
 
 ### Fixed
 
+- **Context overflow on the Responses API compacts** (`internal/provider/openai`) — an HTTP error body or a stream event with the code `context_length_exceeded` now returns a context-overflow error, so a turn on the `openai` or `codex` provider compacts and calls the model again. Before, the turn failed with the raw provider message and never compacted.
 - **`harness serve` stops cleanly with an idle client connection** (`cmd/harness`) — on `SIGINT` or `SIGTERM`, serve closes each HTTP connection that has no request in flight before it waits for the HTTP server. Before, net/http counted a connection that had sent no request as active until it was 5 s old, so one such client held the stop for the whole 5 s budget, and serve exited with status 1 after it wrote a `handoff` report. The exit status now follows the stop: 0 when `Runtime.Close` returned nil and `serve-stop.json` was written; an HTTP request that does not finish in time is logged.
 - **MCP fixture address ownership on Linux** (`harnesstest`) — a closed fixture keeps its address reserved until test cleanup, so stale requests cannot reach another fixture that the OS puts on that port. The listener still closes normally, and a later connect is refused. This removes the fixed-port-range assumption on Linux; other platforms keep their listener behavior.
 

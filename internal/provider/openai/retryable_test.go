@@ -388,3 +388,28 @@ func TestStreamInsaneOutputIndexRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestContextOverflowClassification(t *testing.T) {
+	const errBody = `{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}`
+	for name, reply := range map[string]string{
+		"http body":       `{"error":` + errBody + `}`,
+		"response.failed": sse("response.failed", `{"type":"response.failed","response":{"error":`+errBody+`}}`),
+		"error event":     sse("error", `{"type":"error","error":`+errBody+`}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if reply[0] == '{' {
+					w.WriteHeader(http.StatusBadRequest)
+				}
+				io.WriteString(w, reply) //nolint:errcheck
+			})
+			s, err := c.Stream(context.Background(), &provider.Request{Model: modelref.ModelRef{Provider: Family, Model: "m"}, Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}}})
+			for err == nil {
+				_, err = s.Next()
+			}
+			if _, retry := provider.AsRetryable(err); retry || !provider.IsContextOverflow(err) || !strings.Contains(err.Error(), "exceeds the context window") {
+				t.Fatalf("err = %v, want a non-retryable overflow keeping its message", err)
+			}
+		})
+	}
+}

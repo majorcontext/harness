@@ -52,7 +52,7 @@ type Reply struct {
 	// Anthropic server.
 	Reasoning string
 	// ErrorCode is the error.code of an HTTPStatus reply, for example
-	// "context_length_exceeded". Only NewChat sends it.
+	// "context_length_exceeded". The chat and Responses servers send it.
 	ErrorCode string
 	// WebSearch is a search that the provider runs inside the model call. The
 	// Anthropic and Responses servers stream it before Text, and Text cites each

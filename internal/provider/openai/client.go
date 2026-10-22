@@ -352,6 +352,9 @@ func apiError(resp *http.Response) error {
 		if body.Error.Message == "" {
 			msg = fmt.Sprintf("openai: %s (HTTP %d)", kind, resp.StatusCode)
 		}
+		if pe, ok := contextOverflow(body.Error.Code, msg); ok {
+			return pe
+		}
 		if hint, ok := parseUsageExhaustion(resp.StatusCode, body.Error.Message, body.Error.Type, body.Error.Code); ok {
 			return withReset(provider.MarkPermanent(&provider.Error{
 				Kind:        provider.ErrKindProviderExhausted,
@@ -367,6 +370,13 @@ func apiError(resp *http.Response) error {
 		return provider.MarkRetryableHTTP(err, class, resp)
 	}
 	return err
+}
+
+func contextOverflow(code, raw string) (*provider.Error, bool) {
+	if code != "context_length_exceeded" {
+		return nil, false
+	}
+	return &provider.Error{Kind: provider.ErrKindContextOverflow, Raw: raw}, true
 }
 
 // classifyStatus maps an HTTP status to a retryable class: 429 is a rate
