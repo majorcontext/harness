@@ -2,9 +2,11 @@ package e2e
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"testing"
 
+	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -34,26 +36,51 @@ func TestContractAttachments(t *testing.T) {
 	})
 }
 
-func TestContractImageForAModelWithoutImageInput(t *testing.T) {
+func TestContractCheckInputEqualsSubmit(t *testing.T) {
 	skipShort(t)
+	png, _ := base64.StdEncoding.DecodeString(onePixelPNG)
+	blob := func(mediaType string, data []byte) []protocol.Part {
+		return []protocol.Part{{Type: protocol.PartBlob, MediaType: mediaType, Data: data}}
+	}
+	const noImages = "openai/o3-mini"
+	rows := []struct {
+		name  string
+		model string
+		in    protocol.Input
+		want  string
+	}{
+		{"valid_image", "anthropic/claude-sonnet-4-5", protocol.Input{ID: "in_ok", Parts: blob("image/png", png)}, ""},
+		{"unsupported_media_type", noImages, protocol.Input{ID: "in_type", Parts: blob("application/zip", []byte("PK"))}, "invalid_request"},
+		{"image_bytes_that_do_not_decode", noImages, protocol.Input{ID: "in_bad", Parts: blob("image/png", []byte("not a png"))}, "invalid_request"},
+		{"too_large", noImages, protocol.Input{ID: "in_big", Parts: blob("application/pdf", make([]byte, 21<<20))}, "invalid_request"},
+		{"image_for_a_model_without_image_input", noImages, protocol.Input{ID: "in_img", Parts: blob("image/png", png)}, "invalid_request"},
+	}
 	onHosts(t, func(t *testing.T, h host) {
-		t.Run("image_for_a_model_without_image_input_is_invalid_request", func(t *testing.T) {
-			t.Parallel()
-			extra := map[string]any{"model": "openai/o3-mini", "providers": map[string]any{"openai": map[string]any{"api_key_env": "ANTHROPIC_API_KEY"}}}
-			d, _ := startOn(t, h, runtimeWorkdir(t, nil), extra, replyText("ok"))
-			id := d.Create(t)
-			before := len(d.events(t, id))
-			png, _ := base64.StdEncoding.DecodeString(onePixelPNG)
-			body := map[string]any{"id": "in_img", "parts": []protocol.Part{{Type: protocol.PartBlob, MediaType: "image/png", Data: png}}}
-			res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", body)
-			errBody, _ := bodyOf(t, res)["error"].(map[string]any)
-			msg, _ := errBody["message"].(string)
-			if res.Status != http.StatusBadRequest || errorCode(t, res) != "invalid_request" || msg != "the model openai/o3-mini does not accept image input" {
-				t.Errorf("response = %d %v, want 400 invalid_request with the reason as the message", res.Status, res.Body)
-			}
-			if after := len(d.events(t, id)); after != before {
-				t.Errorf("a rejected input appended %d records", after-before)
-			}
-		})
+		extra := map[string]any{"model": noImages, "providers": map[string]any{"openai": map[string]any{"api_key_env": "ANTHROPIC_API_KEY"}}}
+		d, _ := startOn(t, h, runtimeWorkdir(t, nil), extra, replyText("ok"))
+		for _, row := range rows {
+			t.Run(row.name, func(t *testing.T) {
+				if row.want == "" {
+					if err := harness.CheckInput(row.model, row.in); err != nil {
+						t.Errorf("CheckInput = %v, want nil", err)
+					}
+					return
+				}
+				id := d.Create(t)
+				res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", row.in)
+				want, _ := bodyOf(t, res)["error"].(map[string]any)
+				var got *protocol.Error
+				if !errors.As(harness.CheckInput(noImages, row.in), &got) {
+					t.Fatalf("CheckInput = %v, want a protocol.Error", got)
+				}
+				details, _ := want["details"].(map[string]any)
+				if res.Status != http.StatusBadRequest || string(got.Code) != want["code"] || got.Message != want["message"] || got.Details["input_id"] != details["input_id"] {
+					t.Errorf("CheckInput = %+v, Submit = %d %v", got, res.Status, want)
+				}
+			})
+		}
+		if err := harness.CheckInput("", rows[4].in); err != nil {
+			t.Errorf("CheckInput with no model = %v, want nil", err)
+		}
 	})
 }
