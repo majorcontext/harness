@@ -116,25 +116,25 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 }
 
 // summarize runs the summary request req. When the request overflows the
-// context window, it drops the oldest message of the folded history, with the
-// tool results that answer it, and runs again, until a summary comes back or
-// no message is left.
+// context window, it drops the oldest message after the first of the folded
+// history, with the tool results that answer it, and runs again, until a
+// summary comes back or only the first message is left.
 func (a *Actor) summarize(ctx context.Context, req turn.Request) (string, protocol.Usage, error) {
 	var total protocol.Usage
 	for {
 		text, usage, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits)
 		total = total.Add(usage)
-		if !errors.Is(err, turn.ErrContextOverflow) {
+		if !errors.Is(err, turn.ErrContextOverflow) || len(req.History) < 2 {
 			return text, total, err
 		}
-		rest := req.History[1:]
+		rest := req.History[2:]
 		for len(rest) > 0 && rest[0].Role == protocol.RoleTool {
 			rest = rest[1:]
 		}
 		if len(rest) == 0 {
 			return "", total, err
 		}
-		req.History = rest
+		req.History = append([]protocol.LogMessage{req.History[0]}, rest...)
 	}
 }
 

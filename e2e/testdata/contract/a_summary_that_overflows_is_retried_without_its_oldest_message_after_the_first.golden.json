@@ -177,6 +177,112 @@
     {
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo one"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "one\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo two"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "two\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo three"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "three\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": null,
       "messages": [
         {
@@ -209,6 +315,30 @@
               "text": "one\n",
               "tool_name": "bash",
               "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo two"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "two\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
             },
             {
               "kind": "text",
@@ -224,15 +354,24 @@
       "tools": null,
       "messages": [
         {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            }
+          ]
+        },
+        {
           "role": "assistant",
           "parts": [
             {
               "kind": "tool_use",
               "tool_name": "bash",
               "tool_input": {
-                "command": "echo one"
+                "command": "echo two"
               },
-              "tool_use_id": "toolu#1"
+              "tool_use_id": "toolu#2"
             }
           ]
         },
@@ -241,9 +380,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "one\n",
+              "text": "two\n",
               "tool_name": "bash",
-              "tool_use_id": "toolu#1"
+              "tool_use_id": "toolu#2"
             },
             {
               "kind": "text",
@@ -292,9 +431,9 @@
               "kind": "tool_use",
               "tool_name": "bash",
               "tool_input": {
-                "command": "echo two"
+                "command": "echo three"
               },
-              "tool_use_id": "toolu#2"
+              "tool_use_id": "toolu#3"
             }
           ]
         },
@@ -303,9 +442,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "two\n",
+              "text": "three\n",
               "tool_name": "bash",
-              "tool_use_id": "toolu#2"
+              "tool_use_id": "toolu#3"
             },
             {
               "kind": "text",
@@ -354,16 +493,6 @@
         ]
       },
       {
-        "id": "cmpsum#1",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "gist"
-          }
-        ]
-      },
-      {
         "id": "msg#4",
         "role": "assistant",
         "parts": [
@@ -389,7 +518,42 @@
         ]
       },
       {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "gist"
+          }
+        ]
+      },
+      {
         "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "bash",
+            "arguments": {
+              "command": "echo three"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "three\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -410,7 +574,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -424,8 +588,8 @@
         "title": "go",
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 30,
-          "output_tokens": 8
+          "input_tokens": 40,
+          "output_tokens": 9
         },
         "work_dir": "\u003cworkdir\u003e"
       }
@@ -436,8 +600,8 @@
         "commands": [],
         "first_seq": 1,
         "has_more": false,
-        "last_seq": 7,
-        "total": 7
+        "last_seq": 9,
+        "total": 9
       },
       "messages": [
         {
@@ -476,16 +640,6 @@
           ]
         },
         {
-          "id": "cmpsum#1",
-          "role": "user",
-          "parts": [
-            {
-              "type": "text",
-              "text": "gist"
-            }
-          ]
-        },
-        {
           "id": "msg#4",
           "role": "assistant",
           "parts": [
@@ -511,7 +665,42 @@
           ]
         },
         {
+          "id": "cmpsum#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "gist"
+            }
+          ]
+        },
+        {
           "id": "msg#6",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#3",
+              "name": "bash",
+              "arguments": {
+                "command": "echo three"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#7",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#3",
+              "content": "three\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#8",
           "role": "assistant",
           "parts": [
             {
