@@ -1,4 +1,4 @@
-// Package proc is the process tool and the process status line of a session.
+// Package proc is the process tool and the process status notice of a session.
 package proc
 
 import (
@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/process"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -175,6 +176,21 @@ func (r processResult) MarshalJSON() ([]byte, error) {
 		Logs     string        `json:"logs,omitempty"`
 		Ports    []int         `json:"ports,omitempty"`
 	}{r.Name, r.State, r.PID, r.Ready, r.Log, code, r.Note, r.Logs, r.Ports})
+}
+
+// noticeKind is the notice kind of the process status. A pin keeps the status
+// in place, so a change leaves the prefix of the request as it was.
+const noticeKind = "processes"
+
+// Notices is the Source that gives the process status of m as a notice.
+type Notices struct {
+	M       *process.Manager
+	WorkDir string
+}
+
+// Toolset gives no tools and the status line as the notice of the call.
+func (n Notices) Toolset(context.Context, []protocol.LogMessage, []string, string) turn.Toolset {
+	return turn.Toolset{Notices: []turn.Notice{{Kind: noticeKind, Text: StatusLine(n.M, n.WorkDir), Cleared: "[processes: none.]"}}}
 }
 
 // StatusLine is one line for each process that has started, or "". It

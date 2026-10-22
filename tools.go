@@ -16,6 +16,7 @@ import (
 	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
+	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -124,6 +125,12 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			files = append(files, newWebTool(*r.web))
 		}
 		srcs = append(srcs, files)
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
+			if c.OwnsLoop {
+				return nil
+			}
+			return proc.Notices{M: r.procs, WorkDir: r.workDir}
+		}})
 	}
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {

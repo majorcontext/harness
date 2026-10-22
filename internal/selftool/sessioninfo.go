@@ -7,10 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -45,8 +43,6 @@ type sessionInfoResult struct {
 // Prompt is the system prompt of one session and a record of what its model
 // calls sent. The session reads the prompt files once, when it starts.
 type Prompt struct {
-	procs    *process.Manager
-	workDir  string
 	read     prompt.Info
 	segments []string
 
@@ -64,15 +60,15 @@ type modelCall struct {
 }
 
 // NewPrompt returns the prompt of a session that read describes. agent and p
-// name its agent profile. procs is nil when the runtime has no WorkDir.
-func NewPrompt(read prompt.Info, agent string, p prompt.Profile, procs *process.Manager, workDir string) *Prompt {
+// name its agent profile.
+func NewPrompt(read prompt.Info, agent string, p prompt.Profile) *Prompt {
 	segs := slices.Clone(read.Segments)
 	if agent != "" {
 		if t := strings.Trim(p.Prompt, "\n"); t != "" {
 			segs = append(segs, t)
 		}
 	}
-	return &Prompt{procs: procs, workDir: workDir, read: read, segments: segs}
+	return &Prompt{read: read, segments: segs}
 }
 
 // SkillList returns the skill segment that the session read, or "".
@@ -91,11 +87,6 @@ func (p *Prompt) Sent(system string) {
 // segments as the segments of the turn.
 func (p *Prompt) System() string {
 	segs := slices.Clone(p.segments)
-	if p.procs != nil {
-		if line := proc.StatusLine(p.procs, p.workDir); line != "" {
-			segs = append(segs, prompt.RenderEngineContext(line))
-		}
-	}
 	p.mu.Lock()
 	p.turn, p.reported = segs, false
 	p.mu.Unlock()
