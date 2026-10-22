@@ -128,8 +128,8 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 	return protocol.Admitted{InputID: in.ID, Seq: seq, Repeat: repeat}, nil
 }
 
-// CheckInput runs the checks that Submit runs on an input before it stores
-// anything, and stores nothing. It returns the error that Submit returns for
+// CheckInput runs the checks that Session.Prompt runs on an input before it stores
+// anything, and stores nothing. It returns the error that Prompt returns for
 // the same input, or nil. An empty model skips the check of image input.
 func CheckInput(model string, in protocol.Input) error {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {

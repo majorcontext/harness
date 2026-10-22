@@ -10,7 +10,7 @@ First tagged release.
 
 ### Added
 
-- **Input admission check** (`harness`) — `harness.CheckInput(model, input)` runs the checks that `Session.Submit` runs on an input (provenance, parts, attachment type, decode, and size, and image input for `model`) without a session, and stores nothing. It returns the same `invalid_request` error as `Submit`, so an embedder can refuse a bad attachment when it queues the input. It checks a typed slash command as plain text.
+- **Input admission check** (`harness`) — `harness.CheckInput(model, input)` runs the checks that `Session.Prompt` runs on an input (provenance, parts, attachment type, decode, and size, and image input for `model`) without a session, and stores nothing. It returns the same `invalid_request` error as `Prompt`, so an embedder can refuse a bad attachment when it queues the input. It checks a typed slash command as plain text.
 
 - **Tool allowlist replacement on open** (`harness`, `protocol`, `internal/session`, `internal/eventlog`) — `harness.WithAllowedTools(names)` lets an embedder replace a stored session's tool allowlist before `Runtime.Open` resumes it. The runtime records one `settings.changed` when the sets differ. Nil allows all tools; an empty list allows none. Replay, session views, children, and model validation use the replacement. The HTTP settings surface cannot change the allowlist.
 
