@@ -1,15 +1,19 @@
 package session
 
-import "context"
+import (
+	"context"
+
+	"github.com/majorcontext/harness/internal/turn"
+)
 
 // runKind names what the actor runs: a turn, a compaction, or a goal
 // evaluation. The actor runs one at a time.
-type runKind string
+type runKind = turn.Purpose
 
 const (
-	kindTurn       runKind = "turn"
-	kindCompaction runKind = "compaction"
-	kindJudge      runKind = "judge"
+	kindTurn       = turn.PurposeTurn
+	kindCompaction = turn.PurposeCompaction
+	kindJudge      = turn.PurposeJudge
 )
 
 // running is the run of the actor. An interrupt or a lost ownership ends

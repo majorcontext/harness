@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"encoding/json"
+	"maps"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -57,39 +59,113 @@ func wantAbsent(t *testing.T, what string, rec map[string]any, keys ...string) {
 	}
 }
 
+func wantPurposes(t *testing.T, lines []map[string]any, want map[string]int) {
+	t.Helper()
+	got := map[string]int{}
+	for _, line := range lines {
+		purpose, _ := line["purpose"].(string)
+		got[purpose]++
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("turn_metrics purposes = %v, want %v", got, want)
+	}
+}
+
+func wantPurposeFields(t *testing.T, lines []map[string]any, sessionID string) {
+	t.Helper()
+	for _, line := range lines {
+		switch line["purpose"] {
+		case "turn":
+			wantFields(t, "turn", line, map[string]any{"session_id": sessionID, "model": "anthropic/claude-fable-5"})
+		case "title":
+			wantFields(t, "title", line, map[string]any{"session_id": sessionID, "model": "anthropic/title-model", "effort": "off", "tools_count": 0.0})
+		case "generate":
+			wantFields(t, "generate", line, map[string]any{"session_id": "", "model": "anthropic/claude-fable-5", "tools_count": 0.0})
+			wantAbsent(t, "generate", line, "service_tier", "effort")
+		case "judge":
+			wantFields(t, "judge", line, map[string]any{"session_id": sessionID, "model": "anthropic/eval-model", "effort": "off", "retry": 0.0, "tools_count": 0.0})
+			wantNumbers(t, "judge", line, "system_len")
+		case "compaction":
+			wantFields(t, "compaction", line, map[string]any{"session_id": sessionID, "model": "anthropic/claude-fable-5", "tools_count": 0.0})
+			wantNumbers(t, "compaction", line, "system_len")
+		default:
+			t.Fatalf("unexpected turn_metrics purpose: %v", line["purpose"])
+		}
+	}
+}
+
 func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
+	agentRequest := func(r harnesstest.Request) bool { return notEvaluator(r) && notTitleRequest(r) && notGenerate(r) }
 	fake := harnesstest.NewAnthropic(t,
-		harnesstest.Step{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 429, RetryAfter: "0", ErrorMessage: "upstream broke"}},
-		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{
-			ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: map[string]any{"command": "echo hi"}}},
+		harnesstest.Step{Name: "broken", Match: agentRequest, Reply: harnesstest.Reply{HTTPStatus: 429, RetryAfter: "0", ErrorMessage: "upstream broke"}},
+		harnesstest.Step{Name: "call", Match: matchAll(agentRequest, harnesstest.LastUserText("go")), Reply: harnesstest.Reply{
+			ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "fixture_generate", Input: map[string]any{"system": generateSystem, "text": "hello"}}},
 			Usage:     harnesstest.Usage{Input: 11, Output: 7}}},
-		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "done", Usage: harnesstest.Usage{Input: 13, Output: 5}}},
+		harnesstest.Step{Name: "after", Match: matchAll(agentRequest, harnesstest.LastToolResult("fixture_generate")), Reply: harnesstest.Reply{Text: "done", Usage: harnesstest.Usage{Input: 13, Output: 5}}},
+		harnesstest.Step{Name: "title", Match: isTitleRequest, Reply: harnesstest.Reply{Text: "Session title"}},
+		harnesstest.Step{Name: "generate", Match: isToollessGenerate, Reply: harnesstest.Reply{Text: "Generated reply"}},
+		agentStep("goal work", "done", false),
+		evaluatorStep("judge", "MET: said done", false),
+		harnesstest.Step{Name: "summary", Match: harnesstest.LastUserText("Summarize the conversation above"), Reply: harnesstest.Reply{Text: "Summary"}},
 	)
-	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
+	cfg := pluginConfig(t, map[string]any{"host_calls": true})
+	cfg["title_model"], cfg["compaction_keep_turns"] = "anthropic/title-model", 1
+	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(cfg)), nil, t.TempDir())
 	id := d.Create(t)
 	d.Submit(t, id, "go")
 	d.WaitIdle(t, id)
-	lines := awaitLogLines(t, d, "turn_metrics", 2)
-	if len(lines) != 2 {
-		t.Fatalf("turn_metrics lines = %d, want 2: a model call that failed before its stream ended logs none\n%s", len(lines), d.Stderr())
+	if !fake.AwaitRequests(5, waitBound) {
+		t.Fatalf("model requests = %d, want five for turn, title, and generate calls", len(fake.Requests()))
 	}
+	testpoll.Until(t, waitBound, "the title call did not settle", func() bool {
+		body, _ := d.GetSession(t, id).Body.(map[string]any)
+		return body["title"] == "Session title"
+	})
+	initial := awaitLogLines(t, d, "turn_metrics", 4)
+	wantPurposes(t, initial, map[string]int{"turn": 2, "title": 1, "generate": 1})
 	if n := len(logLines(d.Stderr(), "startup_prewarm")); n != 0 {
 		t.Errorf("startup_prewarm lines = %d, want 0: a backend that cannot warm logs none\n%s", n, d.Stderr())
 	}
-	common := map[string]any{"session_id": id, "model": "anthropic/claude-fable-5", "cache_read_tokens": 0.0, "cache_write_tokens": 0.0}
-	wantFields(t, "first call", lines[0], map[string]any{"retry": 1.0, "input_tokens": 11.0, "output_tokens": 7.0})
-	wantFields(t, "second call", lines[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0})
-	for i, rec := range lines {
-		what := []string{"first call", "second call"}[i]
-		wantFields(t, what, rec, common)
-		wantNumbers(t, what, rec, "ttft_ms", "stream_ms", "system_len", "tools_count")
-		if rec["system_len"].(float64) == 0 || rec["tools_count"].(float64) == 0 {
-			t.Errorf("%s: system_len %v and tools_count %v, want the size of the request that the call sent", what, rec["system_len"], rec["tools_count"])
+	wantPurposeFields(t, initial, id)
+	var turnCalls []map[string]any
+	for _, rec := range initial {
+		if rec["purpose"] == "turn" {
+			turnCalls = append(turnCalls, rec)
 		}
-		wantAbsent(t, what, rec, "service_tier", "effort", "request_mode", "chain_refusal")
 	}
+	if len(turnCalls) != 2 {
+		t.Fatalf("turn-purpose lines = %d, want 2", len(turnCalls))
+	}
+	wantFields(t, "first call", turnCalls[0], map[string]any{"retry": 1.0, "input_tokens": 11.0, "output_tokens": 7.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0})
+	wantFields(t, "second call", turnCalls[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0})
+	for _, rec := range initial {
+		if rec["purpose"] != "turn" {
+			continue
+		}
+		wantNumbers(t, "turn", rec, "ttft_ms", "stream_ms", "system_len", "tools_count")
+		if rec["system_len"].(float64) == 0 || rec["tools_count"].(float64) == 0 {
+			t.Errorf("turn system_len %v and tools_count %v, want the size of the request that the call sent", rec["system_len"], rec["tools_count"])
+		}
+		wantAbsent(t, "turn", rec, "service_tier", "effort", "request_mode", "chain_refusal")
+	}
+	d.SetGoal(t, id, "say done", 1, false)
+	d.WaitIdle(t, id)
+	testpoll.Until(t, waitBound, "the goal was not judged", func() bool {
+		body, _ := d.GetSession(t, id).Body.(map[string]any)
+		goal, _ := body["goal"].(map[string]any)
+		return goal["state"] == "achieved"
+	})
+	withJudge := awaitLogLines(t, d, "turn_metrics", 6)
+	wantPurposes(t, withJudge, map[string]int{"turn": 3, "title": 1, "generate": 1, "judge": 1})
+	wantPurposeFields(t, withJudge, id)
+	if res := d.Compact(t, id); res.Status != http.StatusOK {
+		t.Fatalf("compact = %d %v", res.Status, res.Body)
+	}
+	withCompaction := awaitLogLines(t, d, "turn_metrics", 7)
+	wantPurposes(t, withCompaction, map[string]int{"turn": 3, "title": 1, "generate": 1, "judge": 1, "compaction": 1})
+	wantPurposeFields(t, withCompaction, id)
 }
 
 func TestContractTurnMetricsNamesTheTierAndTheEffortOfTheCall(t *testing.T) {

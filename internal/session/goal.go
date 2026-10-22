@@ -242,7 +242,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 	a.run = r
 	turnID := a.state.LastEnded().TurnID
 	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History(), a.transcriptBudget())
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Purpose: turn.PurposeJudge, Instructions: evaluatorPrompt,
 		Settings: protocol.Settings{Effort: evaluatorEffort, Accounts: a.state.Settings().Accounts}, MaxTokens: evaluatorMaxTokens,
 		History: []protocol.LogMessage{{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}}}
 	a.spawn(func() {

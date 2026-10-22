@@ -1,9 +1,11 @@
 package turn
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -54,13 +56,16 @@ func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
 	req.AcceptCut, req.OneShot = true, true
-	if b.Capabilities(req.Model).OwnsLoop {
+	ownsLoop := b.Capabilities(req.Model).OwnsLoop
+	if ownsLoop {
 		lim.Retries = 0
 	}
-	var a answer
+	a := answer{log: cmp.Or(lim.Log, slog.Default())}
+	a.call = callOf(req, 0, ownsLoop)
 	err := watch(ctx, b, req, &a, lim.Idle)
 	for n := 1; n <= lim.Retries && a.text.Len() == 0 && retryable(err); n++ {
 		if err = sleep(ctx, retryDelay(n, err)); err == nil {
+			a.call = callOf(req, n, ownsLoop)
 			err = watch(ctx, b, req, &a, lim.Idle)
 		}
 	}
@@ -74,6 +79,8 @@ func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 type answer struct {
 	text  strings.Builder
 	usage protocol.Usage
+	log   *slog.Logger
+	call  callInfo
 }
 
 func (a *answer) Item(m protocol.LogMessage) error {
@@ -85,7 +92,12 @@ func (a *answer) Item(m protocol.LogMessage) error {
 	return nil
 }
 
-func (a *answer) Telemetry(t Telemetry) { a.usage = a.usage.Add(t.Usage) }
+func (a *answer) Telemetry(t Telemetry) {
+	if t.Call != nil {
+		logCall(a.log, a.call, t)
+	}
+	a.usage = a.usage.Add(t.Usage)
+}
 
 func (*answer) Delta(string, Delta)                   {}
 func (*answer) Alive()                                {}
