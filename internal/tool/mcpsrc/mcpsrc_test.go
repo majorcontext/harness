@@ -14,6 +14,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -88,6 +89,55 @@ func call(name, args string) protocol.ToolCall {
 }
 
 const forecastRow = "mcp__weather__forecast — Get the weather forecast for a city"
+
+func TestOptedInHTTPServerReceivesCallingSessionID(t *testing.T) {
+	var gotHeader string
+	reg := mcp.NewRegistry("weather", "1")
+	reg.RegisterTool(mcp.Tool{Name: "forecast", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
+			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: "ok"}}}, nil
+		})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			gotHeader = r.Header.Get(mcp.HarnessSessionIDHeader)
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	src := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{
+		"weather": {URL: srv.URL, IncludeSessionIDHeader: true},
+	}}, "", nil)
+	defer src.Close()
+	var tools []turn.Tool
+	for _, tool := range src.Toolset(bg, nil, nil, "").Tools {
+		if tool.Spec().Name == "mcp__weather__forecast" {
+			tools = append(tools, tool)
+		}
+	}
+	if len(tools) != 1 {
+		t.Fatalf("weather tools = %d, want one", len(tools))
+	}
+	ctx := turn.WithSessionID(bg, "child-session")
+	if _, err := tools[0].Run(ctx, call("mcp__weather__forecast", `{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if gotHeader != "child-session" {
+		t.Fatalf("an HTTP MCP server opted in receives the calling session's ID (the child's for a subagent) in the header, in both the native and claude-code backends; got %q", gotHeader)
+	}
+	srcNoOpt := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL}}}, "", nil)
+	defer srcNoOpt.Close()
+	for _, tool := range srcNoOpt.Toolset(bg, nil, nil, "").Tools {
+		if tool.Spec().Name == "mcp__weather__forecast" {
+			if _, err := tool.Run(ctx, call("mcp__weather__forecast", `{}`)); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if gotHeader != "" {
+		t.Fatalf("an HTTP MCP server that did not opt in receives no session ID header; got %q", gotHeader)
+	}
+}
 
 func TestToolsetRestrictedByAllowedTools(t *testing.T) {
 	for _, tc := range []struct {

@@ -45,7 +45,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}},
 		MCPServers: map[string]config.MCPServerSpec{
 			"chrome-devtools": {Command: []string{"chrome-devtools-mcp-absent", "--headless"}, Dir: dir},
-			"gateway":         {URL: gateway.URL},
+			"gateway":         {URL: gateway.URL, IncludeSessionIDHeader: true},
 		}}})
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +58,15 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 		t.Fatalf("bridge runs = %+v, want one that offers echo and %s", runs, hist)
 	}
 	got := jsonLines[mcpConfigFile](t, configLog)
-	if len(got) != 1 || len(got[0].MCPServers) != 2 || !reflect.DeepEqual(got[0].MCPServers["harness"], map[string]any{"type": "http", "url": runs[0].URL}) || got[0].MCPServers["gateway"]["url"] == runs[0].URL {
-		t.Errorf("--mcp-config = %+v, want harness at %s and a gateway entry at its own URL", got, runs[0].URL)
+	if len(got) != 1 || len(got[0].MCPServers) != 2 || !reflect.DeepEqual(got[0].MCPServers["harness"], map[string]any{"type": "http", "url": runs[0].URL}) {
+		t.Fatalf("--mcp-config = %+v, want harness at %s and a gateway entry at its own URL", got, runs[0].URL)
+	}
+	if got[0].MCPServers["gateway"]["url"] == runs[0].URL {
+		t.Errorf("gateway URL = %v, want its configured endpoint", got[0].MCPServers["gateway"]["url"])
+	}
+	wantHeaders := map[string]any{"Harness-Session-Id": "s1"}
+	if !reflect.DeepEqual(got[0].MCPServers["gateway"]["headers"], wantHeaders) {
+		t.Errorf("gateway headers = %v, want %v", got[0].MCPServers["gateway"]["headers"], wantHeaders)
 	}
 	if argv, names := jsonLines[[]string](t, argvLog)[0], toolPartNames(t, st); !hasArgs(argv, "--allowedTools", "mcp__gateway,mcp__harness") ||
 		!slices.Contains(argv, "--strict-mcp-config") || !slices.Equal(names, []string{"mcp__gateway__ping", "mcp__gateway__ping"}) {

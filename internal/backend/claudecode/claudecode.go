@@ -336,7 +336,11 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
 	}
 	servers := map[string]mcpServer{}
 	for _, name := range slices.Sorted(maps.Keys(urls)) {
-		servers[name] = mcpServer{Type: "http", URL: urls[name]}
+		server := mcpServer{Type: "http", URL: urls[name]}
+		if req.MCPInstructions.SessionIDHeaderServers[name] && req.SessionID != "" {
+			server.Headers = map[string]string{"Harness-Session-Id": req.SessionID}
+		}
+		servers[name] = server
 	}
 	path, err := r.writeMCPConfig(servers)
 	if err != nil {
@@ -413,8 +417,9 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (map[string]stri
 
 // mcpServer is one server of an --mcp-config file.
 type mcpServer struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // writeMCPConfig writes servers to an --mcp-config file and returns its

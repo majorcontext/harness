@@ -987,7 +987,7 @@ func TestLoadMCPServers(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, p, `{"mcp_servers": {
 			"fs": {"command": ["mcp-fs", "--root", "/tmp"], "env": ["A=1"], "dir": "/tmp"},
-			"weather": {"url": "https://weather.example/mcp", "headers": {"Authorization": "Bearer tok"}}
+			"weather": {"url": "https://weather.example/mcp", "headers": {"Authorization": "Bearer tok"}, "include_session_id_header": true}
 		}}`)
 		c, err := Load(p)
 		if err != nil {
@@ -1007,8 +1007,8 @@ func TestLoadMCPServers(t *testing.T) {
 		if weather.URL != "https://weather.example/mcp" {
 			t.Errorf("weather.URL = %q", weather.URL)
 		}
-		if weather.Headers["Authorization"] != "Bearer tok" {
-			t.Errorf("weather.Headers = %v", weather.Headers)
+		if weather.Headers["Authorization"] != "Bearer tok" || !weather.IncludeSessionIDHeader {
+			t.Errorf("weather.Headers/include_session_id_header = %v/%t", weather.Headers, weather.IncludeSessionIDHeader)
 		}
 	})
 	t.Run("unset leaves nil", func(t *testing.T) {

@@ -119,9 +119,10 @@ type memory struct {
 	// seen holds the first definition that the runtime read of each tool.
 	seen map[string]mcp.Tool
 	// base holds the tools that the first connect reached. They are the tools that every session sends.
-	base      map[string]bool
-	inst      string
-	resources bool
+	base            map[string]bool
+	inst            string
+	resources       bool
+	sessionIDHeader bool
 	// up is true once the server connected.
 	up bool
 }
@@ -392,6 +393,7 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	defer cancel()
 	defer context.AfterFunc(life, cancel)()
 	return toolresult.Limit(ctx, call.Name, sv.limit, func(ctx context.Context) (protocol.ToolResult, error) {
+		ctx = r.src.sessionHeader(ctx, r.server)
 		res, err := sv.client.CallTool(ctx, r.name, in)
 		if err != nil {
 			if life.Err() != nil {

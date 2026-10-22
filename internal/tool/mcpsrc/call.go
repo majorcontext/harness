@@ -5,9 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/toolresult"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
+
+func (s *Source) sessionHeader(ctx context.Context, server string) context.Context {
+	if m := s.view().mem[server]; m != nil && m.sessionIDHeader {
+		if id := turn.SessionID(ctx); id != "" {
+			return mcp.WithRequestHeader(ctx, mcp.HarnessSessionIDHeader, id)
+		}
+	}
+	return ctx
+}
 
 // Call runs tool of server with args, outside any session. It waits for the
 // first connect of every server. A server that is retrying in the background
@@ -43,6 +54,7 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 	defer cancel()
 	defer context.AfterFunc(life, cancel)()
 	return toolresult.Limit(ctx, prefix+server+"__"+tool, sv.limit, func(ctx context.Context) (protocol.ToolResult, error) {
+		ctx = s.sessionHeader(ctx, server)
 		res, err := sv.client.CallTool(ctx, tool, in)
 		if err != nil {
 			return protocol.ToolResult{}, hide(server, err)

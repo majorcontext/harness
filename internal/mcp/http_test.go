@@ -43,9 +43,37 @@ type fakeHTTPServer struct {
 	jsonContentType string
 	sseContentType  string
 
-	mu          sync.Mutex
-	seenAuth    []string
-	seenSession []string
+	mu                 sync.Mutex
+	seenAuth           []string
+	seenSession        []string
+	seenHarnessSession []string
+}
+
+func TestHTTPCallSendsContextRequestHeader(t *testing.T) {
+	s := &fakeHTTPServer{tools: []Tool{{Name: "greet", InputSchema: json.RawMessage(`{"type":"object"}`)}}}
+	server := s.server(t)
+	client, err := NewClient(&HTTPTransport{Endpoint: server.URL}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithRequestHeader(context.Background(), "Harness-Session-Id", "child-session")
+	if _, err := client.CallTool(ctx, "greet", nil); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if got := s.seenHarnessSession[len(s.seenHarnessSession)-1]; got != "child-session" {
+		t.Fatalf("Harness-Session-Id = %q, want child-session", got)
+	}
+	for _, got := range s.seenHarnessSession[:len(s.seenHarnessSession)-1] {
+		if got != "" {
+			t.Fatalf("Harness-Session-Id during initialization = %q, want absent", got)
+		}
+	}
 }
 
 func (s *fakeHTTPServer) server(t *testing.T) *httptest.Server {
@@ -59,6 +87,7 @@ func (s *fakeHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.seenAuth = append(s.seenAuth, r.Header.Get("Authorization"))
 	s.seenSession = append(s.seenSession, r.Header.Get(sessionIDHeader))
+	s.seenHarnessSession = append(s.seenHarnessSession, r.Header.Get("Harness-Session-Id"))
 	s.mu.Unlock()
 
 	if r.Method == http.MethodDelete {

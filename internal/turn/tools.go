@@ -48,6 +48,8 @@ type MCPInstructions struct {
 	Common string
 	// Servers holds the instructions of each server by its name.
 	Servers map[string]string
+	// SessionIDHeaderServers names servers that receive Harness-Session-Id.
+	SessionIDHeaderServers map[string]bool
 }
 
 // Notice is a status that the model reads inside the conversation. Each model
@@ -123,6 +125,10 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 			out.MCPInstructions.Servers = map[string]string{}
 		}
 		maps.Copy(out.MCPInstructions.Servers, ts.MCPInstructions.Servers)
+		if len(ts.MCPInstructions.SessionIDHeaderServers) > 0 && out.MCPInstructions.SessionIDHeaderServers == nil {
+			out.MCPInstructions.SessionIDHeaderServers = map[string]bool{}
+		}
+		maps.Copy(out.MCPInstructions.SessionIDHeaderServers, ts.MCPInstructions.SessionIDHeaderServers)
 		out.Notices = append(out.Notices, ts.Notices...)
 		if ts.Hooks != nil {
 			hooks = append(hooks, ts.Hooks)
@@ -196,7 +202,7 @@ func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResul
 	if content {
 		span.SetAttributes(attribute.String("gen_ai.tool.call.arguments", tracing.Arguments(c.Arguments)))
 	}
-	res := runTool(ctx, tools, t.hooks, c)
+	res := runTool(WithSessionID(ctx, t.session), tools, t.hooks, c)
 	if res.IsError {
 		tracing.Fail(span, "tool_error")
 	} else if content {
