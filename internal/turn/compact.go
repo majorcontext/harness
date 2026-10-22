@@ -1,11 +1,14 @@
 package turn
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -57,6 +60,14 @@ func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 	if b.Capabilities(req.Model).OwnsLoop {
 		lim.Retries = 0
 	}
+	system, next := req.Instructions, req.Sent
+	req.Sent = func(s string) {
+		system = s
+		if next != nil {
+			next(s)
+		}
+	}
+	start := time.Now()
 	var a answer
 	err := watch(ctx, b, req, &a, lim.Idle)
 	for n := 1; n <= lim.Retries && a.text.Len() == 0 && retryable(err); n++ {
@@ -64,6 +75,7 @@ func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 			err = watch(ctx, b, req, &a, lim.Idle)
 		}
 	}
+	logOneShot(cmp.Or(lim.Log, slog.Default()), req, system, a.text.String(), a.usage, err, time.Since(start))
 	if err != nil {
 		return "", a.usage, err
 	}
