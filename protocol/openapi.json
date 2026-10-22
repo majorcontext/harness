@@ -1739,6 +1739,12 @@
           "model": {
             "type": "string"
           },
+          "allowed_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "title": {
             "type": "string"
           },
@@ -1934,6 +1940,19 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "allowed_tools": {
+            "oneOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"

@@ -110,7 +110,11 @@ func goldenLines(t *testing.T) []string {
 		fill(full, "x")
 		empty := reflect.New(reflect.TypeOf(zero)).Elem()
 		fillEmpty(empty, 0)
-		for _, ev := range []protocol.Payload{zero, full.Interface().(protocol.Payload), empty.Interface().(protocol.Payload)} {
+		events := []protocol.Payload{zero, full.Interface().(protocol.Payload), empty.Interface().(protocol.Payload)}
+		if _, ok := zero.(protocol.SettingsChanged); ok {
+			events = append(events, protocol.SettingsChanged{AllowedTools: new([]string(nil))})
+		}
+		for _, ev := range events {
 			line, err := Envelope{Seq: uint64(i + 1), Time: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC), Event: ev}.Encode()
 			if err != nil {
 				t.Fatalf("%s: %v", zero.Kind(), err)

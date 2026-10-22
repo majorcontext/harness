@@ -48,6 +48,9 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 	if e.Accounts != nil {
 		s.settings.Accounts = maps.Clone(*e.Accounts)
 	}
+	if e.AllowedTools != nil {
+		s.allowed = slices.Clone(*e.AllowedTools)
+	}
 	return nil
 }
 

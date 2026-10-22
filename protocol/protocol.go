@@ -129,6 +129,7 @@ type Session struct {
 	Origin            string             `json:"origin"`
 	WorkDir           string             `json:"work_dir,omitempty"`
 	Model             string             `json:"model"`
+	AllowedTools      []string           `json:"allowed_tools,omitzero"`
 	Title             string             `json:"title,omitempty"`
 	Effort            string             `json:"effort,omitempty"`
 	ServiceTier       string             `json:"service_tier,omitempty"`

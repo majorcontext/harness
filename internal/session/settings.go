@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"maps"
+	"slices"
 
 	"github.com/majorcontext/harness/protocol"
 
@@ -43,9 +44,18 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	if ch.Accounts != nil && maps.Equal(*ch.Accounts, set.Accounts) {
 		ch.Accounts = nil
 	}
-	hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil
-	if ch.Model != nil && a.cfg.Check != nil {
-		if err := a.cfg.Check(prev, *ch.Model, a.state.AllowedTools()); err != nil {
+	tools, model := a.state.AllowedTools(), prev
+	if ch.AllowedTools != nil && sameTools(*ch.AllowedTools, tools) {
+		ch.AllowedTools = nil
+	}
+	if ch.AllowedTools != nil {
+		tools = *ch.AllowedTools
+	}
+	if ch.Model != nil {
+		model = *ch.Model
+	}
+	if (ch.Model != nil || ch.AllowedTools != nil) && a.cfg.Check != nil {
+		if err := a.cfg.Check(prev, model, tools); err != nil {
 			if len(before) == 0 {
 				return err
 			}
@@ -53,6 +63,7 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 			return a.appendCtx(ctx, before...)
 		}
 	}
+	hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil || ch.AllowedTools != nil
 	title = changed(title, a.state.Renamed())
 	if !hasSettings && title == nil {
 		if len(before) == 0 {
@@ -111,6 +122,13 @@ func (a *Actor) DeferModel(ctx context.Context, ref string) (string, string, err
 func (a *Actor) ModelState(ctx context.Context) (string, string, error) {
 	v, err := call(ctx, a, func(reply func(modelState, error)) { reply(a.modelState(), nil) })
 	return v.model, v.pending, err
+}
+
+func sameTools(a, b []string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return slices.Equal(slices.Compact(slices.Sorted(slices.Values(a))), slices.Compact(slices.Sorted(slices.Values(b))))
 }
 
 func changed(v *string, current string) *string {

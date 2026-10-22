@@ -102,9 +102,13 @@ func tsType(s *jsonschema.Schema) string {
 	switch {
 	case s.Ref != "":
 		return strings.TrimPrefix(s.Ref, defsPrefix)
-	case len(s.AnyOf) > 0:
-		parts := make([]string, len(s.AnyOf))
-		for i, a := range s.AnyOf {
+	case len(s.AnyOf) > 0 || len(s.OneOf) > 0:
+		options := s.AnyOf
+		if len(options) == 0 {
+			options = s.OneOf
+		}
+		parts := make([]string, len(options))
+		for i, a := range options {
 			parts[i] = tsType(a)
 		}
 		return strings.Join(parts, " | ")
