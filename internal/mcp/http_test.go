@@ -56,7 +56,7 @@ func TestHTTPCallSendsContextRequestHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 	if _, err := client.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
