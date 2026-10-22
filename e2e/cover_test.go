@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -59,8 +60,36 @@ func startCover() (finish func() error, err error) {
 	}
 	return func() error {
 		defer func() { _ = os.RemoveAll(dir) }()
+		if err := gatherCover(dir); err != nil {
+			return err
+		}
 		return reportCover(dir)
 	}, nil
+}
+
+// gatherCover moves the files that coverwrap put in a directory for each
+// process into dir. Every meta-data file of one binary holds the same bytes,
+// and each counter file name holds its process ID, so no name collides.
+func gatherCover(dir string) error {
+	subs, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, sub := range subs {
+		if !sub.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(dir, sub.Name()))
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if err := os.Rename(filepath.Join(dir, sub.Name(), f.Name()), filepath.Join(dir, f.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func reportCover(dir string) error {
