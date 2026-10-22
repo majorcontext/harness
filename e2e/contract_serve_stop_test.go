@@ -2,10 +2,12 @@ package e2e
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -167,6 +169,23 @@ func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	}
 }
 
+// acceptedBefore serves GET /health on a new connection to addr: serve
+// accepts connections in order, so each connection opened before is accepted.
+func acceptedBefore(t *testing.T, addr string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := io.WriteString(conn, "GET /health HTTP/1.1\r\nHost: serve\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(conn); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestContractServeStopHandsOffWithAnIdleClientConnection(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
@@ -178,10 +197,10 @@ func TestContractServeStopHandsOffWithAnIdleClientConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = idle.Close() }()
-	start := time.Now()
+	acceptedBefore(t, d.proc.addr)
 	d.proc.terminate(t)
-	if took := time.Since(start); took >= 4*time.Second {
-		t.Errorf("serve took %s to stop: the idle connection held shutdown", took)
+	if strings.Contains(d.proc.stderr.String(), "http server shutdown") {
+		t.Errorf("the idle connection held the HTTP server past the stop deadline\nstderr:\n%s", d.proc.stderr.String())
 	}
 	if got := readStopReport(t, d.store); got != (stopReport{Stop: "handoff", Sync: "unsynced"}) {
 		t.Errorf("stop report = %+v, want handoff and unsynced", got)

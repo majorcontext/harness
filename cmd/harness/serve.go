@@ -160,10 +160,13 @@ func newHTTPServer(h http.Handler) *http.Server {
 
 // quietConns holds the state of each connection, so that shutdown closes the
 // connections with no request in flight: net/http waits for a new connection
-// that has sent no request until it is 5 s old.
+// that has sent no request until it is 5 s old. Shutdown runs its hooks before
+// the accept loop ends, so a connection that becomes quiet after close is
+// closed at once.
 type quietConns struct {
-	mu    sync.Mutex
-	state map[net.Conn]http.ConnState
+	mu      sync.Mutex
+	state   map[net.Conn]http.ConnState
+	closing bool
 }
 
 func (q *quietConns) track(c net.Conn, s http.ConnState) {
@@ -174,11 +177,15 @@ func (q *quietConns) track(c net.Conn, s http.ConnState) {
 		return
 	}
 	q.state[c] = s
+	if q.closing && (s == http.StateNew || s == http.StateIdle) {
+		_ = c.Close()
+	}
 }
 
 func (q *quietConns) close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.closing = true
 	for c, s := range q.state {
 		if s == http.StateNew || s == http.StateIdle {
 			_ = c.Close()
