@@ -238,7 +238,9 @@ func (d *runtimeDriver) authorize(req *http.Request) {
 func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path string, body any, header http.Header) *http.Response {
 	t.Helper()
 	var rdr io.Reader
-	if body != nil {
+	if raw, ok := body.(rawBody); ok {
+		rdr = strings.NewReader(string(raw))
+	} else if body != nil {
 		b, err := encodeBody(body)
 		if err != nil {
 			t.Fatalf("marshal body: %v", err)
