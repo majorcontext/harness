@@ -113,7 +113,7 @@ func serveCmd(args []string) error {
 	defer stopBackground()
 	go newGCWatcher(logger).run(background)
 	go store.watch(background)
-	httpSrv := &http.Server{Handler: corsHandler(bearer(httpapi.Handler(rt), token, unauthenticated), o.corsOrigin)}
+	httpSrv := newHTTPServer(corsHandler(bearer(httpapi.Handler(rt), token, unauthenticated), o.corsOrigin))
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	var caughtUp atomic.Bool
@@ -132,13 +132,64 @@ func serveCmd(args []string) error {
 		return errors.Join(err, closeErr, writeStopReport(dir, closeErr, replicated()))
 	case <-ctx.Done():
 		<-resumed
-		budget, cancel := context.WithTimeout(context.Background(), serveBudget)
-		defer cancel()
-		closed := make(chan error, 1)
-		go func() { closed <- rt.Close(budget) }()
-		shutErr := httpSrv.Shutdown(budget)
-		closeErr := <-closed
-		return errors.Join(shutErr, closeErr, writeStopReport(dir, closeErr, replicated()))
+		closeErr := shutdown(rt, httpSrv, logger)
+		return errors.Join(closeErr, writeStopReport(dir, closeErr, replicated()))
+	}
+}
+
+// shutdown closes rt and srv together within serveBudget and returns the
+// error of Runtime.Close: the stop follows the handoff, and an HTTP request
+// that does not finish in time is only logged.
+func shutdown(rt *harness.Runtime, srv *http.Server, logger *slog.Logger) error {
+	budget, cancel := context.WithTimeout(context.Background(), serveBudget)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- rt.Close(budget) }()
+	if err := srv.Shutdown(budget); err != nil {
+		logger.Warn("http server shutdown", "error", err.Error())
+	}
+	return <-closed
+}
+
+func newHTTPServer(h http.Handler) *http.Server {
+	conns := &quietConns{state: map[net.Conn]http.ConnState{}}
+	srv := &http.Server{Handler: h, ConnState: conns.track}
+	srv.RegisterOnShutdown(conns.close)
+	return srv
+}
+
+// quietConns holds the state of each connection, so that shutdown closes the
+// connections with no request in flight: net/http waits for a new connection
+// that has sent no request until it is 5 s old. Shutdown runs its hooks before
+// the accept loop ends, so a connection that becomes quiet after close is
+// closed at once.
+type quietConns struct {
+	mu      sync.Mutex
+	state   map[net.Conn]http.ConnState
+	closing bool
+}
+
+func (q *quietConns) track(c net.Conn, s http.ConnState) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if s == http.StateClosed || s == http.StateHijacked {
+		delete(q.state, c)
+		return
+	}
+	q.state[c] = s
+	if q.closing && (s == http.StateNew || s == http.StateIdle) {
+		_ = c.Close()
+	}
+}
+
+func (q *quietConns) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closing = true
+	for c, s := range q.state {
+		if s == http.StateNew || s == http.StateIdle {
+			_ = c.Close()
+		}
 	}
 }
 

@@ -2,9 +2,12 @@ package e2e
 
 import (
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -163,5 +166,44 @@ func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	awaitStartWork(t, d)
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("the stop report of an earlier run is still there after a start (stat err %v): a SIGKILL would leave it as the report of this run", err)
+	}
+}
+
+// acceptedBefore gets GET /health over a new connection to addr: serve
+// accepts connections in order, so each connection opened before is accepted.
+func acceptedBefore(t *testing.T, addr string) {
+	t.Helper()
+	client := wireClient(t, &http.Client{Transport: &http.Transport{DisableKeepAlives: true}})
+	resp, err := client.Get("http://" + addr + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /health = %d, %v", resp.StatusCode, err)
+	}
+}
+
+func TestContractServeStopHandsOffWithAnIdleClientConnection(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
+	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
+	runTurn(t, d, "go")
+	idle, err := net.Dial("tcp", d.proc.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idle.Close() }()
+	acceptedBefore(t, d.proc.addr)
+	d.proc.terminate(t)
+	if strings.Contains(d.proc.stderr.String(), "http server shutdown") {
+		t.Errorf("the idle connection held the HTTP server past the stop deadline\nstderr:\n%s", d.proc.stderr.String())
+	}
+	if got := readStopReport(t, d.store); got != (stopReport{Stop: "handoff", Sync: "unsynced"}) {
+		t.Errorf("stop report = %+v, want handoff and unsynced", got)
+	}
+	if code := d.proc.cmd.ProcessState.ExitCode(); code != 0 {
+		t.Errorf("serve exited %d after a handoff with a client connection that sent no request, want 0\nstderr:\n%s", code, d.proc.stderr.String())
 	}
 }
