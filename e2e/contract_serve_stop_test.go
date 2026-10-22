@@ -177,7 +177,7 @@ func TestContractServeStopHandsOffWithAnIdleClientConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer idle.Close()
+	defer func() { _ = idle.Close() }()
 	start := time.Now()
 	d.proc.terminate(t)
 	if took := time.Since(start); took >= 4*time.Second {
