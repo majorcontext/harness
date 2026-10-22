@@ -9,18 +9,22 @@ import (
 
 // goBuild compiles the harness binary and the fakeclaude test fake from root
 // into outDir. Only the harness binary takes the coverage flags, so the fake's
-// statements stay out of the contract coverage total.
+// statements stay out of the contract coverage total. With coverage, the
+// covered binary is harness-covered and harness is coverwrap, which gives
+// each process its own coverage directory.
 func goBuild(root, outDir string) error {
 	out := outDir + string(filepath.Separator)
-	var cover []string
-	if os.Getenv("HARNESS_E2E_COVER") == "1" {
-		cover = []string{"-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/..."}
+	type build struct {
+		pkg, name string
+		flags     []string
 	}
-	for _, b := range []struct {
-		pkg   string
-		flags []string
-	}{{"./harnesstest/fakeclaude", nil}, {"./cmd/harness", cover}} {
-		cmd := exec.Command("go", append(append([]string{"build", "-o", out}, b.flags...), b.pkg)...)
+	builds := []build{{"./harnesstest/fakeclaude", "fakeclaude", nil}, {"./cmd/harness", "harness", nil}}
+	if os.Getenv("HARNESS_E2E_COVER") == "1" {
+		builds[1] = build{"./cmd/harness", "harness-covered", []string{"-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/..."}}
+		builds = append(builds, build{"./harnesstest/coverwrap", "harness", nil})
+	}
+	for _, b := range builds {
+		cmd := exec.Command("go", append(append([]string{"build", "-o", out + b.name}, b.flags...), b.pkg)...)
 		cmd.Dir = root
 		if msg, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("go build %s: %v\n%s", b.pkg, err, msg)
