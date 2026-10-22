@@ -47,6 +47,7 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 	image := protocol.Input{ID: "in_img", Parts: blob("image/png", png)}
 	tooLargeData := make([]byte, (20<<20)+1)
 	tooLarge := protocol.Input{ID: "in_big", Parts: blob("application/pdf", tooLargeData)}
+	tooLargeBase64 := strings.Repeat("AAAA", len(tooLargeData)/3)
 	rows := []struct {
 		name string
 		in   protocol.Input
@@ -54,7 +55,7 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 	}{
 		{"unsupported_media_type", protocol.Input{ID: "in_type", Parts: blob("application/zip", []byte("PK"))}, nil},
 		{"image_bytes_that_do_not_decode", protocol.Input{ID: "in_bad", Parts: blob("image/png", []byte("not a png"))}, nil},
-		{"too_large", tooLarge, rawBody(`{"id":"in_big","parts":[{"type":"blob","media_type":"application/pdf","data":"` + strings.Repeat("A", (len(tooLargeData)+2)/3*4) + `"}]}`)},
+		{"too_large", tooLarge, rawBody(`{"id":"in_big","parts":[{"type":"blob","media_type":"application/pdf","data":"` + tooLargeBase64 + `"}]}`)},
 		{"image_for_a_model_without_image_input", image, nil},
 	}
 	if err := harness.CheckInput("anthropic/claude-sonnet-4-5", image); err != nil {
