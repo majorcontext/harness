@@ -13,7 +13,7 @@ const noToolOutput = "(no output)"
 // lastMessageID returns the ID of the newest message, or "".
 func (s *State) lastMessageID() string {
 	for i := len(s.history) - 1; i >= 0; i-- {
-		if !s.history[i].pinned {
+		if !s.history[i].pinned && !s.history[i].carried {
 			return s.history[i].id
 		}
 	}
@@ -38,7 +38,7 @@ func (s *State) Transcript() []protocol.Message {
 		out = append(out, s.summaryMessage())
 	}
 	for _, e := range s.history {
-		if !e.pinned {
+		if !e.pinned && !e.carried {
 			out = append(out, readerMessage(e))
 		}
 	}

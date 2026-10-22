@@ -241,6 +241,70 @@ func TestContractSessionContextOverflow(t *testing.T) {
 	})
 }
 
+var midTurnCompactionRows = map[string]runtimeRow{
+	"a_turn_that_passes_the_threshold_compacts_before_its_next_model_call":           sameAsServe(),
+	"context_overflow_in_a_single_turn_folds_the_turn_and_calls_the_model_again":     sameAsServe(),
+	"a_summary_that_overflows_is_retried_without_its_oldest_message_after_the_first": sameAsServe(),
+}
+
+func TestContractSessionMidTurnCompaction(t *testing.T) {
+	echo := func(n int, id, word string, in int) harnesstest.Step {
+		return harnesstest.Step{Name: id, Match: func(r harnesstest.Request) bool { return !summaryRequest(r) && assistantTurns(n)(r) },
+			Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: id, Name: "bash", Input: map[string]any{"command": "echo " + word}}},
+				Usage: harnesstest.Usage{Input: in, Output: 1}}}
+	}
+	has := func(r harnesstest.Request, kind, text, id string) bool {
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == kind && strings.Contains(p.Text, text) && p.ToolUseID == id {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	foldedTo := func(kept string) harnesstest.Matcher {
+		return func(r harnesstest.Request) bool {
+			return !summaryRequest(r) && strings.Contains(r.Messages[0].Parts[0].Text, "gist") && has(r, "text", "go", "") &&
+				has(r, "tool_use", "", kept) && !has(r, "tool_use", "", "toolu_1")
+		}
+	}
+	folded := foldedTo("toolu_2")
+	summary := harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}, Repeat: true}
+	done := harnesstest.Step{Name: "done", Match: folded, Reply: harnesstest.Reply{Text: "done"}}
+	overflow := harnesstest.Step{Name: "overflow", Match: func(r harnesstest.Request) bool { return !summaryRequest(r) && assistantTurns(2)(r) },
+		Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}}
+	oneTurn := []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}, messagesPage{as: "a"}}
+	runScenarios(t, []scenario{
+		{
+			name:    "a_turn_that_passes_the_threshold_compacts_before_its_next_model_call",
+			config:  overThreshold,
+			model:   []harnesstest.Step{echo(0, "toolu_1", "one", 10), echo(1, "toolu_2", "two", 900), summary, done},
+			actions: oneTurn,
+		},
+		{
+			name:    "context_overflow_in_a_single_turn_folds_the_turn_and_calls_the_model_again",
+			config:  map[string]any{"compaction_keep_turns": 1},
+			model:   []harnesstest.Step{echo(0, "toolu_1", "one", 10), echo(1, "toolu_2", "two", 10), overflow, summary, done},
+			actions: oneTurn,
+		},
+		{
+			name:   "a_summary_that_overflows_is_retried_without_its_oldest_message_after_the_first",
+			config: map[string]any{"compaction_keep_turns": 1},
+			model: []harnesstest.Step{echo(0, "toolu_1", "one", 10), echo(1, "toolu_2", "two", 10), echo(2, "toolu_3", "three", 10),
+				{Name: "overflow", Match: func(r harnesstest.Request) bool { return !summaryRequest(r) && assistantTurns(3)(r) },
+					Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
+				{Name: "summary overflow", Match: func(r harnesstest.Request) bool { return summaryRequest(r) && has(r, "tool_use", "", "toolu_1") },
+					Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
+				{Name: "summary", Match: func(r harnesstest.Request) bool {
+					return summaryRequest(r) && !has(r, "tool_use", "", "toolu_1") && r.Messages[0].Role == "user" && has(r, "text", "go", "")
+				}, Reply: harnesstest.Reply{Text: "gist"}},
+				{Name: "done", Match: foldedTo("toolu_3"), Reply: harnesstest.Reply{Text: "done"}}},
+			actions: oneTurn,
+		},
+	})
+}
+
 func TestContractSessionBusyCommands(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name: "compact_during_a_turn_is_session_busy",

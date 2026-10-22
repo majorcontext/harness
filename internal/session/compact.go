@@ -105,7 +105,7 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	a.run = r
 	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: id})
 	a.spawn(func() {
-		summary, usage, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits)
+		summary, usage, err := a.summarize(r.ctx, req)
 		c.Summary, c.Index, c.Usage = summary, a.resultIndex(metas), usage
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
@@ -113,6 +113,29 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 		})
 	})
 	return true
+}
+
+// summarize runs the summary request req. When the request overflows the
+// context window, it drops the oldest message after the first of the folded
+// history, with the tool results that answer it, and runs again, until a
+// summary comes back or only the first message is left.
+func (a *Actor) summarize(ctx context.Context, req turn.Request) (string, protocol.Usage, error) {
+	var total protocol.Usage
+	for {
+		text, usage, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits)
+		total = total.Add(usage)
+		if !errors.Is(err, turn.ErrContextOverflow) || len(req.History) < 2 {
+			return text, total, err
+		}
+		rest := req.History[2:]
+		for len(rest) > 0 && rest[0].Role == protocol.RoleTool {
+			rest = rest[1:]
+		}
+		if len(rest) == 0 {
+			return "", total, err
+		}
+		req.History = append([]protocol.LogMessage{req.History[0]}, rest...)
+	}
 }
 
 // fold returns the summary request of the turns before the newest keep,
