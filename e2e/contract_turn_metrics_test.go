@@ -67,7 +67,7 @@ func wantPurposes(t *testing.T, lines []map[string]any, want map[string]int) {
 		got[purpose]++
 	}
 	if !maps.Equal(got, want) {
-		t.Errorf("turn_metrics purposes = %v, want %v", got, want)
+		t.Fatalf("turn_metrics purposes = %v, want %v", got, want)
 	}
 }
 
@@ -80,7 +80,8 @@ func wantPurposeFields(t *testing.T, lines []map[string]any, sessionID string) {
 		case "title":
 			wantFields(t, "title", line, map[string]any{"session_id": sessionID, "model": "anthropic/title-model", "effort": "off", "tools_count": 0.0})
 		case "generate":
-			wantFields(t, "generate", line, map[string]any{"session_id": ""})
+			wantFields(t, "generate", line, map[string]any{"session_id": "", "model": "anthropic/claude-fable-5", "tools_count": 0.0})
+			wantAbsent(t, "generate", line, "service_tier", "effort")
 		case "judge":
 			wantFields(t, "judge", line, map[string]any{"session_id": sessionID, "model": "anthropic/eval-model", "effort": "off", "retry": 0.0, "tools_count": 0.0})
 			wantNumbers(t, "judge", line, "system_len")
@@ -115,14 +116,30 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	id := d.Create(t)
 	d.Submit(t, id, "go")
 	d.WaitIdle(t, id)
-	first := awaitLogLines(t, d, "turn_metrics", 2)
-	wantPurposeFields(t, first, id)
-	initial := awaitLogLines(t, d, "turn_metrics", 4)
+	if !fake.AwaitRequests(5, waitBound) {
+		t.Fatalf("model requests = %d, want five for turn, title, and generate calls", len(fake.Requests()))
+	}
+	testpoll.Until(t, waitBound, "the title call did not settle", func() bool {
+		body, _ := d.GetSession(t, id).Body.(map[string]any)
+		return body["title"] == "Session title"
+	})
+	initial := logLines(d.Stderr(), "turn_metrics")
 	wantPurposes(t, initial, map[string]int{"turn": 2, "title": 1, "generate": 1})
 	if n := len(logLines(d.Stderr(), "startup_prewarm")); n != 0 {
 		t.Errorf("startup_prewarm lines = %d, want 0: a backend that cannot warm logs none\n%s", n, d.Stderr())
 	}
 	wantPurposeFields(t, initial, id)
+	var turnCalls []map[string]any
+	for _, rec := range initial {
+		if rec["purpose"] == "turn" {
+			turnCalls = append(turnCalls, rec)
+		}
+	}
+	if len(turnCalls) != 2 {
+		t.Fatalf("turn-purpose lines = %d, want 2", len(turnCalls))
+	}
+	wantFields(t, "first call", turnCalls[0], map[string]any{"retry": 1.0, "input_tokens": 11.0, "output_tokens": 7.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0})
+	wantFields(t, "second call", turnCalls[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0})
 	for _, rec := range initial {
 		if rec["purpose"] != "turn" {
 			continue
@@ -135,13 +152,18 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 	}
 	d.SetGoal(t, id, "say done", 1, false)
 	d.WaitIdle(t, id)
-	withJudge := awaitLogLines(t, d, "turn_metrics", 6)
+	testpoll.Until(t, waitBound, "the goal was not judged", func() bool {
+		body, _ := d.GetSession(t, id).Body.(map[string]any)
+		goal, _ := body["goal"].(map[string]any)
+		return goal["state"] == "achieved"
+	})
+	withJudge := logLines(d.Stderr(), "turn_metrics")
 	wantPurposes(t, withJudge, map[string]int{"turn": 3, "title": 1, "generate": 1, "judge": 1})
 	wantPurposeFields(t, withJudge, id)
 	if res := d.Compact(t, id); res.Status != http.StatusOK {
 		t.Fatalf("compact = %d %v", res.Status, res.Body)
 	}
-	withCompaction := awaitLogLines(t, d, "turn_metrics", 7)
+	withCompaction := logLines(d.Stderr(), "turn_metrics")
 	wantPurposes(t, withCompaction, map[string]int{"turn": 3, "title": 1, "generate": 1, "judge": 1, "compaction": 1})
 	wantPurposeFields(t, withCompaction, id)
 }
