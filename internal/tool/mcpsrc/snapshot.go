@@ -87,9 +87,14 @@ func (s *Source) Populated() bool {
 }
 
 // settle waits until no read of a tool list is in flight, in s and its parent. It reports false when ctx ends first.
+// It first lets the actor handle every message sent before it, so a list_changed notification that a tool result
+// carried counts as a read in flight.
 func (s *Source) settle(ctx context.Context) bool {
 	if s == nil {
 		return true
+	}
+	if !s.barrier(ctx) {
+		return false
 	}
 	for {
 		if !s.parent.settle(ctx) {
@@ -106,3 +111,23 @@ func (s *Source) settle(ctx context.Context) bool {
 		}
 	}
 }
+
+// barrier returns once the actor has handled and published every message sent before it.
+func (s *Source) barrier(ctx context.Context) bool {
+	done := make(chan struct{})
+	if !s.send(barrierMsg{done}) {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-s.done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+type barrierMsg struct{ done chan struct{} }
+
+func (m barrierMsg) handle(a *actor) { a.after = append(a.after, func() { close(m.done) }) }
