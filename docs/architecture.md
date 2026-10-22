@@ -166,6 +166,7 @@ func (r *Runtime) Open(ctx context.Context, id string, opts ...SessionOption) (*
 // A SessionOption is Go-only: no protocol field and no HTTP route carries it.
 type SessionOption func(*sessionOptions)
 func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption // MCP servers of one session, beside Config.MCPServers; not persisted
+func WithAllowedTools(names []string) SessionOption // Open only; replace the recorded tool allowlist before resume
 func (r *Runtime) SetMCPServers(ctx context.Context, servers map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error) // the live set of runtime MCP servers; not persisted (see MCP tools)
 func (r *Runtime) SetPlugins(ctx context.Context, plugins []config.PluginSpec) ([]protocol.Plugin, error) // the live set of config plugins; not persisted (see plugins)
 func (r *Runtime) End(ctx context.Context, id string) error // end and unload; session_busy while a turn or a control command runs; the log stays
@@ -453,6 +454,10 @@ The runtime reads no other on-disk format.
 
 `Settings.accounts` is an optional vendor-to-opaque-account map. Children inherit it; `task spawn.accounts` merges over it, and `task send.accounts` merges over the child map then applies the full map before delivery. `Session.Update` and `settings.changed` carry an absolute optional map: an absent field changes nothing, and an explicit empty object clears every selection. A change through `Session.Update` takes effect at the next model call of a model API session and at the next run of a backend that owns its loop; `task send` with `accounts` to a child with a running turn fails with `session_busy`. Replay applies the same event, including a clear.
 
+`settings.changed.allowed_tools` is an embedder-only replacement of the session tool allowlist. An absent field keeps the list, `null` allows every tool, and `[]` allows none. The session view exposes the current list as `allowed_tools`. Turns and model validation read the same replayed state. New children inherit the replacement allowlist. An existing child keeps its own allowlist. `SettingsPatch` and `PATCH /sessions/{id}` cannot set `allowed_tools`.
+
+`Runtime.Open` with `WithAllowedTools(names)` checks the effective list for shadowed names before fencing. It validates a changed list as `Create` does, against the replayed model. It appends one `settings.changed` before resume or warm-up when the sets differ. An equal set requires no model check. Order and repeated names do not matter, but nil and an empty list differ. The option copies its input. `Create` rejects this option with `invalid_request`; it takes `CreateSession.AllowedTools`. An `Open` of a session that this runtime already runs keeps its tools.
+
 ### Event kinds
 
 The Go types of `protocol` own the payload of each kind: the field names, the JSON tags, and the typed enums (`Status`, `Delivery`, `StopReason`, `Cause`, `ErrorClass`, `ResolutionKind`, `GoalState`, `Verdict`, and `Outcome`). `protocol/openapi.json` and `protocol/protocol.ts` generate from them. `protocol.Kind*` names each kind. A golden test in `internal/eventlog` pins the JSON bytes of every kind.
@@ -589,11 +594,13 @@ type Ownership interface {
 
 Start-up order of `Open` after `Acquire`:
 
-1. Read `Head`.
-2. Append `owner.acquired{epoch, owner}` at that head. On `ErrConflict`, read `Head` again and retry. An old owner's append that lands first is ordered before the fence.
-3. Replay through the fence record, then run.
+1. Check the effective tool allowlist for shadowed names. A failure appends nothing.
+2. Read `Head`.
+3. Append `owner.acquired{epoch, owner}` at that head. On `ErrConflict`, read `Head` again and retry. An old owner's append that lands first is ordered before the fence.
+4. Replay through the fence record.
+5. Validate and record any changed embedder tool allowlist, then run.
 
-After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The error of that stop says `harness: session not owned: another process took over session <id>`; it matches `ErrOwnershipLost`, `ErrSessionNotOwned`, and `ErrConflict`. Two processes on one session directory therefore fence each other: the later `Open` keeps the session, and the earlier run fails with that error. `ErrSessionHeld` wraps `ErrSessionNotOwned`, so the code `session_not_owned` does not change, and `CatchUp` skips a session whose `Acquire` fails with it. The default `Owner` is `NewLocalOwner(1)`: it grants every session to the local process, one grant at a time. An embedder supplies a lease, or passes `NewLocalOwner` with the epoch of its claim; `cmd/harness` reads the config key `owner_epoch` for that epoch. The actor calls `Release` once, after the last record is acknowledged, with a bound of 10 s. A failure is logged and `Session.Release` and `Runtime.Close` return it. A path that has no caller to return it to, such as a failed `Open`, only logs it.
+After step 3, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The error of that stop says `harness: session not owned: another process took over session <id>`; it matches `ErrOwnershipLost`, `ErrSessionNotOwned`, and `ErrConflict`. Two processes on one session directory therefore fence each other: the later `Open` keeps the session, and the earlier run fails with that error. `ErrSessionHeld` wraps `ErrSessionNotOwned`, so the code `session_not_owned` does not change, and `CatchUp` skips a session whose `Acquire` fails with it. The default `Owner` is `NewLocalOwner(1)`: it grants every session to the local process, one grant at a time. An embedder supplies a lease, or passes `NewLocalOwner` with the epoch of its claim; `cmd/harness` reads the config key `owner_epoch` for that epoch. The actor calls `Release` once, after the last record is acknowledged, with a bound of 10 s. A failure is logged and `Session.Release` and `Runtime.Close` return it. A path that has no caller to return it to, such as a failed `Open`, only logs it.
 
 On the browser host the owner is `NewLocalOwner` and the store-wide Web Lock extends its single grant to the origin (see Store).
 

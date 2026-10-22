@@ -55,6 +55,7 @@ func (s *Session) Snapshot() protocol.Session {
 
 func detach(s protocol.Session) protocol.Session {
 	s.Queued = slices.Clone(s.Queued)
+	s.AllowedTools = slices.Clone(s.AllowedTools)
 	if s.Goal != nil {
 		g := *s.Goal
 		s.Goal = &g

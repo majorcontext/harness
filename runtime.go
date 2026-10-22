@@ -300,6 +300,9 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 	if err != nil {
 		return nil, err
 	}
+	if so.allowedTools != nil {
+		return nil, fmt.Errorf("%w: WithAllowedTools is only valid for Open", ErrInvalidRequest)
+	}
 	if err := r.startPlugins(ctx, false); err != nil {
 		return nil, err
 	}
@@ -334,7 +337,7 @@ func (r *Runtime) Open(ctx context.Context, id string, opts ...SessionOption) (*
 	if err != nil {
 		return nil, err
 	}
-	return r.load(ctx, id, launch{mcp: so.mcp})
+	return r.load(ctx, id, launch{mcp: so.mcp, allowedTools: so.allowedTools})
 }
 
 // launch is how a load starts a session that this runtime does not run yet.
@@ -349,7 +352,8 @@ type launch struct {
 	// mcp holds the session MCP servers of WithSessionMCP.
 	mcp map[string]config.MCPServerSpec
 	// accounts applies session account selections before an opened turn resumes.
-	accounts *map[string]string
+	accounts     *map[string]string
+	allowedTools *[]string
 }
 
 func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
@@ -415,10 +419,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	}
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
-	} else if l.accounts != nil {
-		a, err = session.OpenWithAccounts(ctx, cfg, *l.accounts)
 	} else {
-		a, err = session.Open(ctx, cfg)
+		a, err = session.OpenWithSettings(ctx, cfg, protocol.SettingsChanged{Accounts: l.accounts, AllowedTools: l.allowedTools})
 	}
 	if err != nil {
 		sm.Close()

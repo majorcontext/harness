@@ -1,3 +1,4 @@
+allowedtools_test.go WithAllowedTools is Go-only; no HTTP route can replace a session tool allowlist
 banner_test.go Options.Version empty is Go API: serve always passes a version, so no row runs without the banner
 codex_test.go ModelTransport is a Go API option with no serve equivalent; it supplies the key and dials the websocket
 commands_test.go a panicking command operation and a typed command during Close reach no driver

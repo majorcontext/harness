@@ -144,6 +144,17 @@ if err != nil {
 
 This adds the imports `errors` and `path/filepath`.
 
+To update a recorded tool allowlist, pass `harness.WithAllowedTools(names)` to
+`Open`. The runtime validates and records the replacement before any turn
+resumes. A nil list allows every tool; an empty list allows none. Equal sets
+record no change, even if their order or repeated names differ. `Snapshot`
+returns the current list in `AllowedTools`.
+
+Use `CreateSession.AllowedTools` on `Create`; `Create` rejects
+`WithAllowedTools`. If `Create` returns `harness.ErrSessionExists`, call
+`Open` with the option. An `Open` of a session that this runtime already
+runs keeps its tools. No HTTP settings update can replace the allowlist.
+
 ## Give the model your own tools
 
 A `harness.Tool` is a spec for the model and a Go function to run. This one

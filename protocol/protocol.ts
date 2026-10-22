@@ -502,6 +502,7 @@ export interface Session {
   origin: string;
   work_dir?: string;
   model: string;
+  allowed_tools?: string[];
   title?: string;
   effort?: string;
   service_tier?: string;
@@ -552,6 +553,7 @@ export interface SettingsChanged {
   effort?: string;
   service_tier?: string;
   accounts?: Record<string, string>;
+  allowed_tools?: string[] | null;
 }
 
 export interface SettingsPatch {

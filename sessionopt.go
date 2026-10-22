@@ -14,7 +14,14 @@ import (
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
-	mcp map[string]config.MCPServerSpec
+	mcp          map[string]config.MCPServerSpec
+	allowedTools *[]string
+}
+
+// WithAllowedTools replaces the recorded tool allowlist on Open; nil allows all tools, and an empty list allows none.
+func WithAllowedTools(names []string) SessionOption {
+	own := slices.Clone(names)
+	return func(o *sessionOptions) { o.allowedTools = &own }
 }
 
 // WithSessionMCP gives the session MCP servers beside the servers of Config.MCPServers. The map key

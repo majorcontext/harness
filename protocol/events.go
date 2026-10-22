@@ -265,6 +265,8 @@ type SettingsChanged struct {
 	Effort      *string            `json:"effort,omitempty"`
 	ServiceTier *string            `json:"service_tier,omitempty"`
 	Accounts    *map[string]string `json:"accounts,omitempty"`
+	// AllowedTools is embedder-only; a nil slice allows all tools, and an empty list allows none.
+	AllowedTools *[]string `json:"allowed_tools,omitempty" jsonschema:"nullable"`
 }
 
 // SessionTitled sets the session title. The title is not empty and has no control character, such as a tab or a line break.

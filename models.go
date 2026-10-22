@@ -66,14 +66,23 @@ func (r *Runtime) checkShadowed(names []string) error {
 	return nil
 }
 
-// createdForOpen reads the session.created record of session id and checks
-// its tool names as Create does.
-func (r *Runtime) createdForOpen(ctx context.Context, id string) (protocol.SessionCreated, error) {
+// createdForOpen checks the effective allowlist before an Open fences the log.
+func (r *Runtime) createdForOpen(ctx context.Context, id string, names *[]string) (protocol.SessionCreated, error) {
 	c, err := r.created(ctx, id)
-	if err == nil {
-		err = r.checkShadowed(c.AllowedTools)
+	if err != nil || len(r.shadowed()) == 0 {
+		return c, err
 	}
-	return c, err
+	var tools []string
+	if names != nil {
+		tools = *names
+	} else {
+		state, err := session.Load(ctx, id, storeLog{r.store, id})
+		if err != nil {
+			return c, err
+		}
+		tools = state.AllowedTools()
+	}
+	return c, r.checkShadowed(tools)
 }
 
 // lineageOf returns the creation record of session id and its place in the
@@ -81,7 +90,7 @@ func (r *Runtime) createdForOpen(ctx context.Context, id string) (protocol.Sessi
 func (r *Runtime) lineageOf(ctx context.Context, own session.Ownership, id string, l launch) (c protocol.SessionCreated, root string, depth int, err error) {
 	if l.created != nil {
 		c = *l.created
-	} else if c, err = r.createdForOpen(ctx, id); err != nil {
+	} else if c, err = r.createdForOpen(ctx, id, l.allowedTools); err != nil {
 		session.Discard(own, id, r.log)
 		return c, "", 0, err
 	}
