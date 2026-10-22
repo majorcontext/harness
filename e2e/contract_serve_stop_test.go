@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -163,5 +164,29 @@ func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	awaitStartWork(t, d)
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("the stop report of an earlier run is still there after a start (stat err %v): a SIGKILL would leave it as the report of this run", err)
+	}
+}
+
+func TestContractServeStopHandsOffWithAnIdleClientConnection(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t, replyText("ok"))
+	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
+	runTurn(t, d, "go")
+	idle, err := net.Dial("tcp", d.proc.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idle.Close()
+	start := time.Now()
+	d.proc.terminate(t)
+	if took := time.Since(start); took >= 4*time.Second {
+		t.Errorf("serve took %s to stop: the idle connection held shutdown", took)
+	}
+	if got := readStopReport(t, d.store); got != (stopReport{Stop: "handoff", Sync: "unsynced"}) {
+		t.Errorf("stop report = %+v, want handoff and unsynced", got)
+	}
+	if code := d.proc.cmd.ProcessState.ExitCode(); code != 0 {
+		t.Errorf("serve exited %d after a handoff with a client connection that sent no request, want 0\nstderr:\n%s", code, d.proc.stderr.String())
 	}
 }
