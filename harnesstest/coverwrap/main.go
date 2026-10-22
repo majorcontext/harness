@@ -1,18 +1,16 @@
 //go:build unix
 
 // Command coverwrap runs the covered harness binary beside it with GOCOVERDIR
-// set to a directory of its own process. A covered binary rewrites the
+// set to a new directory of its own. A covered binary rewrites the
 // meta-data file of GOCOVERDIR on every exit through a temporary name taken
 // from the clock alone, so two processes that exit in the same tick race on
-// the rename and one prints an error to stderr. The e2e suite moves the files
-// back into GOCOVERDIR before it reports.
+// the rename and one prints an error to stderr.
 package main
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"syscall"
 )
 
@@ -22,8 +20,8 @@ func main() {
 		fail(err)
 	}
 	if root := os.Getenv("GOCOVERDIR"); root != "" {
-		dir := filepath.Join(root, strconv.Itoa(os.Getpid()))
-		if err := os.Mkdir(dir, 0o755); err != nil {
+		dir, err := os.MkdirTemp(root, "")
+		if err != nil {
 			fail(err)
 		}
 		if err := os.Setenv("GOCOVERDIR", dir); err != nil {
