@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
@@ -122,10 +123,34 @@ func (t *turnRun) Ended(runErr error) {
 	})
 }
 
-// CompactTurn folds the turns before the newest Config.KeepTurns into a
-// summary while the turn runs, and returns the new history. ok is false when
-// no turn can fold. When ctx ends, it appends nothing.
+// CompactTurn folds the turns before the newest Config.KeepTurns, else the
+// running turn before its newest round trip, into a summary while the turn
+// runs, and returns the new history. ok is false when nothing folds. When ctx
+// ends, it appends nothing.
 func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool, error) {
+	return t.compactRunning(ctx, false)
+}
+
+// AutoCompact compacts as CompactTurn does when the context passes the
+// threshold. A summary that fails or comes back empty leaves the turn on its
+// history, with no error.
+func (t *turnRun) AutoCompact(ctx context.Context) ([]protocol.LogMessage, bool, error) {
+	due, err := call(ctx, t.a, func(reply func(bool, error)) {
+		if t.a.run != t.r {
+			reply(false, ErrTurnMismatch)
+			return
+		}
+		reply(t.a.compactDue(), nil)
+	})
+	if err != nil || !due {
+		return nil, false, err
+	}
+	return t.compactRunning(ctx, true)
+}
+
+// compactRunning compacts for the running turn. With soft, a failed summary
+// is no error unless ctx ended.
+func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.LogMessage, bool, error) {
 	a, r := t.a, t.r
 	type folding struct {
 		req   turn.Request
@@ -144,15 +169,20 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool,
 	if err != nil || !f.ok {
 		return nil, false, err
 	}
-	summary, usage, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits)
+	summary, usage, err := a.summarize(ctx, f.req)
 	if err != nil {
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			if a.run == r {
-				reply(struct{}{}, a.recordUsage(usage))
+				recordErr := a.recordUsage(usage)
+				a.latched = recordErr == nil && errors.Is(err, turn.ErrEmptySummary)
+				reply(struct{}{}, recordErr)
 				return
 			}
 			reply(struct{}{}, nil)
 		})
+		if soft && ctx.Err() == nil {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
 	f.c.Summary, f.c.Index, f.c.Usage = summary, a.resultIndex(f.metas), usage
@@ -162,6 +192,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool,
 			return
 		}
 		err := a.append(f.c)
+		a.latched = err == nil
 		h := a.state.ModelHistory()
 		reply(h, err)
 	})

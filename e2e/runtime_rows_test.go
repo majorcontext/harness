@@ -52,7 +52,7 @@ const (
 	specNoProvider              = "A model that no configured provider serves fails with `model_unavailable` at create and at a settings change; an unknown window never does."
 	specUnknownWindow           = "else the default of 128000 tokens with `WindowEstimated`"
 	specThreshold               = "A setting at or below 0 is the default."
-	specOverflowFails           = "When no turn can fold or the summary fails, the turn fails."
+	specOverflowFails           = "When nothing can fold or the summary fails, the turn fails."
 	specCompactResult           = "`Compact()` returns `protocol.Compacted`"
 	specChildResend             = "later-send-not-refused"
 	specEndTree                 = "stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`."
@@ -187,7 +187,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, claudeChildReportRows, accountRows, map[string]runtimeRow{
+var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, claudeChildReportRows, accountRows, midTurnCompactionRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),

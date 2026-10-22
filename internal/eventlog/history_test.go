@@ -90,6 +90,75 @@ func TestFold(t *testing.T) {
 	}
 }
 
+func TestFoldRunningTurn(t *testing.T) {
+	one := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"))
+	trips := with(one, call("t1", "i1", "c1"), result("t1", "i2", "c1"), call("t1", "i3", "c2"), result("t1", "i4", "c2"), call("t1", "i5", "c3"), result("t1", "i6", "c3"))
+	parallel := with(one, call("t1", "i1", "c1", "c2"), result("t1", "i2", "c1"), result("t1", "i3", "c2"), call("t1", "i4", "c3"), result("t1", "i5", "c3"))
+	for _, tc := range []struct {
+		name   string
+		events []protocol.Payload
+		n      int
+		to     uint64
+	}{
+		{"a turn with one round trip folds nothing", with(one, call("t1", "i1", "c1"), result("t1", "i2", "c1")), 0, 0},
+		{"a turn with no round trip folds nothing", one, 0, 0},
+		{"a turn that ended folds nothing", with(trips, end("t1", protocol.StopCompleted, "")), 0, 0},
+		{"the running turn folds up to its newest round trip", trips, 5, 7},
+		{"a round trip of parallel calls folds whole", parallel, 4, 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, to, ok := replay(t, tc.events).Fold(1)
+			if len(got) != tc.n || to != tc.to || ok != (tc.n > 0) {
+				t.Fatalf("Fold(1) = %d messages, %d, %v\nwant %d messages, %d", len(got), to, ok, tc.n, tc.to)
+			}
+		})
+	}
+}
+
+func TestCompactionInsideATurnKeepsTheWordsOfThePerson(t *testing.T) {
+	steered := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), says("s", protocol.DeliverySteer, "two"), promote("s", "t1"),
+		result("t1", "i2", "c1"), call("t1", "i3", "c2"), result("t1", "i4", "c2"))
+	first := with(steered, protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"})
+	second := with(first, call("t1", "i5", "c3"), result("t1", "i6", "c3"), protocol.CompactionApplied{FromSeq: 8, ToSeq: 10, Summary: "again"})
+	callOf := func(id string) protocol.LogMessage { return replay(t, with(running, call("t1", "i", id))).History()[1] }
+	resultOf := func(id string) protocol.LogMessage {
+		return replay(t, with(running, call("t1", "i", id), result("t1", "j", id))).History()[2]
+	}
+	summary := func(text string) protocol.LogMessage { return userText(SummaryBanner + text) }
+	for _, tc := range []struct {
+		name   string
+		events []protocol.Payload
+		want   []protocol.LogMessage
+	}{
+		{"the messages of the person follow the summary, then the kept round trip", first,
+			[]protocol.LogMessage{summary("sum"), userText("one"), userText(operator + "1. two\n"), callOf("c2"), resultOf("c2")}},
+		{"a later compaction folds them as other history and keeps them again", second,
+			[]protocol.LogMessage{summary("again"), userText("one"), userText(operator + "1. two\n"), callOf("c3"), resultOf("c3")}},
+		{"a compaction after the turn ended keeps no message of the person", with(steered, end("t1", protocol.StopCompleted, ""), protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"}),
+			[]protocol.LogMessage{summary("sum"), callOf("c2"), resultOf("c2")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := replay(t, tc.events)
+			if got := s.History(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("History = %+v\nwant %+v", got, tc.want)
+			}
+			if got := s.ModelHistory(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ModelHistory = %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
+	t.Run("readers see each message once", func(t *testing.T) {
+		var got []string
+		for _, m := range replay(t, second).Transcript() {
+			got = append(got, m.ID)
+		}
+		want := []string{"msg_a", "msg_i1", "msg_s", "msg_i2", summaryID(10), "msg_i3", "msg_i4", summaryID(13), "msg_i5", "msg_i6"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("Transcript IDs = %v\nwant %v", got, want)
+		}
+	})
+}
+
 func TestResolutionOutlivesTheRequest(t *testing.T) {
 	s := replay(t, with(asking, end("t1", protocol.StopAwaitingInput, ""), dismiss("c1")))
 	if got, ok := s.Resolution("c1"); !ok || got.Resolution != protocol.ResolutionDismissed {

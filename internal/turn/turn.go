@@ -206,8 +206,8 @@ type Limits struct {
 
 // Turn is what a running turn reports through, bound to its turn. Started
 // announces an item and returns the ID that its Delta calls name and ItemAs
-// records. CompactTurn returns ok false when no turn can fold. Only
-// CompactTurn takes a ctx.
+// records. CompactTurn and AutoCompact return ok false when nothing folds, and
+// AutoCompact also when the context is below the threshold. Only they take a ctx.
 type Turn interface {
 	Sink
 	Started() string
@@ -221,6 +221,7 @@ type Turn interface {
 	// Pin pins the changed notices after at messages and returns every pin.
 	Pin(ns []Notice, at int) []Pin
 	CompactTurn(ctx context.Context) (history []protocol.LogMessage, ok bool, err error)
+	AutoCompact(ctx context.Context) (history []protocol.LogMessage, ok bool, err error)
 	Ended(err error)
 }
 
@@ -256,6 +257,15 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	for first := true; ; first = false {
 		if step.Err() != nil {
 			return context.Cause(step)
+		}
+		if !first && !caps.OwnsContext {
+			h, ok, err := to.AutoCompact(step)
+			if err != nil {
+				return err
+			}
+			if ok {
+				req.History = h
+			}
 		}
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err

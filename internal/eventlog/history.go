@@ -37,6 +37,10 @@ type entry struct {
 	// reads: the response that answered a question, which the model reads
 	// once, in the result of the question.
 	readerOnly bool
+	// carried marks a user message of the running turn that a compaction
+	// folded: the model reads it after the summary, and the readers see it
+	// only where it was folded.
+	carried bool
 }
 
 // ReportTrigger is the text of a turn that only reports of children start,
@@ -228,13 +232,22 @@ func (s *State) remember(env Envelope) {
 		if i < 0 {
 			i = len(s.history)
 		}
+		var carried []entry
 		for _, h := range s.history[:i] {
-			if !h.pinned {
+			if h.pinned {
+				continue
+			}
+			if !h.carried {
 				s.folded = append(s.folded, readerMessage(h))
+			}
+			if !e.ByBackend && s.turn.ID != "" && h.turn == s.turnN && h.msg.Role == protocol.RoleUser && !h.readerOnly {
+				h.carried = true
+				carried = append(carried, h)
 			}
 		}
 		folded := slices.DeleteFunc(slices.Clone(s.history[:i]), func(h entry) bool { return !h.pinned })
-		s.history, s.turnAt = movePins(s.history[i:], max(0, s.turnAt-i), env.Seq)
+		kept, turnAt := movePins(s.history[i:], max(0, s.turnAt-i), env.Seq)
+		s.history, s.turnAt = slices.Concat(carried, kept), turnAt
 		s.stranded = slices.Concat(s.stranded, folded)
 		if s.turn.ID != "" {
 			s.settle(env.Seq)
@@ -316,31 +329,51 @@ func cloneParts(parts []protocol.LogPart) []protocol.LogPart {
 }
 
 // Fold returns the history before the newest keep turns, and the seq before
-// the first kept turn. A user message starts a turn. ok is false when keep
-// turns or fewer exist, or when only the compaction summary would fold.
+// the first kept turn. A user message starts a turn. When no turn before the
+// newest keep folds and a turn runs, it returns the history of the running
+// turn before its newest round trip. ok is false when nothing folds, or when
+// only the compaction summary would fold.
 func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok bool) {
 	h := s.History()
-	var seqs []uint64
+	var es []entry
 	for _, e := range s.history {
 		if !e.pinned && !e.readerOnly {
-			seqs = append(seqs, e.seq)
+			es = append(es, e)
 		}
 	}
-	lead := len(h) - len(seqs)
+	lead := len(h) - len(es)
 	var starts []int
 	for i, m := range h {
-		if m.Role == protocol.RoleUser {
+		if m.Role == protocol.RoleUser && (i < lead || !es[i-lead].carried) {
 			starts = append(starts, i)
 		}
 	}
-	if len(starts) <= keep {
+	if len(starts) > keep {
+		if end := starts[len(starts)-keep]; end > lead {
+			return h[:end], es[end-lead].seq - 1, true
+		}
+	}
+	return s.foldRunning(h, es, lead)
+}
+
+// foldRunning returns the history of the running turn before its newest round
+// trip: an assistant message and the messages after it. h holds lead messages
+// before es, the messages that the log holds.
+func (s *State) foldRunning(h []protocol.LogMessage, es []entry, lead int) ([]protocol.LogMessage, uint64, bool) {
+	if s.turn.ID == "" {
 		return nil, 0, false
 	}
-	end := starts[len(starts)-keep]
-	if end <= lead {
+	var starts []int
+	for i, e := range es {
+		if e.turn == s.turnN && e.msg.Role == protocol.RoleAssistant && (i == 0 || es[i-1].msg.Role != protocol.RoleAssistant) {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) < 2 {
 		return nil, 0, false
 	}
-	return h[:end], seqs[end-lead] - 1, true
+	end := starts[len(starts)-1]
+	return h[:lead+end], es[end].seq - 1, true
 }
 
 // dismissal is the result of the tool call that a dismissed request held

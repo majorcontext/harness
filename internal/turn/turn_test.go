@@ -70,6 +70,9 @@ func (r *recorder) Status(f protocol.StatusFrame) {
 func (r *recorder) CompactTurn(context.Context) ([]protocol.LogMessage, bool, error) {
 	return r.folded, r.folded != nil, nil
 }
+func (*recorder) AutoCompact(context.Context) ([]protocol.LogMessage, bool, error) {
+	return nil, false, nil
+}
 func (r *recorder) Ended(err error) { r.ended = append(r.ended, err) }
 
 // model is a native backend: one scripted reply for each model call.
