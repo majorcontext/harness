@@ -144,7 +144,7 @@ type WireEvent struct {
 	PromptCacheKey string `json:"-"`
 	// CredentialHeaders holds the credential headers of the request, by lower-case name, for an Injected server.
 	CredentialHeaders map[string]string `json:"credential_headers,omitempty"`
-	// SessionHeader reports a session-id header equal to the x-client-request-id header.
+	// SessionHeader reports a session_id header equal to the x-client-request-id header.
 	SessionHeader bool `json:"session_header,omitempty"`
 	// ItemsWithoutServerID counts the output items that the request sends back (assistant messages,
 	// function calls, and reasoning) whose id is not an id that the server gave.
@@ -169,7 +169,7 @@ func (o *OpenAI) stamp(w WireEvent, r *http.Request) WireEvent {
 			}
 		}
 	}
-	id := r.Header.Get("session-id")
+	id := r.Header.Get("session_id")
 	w.SessionHeader = id != "" && id == r.Header.Get("x-client-request-id")
 	return w
 }

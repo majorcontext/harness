@@ -168,7 +168,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
-			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
+			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin(), LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL,

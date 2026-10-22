@@ -87,6 +87,7 @@
             "credential": "seed",
             "event": "dial",
             "originator": "harness",
+            "session_header": true,
             "transport": "ws"
           },
           {

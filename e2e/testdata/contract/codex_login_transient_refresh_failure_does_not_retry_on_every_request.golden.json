@@ -253,6 +253,7 @@
             "input_items": 2,
             "originator": "harness",
             "reasoning_summary": "auto",
+            "session_header": true,
             "transport": "sse"
           },
           {
@@ -266,6 +267,7 @@
             "input_items": 4,
             "originator": "harness",
             "reasoning_summary": "auto",
+            "session_header": true,
             "transport": "sse"
           },
           {
@@ -279,6 +281,7 @@
             "input_items": 6,
             "originator": "harness",
             "reasoning_summary": "auto",
+            "session_header": true,
             "transport": "sse"
           }
         ]
