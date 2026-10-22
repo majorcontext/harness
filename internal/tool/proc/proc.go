@@ -190,7 +190,7 @@ type Notices struct {
 
 // Toolset gives no tools and the status line as the notice of the call.
 func (n Notices) Toolset(context.Context, []protocol.LogMessage, []string, string) turn.Toolset {
-	return turn.Toolset{Notices: []turn.Notice{{Kind: noticeKind, Text: StatusLine(n.M, n.WorkDir)}}}
+	return turn.Toolset{Notices: []turn.Notice{{Kind: noticeKind, Text: StatusLine(n.M, n.WorkDir), Cleared: "[processes: none.]"}}}
 }
 
 // StatusLine is one line for each process that has started, or "". It
