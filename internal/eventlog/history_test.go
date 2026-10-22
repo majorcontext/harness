@@ -121,10 +121,10 @@ func TestFoldAfterACompactionInsideATurnCoversNewMessages(t *testing.T) {
 	}
 	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), result("t1", "i2", "c1"))
 	events = with(with(events, steer("s1")...), call("t1", "i3", "c2"), result("t1", "i4", "c2"))
-	events = with(with(events, steer("s2")...), call("t1", "i5", "c3"), result("t1", "i6", "c3"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"})
+	events = with(with(events, steer("s2")...), call("t1", "i5", "c3"), result("t1", "i6", "c3"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 6, Summary: "sum"})
 	for _, keep := range []int{1, 2} {
-		if _, to, ok := replay(t, events).Fold(keep); !ok || to <= 7 {
-			t.Fatalf("Fold(%d) = %d, %v; want a fold past to_seq 7", keep, to, ok)
+		if _, to, ok := replay(t, events).Fold(keep); !ok || to <= 6 {
+			t.Fatalf("Fold(%d) = %d, %v; want a fold past to_seq 6", keep, to, ok)
 		}
 	}
 }
