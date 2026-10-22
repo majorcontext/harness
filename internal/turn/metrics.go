@@ -28,10 +28,10 @@ func (m CallMetrics) Chained() bool {
 	return m.RequestMode == "incremental" && m.PreviousResponseUsed && !m.ChainRecovered
 }
 
-// Purpose keeps telemetry labels in one vocabulary.
+// Purpose names the operation of a model call on its turn_metrics line.
 type Purpose string
 
-// These values prevent telemetry labels from drifting across callers.
+// These constants keep metric labels consistent across request builders.
 const (
 	PurposeTurn       Purpose = "turn"
 	PurposeCompaction Purpose = "compaction"
