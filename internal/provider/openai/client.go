@@ -13,7 +13,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -352,6 +354,9 @@ func apiError(resp *http.Response) error {
 		if body.Error.Message == "" {
 			msg = fmt.Sprintf("openai: %s (HTTP %d)", kind, resp.StatusCode)
 		}
+		if pe, ok := contextOverflow(body.Error.Code, body.Error.Message, msg); ok {
+			return pe
+		}
 		if hint, ok := parseUsageExhaustion(resp.StatusCode, body.Error.Message, body.Error.Type, body.Error.Code); ok {
 			return withReset(provider.MarkPermanent(&provider.Error{
 				Kind:        provider.ErrKindProviderExhausted,
@@ -367,6 +372,26 @@ func apiError(resp *http.Response) error {
 		return provider.MarkRetryableHTTP(err, class, resp)
 	}
 	return err
+}
+
+var (
+	contextLimitPattern  = regexp.MustCompile(`maximum context length is (\d+) tokens`)
+	contextResultPattern = regexp.MustCompile(`resulted in (\d+) tokens`)
+)
+
+// contextOverflow reads token counts only when the message states them.
+func contextOverflow(code, message, raw string) (*provider.Error, bool) {
+	if code != "context_length_exceeded" {
+		return nil, false
+	}
+	pe := &provider.Error{Kind: provider.ErrKindContextOverflow, Raw: raw}
+	if m := contextLimitPattern.FindStringSubmatch(message); m != nil {
+		pe.TokenLimit, _ = strconv.Atoi(m[1])
+	}
+	if m := contextResultPattern.FindStringSubmatch(message); m != nil {
+		pe.PromptTokens, _ = strconv.Atoi(m[1])
+	}
+	return pe, true
 }
 
 // classifyStatus maps an HTTP status to a retryable class: 429 is a rate
