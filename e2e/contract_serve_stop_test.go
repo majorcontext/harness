@@ -169,20 +169,18 @@ func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	}
 }
 
-// acceptedBefore serves GET /health on a new connection to addr: serve
+// acceptedBefore gets GET /health over a new connection to addr: serve
 // accepts connections in order, so each connection opened before is accepted.
 func acceptedBefore(t *testing.T, addr string) {
 	t.Helper()
-	conn, err := net.Dial("tcp", addr)
+	client := wireClient(t, &http.Client{Transport: &http.Transport{DisableKeepAlives: true}})
+	resp, err := client.Get("http://" + addr + "/health")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = conn.Close() }()
-	if _, err := io.WriteString(conn, "GET /health HTTP/1.1\r\nHost: serve\r\nConnection: close\r\n\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.ReadAll(conn); err != nil {
-		t.Fatal(err)
+	defer func() { _ = resp.Body.Close() }()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /health = %d, %v", resp.StatusCode, err)
 	}
 }
 
