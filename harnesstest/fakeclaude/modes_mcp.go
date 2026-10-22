@@ -28,7 +28,7 @@ func mcpTurn(f *fake) bool {
 	}
 	for _, server := range slices.Sorted(maps.Keys(servers)) {
 		var list struct{ Tools []struct{ Name string } }
-		if err := rpc(servers[server], "tools/list", obj{}, &list); err != nil {
+		if err := rpc(servers[server].URL, servers[server].Headers, "tools/list", obj{}, &list); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -38,7 +38,7 @@ func mcpTurn(f *fake) bool {
 			tools = append(tools, "mcp__"+server+"__"+t.Name)
 		}
 		if path := os.Getenv("FAKE_CLAUDE_MCP_LOG"); path != "" && server == "harness" {
-			b, _ := json.Marshal(obj{"url": servers[server], "tools": names})
+			b, _ := json.Marshal(obj{"url": servers[server].URL, "tools": names})
 			appendFile(path, string(b)+"\n")
 		}
 	}
@@ -54,7 +54,7 @@ func mcpTurn(f *fake) bool {
 		IsError bool
 	}
 	call := obj{"name": name, "arguments": args, "_meta": obj{"claudecode/toolUseId": "toolu_m"}}
-	if err := rpc(servers[server], "tools/call", call, &res); err != nil || len(res.Content) != 1 {
+	if err := rpc(servers[server].URL, servers[server].Headers, "tools/call", call, &res); err != nil || len(res.Content) != 1 {
 		fmt.Fprintln(os.Stderr, "tools/call:", err, res)
 		os.Exit(1)
 	}
@@ -77,33 +77,48 @@ func logMCPConfig() {
 	}
 }
 
-func mcpServers() (map[string]string, error) {
+type mcpServerConfig struct {
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+func mcpServers() (map[string]mcpServerConfig, error) {
 	data, err := mcpConfig()
 	if err != nil {
 		return nil, err
 	}
 	var cfg struct {
-		MCPServers map[string]struct{ Type, URL string } `json:"mcpServers"`
+		MCPServers map[string]mcpServerConfig `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	urls := map[string]string{}
 	for name, s := range cfg.MCPServers {
 		if s.Type != "http" {
 			return nil, fmt.Errorf("server %s is not http in %s", name, data)
 		}
-		urls[name] = s.URL
+		if s.URL == "" {
+			return nil, fmt.Errorf("server %s has no URL", name)
+		}
 	}
-	if urls["harness"] == "" {
+	if cfg.MCPServers["harness"].URL == "" {
 		return nil, fmt.Errorf("no http server named harness in %s", data)
 	}
-	return urls, nil
+	return cfg.MCPServers, nil
 }
 
-func rpc(url, method string, params obj, out any) error {
+func rpc(url string, headers map[string]string, method string, params obj, out any) error {
 	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/turn"
@@ -338,7 +339,7 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
 	for _, name := range slices.Sorted(maps.Keys(urls)) {
 		server := mcpServer{Type: "http", URL: urls[name]}
 		if req.MCPInstructions.SessionIDHeaderServers[name] && req.SessionID != "" {
-			server.Headers = map[string]string{"Harness-Session-Id": req.SessionID}
+			server.Headers = map[string]string{mcp.HarnessSessionIDHeader: req.SessionID}
 		}
 		servers[name] = server
 	}
@@ -396,6 +397,10 @@ func groupsOf(tools []protocol.ToolSpec, instructions turn.MCPInstructions) []ex
 func (r *run) serveTools(ctx context.Context, req turn.Request) (map[string]string, error) {
 	var err error
 	call := func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		if server, ok := mcpGroup(c.Name); ok && req.MCPInstructions.SessionIDHeaderServers[server] &&
+			mcp.RequestHeader(ctx, mcp.HarnessSessionIDHeader) != req.SessionID {
+			return protocol.ToolResult{Text: "MCP session ID header does not match this session", IsError: true}
+		}
 		if c.Name == turn.AskTool {
 			return r.ask(ctx, req, c)
 		}

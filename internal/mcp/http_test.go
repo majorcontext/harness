@@ -60,7 +60,7 @@ func TestHTTPCallSendsContextRequestHeader(t *testing.T) {
 	if _, err := client.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	ctx := WithRequestHeader(context.Background(), "Harness-Session-Id", "child-session")
+	ctx := WithRequestHeader(context.Background(), HarnessSessionIDHeader, "child-session")
 	if _, err := client.CallTool(ctx, "greet", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func (s *fakeHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.seenAuth = append(s.seenAuth, r.Header.Get("Authorization"))
 	s.seenSession = append(s.seenSession, r.Header.Get(sessionIDHeader))
-	s.seenHarnessSession = append(s.seenHarnessSession, r.Header.Get("Harness-Session-Id"))
+	s.seenHarnessSession = append(s.seenHarnessSession, r.Header.Get(HarnessSessionIDHeader))
 	s.mu.Unlock()
 
 	if r.Method == http.MethodDelete {

@@ -301,6 +301,7 @@ export interface MCPServerSpec {
   connect_timeout_s?: number;
   tool_timeout_s?: number;
   tool_loading?: string;
+  include_session_id_header?: boolean;
 }
 
 export interface MCPServerStatus {

@@ -286,7 +286,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return err
 		}
 		if first {
-			if err := answerAsks(ctx, runner{hooks: ts.Hooks, sessionID: req.SessionID}, to, &req, record); err != nil {
+			if err := answerAsks(ctx, runner{hooks: ts.Hooks, session: req.SessionID}, to, &req, record); err != nil {
 				return err
 			}
 			call.History = req.History

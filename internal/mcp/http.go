@@ -29,6 +29,11 @@ func WithRequestHeader(ctx context.Context, name, value string) context.Context 
 	return context.WithValue(ctx, requestHeadersKey{}, copy)
 }
 
+// RequestHeader returns an HTTP header carried by ctx.
+func RequestHeader(ctx context.Context, name string) string {
+	return requestHeaders(ctx)[name]
+}
+
 func requestHeaders(ctx context.Context) map[string]string {
 	headers, _ := ctx.Value(requestHeadersKey{}).(map[string]string)
 	return headers

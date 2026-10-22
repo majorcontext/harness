@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -35,7 +36,16 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	reg := mcp.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) { return mcp.CallToolResult{}, nil })
-	gateway := httptest.NewServer(reg)
+	var headerMu sync.Mutex
+	var gatewaySessionHeader string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if value := req.Header.Get(mcp.HarnessSessionIDHeader); value != "" {
+			headerMu.Lock()
+			gatewaySessionHeader = value
+			headerMu.Unlock()
+		}
+		reg.ServeHTTP(w, req)
+	}))
 	defer gateway.Close()
 	bin, err := fakeClaudeBin()
 	if err != nil {
@@ -64,9 +74,15 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	if got[0].MCPServers["gateway"]["url"] == runs[0].URL {
 		t.Errorf("gateway URL = %v, want its configured endpoint", got[0].MCPServers["gateway"]["url"])
 	}
-	wantHeaders := map[string]any{"Harness-Session-Id": "s1"}
+	wantHeaders := map[string]any{mcp.HarnessSessionIDHeader: "s1"}
 	if !reflect.DeepEqual(got[0].MCPServers["gateway"]["headers"], wantHeaders) {
 		t.Errorf("gateway headers = %v, want %v", got[0].MCPServers["gateway"]["headers"], wantHeaders)
+	}
+	headerMu.Lock()
+	gotSessionHeader := gatewaySessionHeader
+	headerMu.Unlock()
+	if gotSessionHeader != "s1" {
+		t.Errorf("upstream Harness-Session-Id = %q, want this turn's session ID s1", gotSessionHeader)
 	}
 	if argv, names := jsonLines[[]string](t, argvLog)[0], toolPartNames(t, st); !hasArgs(argv, "--allowedTools", "mcp__gateway,mcp__harness") ||
 		!slices.Contains(argv, "--strict-mcp-config") || !slices.Equal(names, []string{"mcp__gateway__ping", "mcp__gateway__ping"}) {

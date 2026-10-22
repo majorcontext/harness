@@ -1060,6 +1060,9 @@
           },
           "tool_loading": {
             "type": "string"
+          },
+          "include_session_id_header": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false,

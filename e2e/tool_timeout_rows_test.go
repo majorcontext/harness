@@ -9,10 +9,11 @@ var toolTimeoutRows = map[string]runtimeRow{
 	"plugin_that_starts_slower_than_tool_timeout_s_is_not_left_failed":               sameAsServe(),
 }
 
-// allRowDispositions returns runtimeRows and toolTimeoutRows as one map.
+// allRowDispositions returns the runtime dispositions of every scenario row.
 func allRowDispositions() map[string]runtimeRow {
 	all := maps.Clone(runtimeRows)
 	maps.Copy(all, toolTimeoutRows)
+	maps.Copy(all, mcpRows)
 	return all
 }
 
@@ -21,6 +22,9 @@ func rowDisposition(name string) (runtimeRow, bool) {
 	if row, ok := runtimeRows[name]; ok {
 		return row, true
 	}
-	row, ok := toolTimeoutRows[name]
+	if row, ok := toolTimeoutRows[name]; ok {
+		return row, true
+	}
+	row, ok := mcpRows[name]
 	return row, ok
 }
