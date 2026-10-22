@@ -123,7 +123,7 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 		body, _ := d.GetSession(t, id).Body.(map[string]any)
 		return body["title"] == "Session title"
 	})
-	initial := logLines(d.Stderr(), "turn_metrics")
+	initial := awaitLogLines(t, d, "turn_metrics", 4)
 	wantPurposes(t, initial, map[string]int{"turn": 2, "title": 1, "generate": 1})
 	if n := len(logLines(d.Stderr(), "startup_prewarm")); n != 0 {
 		t.Errorf("startup_prewarm lines = %d, want 0: a backend that cannot warm logs none\n%s", n, d.Stderr())
@@ -157,13 +157,13 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 		goal, _ := body["goal"].(map[string]any)
 		return goal["state"] == "achieved"
 	})
-	withJudge := logLines(d.Stderr(), "turn_metrics")
+	withJudge := awaitLogLines(t, d, "turn_metrics", 6)
 	wantPurposes(t, withJudge, map[string]int{"turn": 3, "title": 1, "generate": 1, "judge": 1})
 	wantPurposeFields(t, withJudge, id)
 	if res := d.Compact(t, id); res.Status != http.StatusOK {
 		t.Fatalf("compact = %d %v", res.Status, res.Body)
 	}
-	withCompaction := logLines(d.Stderr(), "turn_metrics")
+	withCompaction := awaitLogLines(t, d, "turn_metrics", 7)
 	wantPurposes(t, withCompaction, map[string]int{"turn": 3, "title": 1, "generate": 1, "judge": 1, "compaction": 1})
 	wantPurposeFields(t, withCompaction, id)
 }
