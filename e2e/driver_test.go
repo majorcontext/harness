@@ -125,8 +125,7 @@ func scenarioConfig(extra map[string]any) map[string]any {
 	return cfg
 }
 
-// rawBody is a request body that goes on the wire as written, with the
-// whitespace that json.Marshal would remove.
+// rawBody is a pre-encoded request body that goes on the wire as written.
 type rawBody string
 
 func encodeBody(body any) ([]byte, error) {

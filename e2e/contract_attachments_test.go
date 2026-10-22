@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -44,14 +45,18 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 	}
 	const noImages = "openai/o3-mini"
 	image := protocol.Input{ID: "in_img", Parts: blob("image/png", png)}
+	tooLargeData := make([]byte, (20<<20)+1)
+	tooLarge := protocol.Input{ID: "in_big", Parts: blob("application/pdf", tooLargeData)}
+	tooLargeBase64 := strings.Repeat("AAAA", len(tooLargeData)/3)
 	rows := []struct {
 		name string
 		in   protocol.Input
+		body any
 	}{
-		{"unsupported_media_type", protocol.Input{ID: "in_type", Parts: blob("application/zip", []byte("PK"))}},
-		{"image_bytes_that_do_not_decode", protocol.Input{ID: "in_bad", Parts: blob("image/png", []byte("not a png"))}},
-		{"too_large", protocol.Input{ID: "in_big", Parts: blob("application/pdf", make([]byte, 21<<20))}},
-		{"image_for_a_model_without_image_input", image},
+		{"unsupported_media_type", protocol.Input{ID: "in_type", Parts: blob("application/zip", []byte("PK"))}, nil},
+		{"image_bytes_that_do_not_decode", protocol.Input{ID: "in_bad", Parts: blob("image/png", []byte("not a png"))}, nil},
+		{"too_large", tooLarge, rawBody(`{"id":"in_big","parts":[{"type":"blob","media_type":"application/pdf","data":"` + tooLargeBase64 + `"}]}`)},
+		{"image_for_a_model_without_image_input", image, nil},
 	}
 	if err := harness.CheckInput("anthropic/claude-sonnet-4-5", image); err != nil {
 		t.Errorf("CheckInput of a valid image = %v, want nil", err)
@@ -66,7 +71,11 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 			t.Run(row.name, func(t *testing.T) {
 				id := d.Create(t)
 				before := len(d.events(t, id))
-				res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", row.in)
+				requestBody := any(row.in)
+				if row.body != nil {
+					requestBody = row.body
+				}
+				res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", requestBody)
 				if after := len(d.events(t, id)); after != before {
 					t.Errorf("a rejected input appended %d records", after-before)
 				}
