@@ -43,12 +43,13 @@ func TestContractGoalPauses(t *testing.T) {
 				var changed struct {
 					State string `json:"state"`
 					Cause string `json:"cause"`
+					Model string `json:"model"`
 				}
 				if err := json.Unmarshal(event.Data, &changed); err != nil {
 					t.Fatalf("decode goal.changed: %v", err)
 				}
-				if changed.State == string(protocol.GoalPaused) && changed.Cause != "" {
-					t.Fatalf("goal.changed cause = %q for a turn failure, want empty", changed.Cause)
+				if changed.Model != "" || changed.State == string(protocol.GoalPaused) && changed.Cause != "" {
+					t.Fatalf("goal.changed %s cause, model = %q, %q with no judge exhaustion, want empty", changed.State, changed.Cause, changed.Model)
 				}
 			}
 			d.Submit(t, id, "again")
@@ -80,8 +81,10 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 	)
 	proxyURL, capture := newAccountProxy(t, fake.URL())
 	config := writeGoalConfigWith(t, upstream, map[string]any{
-		"providers":       map[string]any{"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": upstream, "vendor": "claude"}},
-		"account_routing": map[string]any{"proxy_url_env": "ACCOUNT_PROXY", "separator": "|"},
+		"goal_evaluator_model": "judge",
+		"aliases":              map[string]any{"judge": "anthropic/eval-model"},
+		"providers":            map[string]any{"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": upstream, "vendor": "claude"}},
+		"account_routing":      map[string]any{"proxy_url_env": "ACCOUNT_PROXY", "separator": "|"},
 	})
 	env := map[string]string{"HTTP_PROXY": proxyURL, "HTTPS_PROXY": proxyURL, "http_proxy": proxyURL, "https_proxy": proxyURL,
 		"ACCOUNT_PROXY": proxyURL, "NO_PROXY": "localhost,127.0.0.1", "E2E_MODEL_PROXY": proxyURL}
@@ -89,28 +92,9 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 	id := d.Create(t)
 	d.SetAccounts(t, id, map[string]string{"claude": "acct_a"})
 	d.SetGoal(t, id, "say done", 2, false)
-	var cause string
-	var resetsAt int64
-	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
-		if ev.Kind != protocol.KindGoalChanged {
-			return false
-		}
-		var data struct {
-			State    string `json:"state"`
-			Cause    string `json:"cause"`
-			ResetsAt int64  `json:"resets_at"`
-		}
-		if err := json.Unmarshal(ev.Data, &data); err != nil {
-			t.Fatalf("decode goal.changed: %v", err)
-		}
-		if data.State != string(protocol.GoalPaused) {
-			return false
-		}
-		cause, resetsAt = data.Cause, data.ResetsAt
-		return true
-	})
-	if cause != string(protocol.CauseProviderExhausted) || resetsAt != 0 {
-		t.Fatalf("goal.changed cause, resets_at = %q, %d; want provider_exhausted, 0", cause, resetsAt)
+	cause, model, resetsAt := awaitJudgePause(t, d, id)
+	if cause != string(protocol.CauseProviderExhausted) || model != "anthropic/eval-model" || resetsAt != 0 {
+		t.Fatalf("goal.changed cause, model, resets_at = %q, %q, %d; want provider_exhausted, anthropic/eval-model, 0", cause, model, resetsAt)
 	}
 	d.SetAccounts(t, id, map[string]string{"claude": "acct_b"})
 	d.Submit(t, id, "again")
@@ -151,34 +135,36 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 	}
 }
 
-func claudeJudgeUsageLimitReset(t *testing.T, h host) {
-	t.Parallel()
-	lane := claudeLane{mode: "one_shot", spawnModes: "2=usage_limit_rejected", extra: map[string]any{"goal_evaluator_model": "claude-code/haiku"}}
-	d := lane.newDriver(t, h, "http://model.test").(*claudeDriver)
-	id := d.Create(t)
-	d.SetGoal(t, id, "say done", 0, false)
-	var cause string
-	var resetsAt int64
-	d.laneHost.(*runtimeDriver).stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+func awaitJudgePause(t *testing.T, d *runtimeDriver, id string) (cause, model string, resetsAt int64) {
+	t.Helper()
+	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
 		if ev.Kind != protocol.KindGoalChanged {
 			return false
 		}
 		var data struct {
 			State    string `json:"state"`
 			Cause    string `json:"cause"`
+			Model    string `json:"model"`
 			ResetsAt int64  `json:"resets_at"`
 		}
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatalf("decode goal.changed: %v", err)
 		}
-		if data.State != string(protocol.GoalPaused) {
-			return false
-		}
-		cause, resetsAt = data.Cause, data.ResetsAt
-		return true
+		cause, model, resetsAt = data.Cause, data.Model, data.ResetsAt
+		return data.State == string(protocol.GoalPaused)
 	})
-	if cause != string(protocol.CauseProviderExhausted) || resetsAt != 1792050000 {
-		t.Fatalf("goal.changed cause, resets_at = %q, %d; want provider_exhausted, 1792050000", cause, resetsAt)
+	return cause, model, resetsAt
+}
+
+func claudeJudgeUsageLimitReset(t *testing.T, h host) {
+	t.Parallel()
+	lane := claudeLane{mode: "one_shot", spawnModes: "2=usage_limit_rejected", extra: map[string]any{"goal_evaluator_model": "claude-code/haiku"}}
+	d := lane.newDriver(t, h, "http://model.test").(*claudeDriver)
+	id := d.Create(t)
+	d.SetGoal(t, id, "say done", 0, false)
+	cause, model, resetsAt := awaitJudgePause(t, d.laneHost.(*runtimeDriver), id)
+	if cause != string(protocol.CauseProviderExhausted) || model != "claude-code/haiku" || resetsAt != 1792050000 {
+		t.Fatalf("goal.changed cause, model, resets_at = %q, %q, %d; want provider_exhausted, claude-code/haiku, 1792050000", cause, model, resetsAt)
 	}
 }
 

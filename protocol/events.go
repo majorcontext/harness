@@ -379,13 +379,15 @@ type GoalEvaluated struct {
 }
 
 // GoalChanged moves a goal to another state. A paused goal resumes at
-// RetryAt. A blocked goal has no RetryAt and resumes at an input. Cause and
-// ResetsAt identify a judge run that hit an exhausted provider.
+// RetryAt. A blocked goal has no RetryAt and resumes at an input. Cause,
+// Model, and ResetsAt identify a judge run that hit an exhausted provider:
+// Model is the resolved model ref of the evaluator.
 type GoalChanged struct {
 	State    GoalState `json:"state"`
 	Reason   string    `json:"reason,omitempty"`
 	RetryAt  time.Time `json:"retry_at,omitzero"`
 	Cause    Cause     `json:"cause,omitempty"`
+	Model    string    `json:"model,omitempty"`
 	ResetsAt int64     `json:"resets_at,omitempty"`
 }
 

@@ -581,6 +581,9 @@
               "provider_exhausted"
             ]
           },
+          "model": {
+            "type": "string"
+          },
           "resets_at": {
             "type": "integer"
           }
