@@ -164,7 +164,7 @@ var acpCompactionScenarios = []acpScenario{
 		model: []harnesstest.Step{
 			{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "ok"}},
 			{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "ok", Usage: harnesstest.Usage{Input: 900, Output: 1}}},
-			{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist", Block: true}},
+			{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist", Block: true}},
 			{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "ok"}},
 		},
 		config: map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1},

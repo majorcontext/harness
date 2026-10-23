@@ -159,7 +159,21 @@
     {
       "system_has_goal_evaluator": false,
       "model": "gpt-5.6-sol",
-      "tools": null,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
       "messages": [
         {
           "role": "user",
@@ -167,6 +181,10 @@
             {
               "kind": "text",
               "text": "alpha"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -202,7 +220,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "Summarize the conversation above, following the system prompt's instructions."
+              "text": "charlie"
+            },
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above so that it can be folded into one message, freeing context for future turns.\n\nWrite a concise, information-preserving summary. Preserve:\n- the user's intent and goals\n- decisions made and their rationale\n- concrete facts a later turn depends on: file paths, commands, values, error text\n\nDo not transcribe tool-call arguments or outputs verbatim; describe what happened and why it matters instead. Be dense; omit anything a later turn would not need.\n\nDo not call a tool. Answer only with the summary text."
             }
           ]
         }

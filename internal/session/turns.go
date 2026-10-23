@@ -119,18 +119,25 @@ func (a *Actor) banner() string {
 	return "[engine: harness " + a.cfg.Version + " · session started " + a.state.CreatedAt().UTC().Format(time.RFC3339) + "]"
 }
 
-func (a *Actor) start(id string, inputIDs []string) {
-	r := a.newRun(kindTurn, id)
+// callRequest returns the request of the next model call of the session, with
+// the pins and the web search permission that every call of the session sends.
+func (a *Actor) callRequest(id string) turn.Request {
 	req := a.modelRequest()
 	req.TurnID, req.Foreign = id, a.state.Foreign(req.Model)
+	req.SearchAllowed = a.cfg.WebSearch && (req.AllowedTools == nil || slices.Contains(req.AllowedTools, turn.WebSearchTool))
+	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
+	return req
+}
+
+func (a *Actor) start(id string, inputIDs []string) {
+	r := a.newRun(kindTurn, id)
+	req := a.callRequest(id)
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
 	}
-	req.SearchAllowed = a.cfg.WebSearch && (req.AllowedTools == nil || slices.Contains(req.AllowedTools, turn.WebSearchTool))
-	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, protocol.LogMessage{Role: protocol.RoleUser, Parts: ev.Parts})

@@ -28,7 +28,7 @@ func TestContractBanner(t *testing.T) {
 		model: []harnesstest.Step{
 			answer("alpha"), answer("bravo"),
 			{Name: "overflow", Match: harnesstest.LastUserText("charlie"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
-			{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}, Repeat: true},
+			{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}, Repeat: true},
 			{Name: "call", Match: summarized, Repeat: true, Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
 				{ID: "toolu_echo", Name: "bash", Input: map[string]any{"command": "echo banner"}},
 			}}},
@@ -50,7 +50,7 @@ func TestContractBanner(t *testing.T) {
 			done("bravo done", "re bravo"),
 			{Name: "charlie", Match: harnesstest.LastUserText("charlie"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{bash("toolu_one", "echo one"), bash("toolu_two", "echo two")}}},
 			done("charlie done", "re charlie"),
-			{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+			{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
 			text("delta", "delta", "re delta"),
 		},
 		actions: []action{

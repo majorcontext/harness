@@ -8,7 +8,7 @@ import (
 )
 
 func summaryRequest(r harnesstest.Request) bool {
-	return harnesstest.SystemContains("You are summarizing a prefix")(r)
+	return harnesstest.LastUserText("Answer only with the summary text")(r)
 }
 
 func usedText(user string, in int) harnesstest.Step {
@@ -28,8 +28,9 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 	text := usedText
 	runScenarios(t, []scenario{
 		{
-			name:   "auto_compaction_with_a_failed_summary_keeps_the_history",
-			config: overThreshold,
+			name:         "auto_compaction_with_a_failed_summary_keeps_the_history",
+			prefixBreaks: summaryQuestionBreak(),
+			config:       overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),
 				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "summary failed"}},
@@ -133,8 +134,9 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			),
 		},
 		{
-			name:   "auto_compaction_waits_for_the_reading_to_fall_after_an_empty_summary",
-			config: overThreshold,
+			name:         "auto_compaction_waits_for_the_reading_to_fall_after_an_empty_summary",
+			prefixBreaks: summaryQuestionBreak(),
+			config:       overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),
 				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: " "}},
@@ -170,8 +172,9 @@ func TestContractSessionStoppedCompaction(t *testing.T) {
 			),
 		},
 		{
-			name:   "interrupt_stops_an_auto_compaction",
-			config: overThreshold,
+			name:         "interrupt_stops_an_auto_compaction",
+			prefixBreaks: summaryQuestionBreak(),
+			config:       overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),
 				{Name: "held", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist", Block: true}},

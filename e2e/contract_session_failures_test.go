@@ -84,8 +84,9 @@ func TestContractSessionUsage(t *testing.T) {
 			getSession{as: "a"},
 		},
 	}, {
-		name:   "a_failed_summary_keeps_its_usage_in_the_session",
-		config: map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1},
+		name:         "a_failed_summary_keeps_its_usage_in_the_session",
+		prefixBreaks: summaryQuestionBreak(),
+		config:       map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1},
 		model: []harnesstest.Step{
 			used("one", "one", 1), used("two", "two", 900),
 			{Name: "empty_summary", Match: summaryRequest, Reply: harnesstest.Reply{Usage: harnesstest.Usage{Input: 20, Output: 20}}},

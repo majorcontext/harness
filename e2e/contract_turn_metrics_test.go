@@ -86,7 +86,7 @@ func wantPurposeFields(t *testing.T, lines []map[string]any, sessionID string) {
 			wantFields(t, "judge", line, map[string]any{"session_id": sessionID, "model": "anthropic/eval-model", "effort": "off", "retry": 0.0, "tools_count": 0.0})
 			wantNumbers(t, "judge", line, "system_len")
 		case "compaction":
-			wantFields(t, "compaction", line, map[string]any{"session_id": sessionID, "model": "anthropic/claude-fable-5", "tools_count": 0.0})
+			wantFields(t, "compaction", line, map[string]any{"session_id": sessionID, "model": "anthropic/claude-fable-5"})
 			wantNumbers(t, "compaction", line, "system_len")
 		default:
 			t.Fatalf("unexpected turn_metrics purpose: %v", line["purpose"])

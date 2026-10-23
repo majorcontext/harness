@@ -154,6 +154,7 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 	a, r := t.a, t.r
 	type folding struct {
 		req   turn.Request
+		src   turn.Source
 		c     protocol.CompactionApplied
 		ok    bool
 		metas []toolresult.Meta
@@ -164,12 +165,12 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 			return
 		}
 		req, c, ok := a.fold(r.id, a.cfg.KeepTurns)
-		reply(folding{req, c, ok, a.retained()}, nil)
+		reply(folding{req, a.source(r), c, ok, a.retained()}, nil)
 	})
 	if err != nil || !f.ok {
 		return nil, false, err
 	}
-	summary, usage, err := a.summarize(ctx, f.req)
+	summary, usage, err := a.summarize(ctx, f.req, f.src)
 	if err != nil {
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			if a.run == r {

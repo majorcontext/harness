@@ -178,7 +178,7 @@ func (e expectPrefixAfterCompaction) run(t *testing.T, r *run) {
 	reqs := r.fake.Requests()
 	from := -1
 	for i, req := range reqs {
-		if strings.Contains(req.System, "You are summarizing a prefix") {
+		if summaryRequest(req) {
 			from = i + 1
 		}
 	}
@@ -516,7 +516,7 @@ func pinPrefixRows() []scenario {
 		{Name: "alpha call", Match: unanswered("alpha"), Reply: harnesstest.Reply{ToolCalls: bashCall("alpha")}},
 		{Name: "alpha done", Match: answeredTool("bash"), Reply: harnesstest.Reply{Text: "re alpha"}},
 		{Name: "bravo", Match: harnesstest.LastUserText("bravo"), Reply: harnesstest.Reply{Text: "re bravo"}},
-		{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+		{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
 	}
 	for _, in := range []string{"charlie", "delta", "echo"} {
 		cacheModel = append(cacheModel,
@@ -549,7 +549,7 @@ func TestContractMCPAvailability(t *testing.T) {
 		{Name: "connected", Match: answeredTool("mcp"), Reply: harnesstest.Reply{Text: "connected"}},
 		{Name: "first forecast", Match: unansweredPrompt("bravo"), Reply: harnesstest.Reply{ToolCalls: callWithID("toolu_first", forecast)}},
 		{Name: "first answer", Match: answeredTool("mcp__weather__forecast"), Reply: harnesstest.Reply{Text: "snow"}},
-		{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+		{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
 		{Name: "second forecast", Match: unansweredPrompt("charlie"), Reply: harnesstest.Reply{ToolCalls: callWithID("toolu_second", forecast)}},
 		{Name: "second answer", Match: answeredTool("mcp__weather__forecast"), Reply: harnesstest.Reply{Text: "still snow"}},
 	}
