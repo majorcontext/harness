@@ -73,3 +73,20 @@ func TestToolResultNamesTheToolsThatToolSearchLoaded(t *testing.T) {
 		t.Errorf("parts = %+v, want one result that names mcp__harness__tool_7", parts)
 	}
 }
+
+func TestResultUsageReadsModelUsageWhenUsageIsZero(t *testing.T) {
+	var env envelope
+	line := `{"type":"result","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},` +
+		`"modelUsage":{"claude-sonnet-5-5":{"inputTokens":2000,"outputTokens":723,"cacheReadInputTokens":24728,"cacheCreationInputTokens":66109}}}`
+	if err := json.Unmarshal([]byte(line), &env); err != nil {
+		t.Fatal(err)
+	}
+	r := &run{}
+	want := protocol.Usage{InputTokens: 2000, OutputTokens: 723, CacheReadTokens: 24728, CacheWriteTokens: 66109}
+	if got := r.resultUsage(env); got != want {
+		t.Errorf("usage = %+v, want %+v", got, want)
+	}
+	if got := r.resultUsage(env); got != (protocol.Usage{}) {
+		t.Errorf("second result with the same running total = %+v, want zero", got)
+	}
+}

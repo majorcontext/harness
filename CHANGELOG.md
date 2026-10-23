@@ -89,6 +89,7 @@ First tagged release.
 
 ### Fixed
 
+- **Claude Code compaction usage** (`internal/backend/claudecode`) — a `/compact` result carries zero `usage` and the call in `modelUsage`. The turn now reports the `modelUsage` token counts when `usage` is zero.
 - **Warm-up tools match the first turn** (`internal/session`, `internal/turn`) — the Codex websocket warm-up omitted `ask_user_question` and ignored the `chat.params` hook and the native web search flag, so the first turn after a create or wake refused the chain with `chain_refusal_detail=tools`. The warm-up now builds its request as the first turn call does.
 - **Chat fixture tail deltas** (`harnesstest`) — `NewChat` streams `Reply.Tail` after the first release and honors `TailBlock` until the tail release, as `NewAnthropic` does.
 - **Side requests leave the Codex websocket chain alone** (`internal/provider/openai`, `internal/backend/modelapi`) — a title, compaction summary, or goal evaluator request of a Codex session now goes over HTTP. Before, it shared the websocket entry of the session, so the next turn request could not chain with `previous_response_id` and was sent in full, and a title that ran during the first turn could push that turn to HTTP.
