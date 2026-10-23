@@ -162,6 +162,7 @@ type preparedRequest struct {
 	url     string
 	headers http.Header
 	client  *http.Client
+	sizes   wireSizes
 }
 
 func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
@@ -197,6 +198,7 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 		url:     responsesURL(c.BaseURL, c.ResponsesPath),
 		headers: headers,
 		client:  c.httpClient(),
+		sizes:   measureBody(body, wire.MaxOutputTokens),
 	}, nil
 }
 
@@ -234,6 +236,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 			URL:        url,
 			Headers:    headers,
 			Body:       body,
+			Sizes:      prepared.sizes,
 			Model:      req.Model,
 			Family:     c.family(),
 			HTTPClient: hc,
@@ -276,6 +279,8 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		model:    req.Model,
 		family:   c.family(),
 		subUsage: c.codexSubscriptionUsage(resp.Header),
+
+		requestMetadata: prepared.sizes.metadata(),
 	}, nil
 }
 
@@ -296,6 +301,7 @@ func (c *Client) Warm(ctx context.Context, req *provider.Request) error {
 		URL:        prepared.url,
 		Headers:    prepared.headers,
 		Body:       prepared.body,
+		Sizes:      prepared.sizes,
 		Model:      req.Model,
 		Family:     c.family(),
 		HTTPClient: prepared.client,

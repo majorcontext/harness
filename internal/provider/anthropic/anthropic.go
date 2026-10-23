@@ -80,28 +80,37 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.send(ctx, wire, ttl)
+	resp, body, err := c.send(ctx, wire, ttl)
 	if err != nil {
 		return nil, err
 	}
 	return &stream{
-		ctx:   ctx,
-		body:  resp.Body,
-		r:     bufio.NewReader(resp.Body),
-		model: req.Model,
+		ctx:             ctx,
+		body:            resp.Body,
+		r:               bufio.NewReader(resp.Body),
+		model:           req.Model,
+		requestMetadata: measureBody(body, wire.MaxTokens),
 		resume: func(blocks []apiBlock) (*http.Response, error) {
 			next := *wire
 			next.Messages = append(slices.Clone(wire.Messages), apiMessage{Role: "assistant", Content: blocks})
-			return c.send(ctx, &next, ttl)
+			resp, _, err := c.send(ctx, &next, ttl)
+			return resp, err
 		},
 	}, nil
 }
 
-// send posts one Messages request and returns its response, which has the status 200.
-func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.Response, error) {
+// measureBody sizes the parts of a serialized request body of maxTokens output tokens.
+func measureBody(body []byte, maxTokens int) *provider.RequestMetadata {
+	parts := provider.BodyParts(body)
+	return &provider.RequestMetadata{RequestBytes: len(body), MaxOutputTokens: maxTokens,
+		InstructionsBytes: len(parts["system"]), ToolsBytes: len(parts["tools"]), HistoryBytes: len(parts["messages"])}
+}
+
+// send posts one Messages request and returns its response, which has the status 200, and the request body.
+func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.Response, []byte, error) {
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	base := c.BaseURL
 	if base == "" {
@@ -109,7 +118,7 @@ func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, body, err
 	}
 	for k, v := range c.ExtraHeaders {
 		httpReq.Header.Set(k, v)
@@ -130,13 +139,13 @@ func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.
 	}
 	resp, err := provider.Do(ctx, hc, httpReq, c.RequestRetries)
 	if err != nil {
-		return nil, err
+		return nil, body, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, apiError(resp)
+		return nil, body, apiError(resp)
 	}
-	return resp, nil
+	return resp, body, nil
 }
 
 func apiError(resp *http.Response) error {
@@ -382,6 +391,8 @@ type stream struct {
 	resume     func(blocks []apiBlock) (*http.Response, error)
 	usage      provider.Usage
 	stopReason provider.StopReason
+	// requestMetadata holds the sizes of the first request of the call.
+	requestMetadata *provider.RequestMetadata
 
 	queue []provider.Event
 	done  bool

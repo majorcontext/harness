@@ -141,6 +141,10 @@ func TestStreamAssembly(t *testing.T) {
 	if done.Usage.InputTokens != 100 || done.Usage.OutputTokens != 42 {
 		t.Errorf("usage = %+v", done.Usage)
 	}
+	if md := done.RequestMetadata; md == nil || md.ResponseID != "chatcmpl_1" || md.RequestBytes == 0 || md.InstructionsBytes == 0 || md.HistoryBytes == 0 ||
+		md.MaxOutputTokens != 1024 || md.ProviderUsage == nil || *md.ProviderUsage != (provider.RawUsage{Input: 100, Output: 42}) {
+		t.Errorf("request metadata = %+v, want response id, sizes, max tokens, and raw usage", md)
+	}
 
 	msg := done.Message
 	if msg.ID != "chatcmpl_1" || msg.Role != message.RoleAssistant || len(msg.Parts) != 3 {

@@ -138,11 +138,12 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartReasoning, Text: ev.Text})
 		case provider.EventDone:
+			cut := incomplete(ev, req.AcceptCut)
 			tel := b.telemetry(req.Model, ev.Usage, ev.Prompt, ev.SubscriptionUsage)
-			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev.RequestMetadata)
+			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev, cut)
 			out.Telemetry(tel)
-			if err := incomplete(ev, req.AcceptCut); err != nil {
-				return classify(err)
+			if cut != nil {
+				return classify(cut)
 			}
 			m := fromMessage(ev.Message)
 			if len(m.Parts) > 0 {
@@ -181,16 +182,27 @@ func (b *Backend) Warm(ctx context.Context, req turn.Request) error {
 
 // callMetrics measures a call that was sent at sentAt, streamed its first
 // content at firstAt, and ended at doneAt. A call whose first event was its
-// end has no stream time.
-func callMetrics(sentAt, firstAt, doneAt time.Time, md *provider.RequestMetadata) *turn.CallMetrics {
-	m := &turn.CallMetrics{TTFT: firstAt.Sub(sentAt), Stream: doneAt.Sub(firstAt)}
-	if md != nil {
+// end has no stream time. cut is the error that the response ends the call with, or nil.
+func callMetrics(sentAt, firstAt, doneAt time.Time, ev provider.Event, cut error) *turn.CallMetrics {
+	m := &turn.CallMetrics{TTFT: firstAt.Sub(sentAt), Stream: doneAt.Sub(firstAt), StopReason: string(ev.StopReason)}
+	if cut != nil {
+		class, _ := provider.AsRetryable(cut)
+		m.ErrorClass = string(cmp.Or(class, "other"))
+	}
+	if md := ev.RequestMetadata; md != nil {
 		m.RequestMode = string(md.Mode)
 		m.CompleteInputItems, m.SentInputItems = md.CompleteInputItems, md.SentInputItems
 		m.PreviousResponseUsed, m.ChainRecovered = md.PreviousResponseUsed, md.ChainRecovered
 		m.ChainRefusal, m.ChainRefusalDetail, m.ChainRefusalItem = string(md.ChainRefusal), md.ChainRefusalDetail, md.ChainRefusalItem
 		m.ChainRefusalOffset = md.ChainRefusalOffset
 		m.ChainRefusalPreviousLen, m.ChainRefusalCurrentLen = md.ChainRefusalPreviousLen, md.ChainRefusalCurrentLen
+		m.ChainRefusalTool, m.ChainRefusalToolPart = md.ChainRefusalTool, md.ChainRefusalToolPart
+		m.ResponseID, m.IncompleteReason = md.ResponseID, md.IncompleteReason
+		if u := md.ProviderUsage; u != nil {
+			m.ProviderTokens = &turn.ProviderTokens{Input: u.Input, Output: u.Output, Cached: u.Cached}
+		}
+		m.RequestBytes, m.InstructionsBytes, m.ToolsBytes, m.HistoryBytes = md.RequestBytes, md.InstructionsBytes, md.ToolsBytes, md.HistoryBytes
+		m.MaxOutputTokens = md.MaxOutputTokens
 	}
 	return m
 }
@@ -275,14 +287,22 @@ func incomplete(ev provider.Event, acceptCut bool) error {
 	switch ev.StopReason {
 	case provider.StopMaxTokens:
 		if !acceptCut {
-			return provider.MarkStreamTruncated(errIncomplete)
+			return provider.MarkStreamTruncated(noUsage(ev.RequestMetadata, errIncomplete))
 		}
 	case provider.StopRefusal:
 		return provider.MarkRetryable(errFiltered, provider.RetryableContentFilter)
 	case provider.StopIncomplete:
-		return provider.MarkStreamTruncated(fmt.Errorf("incomplete response returned, reason: %s", ev.IncompleteReason))
+		return provider.MarkStreamTruncated(noUsage(ev.RequestMetadata, fmt.Errorf("incomplete response returned, reason: %s", ev.IncompleteReason)))
 	}
 	return nil
+}
+
+// noUsage returns err, or a message that names the likely cause when the provider answered an incomplete response with no usage.
+func noUsage(md *provider.RequestMetadata, err error) error {
+	if md == nil || md.IncompleteReason == "" || md.ProviderUsage != nil && (md.ProviderUsage.Input > 0 || md.ProviderUsage.Output > 0) {
+		return err
+	}
+	return fmt.Errorf("the backend returned no output and no usage; the request is likely too large for the backend (request_bytes=%d)", md.RequestBytes)
 }
 
 func classify(err error) error {

@@ -121,11 +121,11 @@ type responseCreatePayload struct {
 // {"model":..., "input":..., "stream":true, ...}) as a Codex websocket
 // request: {"type":"response.create", ...body-minus-stream}. WebSocket-only
 // options can replace input or add chaining and generation controls without
-// mutating the complete HTTP request body.
-func sendResponseCreate(ctx context.Context, conn *websocket.Conn, body []byte, options ...responseCreateOptions) error {
+// mutating the complete HTTP request body. It returns the size of the frame.
+func sendResponseCreate(ctx context.Context, conn *websocket.Conn, body []byte, options ...responseCreateOptions) (int, error) {
 	var request apiRequest
 	if err := json.Unmarshal(body, &request); err != nil {
-		return fmt.Errorf("openai: websocket response.create: decoding request body: %w", err)
+		return 0, fmt.Errorf("openai: websocket response.create: decoding request body: %w", err)
 	}
 	var option responseCreateOptions
 	if len(options) != 0 {
@@ -152,12 +152,12 @@ func sendResponseCreate(ctx context.Context, conn *websocket.Conn, body []byte, 
 		Generate:           option.Generate,
 	})
 	if err != nil {
-		return fmt.Errorf("openai: websocket response.create: encoding request: %w", err)
+		return 0, fmt.Errorf("openai: websocket response.create: encoding request: %w", err)
 	}
 	if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
-		return fmt.Errorf("openai: websocket write response.create: %w", err)
+		return 0, fmt.Errorf("openai: websocket write response.create: %w", err)
 	}
-	return nil
+	return len(payload), nil
 }
 
 // wsFrameEnvelope reads only the "type" discriminator out of one websocket

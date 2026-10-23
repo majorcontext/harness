@@ -109,11 +109,29 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, apiError(c.Family, resp)
 	}
 	return &stream{
-		body:   resp.Body,
-		r:      bufio.NewReader(resp.Body),
-		model:  req.Model,
-		family: c.Family,
+		body:            resp.Body,
+		r:               bufio.NewReader(resp.Body),
+		model:           req.Model,
+		family:          c.Family,
+		requestMetadata: measureBody(body, wire.MaxTokens),
 	}, nil
+}
+
+// measureBody sizes the parts of a serialized request body of maxTokens output tokens.
+// The system messages are the instructions and the other messages are the history.
+func measureBody(body []byte, maxTokens int) *provider.RequestMetadata {
+	parts := provider.BodyParts(body)
+	md := &provider.RequestMetadata{RequestBytes: len(body), MaxOutputTokens: maxTokens, ToolsBytes: len(parts["tools"])}
+	var messages []json.RawMessage
+	_ = json.Unmarshal(parts["messages"], &messages)
+	for _, m := range messages {
+		if bytes.HasPrefix(m, []byte(`{"role":"system"`)) {
+			md.InstructionsBytes += len(m)
+		} else {
+			md.HistoryBytes += len(m)
+		}
+	}
+	return md
 }
 
 func apiError(family string, resp *http.Response) error {
@@ -270,6 +288,8 @@ type stream struct {
 	r      *bufio.Reader
 	model  modelref.ModelRef
 	family string
+	// requestMetadata holds the sizes of the request of the call.
+	requestMetadata *provider.RequestMetadata
 
 	id        string
 	createdAt time.Time
@@ -566,11 +586,20 @@ func (s *stream) finish() {
 			stop = provider.StopEndTurn
 		}
 	}
+	var md provider.RequestMetadata
+	if s.requestMetadata != nil {
+		md = *s.requestMetadata
+	}
+	md.ResponseID = s.id
+	if s.haveUsage {
+		md.ProviderUsage = &provider.RawUsage{Input: s.usage.InputTokens, Output: s.usage.OutputTokens}
+	}
 	s.queue = append(s.queue, provider.Event{
-		Type:       provider.EventDone,
-		Message:    s.assemble(),
-		StopReason: stop,
-		Usage:      s.usage,
+		Type:            provider.EventDone,
+		Message:         s.assemble(),
+		StopReason:      stop,
+		Usage:           s.usage,
+		RequestMetadata: &md,
 	})
 	s.done = true
 }

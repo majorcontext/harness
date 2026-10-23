@@ -136,7 +136,7 @@ func TestCodexChainAcrossRedialLive(t *testing.T) {
 	}
 
 	connA := liveDial(t, ctx, prepared)
-	if err := sendResponseCreate(ctx, connA, prepared.body); err != nil {
+	if _, err := sendResponseCreate(ctx, connA, prepared.body); err != nil {
 		t.Fatalf("sendResponseCreate on connection A: %v", err)
 	}
 	responseID, terminal, frame := liveDrain(t, ctx, connA)
@@ -155,7 +155,7 @@ func TestCodexChainAcrossRedialLive(t *testing.T) {
 
 	// Step 2: the same ID on a connection that never saw it.
 	connB := liveDial(t, ctx, prepared)
-	if err := sendResponseCreate(ctx, connB, prepared.body, chained); err != nil {
+	if _, err := sendResponseCreate(ctx, connB, prepared.body, chained); err != nil {
 		t.Fatalf("sendResponseCreate on freshly dialed connection B: %v", err)
 	}
 	nameB, frameB, errB := readFirstFrame(ctx, connB, wsDefaultIdleTimeout)
@@ -174,7 +174,7 @@ func TestCodexChainAcrossRedialLive(t *testing.T) {
 
 	// Step 3, the control: the same ID and bytes on the connection that
 	// produced it. This must work, or step 2 proves nothing.
-	if err := sendResponseCreate(ctx, connA, prepared.body, chained); err != nil {
+	if _, err := sendResponseCreate(ctx, connA, prepared.body, chained); err != nil {
 		t.Fatalf("sendResponseCreate on reused connection A: %v", err)
 	}
 	nameA, frameA, errA := readFirstFrame(ctx, connA, wsDefaultIdleTimeout)
@@ -219,7 +219,7 @@ func TestCodexStaleChainMissVocabularyLive(t *testing.T) {
 	}
 
 	conn := liveDial(t, ctx, prepared)
-	if err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
+	if _, err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
 		t.Fatalf("sendResponseCreate: %v", err)
 	}
 	if _, terminal, frame := liveDrain(t, ctx, conn); terminal != "response.completed" {
@@ -233,7 +233,7 @@ func TestCodexStaleChainMissVocabularyLive(t *testing.T) {
 		Input:              []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"Say: two"}]}`)},
 		InputSet:           true,
 	}
-	if err := sendResponseCreate(ctx, conn, prepared.body, bogus); err != nil {
+	if _, err := sendResponseCreate(ctx, conn, prepared.body, bogus); err != nil {
 		t.Fatalf("sendResponseCreate with a bogus previous_response_id: %v", err)
 	}
 	name, frame, err := readFirstFrame(ctx, conn, wsDefaultIdleTimeout)
@@ -293,7 +293,7 @@ func TestCodexIdleToleranceLive(t *testing.T) {
 	}
 
 	conn := liveDial(t, ctx, prepared)
-	if err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
+	if _, err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
 		t.Fatalf("sendResponseCreate: %v", err)
 	}
 	responseID, terminal, frame := liveDrain(t, ctx, conn)
@@ -317,7 +317,7 @@ func TestCodexIdleToleranceLive(t *testing.T) {
 			Input:              []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"Say: two"}]}`)},
 			InputSet:           true,
 		}
-		if err := sendResponseCreate(ctx, conn, prepared.body, chained); err != nil {
+		if _, err := sendResponseCreate(ctx, conn, prepared.body, chained); err != nil {
 			t.Fatalf("IDLE TOLERANCE < %s: send failed after %s idle: %v", gap, gap, err)
 		}
 		id, name, body := liveDrain(t, ctx, conn)
@@ -449,7 +449,7 @@ func TestCodexIdleKeepaliveLive(t *testing.T) {
 				}
 			}
 
-			if err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
+			if _, err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
 				t.Fatalf("sendResponseCreate: %v", err)
 			}
 			responseID := drain("baseline request")
@@ -490,7 +490,7 @@ func TestCodexIdleKeepaliveLive(t *testing.T) {
 				Input:              []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"Say: two"}]}`)},
 				InputSet:           true,
 			}
-			if err := sendResponseCreate(ctx, conn, prepared.body, chained); err != nil {
+			if _, err := sendResponseCreate(ctx, conn, prepared.body, chained); err != nil {
 				t.Fatalf("sendResponseCreate after %s idle: %v", gap, err)
 			}
 			drain("chained request")

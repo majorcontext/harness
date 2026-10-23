@@ -15,7 +15,7 @@ Read the root AGENTS.md. Read `internal/message/AGENTS.md` for canonical data ru
 - `Request.SessionKey` is the routing hint. Omit empty keys.
 - Anthropic cache TTL is `"1h"` or `"5m"`. Reject other values.
 - Send `previous_response_id` or `generate:false` only for `CodexFamily` over WebSocket with a `SessionKey`.
-- Install lineage only after a clean `response.completed`. Never log or persist a response ID.
+- Install lineage only after a clean `response.completed`. Never persist a response ID. Log it only as `response_id` on `turn_metrics`.
 - Recover a first-frame chain miss once, with the complete request on a fresh connection.
 - Add no static model-name vision list.
 - Test each shared behavior through every affected real adapter. Compare ordered wire bytes.

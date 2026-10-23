@@ -201,7 +201,7 @@ func captureResponseCreate(t *testing.T, body []byte, options responseCreateOpti
 		t.Fatalf("websocket.Dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-	if err := sendResponseCreate(context.Background(), conn, body, options); err != nil {
+	if _, err := sendResponseCreate(context.Background(), conn, body, options); err != nil {
 		t.Fatalf("sendResponseCreate: %v", err)
 	}
 	return <-frames
@@ -580,14 +580,12 @@ func TestPreviousResponseNotFoundRetriesFullRequestOnce(t *testing.T) {
 	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil {
 		t.Fatalf("terminal event = %+v, want EventDone with request metadata", terminal)
 	}
-	want := provider.RequestMetadata{Mode: provider.RequestModeFull, CompleteInputItems: 3, SentInputItems: 3, PreviousResponseUsed: false, ChainRecovered: true}
-	if !reflect.DeepEqual(*terminal.RequestMetadata, want) {
-		t.Fatalf("request metadata = %+v, want %+v", *terminal.RequestMetadata, want)
+	got := *terminal.RequestMetadata
+	want := provider.RequestMetadata{Mode: provider.RequestModeFull, CompleteInputItems: 3, SentInputItems: 3, ChainRecovered: true, ResponseID: "resp_recovered", RequestBytes: got.RequestBytes, HistoryBytes: got.HistoryBytes, MaxOutputTokens: 100}
+	if got.RequestBytes == 0 || got.HistoryBytes == 0 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("request metadata = %+v, want %+v", got, want)
 	}
-	raw, err := json.Marshal(terminal.RequestMetadata)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw, _ := json.Marshal(terminal.RequestMetadata)
 	if strings.Contains(string(raw), "resp_secret_lineage") {
 		t.Fatalf("terminal metadata leaked response ID: %s", raw)
 	}

@@ -88,6 +88,25 @@ type stream struct {
 	done  bool
 }
 
+// responseUsage is the usage object of a terminal Responses event.
+type responseUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+// doneMetadata returns the request facts of the call with the response id and the raw reason of the terminal event.
+func (s *stream) doneMetadata(id, reason string) *provider.RequestMetadata {
+	md := provider.RequestMetadata{}
+	if s.requestMetadata != nil {
+		md = *s.requestMetadata
+	}
+	md.ResponseID, md.IncompleteReason = id, reason
+	return &md
+}
+
 // Close releases this stream's transport. For a websocket-delivered
 // response, whether the underlying connection is actually torn down or
 // kept pooled for the session's next turn was already decided when the
@@ -525,26 +544,21 @@ func (s *stream) handle(name string, data []byte) error {
 				IncompleteDetails struct {
 					Reason string `json:"reason"`
 				} `json:"incomplete_details"`
-				Usage struct {
-					InputTokens        int `json:"input_tokens"`
-					OutputTokens       int `json:"output_tokens"`
-					InputTokensDetails struct {
-						CachedTokens int `json:"cached_tokens"`
-					} `json:"input_tokens_details"`
-				} `json:"usage"`
+				Usage *responseUsage `json:"usage"`
 			} `json:"response"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad %s: %w", name, err)
 		}
 		// input_tokens includes the cached portion; Usage wants disjoint parts.
-		cached := ev.Response.Usage.InputTokensDetails.CachedTokens
-		uncached := ev.Response.Usage.InputTokens - cached
+		raw := cmp.Or(ev.Response.Usage, &responseUsage{})
+		cached := raw.InputTokensDetails.CachedTokens
+		uncached := raw.InputTokens - cached
 		if uncached < 0 {
 			uncached = 0
 		}
 		s.usage.InputTokens = uncached
-		s.usage.OutputTokens = ev.Response.Usage.OutputTokens
+		s.usage.OutputTokens = raw.OutputTokens
 		s.usage.CacheReadTokens = cached
 
 		var stop provider.StopReason
@@ -566,6 +580,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if s.respCreatedAt.IsZero() {
 			s.respCreatedAt = time.Now().UTC()
 		}
+		md := s.doneMetadata(s.respID, ev.Response.IncompleteDetails.Reason)
+		if ev.Response.Usage != nil {
+			md.ProviderUsage = &provider.RawUsage{Input: raw.InputTokens, Output: raw.OutputTokens, Cached: cached}
+		}
 		assistant := s.assemble()
 		if name == "response.completed" && s.onComplete != nil {
 			s.onComplete(ev.Response.ID, assistant)
@@ -577,7 +595,7 @@ func (s *stream) handle(name string, data []byte) error {
 			IncompleteReason:  incomplete,
 			Usage:             s.usage,
 			SubscriptionUsage: s.subUsage,
-			RequestMetadata:   s.requestMetadata,
+			RequestMetadata:   md,
 		})
 		s.done = true
 

@@ -180,8 +180,15 @@ const (
 	ChainRefusalPrefixChanged ChainRefusal = "prefix_changed"
 )
 
-// RequestMetadata contains non-secret transport projection facts for one
-// completed provider call. It never contains a provider response identifier.
+// RawUsage is the token count that a provider reported on its terminal
+// event, before the adapter splits it into the disjoint parts of Usage.
+type RawUsage struct {
+	Input, Output, Cached int
+}
+
+// RequestMetadata contains non-secret facts for one completed provider call:
+// how the transport projected the request, how large the request was, and the
+// identity and raw result of the response. It never contains content.
 type RequestMetadata struct {
 	Mode                 RequestMode `json:"mode"`
 	CompleteInputItems   int         `json:"complete_input_items"`
@@ -194,10 +201,12 @@ type RequestMetadata struct {
 	// chained call, and on an adapter or transport that cannot chain.
 	//
 	// ChainRefusalDetail and ChainRefusalItem are the two locator shapes a
-	// reason can carry, and a reason carries at most one. Both are empty
-	// for a reason that needs no locator. A change of instructions also
-	// carries ChainRefusalOffset, its first differing byte, and the byte
-	// lengths ChainRefusalPreviousLen and ChainRefusalCurrentLen.
+	// reason can carry. Both are empty for a reason that needs no locator.
+	// A change of instructions also carries ChainRefusalOffset, its first
+	// differing byte, and the byte lengths ChainRefusalPreviousLen and
+	// ChainRefusalCurrentLen. A change of tools also carries ChainRefusalTool,
+	// the name of the first tool whose entry differs, and ChainRefusalToolPart:
+	// name, description, schema, order, or other.
 	//
 	// ChainRefusalDetail is a NAME: a wire property name for
 	// ChainRefusalPropertyChanged, or "input_shorter_than_prefix" for the
@@ -217,6 +226,23 @@ type RequestMetadata struct {
 	ChainRefusalOffset      *int         `json:"chain_refusal_offset,omitempty"`
 	ChainRefusalPreviousLen *int         `json:"chain_refusal_previous_len,omitempty"`
 	ChainRefusalCurrentLen  *int         `json:"chain_refusal_current_len,omitempty"`
+	ChainRefusalTool        string       `json:"chain_refusal_tool,omitempty"`
+	ChainRefusalToolPart    string       `json:"chain_refusal_tool_part,omitempty"`
+
+	// ResponseID is the id that the provider gave the response. IncompleteReason
+	// is the raw reason of an incomplete response. ProviderUsage is nil when the
+	// terminal event carried no usage. Each is set when the terminal event arrives.
+	ResponseID       string    `json:"response_id,omitempty"`
+	IncompleteReason string    `json:"incomplete_reason,omitempty"`
+	ProviderUsage    *RawUsage `json:"provider_usage,omitempty"`
+
+	// The byte sizes of the request that the wire sent and of its parts.
+	// MaxOutputTokens is 0 when the request set none.
+	RequestBytes      int `json:"request_bytes,omitempty"`
+	InstructionsBytes int `json:"instructions_bytes,omitempty"`
+	ToolsBytes        int `json:"tools_bytes,omitempty"`
+	HistoryBytes      int `json:"history_bytes,omitempty"`
+	MaxOutputTokens   int `json:"max_output_tokens,omitempty"`
 }
 
 // Event is one streaming event from a model call.
@@ -242,8 +268,8 @@ type Event struct {
 	Usage            Usage
 	// Prompt is the size in tokens of the prompt that the call read, which the context gauge shows. Zero: the input counts of Usage.
 	Prompt int
-	// RequestMetadata is set only on EventDone when an adapter reports how
-	// it projected the complete logical request onto its transport.
+	// RequestMetadata is set only on EventDone, by an adapter that reports
+	// the facts of the call.
 	RequestMetadata *RequestMetadata
 	// SubscriptionUsage carries a subscription lane's captured rate-limit/
 	// quota snapshot (see message.SubscriptionUsage's own doc comment),
@@ -293,4 +319,12 @@ type Provider interface {
 	// ProviderData tag this adapter reads and writes.
 	Name() string
 	Stream(ctx context.Context, req *Request) (Stream, error)
+}
+
+// BodyParts returns the serialized value of each top-level key of a JSON request body.
+// It returns nil for a body that is not a JSON object.
+func BodyParts(body []byte) map[string]json.RawMessage {
+	var parts map[string]json.RawMessage
+	_ = json.Unmarshal(body, &parts)
+	return parts
 }

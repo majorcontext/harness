@@ -74,12 +74,20 @@ func (s *stream) finish(stop provider.StopReason, incomplete string) {
 	if stop == provider.StopPaused {
 		msg.Parts = slices.DeleteFunc(msg.Parts, unfinishedSearch)
 	}
+	usage := addUsage(s.carry, s.usage)
+	md := provider.RequestMetadata{}
+	if s.requestMetadata != nil {
+		md = *s.requestMetadata
+	}
+	md.ResponseID = msg.ID
+	md.ProviderUsage = &provider.RawUsage{Input: usage.InputTokens, Output: usage.OutputTokens, Cached: usage.CacheReadTokens}
 	s.queue = append(s.queue, provider.Event{
 		Type:             provider.EventDone,
 		Message:          msg,
 		StopReason:       stop,
 		IncompleteReason: incomplete,
-		Usage:            addUsage(s.carry, s.usage),
+		Usage:            usage,
+		RequestMetadata:  &md,
 		Prompt:           cmp.Or(s.prompt, s.usage.InputTokens+s.usage.CacheWriteTokens+s.usage.CacheReadTokens),
 	})
 	s.done = true

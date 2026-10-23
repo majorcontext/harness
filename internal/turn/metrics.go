@@ -22,6 +22,21 @@ type CallMetrics struct {
 	ChainRefusalItem                                *int
 	ChainRefusalOffset                              *int
 	ChainRefusalPreviousLen, ChainRefusalCurrentLen *int
+	// ChainRefusalTool names the first tool whose entry changed, and ChainRefusalToolPart the part of it.
+	ChainRefusalTool, ChainRefusalToolPart string
+	// ResponseID is the provider id of the response. StopReason is the stop reason as the backend maps it,
+	// IncompleteReason the raw reason of an incomplete response, and ErrorClass the class of a call that failed.
+	ResponseID, StopReason, IncompleteReason, ErrorClass string
+	// ProviderTokens is the usage as the provider reported it, or nil when its terminal event had none.
+	ProviderTokens *ProviderTokens
+	// The byte sizes of the request and its parts. RequestBytes 0 means the backend reports none.
+	// MaxOutputTokens is 0 when the request sent none.
+	RequestBytes, InstructionsBytes, ToolsBytes, HistoryBytes, MaxOutputTokens int
+}
+
+// ProviderTokens is the token count that a provider reported, before the backend splits it.
+type ProviderTokens struct {
+	Input, Output, Cached int
 }
 
 // Chained reports a call that sent only the input that the earlier response
@@ -118,5 +133,30 @@ func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 			args = append(args, "chain_refusal_previous_len", *m.ChainRefusalPreviousLen, "chain_refusal_current_len", *m.ChainRefusalCurrentLen)
 		}
 	}
-	log.Info("turn_metrics", args...)
+	log.Info("turn_metrics", append(args, requestArgs(m)...)...)
+}
+
+// requestArgs are the keys of a turn_metrics line that name the response and the size of the request.
+func requestArgs(m *CallMetrics) []any {
+	var args []any
+	for _, kv := range []struct{ k, v string }{
+		{"response_id", m.ResponseID}, {"stop_reason", m.StopReason}, {"incomplete_reason", m.IncompleteReason},
+		{"chain_refusal_tool", m.ChainRefusalTool}, {"chain_refusal_tool_part", m.ChainRefusalToolPart}, {"error_class", m.ErrorClass},
+	} {
+		if kv.v != "" {
+			args = append(args, kv.k, kv.v)
+		}
+	}
+	if p := m.ProviderTokens; p != nil {
+		args = append(args, "provider_input_tokens", p.Input, "provider_output_tokens", p.Output, "provider_cached_tokens", p.Cached)
+	}
+	if m.RequestBytes > 0 {
+		var maxOutput any = "omitted"
+		if m.MaxOutputTokens > 0 {
+			maxOutput = m.MaxOutputTokens
+		}
+		args = append(args, "request_bytes", m.RequestBytes, "instructions_bytes", m.InstructionsBytes,
+			"tools_bytes", m.ToolsBytes, "history_bytes", m.HistoryBytes, "max_output_tokens", maxOutput)
+	}
+	return args
 }

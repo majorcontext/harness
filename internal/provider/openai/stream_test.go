@@ -229,6 +229,11 @@ func TestStreamIncomplete(t *testing.T) {
 			if done.Usage.InputTokens != 5 || done.Usage.OutputTokens != 9 || done.Usage.CacheReadTokens != 2 { // disjoint: 7 wire total - 2 cached
 				t.Errorf("usage = %+v", done.Usage)
 			}
+			md := done.RequestMetadata
+			if md == nil || md.ResponseID != "resp_inc" || md.IncompleteReason != tc.reason || md.RequestBytes == 0 || md.MaxOutputTokens != 10 ||
+				md.ProviderUsage == nil || *md.ProviderUsage != (provider.RawUsage{Input: 7, Output: 9, Cached: 2}) {
+				t.Errorf("request metadata = %+v, want response id, raw reason, raw usage 7/9/2, and sizes", md)
+			}
 			msg := done.Message
 			if msg == nil || msg.ID != "resp_inc" || len(msg.Parts) != 1 {
 				t.Fatalf("message = %+v", msg)
