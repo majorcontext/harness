@@ -393,11 +393,11 @@ the reason where it makes the decision (`internal/provider/openai/ws_pool.go`).
 | `no_lineage` | No usable lineage: the session's first call, or a lineage that a partial, failed, canceled, or concurrent call invalidated | omitted | omitted |
 | `connection_idle` | The pooled connection sat idle past `wsDefaultIdleTimeout` (5 minutes) and took its lineage with it | omitted | omitted |
 | `connection_aged` | The pooled connection reached `wsDefaultMaxConnectionAge` (55 minutes) | omitted | omitted |
-| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` | omitted |
+| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` | omitted; for `instructions`, `chain_refusal_offset` (the first differing byte), `chain_refusal_previous_len`, and `chain_refusal_current_len` (byte lengths) |
 | `prefix_changed` | The input prefix is no longer byte-identical to the lineage call's input plus its response | omitted | the index of the first item that differs, `0` included |
 | `prefix_changed` | The input is too short to extend the prefix at all, so no item index exists | `input_shorter_than_prefix` | omitted |
 
-A reason carries at most one locator, and the two locators have different
+A reason carries at most one of these two locators, and they have different
 shapes on purpose:
 
 - `chain_refusal_detail` is a NAME. It holds no `[` or `]`.
