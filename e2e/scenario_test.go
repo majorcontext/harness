@@ -509,9 +509,7 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 	if sc.concurrent {
 		reqs = groupByConversation(reqs)
 	}
-	// A title call runs beside the turn, so its arrival order is not fixed.
-	slices.SortStableFunc(reqs, func(a, b harnesstest.Request) int { return cmp.Compare(b2i(isTitleRequest(a)), b2i(isTitleRequest(b))) })
-	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
+	return normalizeRun(titlesLast(reqs), sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runScenarios(t *testing.T, table []scenario) {
@@ -610,4 +608,11 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// titlesLast moves the title requests after the others. A title call runs
+// beside the turn, so its arrival order is not fixed.
+func titlesLast(reqs []harnesstest.Request) []harnesstest.Request {
+	slices.SortStableFunc(reqs, func(a, b harnesstest.Request) int { return cmp.Compare(b2i(isTitleRequest(a)), b2i(isTitleRequest(b))) })
+	return reqs
 }
