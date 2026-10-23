@@ -73,8 +73,8 @@ func TestContractSessionCacheExpiryAndCompactionPoint(t *testing.T) {
 			}
 			before := len(d.events(t, id))
 			res := d.call(t, http.MethodPost, "/sessions/"+id+"/compact", protocol.Compact{ExpectedTurnID: turns[0]})
-			if res.Status != http.StatusConflict || len(d.events(t, id)) != before {
-				t.Errorf("compact with the older turn = %d %v, want 409 and no new record", res.Status, res.Body)
+			if e, _ := res.Body.(map[string]any)["error"].(map[string]any); res.Status != http.StatusConflict || e["code"] != "turn_mismatch" || len(d.events(t, id)) != before {
+				t.Errorf("compact with the older turn = %d %v, want 409 turn_mismatch and no new record", res.Status, res.Body)
 			}
 			if res := d.call(t, http.MethodPost, "/sessions/"+id+"/compact", protocol.Compact{ExpectedTurnID: turns[1]}); res.Status != http.StatusOK {
 				t.Errorf("compact with the newest turn = %d %v, want 200", res.Status, res.Body)
