@@ -220,7 +220,8 @@ func (s *Session) ClearGoal(ctx context.Context) error { return s.a.ClearGoal(ct
 // first. A backend that owns its context runs its own /compact command
 // instead, and takes no KeepTurns. It returns when the compaction ends with
 // what it folded, and fails with ErrSessionBusy while a turn runs or inputs
-// wait. A session with too few turns folds nothing, with no error.
+// wait, and with ErrTurnMismatch when req.ExpectedTurnID is not the newest
+// ended turn. A session with too few turns folds nothing, with no error.
 func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error) {
 	keep := 0
 	if req.KeepTurns != nil {
@@ -228,7 +229,7 @@ func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.C
 			return protocol.Compacted{}, fmt.Errorf("%w: keep_turns must be >= 1", ErrInvalidRequest)
 		}
 	}
-	c, ran, err := s.a.Compact(ctx, keep)
+	c, ran, err := s.a.Compact(ctx, keep, req.ExpectedTurnID)
 	if errors.Is(err, session.ErrKeepTurns) {
 		err = fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}

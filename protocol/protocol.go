@@ -234,6 +234,8 @@ type Interrupt struct {
 // newest compaction_keep_turns when KeepTurns is nil. KeepTurns is at least 1.
 type Compact struct {
 	KeepTurns *int `json:"keep_turns,omitempty"`
+	// ExpectedTurnID, when set, makes the compaction run only if the newest ended turn has this ID.
+	ExpectedTurnID string `json:"expected_turn_id,omitempty"`
 }
 
 // Compacted is the result of a compaction. Folded is false when the session

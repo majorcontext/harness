@@ -93,6 +93,7 @@ export interface Commands {
 
 export interface Compact {
   keep_turns?: number;
+  expected_turn_id?: string;
 }
 
 export interface Compacted {

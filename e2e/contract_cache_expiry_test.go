@@ -60,6 +60,26 @@ func TestContractSessionCacheExpiryAndCompactionPoint(t *testing.T) {
 				t.Errorf("cache_expires_at after a compaction = %v, want none", got)
 			}
 		})
+		t.Run("a compaction with the ID of an older turn fails with turn_mismatch and appends nothing", func(t *testing.T) {
+			d, _ := startOn(t, h, t.TempDir(), map[string]any{"compaction_keep_turns": 1},
+				harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				replyText("hi"))
+			id := createdID(t, d, "anthropic/claude-opus-5")
+			var turns []string
+			for _, prompt := range []string{"one", "two"} {
+				d.Submit(t, id, prompt)
+				d.WaitIdle(t, id)
+				turns = append(turns, d.view(t, id).LastTurn.TurnID)
+			}
+			before := len(d.events(t, id))
+			res := d.call(t, http.MethodPost, "/sessions/"+id+"/compact", protocol.Compact{ExpectedTurnID: turns[0]})
+			if res.Status != http.StatusConflict || len(d.events(t, id)) != before {
+				t.Errorf("compact with the older turn = %d %v, want 409 and no new record", res.Status, res.Body)
+			}
+			if res := d.call(t, http.MethodPost, "/sessions/"+id+"/compact", protocol.Compact{ExpectedTurnID: turns[1]}); res.Status != http.StatusOK {
+				t.Errorf("compact with the newest turn = %d %v, want 200", res.Status, res.Body)
+			}
+		})
 		t.Run("a claude-code session expires its cache one hour after a call that wrote 1h tokens", func(t *testing.T) {
 			fake := harnesstest.NewAnthropic(t)
 			cd := claudeLane{mode: "cache_1h"}.newDriver(t, h, fake.URL()).(*claudeDriver)

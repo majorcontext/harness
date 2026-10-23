@@ -23,9 +23,10 @@ const compactCommand = "/compact"
 // keep is 0, into a summary, or runs compactCommand as a turn of a backend
 // that owns its context. It returns when the compaction ends, with the
 // compaction that it appended, or one with only ByBackend for a backend
-// that owns its context. When too few turns exist, it appends nothing and
-// ran is false.
-func (a *Actor) Compact(ctx context.Context, keep int) (c protocol.CompactionApplied, ran bool, err error) {
+// that owns its context. It fails with ErrTurnMismatch when expectTurn is not
+// empty and is not the newest ended turn. When too few turns exist, it
+// appends nothing and ran is false.
+func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c protocol.CompactionApplied, ran bool, err error) {
 	type result struct {
 		c   protocol.CompactionApplied
 		ran bool
@@ -39,6 +40,8 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c protocol.CompactionApp
 		switch {
 		case a.run != nil || len(a.state.Queue()) > 0:
 			reply(result{}, ErrBusy)
+		case expectTurn != "" && a.state.LastEnded().TurnID != expectTurn:
+			reply(result{}, ErrTurnMismatch)
 		case owns && keep != 0:
 			reply(result{}, ErrKeepTurns)
 		case owns:
