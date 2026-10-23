@@ -73,7 +73,7 @@ func (a *Actor) autoCompact() bool {
 // another one is due: the pressure sits in the kept turns.
 func (a *Actor) compactDue() bool {
 	c, caps := a.state.Context(), a.cfg.Backend.Capabilities(a.state.Model())
-	window := contextWindow(caps.ContextWindow, c)
+	window := contextWindow(caps.ContextWindow, c, caps.OwnsContext)
 	if window <= 0 || caps.OwnsContext {
 		return false
 	}
