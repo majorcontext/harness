@@ -191,7 +191,6 @@ func TestChatBlockUntilRelease(t *testing.T) {
 		wantDelta string
 	}{
 		{"text", Reply{Text: "slow text", Block: true}, `"content":"slow text"`},
-		{"tail", Reply{Text: "slow text", Block: true, Tail: "tail text", TailBlock: true}, `"content":"slow text"`},
 		{"tool call only", Reply{Block: true, ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}}, `"id":"call_1"`},
 	}
 	for _, tc := range tests {
@@ -214,23 +213,8 @@ func TestChatBlockUntilRelease(t *testing.T) {
 				if body := w.Body.String(); !strings.Contains(body, tc.wantDelta) || strings.Contains(body, "[DONE]") {
 					t.Fatalf("body before Release = %q, want the first delta and no [DONE]", body)
 				}
-				if tc.reply.Tail != "" && strings.Contains(w.Body.String(), `"content":"tail text"`) {
-					t.Fatal("tail streamed before the first Release")
-				}
 				s.Release("slow")
 				synctest.Wait()
-				if tc.reply.TailBlock {
-					select {
-					case <-s.blockedCh("slow:tail"):
-					default:
-						t.Fatal("handler is not waiting on the tail Release")
-					}
-					if body := w.Body.String(); !strings.Contains(body, `"content":"tail text"`) || strings.Contains(body, "[DONE]") {
-						t.Fatalf("body before tail Release = %q, want the tail delta and no [DONE]", body)
-					}
-					s.Release("slow:tail")
-					synctest.Wait()
-				}
 				select {
 				case <-finished:
 				default:

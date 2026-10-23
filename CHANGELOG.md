@@ -10,8 +10,6 @@ First tagged release.
 
 ### Added
 
-- **Chat fixture tail deltas** (`harnesstest`) — `NewChat` streams `Reply.Tail` after the first release and honors `TailBlock` until the tail release, as `NewAnthropic` does.
-
 - **Goal judge account exhaustion** (`protocol`, `internal/session`) — a goal evaluation that reaches a provider usage limit adds `cause`, `model` (the resolved evaluator model ref), and optional `resets_at` to `goal.changed`. A host can move the session to another account before the next judge retry.
 - **Goal evaluator transcript limit** (`internal/modelmeta`, `internal/backend/claudecode`, `internal/session`) — Claude Code aliases use the latest matching Anthropic context window. The evaluator transcript budget does not exceed 391,808 bytes. Session views use the latest window reported by Claude Code when available.
 
@@ -83,6 +81,7 @@ First tagged release.
 
 ### Fixed
 
+- **Chat fixture tail deltas** (`harnesstest`) — `NewChat` streams `Reply.Tail` after the first release and honors `TailBlock` until the tail release, as `NewAnthropic` does.
 - **Side requests leave the Codex websocket chain alone** (`internal/provider/openai`, `internal/backend/modelapi`) — a title, compaction summary, or goal evaluator request of a Codex session now goes over HTTP. Before, it shared the websocket entry of the session, so the next turn request could not chain with `previous_response_id` and was sent in full, and a title that ran during the first turn could push that turn to HTTP.
 - **A model call after `tools/list_changed` sees the new list** (`internal/tool/mcpsrc`) — a tool result that carried `notifications/tools/list_changed` could reach the next model call before the actor marked the read of the list as in flight, so that call used the old list and the added-tools notice landed one call late. The wait before a model call now goes through the actor, so it waits for that read.
 - **Context overflow on the Responses API compacts** (`internal/provider/openai`) — an HTTP error body or a stream event with the code `context_length_exceeded` now returns a context-overflow error, so a turn on the `openai` or `codex` provider compacts and calls the model again. Before, the turn failed with the raw provider message and never compacted.
