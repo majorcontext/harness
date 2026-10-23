@@ -115,9 +115,12 @@ type State struct {
 	context   protocol.ContextMeasured
 	// measuredTurn is the turn count when the newest reading was recorded.
 	measuredTurn int
-	subscribed   *protocol.SubscriptionUsage
-	cost         *float64
-	compaction   protocol.CompactionApplied
+	// readAt is the record time of the newest reading of a model call, or zero after a compaction. readTTL is the newest cache lifetime that a reading stated.
+	readAt     time.Time
+	readTTL    time.Duration
+	subscribed *protocol.SubscriptionUsage
+	cost       *float64
+	compaction protocol.CompactionApplied
 	// compactedAt is the seq of the record of the newest compaction.
 	compactedAt uint64
 	// compactedTime is the time of that record.
@@ -302,6 +305,17 @@ func (s *State) Usage() protocol.Usage { return s.usage }
 // Context returns the newest context measurement, with no usage.
 func (s *State) Context() protocol.ContextMeasured { return s.context }
 
+// CacheExpiry returns when the prompt cache expires: the newest model call
+// reading plus the cache lifetime that a reading stated, else fallback. It is
+// zero with no reading, after a compaction, or with no lifetime.
+func (s *State) CacheExpiry(fallback time.Duration) time.Time {
+	ttl := cmp.Or(s.readTTL, fallback)
+	if s.readAt.IsZero() || ttl <= 0 {
+		return time.Time{}
+	}
+	return s.readAt.Add(ttl)
+}
+
 // Measured reports whether the newest reading was recorded in the newest turn.
 func (s *State) Measured() bool {
 	return s.context != (protocol.ContextMeasured{}) && s.measuredTurn == s.turnN
@@ -470,7 +484,7 @@ func (s *State) step(env Envelope) error {
 	case protocol.CommandRecorded:
 		return s.applyCommand(e, env.Seq)
 	case protocol.ContextMeasured:
-		s.applyMeasured(e)
+		s.applyMeasured(e, env.Time)
 		return nil
 	case protocol.BackendState:
 		return s.applyBackendState(e)

@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Cache expiry and compaction point on the session view** (`protocol`, `internal/session`, `internal/eventlog`, `internal/backend`) — `context.compact_at` is the token count at which the session compacts before the next turn. `cache_expires_at` is when the prompt cache expires: the newest model call reading plus its cache lifetime. It is absent when the lifetime is unknown and after a compaction. The Anthropic client states its `cache_ttl`, the ChatGPT Codex backend states 30 minutes, and the Claude Code backend sets `ENABLE_PROMPT_CACHING_1H=1` and reads the lifetime from the usage of each call. `context.measured` gains `cache_ttl_seconds`.
+
 - **Goal judge account exhaustion** (`protocol`, `internal/session`) — a goal evaluation that reaches a provider usage limit adds `cause`, `model` (the resolved evaluator model ref), and optional `resets_at` to `goal.changed`. A host can move the session to another account before the next judge retry.
 - **Goal evaluator transcript limit** (`internal/modelmeta`, `internal/backend/claudecode`, `internal/session`) — Claude Code aliases use the latest matching Anthropic context window. The evaluator transcript budget does not exceed 391,808 bytes. Session views use the latest window reported by Claude Code when available.
 

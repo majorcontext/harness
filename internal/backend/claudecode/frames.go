@@ -126,6 +126,22 @@ type usage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreation            struct {
+		Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
+		Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
+	} `json:"cache_creation"`
+}
+
+// cacheTTLSeconds is the cache lifetime that the call states: 1h when it wrote 1h tokens, 5m when it wrote only 5m tokens, else 0.
+func (u *usage) cacheTTLSeconds() int64 {
+	switch {
+	case u == nil:
+	case u.CacheCreation.Ephemeral1h > 0:
+		return 3600
+	case u.CacheCreation.Ephemeral5m > 0:
+		return 300
+	}
+	return 0
 }
 
 func (u *usage) usage() protocol.Usage {

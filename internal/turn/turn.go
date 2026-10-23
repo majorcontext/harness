@@ -45,6 +45,7 @@ type Capabilities struct {
 	ContextWindow int
 	// WindowEstimated marks ContextWindow as the default for an unknown model.
 	WindowEstimated bool
+	CacheTTL        time.Duration // how long the provider keeps an idle prompt prefix; 0: unknown
 	// Efforts are the levels the model lists; none: unknown.
 	Efforts []string
 	// Tools names the built-in tools of a backend that owns the loop. A

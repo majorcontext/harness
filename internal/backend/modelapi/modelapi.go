@@ -64,18 +64,29 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 		return turn.Capabilities{}
 	}
 	control, _ := b.effortControl(ref)
-	search := b.nativeSearch(ref.Model)
+	caps := turn.Capabilities{Efforts: control.Levels, WebSearch: b.nativeSearch(ref.Model)}
+	if c, ok := b.client.(cacheTTLSource); ok {
+		caps.CacheTTL = c.CacheLifetime()
+	}
 	if b.window > 0 {
-		return turn.Capabilities{ContextWindow: b.window, Efforts: control.Levels, WebSearch: search}
+		caps.ContextWindow = b.window
+		return caps
 	}
 	window, ok := modelmeta.ContextWindow(ref)
 	if ok {
-		return turn.Capabilities{ContextWindow: window, Efforts: control.Levels, WebSearch: search}
+		caps.ContextWindow = window
+		return caps
 	}
 	if _, seen := warned.LoadOrStore(model, true); !seen {
 		b.log.Warn("harness: the model has no known context window, so it runs on the default", "model", model, "window", defaultContextWindow)
 	}
-	return turn.Capabilities{ContextWindow: defaultContextWindow, WindowEstimated: true, Efforts: control.Levels, WebSearch: search}
+	caps.ContextWindow, caps.WindowEstimated = defaultContextWindow, true
+	return caps
+}
+
+// cacheTTLSource is a provider client that states how long its API keeps an idle prompt prefix.
+type cacheTTLSource interface {
+	CacheLifetime() time.Duration
 }
 
 // nativeSearch reports whether the client offers the web search of its API for model.

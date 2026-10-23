@@ -62,6 +62,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 800000,
           "tokens": 9,
           "window": 1000000
         },

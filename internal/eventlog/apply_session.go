@@ -62,13 +62,20 @@ func (s *State) applyCompaction(e protocol.CompactionApplied, seq uint64, at tim
 		s.folded = append(s.folded, s.summaryMessage())
 	}
 	s.compaction, s.compactedAt, s.compactedTime = e, seq, at
+	s.readAt = time.Time{}
 	s.compacted++
 	s.usage = s.usage.Add(e.Usage)
 	return nil
 }
 
-func (s *State) applyMeasured(e protocol.ContextMeasured) {
+func (s *State) applyMeasured(e protocol.ContextMeasured, at time.Time) {
 	s.usage = s.usage.Add(e.Usage)
+	if e.Tokens > 0 {
+		s.readAt = at
+		if e.CacheTTLSeconds > 0 {
+			s.readTTL = time.Duration(e.CacheTTLSeconds) * time.Second
+		}
+	}
 	if e.Tokens > 0 || e.Source != "" {
 		window, estimated := e.Window, e.WindowEstimated
 		if window == 0 && e.Source != "" && e.Source == s.context.Source {

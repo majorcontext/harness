@@ -291,8 +291,10 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "compaction_count": 1,
         "context": {
+          "compact_at": 160000,
           "tokens": 5,
           "window": 200000
         },
@@ -320,7 +322,9 @@
     "set_model.a": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 160000,
           "tokens": 300000,
           "window": 200000
         },

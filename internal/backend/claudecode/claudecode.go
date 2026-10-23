@@ -255,7 +255,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if req.Sent != nil {
 		req.Sent(system)
 	}
-	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading))
+	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading), "ENABLE_PROMPT_CACHING_1H=1")
 	if account := req.Settings.Accounts[b.p.Vendor]; b.p.Vendor != "" && account != "" {
 		if env, err = b.accountEnv(env, account); err != nil {
 			return nil, err

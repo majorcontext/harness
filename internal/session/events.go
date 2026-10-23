@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -22,8 +23,10 @@ func contextWindow(model int, c protocol.ContextMeasured, ownsContext bool) int6
 }
 
 // Describe returns the protocol view of state. An owned-context backend uses
-// its measured window when it has one.
-func Describe(id string, s *eventlog.State, window int, estimated, ownsContext bool) protocol.Session {
+// its measured window when it has one. The session compacts at threshold of
+// the window.
+func Describe(id string, s *eventlog.State, caps turn.Capabilities, threshold float64) protocol.Session {
+	window, estimated, ownsContext := caps.ContextWindow, caps.WindowEstimated, caps.OwnsContext
 	sum, set, p := s.Summary(), s.Settings(), s.Progress()
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, WorkDir: sum.WorkDir, Model: sum.Model, Title: sum.Title,
@@ -39,7 +42,8 @@ func Describe(id string, s *eventlog.State, window int, estimated, ownsContext b
 		estimated = c.WindowEstimated
 	}
 	windowSize := contextWindow(window, c, ownsContext)
-	v.Context = protocol.Context{Tokens: c.Tokens, Window: windowSize, WindowEstimated: estimated && windowSize > 0}
+	v.Context = protocol.Context{Tokens: c.Tokens, Window: windowSize, WindowEstimated: estimated && windowSize > 0, CompactAt: int64(threshold * float64(windowSize))}
+	v.CacheExpiresAt = s.CacheExpiry(caps.CacheTTL)
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
 		v.SubscriptionUsage = subscriptionView(sub)

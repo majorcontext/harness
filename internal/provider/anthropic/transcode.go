@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/internal/imageclamp"
 	"github.com/majorcontext/harness/internal/message"
@@ -225,6 +226,17 @@ func resolveCacheTTL(v string) (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("anthropic: invalid cache_ttl %q (want %q or %q)", v, CacheTTL5m, CacheTTL1h)
+}
+
+// CacheLifetime is the lifetime of the prompt-cache breakpoints of the client, or 0 for an invalid CacheTTL.
+func (c *Client) CacheLifetime() time.Duration {
+	switch ttl, _ := resolveCacheTTL(c.CacheTTL); ttl {
+	case CacheTTL1h:
+		return time.Hour
+	case CacheTTL5m:
+		return 5 * time.Minute
+	}
+	return 0
 }
 
 // cacheControl builds the breakpoint marker for a resolved TTL. The 5m TTL is

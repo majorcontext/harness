@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
@@ -160,6 +161,10 @@ func client(name string, p config.Provider, transport func(provider string) http
 	} else if e := env.Logins.Of(name, p); e != nil {
 		hc = e.Client(hc)
 	}
+	var cacheTTL time.Duration
+	if p.UsesChatGPTLogin() {
+		cacheTTL = responses.ChatGPTCacheTTL
+	}
 	switch {
 	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
 		key, reason := "", "the entry uses the "+p.Auth+" login"
@@ -168,7 +173,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
-			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin(), LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
+			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin(), CacheTTL: cacheTTL, LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL,

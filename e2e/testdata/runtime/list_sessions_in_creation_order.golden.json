@@ -15,6 +15,7 @@
         "sessions": [
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -35,6 +36,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -55,6 +57,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -75,6 +78,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -95,6 +99,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -115,6 +120,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -142,6 +148,7 @@
         "sessions": [
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -162,6 +169,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -182,6 +190,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -202,6 +211,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -222,6 +232,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -242,6 +253,7 @@
           },
           {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },

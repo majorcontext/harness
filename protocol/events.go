@@ -438,6 +438,7 @@ type ContextMeasured struct {
 	Window            int64              `json:"window"`
 	WindowEstimated   bool               `json:"window_estimated,omitempty"`
 	Source            string             `json:"source"`
+	CacheTTLSeconds   int64              `json:"cache_ttl_seconds,omitempty"` // the prompt-cache lifetime that the call states; 0: none
 	Usage             Usage              `json:"usage,omitzero"`
 	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage,omitempty"`
 	CostUSD           *float64           `json:"cost_usd,omitempty"`

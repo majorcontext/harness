@@ -94,6 +94,7 @@
           "name": "thinking",
           "result": {
             "context": {
+              "compact_at": 800000,
               "tokens": 0,
               "window": 1000000
             },
@@ -377,7 +378,9 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 800000,
           "tokens": 5,
           "window": 1000000
         },

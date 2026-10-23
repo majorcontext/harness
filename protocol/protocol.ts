@@ -115,6 +115,7 @@ export interface Context {
   tokens: number;
   window: number;
   window_estimated?: boolean;
+  compact_at?: number;
 }
 
 export interface ContextMeasured {
@@ -122,6 +123,7 @@ export interface ContextMeasured {
   window: number;
   window_estimated?: boolean;
   source: string;
+  cache_ttl_seconds?: number;
   usage?: Usage;
   subscription_usage?: SubscriptionUsage;
   cost_usd?: number;
@@ -517,6 +519,7 @@ export interface Session {
   context: Context;
   last_turn?: LastTurn;
   compaction_count?: number;
+  cache_expires_at?: string;
   subscription_usage: SubscriptionUsage | null;
   plugins?: Plugin[];
   head_seq: number;

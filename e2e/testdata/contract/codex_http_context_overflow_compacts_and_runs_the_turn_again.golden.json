@@ -349,6 +349,7 @@
       "body": {
         "compaction_count": 1,
         "context": {
+          "compact_at": 800000,
           "tokens": 5,
           "window": 1000000
         },
