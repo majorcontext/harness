@@ -383,7 +383,7 @@ func (a *Actor) goalStop(err error, kind runKind) []protocol.Payload {
 	if kind == kindJudge {
 		cause, exhausted := providerExhaustionDetails(err)
 		if cause != "" {
-			change.Cause = cause
+			change.Cause, change.Model = cause, a.cfg.Evaluator
 			if exhausted != nil {
 				change.ResetsAt = exhausted.ResetsAt
 			}

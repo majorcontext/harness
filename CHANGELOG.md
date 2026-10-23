@@ -10,7 +10,7 @@ First tagged release.
 
 ### Added
 
-- **Goal judge account exhaustion** (`protocol`, `internal/session`) — a goal evaluation that reaches a provider usage limit adds `cause` and optional `resets_at` to `goal.changed`. A host can move the session to another account before the next judge retry.
+- **Goal judge account exhaustion** (`protocol`, `internal/session`) — a goal evaluation that reaches a provider usage limit adds `cause`, `model` (the resolved evaluator model ref), and optional `resets_at` to `goal.changed`. A host can move the session to another account before the next judge retry.
 - **Goal evaluator transcript limit** (`internal/modelmeta`, `internal/backend/claudecode`, `internal/session`) — Claude Code aliases use the latest matching Anthropic context window. The evaluator transcript budget does not exceed 391,808 bytes. Session views use the latest window reported by Claude Code when available.
 
 - **Input admission check** (`harness`) — `harness.CheckInput(model, input)` runs the checks that `Session.Prompt` runs on an input (provenance, parts, attachment type, decode, and size, and image input for `model`) without a session, and stores nothing. It returns the same `invalid_request` error as `Prompt`, so an embedder can refuse a bad attachment when it queues the input. It checks a typed slash command as plain text.

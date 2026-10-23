@@ -169,6 +169,7 @@ export interface GoalChanged {
   reason?: string;
   retry_at?: string;
   cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
+  model?: string;
   resets_at?: number;
 }
 
