@@ -59,6 +59,8 @@ First tagged release.
 
 ### Changed
 
+- **Cache-reusing compaction summary** (`internal/turn`, `internal/session`) — the summary request of a compaction now sends the instructions, tools, settings, and whole history of the next model call, then one user message that asks for the summary, so a provider reads the cached prefix of the turns instead of the folded history at full price. The compaction still folds only the turns before the kept ones, and the summary now also covers the kept turns.
+
 - **Instructions change offset in chain refusals** (`openai`, `internal/turn`, `internal/backend/modelapi`) — a `turn_metrics` line of a call that did not chain because the instructions changed now has `chain_refusal_offset`, the byte offset of the first byte that differs, with `chain_refusal_previous_len` and `chain_refusal_current_len`, so an operator can tell a change in the base prompt from a change in a later section. The line never holds the instructions text.
 - **Deferred MCP tools** (`internal/tool/mcpsrc`, `internal/turn`, `internal/tool/pluginsrc`) — `mcp(action="select")` now returns the description and input schema of each named deferred tool, and the new `mcp(action="call", tool, arguments)` runs it, so a deferred tool never joins the `tools` array and a select no longer breaks the prompt cache of the session.
 - **Cache routing headers on the ChatGPT login** (`openai`, `backend`) — a request that the ChatGPT login authenticates, over HTTP and over the websocket handshake, sends the session key as the `session_id` and `x-client-request-id` headers, so the backend routes the prompt cache of a session to the same place. A request with no session key sends neither.

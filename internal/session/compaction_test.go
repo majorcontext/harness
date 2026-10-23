@@ -25,7 +25,7 @@ func compactAnswer(in string, tokens int) harnesstest.Step {
 }
 
 func compactSummary(name string, rep harnesstest.Reply) harnesstest.Step {
-	return harnesstest.Step{Name: name, Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: rep}
+	return harnesstest.Step{Name: name, Match: harnesstest.LastUserText("Answer only with the summary text"), Reply: rep}
 }
 
 // holdNth holds request n until its ctx ends, and closes held when it arrives.

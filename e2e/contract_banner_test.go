@@ -89,7 +89,7 @@ func TestContractEngineBanner(t *testing.T) {
 			config: map[string]any{"compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", "one", "1"), text("two", "two", "2"),
-				{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
 				text("three", "three", "3"), text("four", "four", "4"),
 			},
 			actions: []action{

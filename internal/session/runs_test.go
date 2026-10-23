@@ -22,11 +22,10 @@ func (*kindBackend) Capabilities(string) turn.Capabilities { return turn.Capabil
 
 func (b *kindBackend) Run(_ context.Context, req turn.Request, out turn.Sink) error {
 	kind, text := kindTurn, "ok"
-	switch req.Instructions {
-	case evaluatorPrompt:
+	switch {
+	case req.Instructions == evaluatorPrompt:
 		kind, text = kindJudge, "MET: ok"
-	case "":
-	default:
+	case req.Purpose == turn.PurposeCompaction:
 		kind, text = kindCompaction, "summary"
 	}
 	b.mu.Lock()

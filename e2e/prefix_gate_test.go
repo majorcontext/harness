@@ -18,7 +18,7 @@ const (
 )
 
 // notTurnMarkers are texts of the system prompt of a request that is no turn of a session: a title, a summary, and a goal evaluator each have a stream of their own.
-var notTurnMarkers = []string{"Generate a short title for a conversation", "You are summarizing a prefix", goalEvaluatorMarker}
+var notTurnMarkers = []string{"Generate a short title for a conversation", goalEvaluatorMarker}
 
 // checkPrefixes checks that each request of a session after the first sends the tools, the system prompt, and the cache key of the request before it, and a history that starts with the bytes of that request's history. Only the cache_control marker may move. A break that the spec designs is declared in breaks with its reason; a declared break that never happens fails.
 func checkPrefixes(t *testing.T, raws [][]byte, breaks map[string]string) {
@@ -191,6 +191,10 @@ func prefixBreak(reason string, kinds ...string) map[string]string {
 
 func compactionBreak() map[string]string {
 	return prefixBreak("a compaction replaces the folded history with its summary", breakHistory)
+}
+
+func summaryQuestionBreak() map[string]string {
+	return prefixBreak("a summary request ends with the question for a summary, which the next turn does not send when the summary fails", breakHistory)
 }
 
 func foreignHistoryBreak() map[string]string {

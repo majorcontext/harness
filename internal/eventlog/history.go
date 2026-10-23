@@ -328,12 +328,12 @@ func cloneParts(parts []protocol.LogPart) []protocol.LogPart {
 	return parts
 }
 
-// Fold returns the history before the newest keep turns, and the seq before
-// the first kept turn. A user message starts a turn. When no turn before the
-// newest keep folds and a turn runs, it returns the history of the running
-// turn before its newest round trip. ok is false when nothing folds, or when
-// only the compaction summary would fold.
-func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok bool) {
+// Fold returns the seq before the first kept turn of the newest keep turns. A
+// user message starts a turn. When no turn before the newest keep folds and a
+// turn runs, it returns the seq before the newest round trip of the running
+// turn. ok is false when nothing folds, or when only the compaction summary
+// would fold.
+func (s *State) Fold(keep int) (toSeq uint64, ok bool) {
 	h := s.History()
 	var es []entry
 	for _, e := range s.history {
@@ -354,18 +354,18 @@ func (s *State) Fold(keep int) (folded []protocol.LogMessage, toSeq uint64, ok b
 	}
 	if len(starts) > keep {
 		if end := starts[len(starts)-keep]; end > lead+carried {
-			return h[:end], es[end-lead].seq - 1, true
+			return es[end-lead].seq - 1, true
 		}
 	}
-	return s.foldRunning(h, es, lead)
+	return s.foldRunning(es)
 }
 
-// foldRunning returns the history of the running turn before its newest round
-// trip: an assistant message and the messages after it. h holds lead messages
-// before es, the messages that the log holds.
-func (s *State) foldRunning(h []protocol.LogMessage, es []entry, lead int) ([]protocol.LogMessage, uint64, bool) {
+// foldRunning returns the seq before the newest round trip of the running turn:
+// an assistant message and the messages after it. es holds the messages that
+// the log holds.
+func (s *State) foldRunning(es []entry) (uint64, bool) {
 	if s.turn.ID == "" {
-		return nil, 0, false
+		return 0, false
 	}
 	var starts []int
 	for i, e := range es {
@@ -374,10 +374,9 @@ func (s *State) foldRunning(h []protocol.LogMessage, es []entry, lead int) ([]pr
 		}
 	}
 	if len(starts) < 2 {
-		return nil, 0, false
+		return 0, false
 	}
-	end := starts[len(starts)-1]
-	return h[:lead+end], es[end].seq - 1, true
+	return es[starts[len(starts)-1]].seq - 1, true
 }
 
 // dismissal is the result of the tool call that a dismissed request held

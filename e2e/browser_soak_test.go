@@ -89,7 +89,7 @@ func soakSteps() []harnesstest.Step {
 	}
 	answer := strings.Repeat("The scripted answer of the soak session. ", 10)
 	return []harnesstest.Step{
-		{Name: "summary", Repeat: true, Match: harnesstest.SystemContains("You are summarizing a prefix"),
+		{Name: "summary", Repeat: true, Match: summaryRequest,
 			Reply: harnesstest.Reply{Text: strings.Repeat("Summary of the earlier turns of the soak session. ", 20)}},
 		{Name: "grep call", Repeat: true, Match: func(r harnesstest.Request) bool {
 			return strings.HasPrefix(r.LastUserText(), "soak grep") && !soakLastIsResult(r)

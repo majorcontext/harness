@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -99,13 +100,14 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	}
 	metas := a.retained()
 	r := a.newRun(kindCompaction, id)
+	src := a.source(r)
 	if done != nil {
 		r.waiters = append(r.waiters, done)
 	}
 	a.run = r
 	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: id})
 	a.spawn(func() {
-		summary, usage, err := a.summarize(r.ctx, req)
+		summary, usage, err := a.summarize(r.ctx, req, src)
 		c.Summary, c.Index, c.Usage = summary, a.resultIndex(metas), usage
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
@@ -115,11 +117,15 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	return true
 }
 
-// summarize runs the summary request req. When the request overflows the
-// context window, it drops the oldest message after the first of the folded
-// history, with the tool results that answer it, and runs again, until a
-// summary comes back or only the first message is left.
-func (a *Actor) summarize(ctx context.Context, req turn.Request) (string, protocol.Usage, error) {
+// summarize runs the summary request req, described from src as a turn is.
+// When the request overflows the context window, it drops the oldest message
+// after the first of the history, with the tool results that answer it, and
+// runs again, until a summary comes back or only the first message is left.
+func (a *Actor) summarize(ctx context.Context, req turn.Request, src turn.Source) (string, protocol.Usage, error) {
+	req, err := turn.SummaryRequest(ctx, a.cfg.Backend, req, src)
+	if err != nil {
+		return "", protocol.Usage{}, err
+	}
 	var total protocol.Usage
 	for {
 		text, usage, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits)
@@ -134,14 +140,22 @@ func (a *Actor) summarize(ctx context.Context, req turn.Request) (string, protoc
 		if len(rest) == 0 {
 			return "", total, err
 		}
+		dropped := len(req.History) - 1 - len(rest)
 		req.History = append([]protocol.LogMessage{req.History[0]}, rest...)
+		req.Pins = slices.Clone(req.Pins)
+		for i := range req.Pins {
+			if req.Pins[i].At > 1 {
+				req.Pins[i].At = max(1, req.Pins[i].At-dropped)
+			}
+		}
 	}
 }
 
-// fold returns the summary request of the turns before the newest keep,
-// and the compaction that records the summary.
+// fold returns the summary request, which holds the whole history of the
+// session, and the compaction that records the summary of the turns before the
+// newest keep.
 func (a *Actor) fold(id string, keep int) (turn.Request, protocol.CompactionApplied, bool) {
-	folded, to, ok := a.state.Fold(keep)
+	to, ok := a.state.Fold(keep)
 	if !ok {
 		return turn.Request{}, protocol.CompactionApplied{}, false
 	}
@@ -149,7 +163,8 @@ func (a *Actor) fold(id string, keep int) (turn.Request, protocol.CompactionAppl
 	if prev, ok := a.state.Compaction(); ok {
 		c.FromSeq = prev.ToSeq + 1
 	}
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Purpose: turn.PurposeCompaction, Settings: a.state.Settings(), History: folded, Blob: a.blob}
+	req := a.callRequest(id)
+	req.Purpose = turn.PurposeCompaction
 	return req, c, true
 }
 
