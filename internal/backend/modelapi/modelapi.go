@@ -181,6 +181,8 @@ func callMetrics(sentAt, firstAt, doneAt time.Time, md *provider.RequestMetadata
 		m.CompleteInputItems, m.SentInputItems = md.CompleteInputItems, md.SentInputItems
 		m.PreviousResponseUsed, m.ChainRecovered = md.PreviousResponseUsed, md.ChainRecovered
 		m.ChainRefusal, m.ChainRefusalDetail, m.ChainRefusalItem = string(md.ChainRefusal), md.ChainRefusalDetail, md.ChainRefusalItem
+		m.ChainRefusalOffset = md.ChainRefusalOffset
+		m.ChainRefusalPreviousLen, m.ChainRefusalCurrentLen = md.ChainRefusalPreviousLen, md.ChainRefusalCurrentLen
 	}
 	return m
 }

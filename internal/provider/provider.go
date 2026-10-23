@@ -212,6 +212,10 @@ type RequestMetadata struct {
 	ChainRefusal       ChainRefusal `json:"chain_refusal,omitempty"`
 	ChainRefusalDetail string       `json:"chain_refusal_detail,omitempty"`
 	ChainRefusalItem   *int         `json:"chain_refusal_item,omitempty"`
+	// ChainRefusalOffset is the first differing byte of an instructions change; the two lengths are in bytes.
+	ChainRefusalOffset      *int `json:"chain_refusal_offset,omitempty"`
+	ChainRefusalPreviousLen *int `json:"chain_refusal_previous_len,omitempty"`
+	ChainRefusalCurrentLen  *int `json:"chain_refusal_current_len,omitempty"`
 }
 
 // Event is one streaming event from a model call.
