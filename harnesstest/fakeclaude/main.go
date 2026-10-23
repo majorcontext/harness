@@ -22,6 +22,7 @@
 //	FAKE_CLAUDE_CALL_ARGS      JSON arguments of the FAKE_CLAUDE_CALL_TOOL call
 //	FAKE_CLAUDE_TURN_CALLS     JSON batches of harness tool calls that the "turn_calls" mode runs during the turn
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
+//	FAKE_CLAUDE_CACHE_WRITE    tokens that a "cache_1h" or "compact_after_cache_1h" turn writes to the 1h cache
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
 // modes_stdin.go, modes_question.go, modes_mirror.go, modes_mcp.go, modes_children.go, and modes_partial.go.

@@ -8,14 +8,15 @@ import (
 // preInitModes print before the init frame, or never print it. A handler
 // reports whether it ended the turn.
 var preInitModes = map[string]func(f *fake) bool{
-	"crash_before_init":    crashBeforeInit,
-	"compact_turn":         compactTurn,
-	"compact_after_tokens": compactAfterTokens,
-	"compact_after_window": compactAfterTokens,
-	"queued_empty_result":  queuedEmptyResult,
-	"mirror":               replayMirror,
-	"no_init":              noInit,
-	"mcp":                  mcpTurn,
+	"crash_before_init":      crashBeforeInit,
+	"compact_turn":           compactTurn,
+	"compact_after_tokens":   compactAfterTokens,
+	"compact_after_window":   compactAfterTokens,
+	"compact_after_cache_1h": compactAfterTokens,
+	"queued_empty_result":    queuedEmptyResult,
+	"mirror":                 replayMirror,
+	"no_init":                noInit,
+	"mcp":                    mcpTurn,
 }
 
 // noInit prints a hook frame and a reply, but no init frame.
@@ -65,7 +66,7 @@ func compactTurn(f *fake) bool {
 }
 
 // compactAfterTokens runs a /compact command as compactTurn does, and any
-// other turn as the normal turn, with usage.
+// other turn as the normal turn of its mode, with usage.
 func compactAfterTokens(f *fake) bool {
 	if strings.Contains(f.first, "/compact") {
 		return compactTurn(f)
