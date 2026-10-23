@@ -87,8 +87,14 @@ config file, and `CodexAuthFile` names the login file; it has no default in Go.
 For Claude Code, set `Model: "claude-code/sonnet"` and no `CodexAuthFile`: the
 runtime runs the `claude` CLI, which keeps its own login. For an API key, set
 `Model` to an `anthropic/` or `openai/` model. `Getenv` lets the runtime read
-the API-key variables; without it, a provider has no key unless
-`ModelTransport` supplies the credentials. The later snippets show `Options`
+the API-key variables. A non-empty selected key, configured auth, or a non-empty
+`Authorization` or `x-api-key` credential header makes a native API-key provider
+available. Without credentials, `Create` rejects it with `model_unavailable`
+before a turn starts, also when the session selects the default model.
+The error names the missing key variable. If `ModelTransport` supplies the
+credentials, set `Auth: config.AuthInjected` on that provider entry.
+A base URL, `WithProxyBase`, or transport alone does not make it available.
+The later snippets show `Options`
 without `Config`; add the same `Config` to each. `protocol.CreateSession{Model: ...}`
 picks the model of one session; empty selects `Config.Model`. `WorkDir` gives each session
 the built-in tools, bash among them. Leave it empty for a session with no file
@@ -219,9 +225,20 @@ everything else.
 Worker, or spawns `harness acp` under Node. Either way, you get an ACP stream.
 In the WebAssembly module, the default tools have no `bash` or `process`;
 `shellTool()` adds a shell for the browser. Keep model keys behind a
-server, never in the page. A provider entry with `auth: "injected"` sends no
-credential, and the server adds it; `proxy.providers` sets the URLs of the
-server and of its sign-in page. See the `sdk/embed` README.
+server, never in the page. For a native provider behind a credential-injecting
+server, set `config.providers.anthropic.auth` (or `openai.auth`) to `"injected"`
+and set `proxy.baseURL`. The URL alone does not supply credentials. A provider
+entry with `auth: "injected"` sends no credential, and the server adds it;
+`proxy.providers` sets the URLs of the server and of its sign-in page.
+
+Injected auth also enables a status probe during ACP `session/new`, `session/load`,
+and `session/resume`. The probe is a GET of the wire's model-list endpoint;
+for Anthropic it is `<base_url>/v1/models` with `Anthropic-Version`.
+A cross-origin probe can add a CORS preflight. A 401 probe rejects the session
+request with `login_required`. Responses requests send a stable hash of the
+session ID as `prompt_cache_key`, not the raw ID. An optional `login_url`
+offers an interactive ACP auth method to clients with `elicitation.url`.
+See the `sdk/embed` README for the server contract.
 
 In the browser, an `mcp_servers` entry with a `url` works when the MCP server allows the origin of the page. To keep its credential out of the page, send it through a relay on your server, as [`examples/embed-server`](../examples/embed-server) does with the gatekeeper MCP relay.
 

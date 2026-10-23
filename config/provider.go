@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,8 +72,16 @@ func (c *Config) ProviderEntries() map[string]Provider {
 // NativeKeyEnv returns the variable that holds the API key of the built-in provider name, and "" for any other provider.
 func NativeKeyEnv(name string) string { return nativeProviderKeys[name] }
 
-// KeyEnv returns the variable that holds the API key of the provider name with entry p: the api_key_env of the entry, else the variable of the built-in provider.
-func (p Provider) KeyEnv(name string) string { return cmp.Or(p.APIKeyEnv, NativeKeyEnv(name)) }
+// KeyEnv returns the variable that holds the API key of the provider name with entry p: the api_key_env of the entry, else the variable of the built-in provider when the entry builds its native wire, else "".
+func (p Provider) KeyEnv(name string) string {
+	if p.APIKeyEnv != "" {
+		return p.APIKeyEnv
+	}
+	if WireOf(name, p) == WireNone {
+		return ""
+	}
+	return NativeKeyEnv(name)
+}
 
 // WithProxyBase returns a copy of c in which every request goes to base: the native providers and each
 // providers entry that sets no BaseURL get it. A Claude Code CLI entry keeps no base URL. An empty base
@@ -100,6 +107,25 @@ func (c Config) WithProxyBase(base string) Config {
 	}
 	c.Providers = providers
 	return c
+}
+
+// HasCredentialHeader reports an explicit credential header in the provider configuration.
+func (p Provider) HasCredentialHeader() bool {
+	for name, value := range p.ExtraHeaders {
+		if value != "" && (strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "x-api-key")) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCredentials reports a key, configured auth, a credential header, a Claude CLI entry, or explicit keyless behavior without probing a login.
+func (p Provider) HasCredentials(name string, getenv func(string) string) bool {
+	if p.Keyless() || p.Auth != "" || p.UsesClaudeCLI() || p.HasCredentialHeader() {
+		return true
+	}
+	env := p.KeyEnv(name)
+	return env != "" && getenv != nil && getenv(env) != ""
 }
 
 // Provider is per-family provider configuration.

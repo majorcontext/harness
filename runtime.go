@@ -84,8 +84,9 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider. nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Getenv reads the variables that hold provider API keys, by the api_key_env of the provider or its
-	// default name. nil: New and the runtime read no variable, so a provider has no key unless
-	// ModelTransport supplies the credentials. A backend child process, such as the claude CLI, a plugin,
+	// default name. nil: New and the runtime read no variable. A native API provider then needs
+	// configured auth or a credential header. A transport that supplies auth sets auth injected.
+	// A backend child process, such as the claude CLI, a plugin,
 	// an MCP stdio server, a process, or a bash call, still inherits the environment of this process.
 	Getenv func(key string) string
 	// Logins holds the sign-in state of the injected providers. The hosts of this module set it; nil: the runtime makes its own from ModelTransport.
@@ -233,7 +234,7 @@ func New(opts Options) (*Runtime, error) {
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
 	r.base, r.cancel = context.WithCancel(context.Background())
 	r.closing, r.closeStart = context.WithCancel(r.base)
-	catalog := selftool.Catalog{Aliases: r.aliases, Providers: func() []string { return r.models.Providers() }}
+	catalog := selftool.Catalog{Aliases: r.aliases, Providers: func() []string { return r.models.Providers() }, Unavailable: func(p string) string { return r.models.Unavailable(p) }}
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },

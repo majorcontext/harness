@@ -106,7 +106,7 @@ func TestOpenValidatesTheReplacementAllowlist(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := store.NewMemStore()
-			opts := harness.Options{Store: st}
+			opts := harness.Options{Store: st, Config: config.Config{Providers: map[string]config.Provider{"openai": {Auth: config.AuthInjected}}}}
 			r, err := harness.New(opts)
 			if err != nil {
 				t.Fatal(err)

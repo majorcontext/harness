@@ -21,7 +21,7 @@ func TestACPSessionNewReportsTheSubscriptionDefaultAsTheCurrentModel(t *testing.
 		{"claude on PATH and no API key", true, false, "", "claude-code/sonnet"},
 		{"codex login file and claude on PATH", true, true, "", "codex/gpt-6.1-sol"},
 		{"API key keeps the built-in default", true, true, "sk-test", "anthropic/claude-fable-5"},
-		{"no subscription", false, false, "", "anthropic/claude-fable-5"},
+		{"no subscription", false, false, "", ""},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
@@ -49,9 +49,18 @@ func TestACPSessionNewReportsTheSubscriptionDefaultAsTheCurrentModel(t *testing.
 			in, out, g, stderr := startACPCmd(t, cmd)
 			c := newACPConn(t, schema, in, out)
 			c.dirs["main"] = t.TempDir()
-			acpNew{as: "a"}.run(t, c)
-			if got := acpOptionValue(acpNewOptions(c), "model"); got != r.want {
-				t.Errorf("current model = %v, want %q", got, r.want)
+			if r.want == "" {
+				f := c.response(c.request("session/new", map[string]any{"cwd": c.dirs["main"], "mcpServers": []any{}}))
+				c.mustBeError(f, acpInternal)
+				data, _ := f["error"].(map[string]any)["data"].(map[string]any)
+				if data["code"] != "model_unavailable" {
+					t.Errorf("error data = %v, want model_unavailable", data)
+				}
+			} else {
+				acpNew{as: "a"}.run(t, c)
+				if got := acpOptionValue(acpNewOptions(c), "model"); got != r.want {
+					t.Errorf("current model = %v, want %q", got, r.want)
+				}
 			}
 			c.finish(func() { t.Helper(); waitACPExit(t, g, stderr) })
 		})

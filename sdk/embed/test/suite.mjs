@@ -19,7 +19,7 @@ export function clientSuite(start) {
       const c = acpClient(h);
       assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
       assert.ok(c.updates.some((u) => u.sessionUpdate === "agent_message_chunk" && u.content.text === "hello"));
-      assert.equal((await model.requests()).length, 1);
+      assert.equal((await model.modelRequests()).length, 1);
     } finally {
       await h.close();
       model.close();

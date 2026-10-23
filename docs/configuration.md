@@ -6,11 +6,35 @@ use a subscription login; `anthropic` and `openai` use an API key) or a key
 from `providers`. The sections for OpenAI-compatible and Responses endpoints
 are for API keys.
 
+## Provider availability
+
+Native API-key providers (`anthropic` and `openai`) are available only with
+credentials. Harness reads the selected key variable through `Options.Getenv`.
+The entry's `api_key_env` wins over the native key variable. A configured `auth`
+source or a non-empty `Authorization` or `x-api-key` header also counts.
+Harness checks presence, not whether a remote service accepts the credential.
+
+A base URL alone, including one from `WithProxyBase`, is not a credential.
+A generic `ModelTransport` alone is not a credential either. An embedder whose
+transport supplies native credentials sets `auth: "injected"` explicitly.
+
+The available registry owns this rule. The model list, model tool, session
+settings, default model use, title calls, and goal evaluator use that registry.
+`Runtime.Create`, including an empty model that selects the default, and ACP
+`session/new` reject an unavailable native provider before a turn starts.
+The error is `model_unavailable` and names the missing key variable. No other
+model replaces it. An unavailable title provider keeps the derived title and
+logs `model_unavailable`; it does not fail the caller's request.
+
+Codex and Claude Code discovery stays unchanged. `harness.New` performs no file
+I/O, and Claude Code login requires its CLI to inspect. Login failures remain
+first-use errors. Explicit keyless project entries keep their existing behavior.
+
 ## Default model
 
 `model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose the first match:
 
-1. The API default, `anthropic/claude-fable-5`, when the key variable of the `anthropic` entry is set (its `api_key_env`, else `ANTHROPIC_API_KEY`).
+1. The API default, `anthropic/claude-fable-5`, when the `anthropic` entry has a non-empty selected key, configured auth, or a non-empty credential header.
 2. `codex/gpt-6.1-sol`, when the `codex` entry is the native entry or has `auth` `chatgpt`, and the login file exists and is not empty.
 3. `claude-code/sonnet`, when the `claude-code` entry has type `claude-code-cli` and its program resolves on `PATH`.
 4. The API default.
@@ -69,7 +93,7 @@ Harness keeps its own login in `auth/codex.json` beside the user config (`~/.har
 }
 ```
 
-`models_from` makes Harness fetch the live model list of the ChatGPT backend; an entry that sets `auth: "chatgpt"` and no `models_from` lists the static models. `auth` and `api_key_env` are mutually exclusive, and `auth` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
+`models_from` makes Harness fetch the live model list of the ChatGPT backend; an entry that sets `auth: "chatgpt"` and no `models_from` lists the static models. `auth` and `api_key_env` are mutually exclusive, and `auth: "chatgpt"` is valid only on an entry that builds the OpenAI Responses adapter. The login goes only to the Responses URL of the entry. When the login is missing or the refresh token is rejected, the turn fails with ``not logged in to Codex; run `harness login codex` ``.
 
 In an editor, add Harness as an [agent server](cli.md#use-harness-in-your-editor). Zed shows a "Log in with ChatGPT" button when no login exists: the button opens your browser and stores the login. You can also run `harness login codex` once in a terminal. A client that supports terminal login also shows a terminal method, which runs `harness acp login codex`. If you start Harness through a wrapper script, the script must pass its arguments on (`"$@"`).
 
@@ -94,7 +118,13 @@ With `auth: "injected"`, Harness sends no credential. A proxy or gateway in fron
   "login_url": "https://console.example.com/settings/codex"}}}
 ```
 
-`models_from: "chatgpt"` makes Harness fetch the model list of the ChatGPT backend through the proxy. For a proxy that replaces placeholders, such as moat, set the placeholders in `extra_headers`: Harness sends them as they are. When the proxy answers 401, the turn fails with `login_required`. A 403 is not a login error. In an editor, the `login_url` is offered as a link, and the editor waits until you have signed in. Only the user config sets `auth`, `login_url`, and `models_from`.
+`models_from: "chatgpt"` makes Harness fetch the model list of the ChatGPT backend through the proxy. For a proxy that replaces placeholders, such as moat, set the placeholders in `extra_headers`: Harness sends them as they are.
+
+Injected auth also enables a status probe during ACP `session/new`, `session/load`, and `session/resume`. It sends a GET to the wire's model-list endpoint, even without `models_from`. For Anthropic, it sends `GET <base_url>/v1/models` with `Anthropic-Version`; for Responses, it replaces the last segment of `responses_path` with `models`. A cross-origin probe can add a CORS preflight. A 200 means signed in, a 401 rejects the session request with `login_required`, and a 404 or 405 means no probe. Harness caches the status for 30 seconds. `New` and ACP `initialize` send no probe.
+
+A model call that gets 401 fails with `login_required`, except within two minutes of a successful probe: it fails as `permanent` because the server accepted the probe but rejected the call. A 403 is not a login error. Responses requests send a stable hash of the session ID as `prompt_cache_key`, not the raw ID.
+
+The optional `login_url` offers an interactive ACP auth method to a client with `elicitation.url`. The client opens the link and waits for sign-in. Without `login_url`, Harness still probes but offers no interactive method for that entry. Only the user config sets `auth`, `login_url`, and `models_from`.
 
 ## OpenAI-compatible endpoints
 

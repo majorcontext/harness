@@ -86,6 +86,8 @@ type Catalog struct {
 	Aliases map[string]string
 	// Providers returns the names of the configured providers.
 	Providers func() []string
+	// Unavailable returns why a configured provider has no backend, or "".
+	Unavailable func(provider string) string
 }
 
 // Model is the model tool for the session to which the runtime binds it.
@@ -229,6 +231,9 @@ func (c Catalog) servesProvider(ref modelref.ModelRef) error {
 		if n == ref.Provider {
 			return nil
 		}
+	}
+	if reason := c.Unavailable(ref.Provider); reason != "" {
+		return fmt.Errorf("provider %q is unavailable: %s (%s)", ref.Provider, reason, c.modelChoices())
 	}
 	return fmt.Errorf("provider %q is not configured (%s)", ref.Provider, c.modelChoices())
 }

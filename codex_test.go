@@ -66,6 +66,9 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 		BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses",
 		OmitResponseParams: []string{"max_output_tokens"}, UseWebSocketTransport: websocket,
 	}
+	if injected {
+		p.APIKeyEnv, p.Auth = "", config.AuthInjected
+	}
 	r, err := harness.New(harness.Options{Getenv: os.Getenv,
 		Store:          st,
 		WorkDir:        workDir,
@@ -153,6 +156,9 @@ func TestEachWireRunsATurn(t *testing.T) {
 			s := tc.serve(t, hi)
 			tc.p.BaseURL = s.URL() + tc.path
 			name, model, _ := strings.Cut(tc.model, "/")
+			if config.NativeKeyEnv(name) != "" {
+				tc.p.APIKeyEnv, tc.p.Auth = "", config.AuthInjected
+			}
 			st, rec := store.NewMemStore(), &transport{}
 			r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: st, Config: config.Config{Providers: map[string]config.Provider{name: tc.p}},
 				ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, "k"} }})
@@ -231,16 +237,19 @@ func TestNativeCodexRunsATurnWithAnEmptyConfig(t *testing.T) {
 	}
 }
 
-func TestNativeProvidersListTheirModelsWithoutALogin(t *testing.T) {
+func TestNativeSubscriptionsListModelsWithoutALogin(t *testing.T) {
 	r, _, rec, logs := nativeRuntime(t, harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}), "")
 	providers := map[string]bool{}
 	for _, m := range r.Models(bg) {
 		providers[m.Provider] = true
 	}
-	for _, p := range []string{"anthropic", "openai", "codex", "claude-code"} {
+	for _, p := range []string{"codex", "claude-code"} {
 		if !providers[p] {
 			t.Errorf("Models lists nothing of provider %s", p)
 		}
+	}
+	if providers["anthropic"] || providers["openai"] {
+		t.Error("Models lists a native API provider without credentials")
 	}
 	if got := rec.Calls(); len(got) != 0 {
 		t.Errorf("transport calls = %q, want none without a login", got)

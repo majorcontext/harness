@@ -47,6 +47,18 @@ func (r *Runtime) checkModel(model string, names []string, session bool) error {
 	return nil
 }
 
+func (r *Runtime) checkEvaluator() error {
+	if r.evaluator == "" {
+		return fmt.Errorf("%w: a goal needs goal_evaluator_model", ErrInvalidRequest)
+	}
+	ref, err := modelref.ParseModelRef(r.evaluator)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	_, err = r.models.Check(ref)
+	return err
+}
+
 // changeModel reports why a session that allows the names cannot move to
 // model to. A backend that owns its context reads the history of another
 // provider through the history tool, so any two models may follow each other.

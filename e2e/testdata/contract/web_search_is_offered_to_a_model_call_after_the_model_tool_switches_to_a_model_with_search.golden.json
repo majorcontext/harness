@@ -52,7 +52,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"model\":\"anthropic/claude-fable-5\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"bifrost\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"bifrost\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}",
               "tool_name": "model",
               "tool_use_id": "call#1"
             }
@@ -95,7 +95,7 @@
           {
             "type": "tool_result",
             "call_id": "call#1",
-            "content": "{\"model\":\"anthropic/claude-fable-5\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"bifrost\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+            "content": "{\"model\":\"anthropic/claude-fable-5\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"bifrost\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}"
           }
         ]
       },

@@ -20,6 +20,9 @@ func (h toolHost) Session(id string) (selftool.Session, bool) {
 type ownedSession struct{ *Session }
 
 func (s ownedSession) StartGoal(ctx context.Context, condition string) error {
+	if err := s.r.checkEvaluator(); err != nil {
+		return err
+	}
 	return s.a.StartGoal(ctx, condition)
 }
 
@@ -32,5 +35,8 @@ func (s ownedSession) ModelState(ctx context.Context) (string, string, error) {
 }
 
 func (s ownedSession) AdjustGoal(ctx context.Context, condition string) error {
+	if err := s.r.checkEvaluator(); err != nil {
+		return err
+	}
 	return s.a.AdjustGoal(ctx, condition)
 }

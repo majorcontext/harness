@@ -40,7 +40,7 @@ test("the first request lists the whole tool set of the binary, with bash and pr
   try {
     const c = acpClient(h);
     await c.prompt(await c.session(), "go");
-    const names = (await model.requests())[0].body.tools.map((t) => t.name);
+    const names = (await model.modelRequests())[0].body.tools.map((t) => t.name);
     assert.ok(names.includes("bash") && names.includes("process"));
   } finally {
     await h.close();
