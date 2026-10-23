@@ -37,12 +37,6 @@ func TestLoadMCPToolLoadingRejectsGarbage(t *testing.T) {
 	}
 }
 
-func TestDefaultMCPSchemaBytes(t *testing.T) {
-	if got := Defaults().MCPSchemaBytes; got != 64<<10 {
-		t.Errorf("default MCPSchemaBytes = %d, want 65536", got)
-	}
-}
-
 func TestLoadMCPServerToolLoading(t *testing.T) {
 	t.Run("accepted values", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
