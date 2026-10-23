@@ -464,7 +464,6 @@ func (s *sink) Steer() ([]protocol.LogMessage, error) {
 	return in, err
 }
 
-// applyParams runs the Params hook of req and sets its result on call.
 // nextCall returns the next model call of req and its tools, before describe.
 // A turn, a summary, and a warm-up build their call here, so they cannot differ.
 func nextCall(ctx context.Context, b Backend, caps Capabilities, req Request, src Source) (Request, Toolset, error) {
@@ -476,6 +475,7 @@ func nextCall(ctx context.Context, b Backend, caps Capabilities, req Request, sr
 	return call, toolsetOf(ctx, &call, src), nil
 }
 
+// applyParams runs the Params hook of req and sets its result on call.
 func applyParams(ctx context.Context, b Backend, caps Capabilities, req Request, call *Request) error {
 	if req.Params == nil || caps.OwnsLoop {
 		return nil
