@@ -75,6 +75,7 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 	fake := harnesstest.NewAnthropic(t,
 		agentStep("work_a", "done", false),
 		harnesstest.Step{Name: "judge_a", Match: isEvaluator, Reply: harnesstest.Reply{HTTPStatus: http.StatusTooManyRequests, ErrorMessage: usageLimitMessage}},
+		agentStep("work_b", "done", false),
 		evaluatorStep("judge_b", "MET: done", false),
 	)
 	proxyURL, capture := newAccountProxy(t, fake.URL())
@@ -87,7 +88,7 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 	d := h.open(t, config, env).(*runtimeDriver)
 	id := d.Create(t)
 	d.SetAccounts(t, id, map[string]string{"claude": "acct_a"})
-	d.SetGoal(t, id, "say done", 1, false)
+	d.SetGoal(t, id, "say done", 2, false)
 	var cause string
 	var resetsAt int64
 	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
@@ -112,6 +113,7 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 		t.Fatalf("goal.changed cause, resets_at = %q, %d; want provider_exhausted, 0", cause, resetsAt)
 	}
 	d.SetAccounts(t, id, map[string]string{"claude": "acct_b"})
+	d.Submit(t, id, "again")
 	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
 		if ev.Kind != protocol.KindGoalChanged {
 			return false
@@ -125,8 +127,8 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 		return data.State == string(protocol.GoalAchieved)
 	})
 	requests := fake.Requests()
-	if len(requests) != 3 || isEvaluator(requests[0]) || !isEvaluator(requests[1]) || !isEvaluator(requests[2]) {
-		t.Fatalf("model request purposes = %+v, want work/judge/judge", requests)
+	if len(requests) != 4 || isEvaluator(requests[0]) || !isEvaluator(requests[1]) || isEvaluator(requests[2]) || !isEvaluator(requests[3]) {
+		t.Fatalf("model request purposes = %+v, want work/judge/work/judge", requests)
 	}
 	for _, event := range d.events(t, id) {
 		if event.Kind != protocol.KindTurnEnded {
@@ -143,7 +145,7 @@ func goalJudgeUsesUpdatedAccount(t *testing.T, h host) {
 	capture.mu.Lock()
 	users := slices.Clone(capture.users)
 	capture.mu.Unlock()
-	want := []string{"subject|box|acct_a", "subject|box|acct_a", "subject|box|acct_b"}
+	want := []string{"subject|box|acct_a", "subject|box|acct_a", "subject|box|acct_b", "subject|box|acct_b"}
 	if !slices.Equal(users, want) {
 		t.Fatalf("model account routes = %v, want %v", users, want)
 	}
