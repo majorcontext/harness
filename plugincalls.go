@@ -39,7 +39,7 @@ func (r *Runtime) generate(ctx context.Context, model string, req turn.Request) 
 	if err != nil {
 		return ref, "", protocol.Usage{}, fmt.Errorf("invalid model %q: %w", model, err)
 	}
-	if err := (selftool.Catalog{Aliases: r.aliases, Providers: r.models.Providers}).CheckChild(ref.String()); err != nil {
+	if err := (selftool.Catalog{Aliases: r.aliases, Providers: r.models.Providers, Unavailable: r.models.Unavailable}).CheckChild(ref.String()); err != nil {
 		return ref, "", protocol.Usage{}, err
 	}
 	ctx, done, err := r.bound(ctx)

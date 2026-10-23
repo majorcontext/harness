@@ -72,7 +72,7 @@ func (c *Config) ProviderEntries() map[string]Provider {
 // NativeKeyEnv returns the variable that holds the API key of the built-in provider name, and "" for any other provider.
 func NativeKeyEnv(name string) string { return nativeProviderKeys[name] }
 
-// KeyEnv returns the variable that holds the API key of the provider name with entry p: the api_key_env of the entry, else the variable of the built-in provider.
+// KeyEnv returns the variable that holds the API key of the provider name with entry p: the api_key_env of the entry, else the variable of the built-in provider when the entry builds its native wire, else "".
 func (p Provider) KeyEnv(name string) string {
 	if p.APIKeyEnv != "" {
 		return p.APIKeyEnv
@@ -119,7 +119,7 @@ func (p Provider) HasCredentialHeader() bool {
 	return false
 }
 
-// HasCredentials reports a key, configured auth, or explicit keyless behavior without probing a login.
+// HasCredentials reports a key, configured auth, a credential header, a Claude CLI entry, or explicit keyless behavior without probing a login.
 func (p Provider) HasCredentials(name string, getenv func(string) string) bool {
 	if p.Keyless() || p.Auth != "" || p.UsesClaudeCLI() || p.HasCredentialHeader() {
 		return true

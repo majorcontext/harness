@@ -234,7 +234,7 @@ func New(opts Options) (*Runtime, error) {
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
 	r.base, r.cancel = context.WithCancel(context.Background())
 	r.closing, r.closeStart = context.WithCancel(r.base)
-	catalog := selftool.Catalog{Aliases: r.aliases, Providers: func() []string { return r.models.Providers() }}
+	catalog := selftool.Catalog{Aliases: r.aliases, Providers: func() []string { return r.models.Providers() }, Unavailable: func(p string) string { return r.models.Unavailable(p) }}
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs, r.log) },

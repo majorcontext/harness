@@ -72,7 +72,7 @@ type Env struct {
 }
 
 // New returns the Router of the providers of cfg, and of the providers that
-// need no entry: the native anthropic, openai, codex, and claude-code.
+// need no entry: codex, claude-code, and anthropic and openai when credentialed.
 // The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper, env Env) *Router {
 	env.Log = cmp.Or(env.Log, slog.Default())
@@ -252,6 +252,9 @@ func (m *Router) lookup(model string) (turn.Backend, error) {
 
 // Providers returns the names of the configured providers, sorted.
 func (m *Router) Providers() []string { return slices.Sorted(maps.Keys(m.backends)) }
+
+// Unavailable returns why the configured provider name has no backend, or "".
+func (m *Router) Unavailable(name string) string { return m.unavailable[name] }
 
 // Capabilities returns the capabilities of the backend of model, or none for a model with no backend.
 func (m *Router) Capabilities(model string) turn.Capabilities {
