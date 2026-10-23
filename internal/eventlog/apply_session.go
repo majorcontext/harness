@@ -36,6 +36,7 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 	if e.Model != nil {
 		if *e.Model != s.model {
 			s.context.Window = 0
+			s.readTTL = 0
 		}
 		s.model = *e.Model
 	}

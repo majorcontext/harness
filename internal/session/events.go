@@ -43,7 +43,7 @@ func Describe(id string, s *eventlog.State, caps turn.Capabilities, threshold fl
 	}
 	windowSize := contextWindow(window, c, ownsContext)
 	v.Context = protocol.Context{Tokens: c.Tokens, Window: windowSize, WindowEstimated: estimated && windowSize > 0, CompactAt: int64(threshold * float64(windowSize))}
-	v.CacheExpiresAt = s.CacheExpiry(caps.CacheTTL)
+	v.CacheExpiresAt = s.CacheExpiry()
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
 		v.SubscriptionUsage = subscriptionView(sub)

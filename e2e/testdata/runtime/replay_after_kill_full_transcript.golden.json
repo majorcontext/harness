@@ -496,6 +496,7 @@
           },
           {
             "d": {
+              "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
               "usage": {
@@ -552,6 +553,7 @@
           },
           {
             "d": {
+              "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
               "usage": {
@@ -656,6 +658,7 @@
           },
           {
             "d": {
+              "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
               "usage": {
@@ -712,6 +715,7 @@
           },
           {
             "d": {
+              "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
               "usage": {

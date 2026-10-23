@@ -306,14 +306,13 @@ func (s *State) Usage() protocol.Usage { return s.usage }
 func (s *State) Context() protocol.ContextMeasured { return s.context }
 
 // CacheExpiry returns when the prompt cache expires: the newest model call
-// reading plus the cache lifetime that a reading stated, else fallback. It is
-// zero with no reading, after a compaction, or with no lifetime.
-func (s *State) CacheExpiry(fallback time.Duration) time.Time {
-	ttl := cmp.Or(s.readTTL, fallback)
-	if s.readAt.IsZero() || ttl <= 0 {
+// reading plus the newest cache lifetime that a reading stated. It is zero
+// with no reading, after a compaction, or with no lifetime.
+func (s *State) CacheExpiry() time.Time {
+	if s.readAt.IsZero() || s.readTTL <= 0 {
 		return time.Time{}
 	}
-	return s.readAt.Add(ttl)
+	return s.readAt.Add(s.readTTL)
 }
 
 // Measured reports whether the newest reading was recorded in the newest turn.

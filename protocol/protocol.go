@@ -78,7 +78,7 @@ type Context struct {
 	Tokens          int64 `json:"tokens"`
 	Window          int64 `json:"window"`
 	WindowEstimated bool  `json:"window_estimated,omitempty"`
-	CompactAt       int64 `json:"compact_at,omitempty"` // the token count at which the session compacts before the next turn; 0: window unknown
+	CompactAt       int64 `json:"compact_at,omitempty"` // compaction_threshold times the window; 0: window unknown
 }
 
 // LastTurn is the outcome of the newest turn that ended: the stop reason, typed

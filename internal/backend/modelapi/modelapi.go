@@ -65,9 +65,6 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 	}
 	control, _ := b.effortControl(ref)
 	caps := turn.Capabilities{Efforts: control.Levels, WebSearch: b.nativeSearch(ref.Model)}
-	if c, ok := b.client.(cacheTTLSource); ok {
-		caps.CacheTTL = c.CacheLifetime()
-	}
 	if b.window > 0 {
 		caps.ContextWindow = b.window
 		return caps
@@ -208,6 +205,9 @@ func (b *Backend) telemetry(model string, u provider.Usage, prompt int, sub *mes
 	if tokens > 0 {
 		caps := b.Capabilities(model)
 		t.Context = protocol.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(caps.ContextWindow), WindowEstimated: caps.WindowEstimated}
+		if c, ok := b.client.(cacheTTLSource); ok {
+			t.Context.CacheTTLSeconds = int64(c.CacheLifetime() / time.Second)
+		}
 	}
 	return t
 }

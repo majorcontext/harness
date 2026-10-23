@@ -482,7 +482,6 @@
     "set_model.a": {
       "status": 200,
       "body": {
-        "cache_expires_at": "\u003ctime\u003e",
         "compaction_count": 1,
         "context": {
           "compact_at": 160000,

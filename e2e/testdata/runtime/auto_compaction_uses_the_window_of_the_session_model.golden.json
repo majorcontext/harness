@@ -322,7 +322,6 @@
     "set_model.a": {
       "status": 200,
       "body": {
-        "cache_expires_at": "\u003ctime\u003e",
         "context": {
           "compact_at": 160000,
           "tokens": 300000,
