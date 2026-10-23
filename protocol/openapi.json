@@ -369,6 +369,9 @@
           },
           "window_estimated": {
             "type": "boolean"
+          },
+          "compact_at": {
+            "type": "integer"
           }
         },
         "type": "object",
@@ -390,6 +393,9 @@
           },
           "source": {
             "type": "string"
+          },
+          "cache_ttl_seconds": {
+            "type": "integer"
           },
           "usage": {
             "$ref": "#/components/schemas/Usage"
@@ -1806,6 +1812,10 @@
           },
           "compaction_count": {
             "type": "integer"
+          },
+          "cache_expires_at": {
+            "type": "string",
+            "format": "date-time"
           },
           "subscription_usage": {
             "anyOf": [

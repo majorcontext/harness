@@ -353,6 +353,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 102400,
           "tokens": 0,
           "window": 128000,
           "window_estimated": true
@@ -377,6 +378,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 800000,
           "tokens": 0,
           "window": 1000000
         },

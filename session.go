@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/modelmeta"
@@ -298,7 +299,7 @@ func (r *Runtime) Read(ctx context.Context, id string) (Reader, error) {
 	if s := r.running(id); s != nil {
 		return s, nil
 	}
-	v, err := openView(ctx, r.store, id, r.models.Capabilities)
+	v, err := openView(ctx, r.store, id, r.models.Capabilities, r.threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -351,12 +352,12 @@ func (v *View) ID() string { return v.id }
 // OpenView reads a session from st without owning it: no Acquire, no appends. An ID that a Store must refuse fails with ErrInvalidRequest.
 // It has no backend, so the gauge window is the window of the newest reading.
 func OpenView(ctx context.Context, st Store, id string) (*View, error) {
-	return openView(ctx, st, id, nil)
+	return openView(ctx, st, id, nil, config.Defaults().CompactionThreshold)
 }
 
 // openView is OpenView with a resolver of the window of the session model,
-// which a runtime supplies from its backends.
-func openView(ctx context.Context, st Store, id string, windows func(model string) turn.Capabilities) (*View, error) {
+// which a runtime supplies from its backends, and the compaction threshold of the view.
+func openView(ctx context.Context, st Store, id string, windows func(model string) turn.Capabilities, threshold float64) (*View, error) {
 	if err := storecheck.Name(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
@@ -368,7 +369,7 @@ func openView(ctx context.Context, st Store, id string, windows func(model strin
 	if windows != nil {
 		caps = windows(s.Model())
 	}
-	return &View{st: st, id: id, state: session.Describe(id, s, caps.ContextWindow, caps.WindowEstimated, caps.OwnsContext), log: s}, nil
+	return &View{st: st, id: id, state: session.Describe(id, s, caps, threshold), log: s}, nil
 }
 
 // Resumable reports whether Open of the session has work to resume.

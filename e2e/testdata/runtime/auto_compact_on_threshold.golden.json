@@ -385,7 +385,9 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 800,
           "tokens": 900,
           "window": 1000
         },
@@ -413,8 +415,10 @@
     "get_session.a#2": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "compaction_count": 1,
         "context": {
+          "compact_at": 800,
           "tokens": 5,
           "window": 1000
         },
@@ -442,8 +446,10 @@
     "get_session.a#3": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "compaction_count": 1,
         "context": {
+          "compact_at": 800,
           "tokens": 5,
           "window": 1000
         },

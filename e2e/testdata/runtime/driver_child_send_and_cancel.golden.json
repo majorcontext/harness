@@ -198,6 +198,7 @@
       "body": {
         "agent": "general-purpose",
         "context": {
+          "compact_at": 800000,
           "tokens": 0,
           "window": 1000000
         },
@@ -225,6 +226,7 @@
       "body": {
         "agent": "general-purpose",
         "context": {
+          "compact_at": 800000,
           "tokens": 0,
           "window": 1000000
         },

@@ -139,6 +139,10 @@ func hang(f *fake) {
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
+	"cache_1h": func(f *fake) {
+		f.emit(say("ok"), success("ok", 0, 0).set("usage", obj{"input_tokens": 10, "output_tokens": 3, "cache_creation_input_tokens": 50,
+			"cache_creation": obj{"ephemeral_1h_input_tokens": 50, "ephemeral_5m_input_tokens": 0}}))
+	},
 	"one_shot":       func(f *fake) { f.emit(say("MET: ok"), success("MET: ok", 0, 0)) },
 	"parallel_calls": parallelCalls,
 	"builtin_tool":   builtinTool,

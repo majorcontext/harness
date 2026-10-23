@@ -138,6 +138,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 160000,
           "tokens": 0,
           "window": 200000
         },
@@ -162,7 +163,9 @@
     "get_session.a#2": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 160000,
           "tokens": 5,
           "window": 200000
         },
@@ -192,7 +195,9 @@
     "get_session.a#3": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 160000,
           "tokens": 5,
           "window": 200000
         },
@@ -221,6 +226,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 102400,
           "tokens": 0,
           "window": 128000,
           "window_estimated": true
@@ -265,6 +271,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 160000,
           "tokens": 0,
           "window": 200000
         },
@@ -288,6 +295,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 160000,
           "tokens": 0,
           "window": 200000
         },
@@ -313,6 +321,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 160000,
           "tokens": 0,
           "window": 200000
         },
@@ -337,7 +346,9 @@
     "set_service_tier.a#3": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 160000,
           "tokens": 5,
           "window": 200000
         },
@@ -376,6 +387,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 160000,
           "tokens": 0,
           "window": 200000
         },
@@ -400,6 +412,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 160000,
           "tokens": 0,
           "window": 200000
         },
@@ -423,7 +436,9 @@
     "set_thinking.a#4": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 160000,
           "tokens": 5,
           "window": 200000
         },

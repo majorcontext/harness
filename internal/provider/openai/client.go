@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/modelmeta"
@@ -27,6 +28,9 @@ const defaultBaseURL = "https://api.openai.com"
 
 // defaultResponsesPath is the documented path. An empty ResponsesPath uses it.
 const defaultResponsesPath = "/v1/responses"
+
+// ChatGPTCacheTTL is the idle prompt-prefix lifetime that the ChatGPT Codex backend keeps. The backend rejects every retention field, so this is a measured lifetime.
+const ChatGPTCacheTTL = 30 * time.Minute
 
 // Client is a provider.Provider for the OpenAI Responses API. The zero value
 // plus APIKey is usable; nothing touches the network until Stream.
@@ -70,6 +74,8 @@ type Client struct {
 	HashCacheKey bool
 	// SessionHeaders sends the session key as the session_id and x-client-request-id headers, on which the ChatGPT backend routes the prompt cache.
 	SessionHeaders bool
+	// CacheTTL is how long the endpoint keeps an idle prompt prefix. 0: unknown.
+	CacheTTL       time.Duration
 	RequestRetries int // see provider.Do
 
 	wsPoolOnce sync.Once
@@ -111,6 +117,9 @@ func (c *Client) liveCatalogValue() *atomic.Value {
 	}
 	return &c.live
 }
+
+// CacheLifetime is how long the endpoint keeps an idle prompt prefix, or 0 when unknown.
+func (c *Client) CacheLifetime() time.Duration { return c.CacheTTL }
 
 // NativeWebSearch reports whether model takes the hosted web search of the Responses API.
 func (c *Client) NativeWebSearch(model string) bool {

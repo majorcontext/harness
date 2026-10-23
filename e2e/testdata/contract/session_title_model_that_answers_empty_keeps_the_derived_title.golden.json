@@ -79,7 +79,9 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
+          "compact_at": 800000,
           "tokens": 5,
           "window": 1000000
         },
@@ -157,6 +159,7 @@
           },
           {
             "d": {
+              "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
               "usage": {

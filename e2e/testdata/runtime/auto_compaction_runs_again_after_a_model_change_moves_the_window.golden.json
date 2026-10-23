@@ -451,8 +451,10 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "cache_expires_at": "\u003ctime\u003e",
         "compaction_count": 2,
         "context": {
+          "compact_at": 160000,
           "tokens": 5,
           "window": 200000
         },
@@ -482,6 +484,7 @@
       "body": {
         "compaction_count": 1,
         "context": {
+          "compact_at": 160000,
           "tokens": 900000,
           "window": 200000
         },

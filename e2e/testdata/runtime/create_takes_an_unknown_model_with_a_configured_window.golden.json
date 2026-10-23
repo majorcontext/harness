@@ -6,6 +6,7 @@
       "status": 201,
       "body": {
         "context": {
+          "compact_at": 800,
           "tokens": 0,
           "window": 1000
         },
@@ -29,6 +30,7 @@
       "status": 201,
       "body": {
         "context": {
+          "compact_at": 800,
           "tokens": 0,
           "window": 1000
         },

@@ -457,3 +457,34 @@ func TestSessionTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestCacheExpiryFollowsTheLifetimeOfTheReadings(t *testing.T) {
+	read := func(ttl int64) protocol.Payload {
+		return protocol.ContextMeasured{Tokens: 10, Source: "m", CacheTTLSeconds: ttl}
+	}
+	other := "other/model"
+	rows := []struct {
+		name   string
+		events []protocol.Payload
+		want   time.Duration
+	}{
+		{"no reading", running, 0},
+		{"a reading with no lifetime", with(running, read(0)), 0},
+		{"a reading lifetime", with(running, read(300)), 5 * time.Minute},
+		{"a later reading with no lifetime keeps the earlier one", with(running, read(300), read(0)), 5 * time.Minute},
+		{"a call with no tokens is no reading", with(running, protocol.ContextMeasured{Usage: protocol.Usage{InputTokens: 1}}), 0},
+		{"a compaction ends the warm prefix", with(running, read(300), protocol.CompactionApplied{FromSeq: 1, ToSeq: 2, Summary: "s"}), 0},
+		{"a model change drops the earlier lifetime", with(running, read(3600), protocol.SettingsChanged{Model: &other}, read(0)), 0},
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			var want time.Time
+			if tc.want > 0 {
+				want = t0.Add(tc.want)
+			}
+			if got := replay(t, tc.events).CacheExpiry(); !got.Equal(want) {
+				t.Fatalf("CacheExpiry = %v, want %v", got, want)
+			}
+		})
+	}
+}

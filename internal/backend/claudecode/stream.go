@@ -611,6 +611,7 @@ func (r *run) telemetry(env envelope) {
 			last = env.Usage
 		}
 		t.Context.Tokens = last.prompt()
+		t.Context.CacheTTLSeconds = last.cacheTTLSeconds()
 	}
 	t.Context.Window = env.ModelUsage[r.mainModel].ContextWindow
 	t.Context.Source = stateKey

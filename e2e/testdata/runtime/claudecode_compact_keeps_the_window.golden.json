@@ -106,6 +106,7 @@
       "status": 200,
       "body": {
         "context": {
+          "compact_at": 400000,
           "tokens": 15989,
           "window": 500000
         },
@@ -143,6 +144,7 @@
       "body": {
         "compaction_count": 1,
         "context": {
+          "compact_at": 400000,
           "tokens": 7039,
           "window": 500000
         },

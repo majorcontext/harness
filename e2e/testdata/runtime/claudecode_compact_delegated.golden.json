@@ -97,6 +97,7 @@
       "body": {
         "compaction_count": 2,
         "context": {
+          "compact_at": 800000,
           "tokens": 7039,
           "window": 1000000
         },
