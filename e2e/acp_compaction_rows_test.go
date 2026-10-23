@@ -199,8 +199,9 @@ var acpCompactionScenarios = []acpScenario{
 		},
 	},
 	{
-		name: "a_claude_code_compaction_in_a_turn_sends_the_entity_lifecycle",
-		cite: "A frame with `idle` or `running` ends no compaction, because the summary of a compaction of the Claude Code CLI follows its `running` frame.",
+		name:                        "a_claude_code_compaction_in_a_turn_sends_the_entity_lifecycle",
+		usageUpdateOrderUnspecified: true,
+		cite:                        "A frame with `idle` or `running` ends no compaction, because the summary of a compaction of the Claude Code CLI follows its `running` frame.",
 		login: &acpLoginSpec{claude: true, claudeFrames: []map[string]any{
 			{"type": "system", "subtype": "init", "session_id": "S", "model": "claude-haiku-4-5-20251001", "tools": []string{}},
 			{"type": "system", "subtype": "status", "status": "compacting", "session_id": "S"},

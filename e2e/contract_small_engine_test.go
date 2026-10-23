@@ -1,11 +1,15 @@
 package e2e
 
 import (
+	"encoding/json"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func evaluatorTranscript(t *testing.T, fake *harnesstest.Server) string {
@@ -115,7 +119,142 @@ func TestContractGoalEvaluatorTranscriptBudget(t *testing.T) {
 				t.Errorf("transcript = %d bytes, want between %d and %d", len(body), budget-pair, budget)
 			}
 		})
+
+		t.Run("a large evaluator window is capped at the 200k transcript budget", func(t *testing.T) {
+			t.Parallel()
+			const budget = (200000/2 - 2048) * 4
+			const tail = "ASSISTANT:\ndone"
+			d, fake := startOn(t, h, t.TempDir(), map[string]any{"context_window_tokens": 1050000, "compaction_threshold": 0.99},
+				agentStep("old", "done", false),
+				harnesstest.Step{Name: "work", Reply: harnesstest.Reply{Text: "done", Block: true}},
+				evaluatorStep("judge", "MET: ok", false))
+			id := d.Create(t)
+			d.Submit(t, id, "x")
+			d.WaitIdle(t, id)
+			var parts []protocol.Part
+			var texts []string
+			for remaining := budget - len("USER:\n\n\n"+tail+"\n\n"); remaining > 0; {
+				n := min(remaining, 4096)
+				text := strings.Repeat("x", n)
+				texts = append(texts, text)
+				parts = append(parts, protocol.Part{Type: protocol.PartText, Text: text})
+				remaining -= n
+				if remaining > 0 {
+					remaining--
+				}
+			}
+			path, input := d.input(id, "", "", "")
+			input["parts"] = parts
+			d.expect(t, http.StatusCreated, http.MethodPost, path, input, nil)
+			if !fake.AwaitBlocked("work", waitBound) {
+				t.Fatal("the goal turn did not reach the model")
+			}
+			d.SetGoal(t, id, "say done", 1, false)
+			fake.Release("work")
+			d.WaitIdle(t, id)
+			_, body, _ := strings.Cut(evaluatorTranscript(t, fake), "CONVERSATION TRANSCRIPT:\n")
+			want := "[earlier conversation omitted to fit the evaluator's context budget]\n\nUSER:\n" + strings.Join(texts, "\n") + "\n\n" + tail
+			if body != want {
+				t.Errorf("transcript = %.200q (%d bytes), want %.200q (%d bytes)", body, len(body), want, len(want))
+			}
+		})
+
+		t.Run("Claude Code aliases provide metadata windows to the goal evaluator", func(t *testing.T) {
+			t.Parallel()
+			claudeCodeGoalEvaluatorBudget(t, h)
+		})
 	})
+}
+
+func claudeCodeGoalEvaluatorBudget(t *testing.T, h host) {
+	lane := claudeLane{mode: "one_shot", extra: map[string]any{"goal_evaluator_model": "claude-code/haiku"}}
+	d := lane.newDriver(t, h, "http://model.test").(*claudeDriver)
+	var models []protocol.Model
+	body, err := json.Marshal(d.Models(t).Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &models); err != nil {
+		t.Fatalf("decode model catalog: %v", err)
+	}
+	wantWindows := map[string]int{"claude-code/haiku": 1000000, "claude-code/sonnet": 1000000, "claude-code/opus": 1000000}
+	for _, model := range models {
+		if want, ok := wantWindows[model.ID]; ok {
+			if model.ContextWindow != want {
+				t.Errorf("%s context_window = %d, want %d", model.ID, model.ContextWindow, want)
+			}
+			delete(wantWindows, model.ID)
+		}
+	}
+	if len(wantWindows) != 0 {
+		t.Fatalf("model catalog omitted Claude Code aliases: %v", wantWindows)
+	}
+	id := d.Create(t)
+	part := strings.Repeat("x", 4097)
+	for range 10 {
+		d.Submit(t, id, part)
+		d.WaitIdle(t, id)
+	}
+	d.SetGoal(t, id, "say done", 0, false)
+	runtime := d.laneHost.(*runtimeDriver)
+	runtime.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+		if ev.Kind != protocol.KindGoalChanged {
+			return false
+		}
+		var changed struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal(ev.Data, &changed); err != nil {
+			t.Fatalf("decode goal.changed: %v", err)
+		}
+		return changed.State == string(protocol.GoalAchieved)
+	})
+	budget := (200000/2 - 2048) * 4
+	floor := (16000/2 - 2048) * 4
+	transcript := claudeEvaluatorTranscript(t, d)
+	if len(transcript) <= floor || len(transcript) > budget+128 {
+		t.Errorf("Claude Code evaluator transcript = %d bytes, want more than %d and no more than %d", len(transcript), floor, budget+128)
+	}
+}
+
+func claudeEvaluatorTranscript(t *testing.T, d *claudeDriver) string {
+	t.Helper()
+	data, err := os.ReadFile(d.stdinLog)
+	if err != nil {
+		t.Fatalf("read Claude Code inputs: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var input struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &input); err != nil {
+			t.Fatalf("decode Claude Code input: %v", err)
+		}
+		if input.Type != "user" || input.Message.Role != "user" {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(input.Message.Content, &text); err != nil {
+			var parts []struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(input.Message.Content, &parts); err != nil {
+				t.Fatalf("decode Claude Code user content: %v", err)
+			}
+			for _, part := range parts {
+				text += part.Text
+			}
+		}
+		if _, transcript, ok := strings.Cut(text, "CONVERSATION TRANSCRIPT:\n"); ok {
+			return transcript
+		}
+	}
+	t.Fatal("no goal evaluator transcript reached Claude Code")
+	return ""
 }
 
 func TestContractAgentProfileWithAnUnknownKeyAndAnotherError(t *testing.T) {

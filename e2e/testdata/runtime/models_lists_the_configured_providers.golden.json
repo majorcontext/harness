@@ -7,7 +7,7 @@
       "body": {
         "context": {
           "tokens": 0,
-          "window": 0
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 2,
@@ -268,7 +268,7 @@
           "provider_name": "Anthropic"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",
@@ -283,7 +283,7 @@
           "provider": "claude-code"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",
@@ -298,7 +298,7 @@
           "provider": "claude-code"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",
@@ -313,7 +313,7 @@
           "provider": "claude-code"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",

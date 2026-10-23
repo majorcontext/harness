@@ -92,7 +92,7 @@
       "body": {
         "context": {
           "tokens": 113,
-          "window": 0
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 12,
@@ -129,7 +129,7 @@
         "compaction_count": 1,
         "context": {
           "tokens": 7039,
-          "window": 0
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 17,

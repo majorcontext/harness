@@ -22,7 +22,7 @@
           "provider_name": "Anthropic"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",
@@ -37,7 +37,7 @@
           "provider": "claude-code"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",
@@ -52,7 +52,7 @@
           "provider": "claude-code"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",
@@ -67,7 +67,7 @@
           "provider": "claude-code"
         },
         {
-          "context_window": 0,
+          "context_window": 1000000,
           "efforts": [
             "off",
             "minimal",

@@ -50,7 +50,7 @@ const (
 	specEventsRoute             = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
 	specBoxGlobal               = "no-box-global-journal"
 	specNoProvider              = "A model that no configured provider serves fails with `model_unavailable` at create and at a settings change; an unknown window never does."
-	specUnknownWindow           = "else the default of 128000 tokens with `WindowEstimated`"
+	specUnknownWindow           = "else the 128000-token default with `WindowEstimated`"
 	specThreshold               = "A setting at or below 0 is the default."
 	specOverflowFails           = "When nothing can fold or the summary fails, the turn fails."
 	specCompactResult           = "`Compact()` returns `protocol.Compacted`"

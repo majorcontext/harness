@@ -252,7 +252,7 @@ func main() {
 	}
 	init := initFrame(f)
 	if mode == "per_call_usage" || mode == "compact_after_window" {
-		init["model"] = "claude-opus-5-5[1m]"
+		init["model"] = "claude-opus-5-5"
 	}
 	initExtras(init)
 	f.hold(init)

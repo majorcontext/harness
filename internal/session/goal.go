@@ -49,6 +49,7 @@ const (
 	transcriptShare       = 0.5
 	transcriptReserve     = 2048
 	transcriptFloorWindow = 16000
+	transcriptBudgetCap   = 391808
 	partCut               = "…[truncated]"
 	transcriptCut         = "[earlier conversation omitted to fit the evaluator's context budget]\n"
 )
@@ -269,7 +270,7 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	if stopped == nil && len(a.releasing) == 0 && g.State == protocol.GoalActive && g.Evaluated != turnID {
 		events := append(a.withdrawGoal(), verdict(turnID, g, answer)...)
 		if err != nil {
-			events = a.goalStop(err)
+			events = a.goalStop(err, r.kind)
 		}
 		appendErr = a.append(events...)
 	}
@@ -318,15 +319,15 @@ func parseVerdict(answer string) (protocol.Verdict, string) {
 
 // transcriptBudget returns the bytes of transcript that the evaluator model
 // reads: half its window less a reserve for the rest of the request, never
-// less than the reserve. A window that the backend only estimates counts as
-// transcriptFloorWindow.
+// less than the reserve or more than `transcriptBudgetCap` bytes. An absent
+// or estimated window counts as `transcriptFloorWindow`.
 func (a *Actor) transcriptBudget() int {
 	caps := a.cfg.Backend.Capabilities(a.cfg.Evaluator)
 	window := caps.ContextWindow
 	if caps.WindowEstimated || window <= 0 {
 		window = transcriptFloorWindow
 	}
-	return max(int(float64(window)*transcriptShare)-transcriptReserve, transcriptReserve) * bytesPerToken
+	return min(max(int(float64(window)*transcriptShare)-transcriptReserve, transcriptReserve)*bytesPerToken, transcriptBudgetCap)
 }
 
 // transcript renders h for the evaluator: each message under its role, each
@@ -373,12 +374,21 @@ func transcript(h []protocol.LogMessage, budget int) string {
 // goalStop returns the goal change after err ended a goal turn or its
 // evaluation: paused for a retryable error or a usage limit, else failed. The
 // goalMaxPauses+1th pause fails with retries_exhausted.
-func (a *Actor) goalStop(err error) []protocol.Payload {
+func (a *Actor) goalStop(err error, kind runKind) []protocol.Payload {
 	g, _ := a.state.Goal()
 	if g.State != protocol.GoalActive {
 		return nil
 	}
 	change := protocol.GoalChanged{State: protocol.GoalFailed, Reason: plugin.SanitizeSessionError(err.Error())}
+	if kind == kindJudge {
+		cause, exhausted := providerExhaustionDetails(err)
+		if cause != "" {
+			change.Cause = cause
+			if exhausted != nil {
+				change.ResetsAt = exhausted.ResetsAt
+			}
+		}
+	}
 	if errors.Is(err, turn.ErrRetryable) || errors.Is(err, turn.ErrExhausted) {
 		if g.Pauses >= goalMaxPauses {
 			change.Reason = goalRetriesExhausted

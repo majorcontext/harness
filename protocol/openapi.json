@@ -569,6 +569,20 @@
           "retry_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "cause": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "ended",
+              "goal_cleared",
+              "handoff",
+              "crashed",
+              "provider_exhausted"
+            ]
+          },
+          "resets_at": {
+            "type": "integer"
           }
         },
         "type": "object",

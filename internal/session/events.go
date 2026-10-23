@@ -12,18 +12,18 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// contextWindow is the window of the session model, or the window of the
-// reading c when the model reports none. A model switch thus replaces the
-// window of an older reading.
-func contextWindow(model int, c protocol.ContextMeasured) int64 {
+// contextWindow uses a nonzero measured window for a backend that owns its
+// context. Otherwise, the model window wins and a reading fills an unknown window.
+func contextWindow(model int, c protocol.ContextMeasured, ownsContext bool) int64 {
+	if ownsContext && c.Window > 0 {
+		return c.Window
+	}
 	return cmp.Or(int64(model), c.Window)
 }
 
-// Describe returns the protocol view of state. window is the context window
-// of the session model, or 0 when it is not known, and estimated says that
-// window is the default for a model that nothing states. With no window, the
-// newest reading supplies the window and its estimated flag.
-func Describe(id string, s *eventlog.State, window int, estimated bool) protocol.Session {
+// Describe returns the protocol view of state. An owned-context backend uses
+// its measured window when it has one.
+func Describe(id string, s *eventlog.State, window int, estimated, ownsContext bool) protocol.Session {
 	sum, set, p := s.Summary(), s.Settings(), s.Progress()
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, WorkDir: sum.WorkDir, Model: sum.Model, Title: sum.Title,
@@ -35,10 +35,11 @@ func Describe(id string, s *eventlog.State, window int, estimated bool) protocol
 	if c.Tokens == 0 && c.Source == "" {
 		c = protocol.ContextMeasured{}
 	}
-	if window == 0 {
+	if window == 0 || ownsContext && c.Window > 0 {
 		estimated = c.WindowEstimated
 	}
-	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c), WindowEstimated: estimated && contextWindow(window, c) > 0}
+	windowSize := contextWindow(window, c, ownsContext)
+	v.Context = protocol.Context{Tokens: c.Tokens, Window: windowSize, WindowEstimated: estimated && windowSize > 0}
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
 		v.SubscriptionUsage = subscriptionView(sub)

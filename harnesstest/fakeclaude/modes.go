@@ -76,7 +76,7 @@ func perCallUsage(f *fake) {
 			set("usage", obj{"input_tokens": 6, "cache_creation_input_tokens": 5753, "cache_read_input_tokens": 41896, "output_tokens": 187}).
 			set("modelUsage", obj{
 				"claude-haiku-4-5-20251001": obj{"inputTokens": 1, "contextWindow": 200000},
-				"claude-opus-5-5[1m]":       obj{"inputTokens": 6, "contextWindow": 1000000},
+				"claude-opus-5-5":           obj{"inputTokens": 6, "contextWindow": 500000},
 			}),
 	)
 }
@@ -139,6 +139,7 @@ func hang(f *fake) {
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
+	"one_shot":       func(f *fake) { f.emit(say("MET: ok"), success("MET: ok", 0, 0)) },
 	"parallel_calls": parallelCalls,
 	"builtin_tool":   builtinTool,
 	"builtin_refused": func(f *fake) {

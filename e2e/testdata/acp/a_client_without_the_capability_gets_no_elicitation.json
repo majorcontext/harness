@@ -399,6 +399,25 @@
         "params": {
           "sessionId": "\u003csession:a\u003e",
           "update": {
+            "cost": {
+              "amount": 0.0123,
+              "currency": "USD"
+            },
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 113
+          }
+        }
+      }
+    },
+    {
+      "dir": "agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "\u003csession:a\u003e",
+          "update": {
             "sessionUpdate": "session_info_update",
             "updatedAt": "\u003ctime\u003e"
           }
