@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -139,7 +140,14 @@ func (a *Actor) summarize(ctx context.Context, req turn.Request, src turn.Source
 		if len(rest) == 0 {
 			return "", total, err
 		}
+		dropped := len(req.History) - 1 - len(rest)
 		req.History = append([]protocol.LogMessage{req.History[0]}, rest...)
+		req.Pins = slices.Clone(req.Pins)
+		for i := range req.Pins {
+			if req.Pins[i].At > 1 {
+				req.Pins[i].At = max(1, req.Pins[i].At-dropped)
+			}
+		}
 	}
 }
 
@@ -147,7 +155,7 @@ func (a *Actor) summarize(ctx context.Context, req turn.Request, src turn.Source
 // session, and the compaction that records the summary of the turns before the
 // newest keep.
 func (a *Actor) fold(id string, keep int) (turn.Request, protocol.CompactionApplied, bool) {
-	_, to, ok := a.state.Fold(keep)
+	to, ok := a.state.Fold(keep)
 	if !ok {
 		return turn.Request{}, protocol.CompactionApplied{}, false
 	}

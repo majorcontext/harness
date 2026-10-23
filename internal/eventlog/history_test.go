@@ -71,20 +71,18 @@ func TestFold(t *testing.T) {
 		name   string
 		events []protocol.Payload
 		keep   int
-		want   []protocol.LogMessage
 		to     uint64
 	}{
-		{"no more turns than keep fold nothing", with(with(base, turn("t1", "a", "one")...), turn("t2", "b", "two")...), 2, nil, 0},
-		{"the turns before the newest keep fold up to the first kept turn", three, 2, []protocol.LogMessage{userText("one")}, 5},
-		{"keep one folds every turn but the newest", three, 1, []protocol.LogMessage{userText("one"), userText("two")}, 8},
-		{"a summary alone folds nothing", with(summarized, turn("t3", "c", "three")...), 2, nil, 0},
-		{"a summary folds with the turns after it", with(summarized, turn("t3", "c", "three")...), 1,
-			[]protocol.LogMessage{userText(SummaryBanner + "sum"), userText("two")}, 9},
+		{"no more turns than keep fold nothing", with(with(base, turn("t1", "a", "one")...), turn("t2", "b", "two")...), 2, 0},
+		{"the turns before the newest keep fold up to the first kept turn", three, 2, 5},
+		{"keep one folds every turn but the newest", three, 1, 8},
+		{"a summary alone folds nothing", with(summarized, turn("t3", "c", "three")...), 2, 0},
+		{"a summary folds with the turns after it", with(summarized, turn("t3", "c", "three")...), 1, 9},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, to, ok := replay(t, tc.events).Fold(tc.keep)
-			if !reflect.DeepEqual(got, tc.want) || to != tc.to || ok != (tc.to != 0) {
-				t.Fatalf("Fold(%d) = %+v, %d, %v\nwant %+v, %d", tc.keep, got, to, ok, tc.want, tc.to)
+			to, ok := replay(t, tc.events).Fold(tc.keep)
+			if to != tc.to || ok != (tc.to != 0) {
+				t.Fatalf("Fold(%d) = %d, %v\nwant %d", tc.keep, to, ok, tc.to)
 			}
 		})
 	}
@@ -97,19 +95,18 @@ func TestFoldRunningTurn(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		events []protocol.Payload
-		n      int
 		to     uint64
 	}{
-		{"a turn with one round trip folds nothing", with(one, call("t1", "i1", "c1"), result("t1", "i2", "c1")), 0, 0},
-		{"a turn with no round trip folds nothing", one, 0, 0},
-		{"a turn that ended folds nothing", with(trips, end("t1", protocol.StopCompleted, "")), 0, 0},
-		{"the running turn folds up to its newest round trip", trips, 5, 7},
-		{"a round trip of parallel calls folds whole", parallel, 4, 6},
+		{"a turn with one round trip folds nothing", with(one, call("t1", "i1", "c1"), result("t1", "i2", "c1")), 0},
+		{"a turn with no round trip folds nothing", one, 0},
+		{"a turn that ended folds nothing", with(trips, end("t1", protocol.StopCompleted, "")), 0},
+		{"the running turn folds up to its newest round trip", trips, 7},
+		{"a round trip of parallel calls folds whole", parallel, 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, to, ok := replay(t, tc.events).Fold(1)
-			if len(got) != tc.n || to != tc.to || ok != (tc.n > 0) {
-				t.Fatalf("Fold(1) = %d messages, %d, %v\nwant %d messages, %d", len(got), to, ok, tc.n, tc.to)
+			to, ok := replay(t, tc.events).Fold(1)
+			if to != tc.to || ok != (tc.to != 0) {
+				t.Fatalf("Fold(1) = %d, %v\nwant %d", to, ok, tc.to)
 			}
 		})
 	}
@@ -123,7 +120,7 @@ func TestFoldAfterACompactionInsideATurnCoversNewMessages(t *testing.T) {
 	events = with(with(events, steer("s1")...), call("t1", "i3", "c2"), result("t1", "i4", "c2"))
 	events = with(with(events, steer("s2")...), call("t1", "i5", "c3"), result("t1", "i6", "c3"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 6, Summary: "sum"})
 	for _, keep := range []int{1, 2} {
-		if _, to, ok := replay(t, events).Fold(keep); !ok || to <= 6 {
+		if to, ok := replay(t, events).Fold(keep); !ok || to <= 6 {
 			t.Fatalf("Fold(%d) = %d, %v; want a fold past to_seq 6", keep, to, ok)
 		}
 	}

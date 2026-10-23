@@ -38,13 +38,14 @@ var ErrEmptySummary = errors.New("turn: the compaction summary is empty")
 // tools, the instructions, and the history read the same prefix in both.
 func SummaryRequest(ctx context.Context, b Backend, req Request, src Source) (Request, error) {
 	caps := b.Capabilities(req.Model)
+	req.MaxTokens = summaryMaxTokens
 	call := req
 	if err := applyParams(ctx, b, caps, req, &call); err != nil {
 		return Request{}, err
 	}
 	call.WebSearch = call.SearchAllowed && b.Capabilities(call.Model).WebSearch
 	describe(&call, toolsetOf(ctx, &call, src), nil, caps.OwnsLoop)
-	call.Call, call.Ask, call.MaxTokens = nil, nil, summaryMaxTokens
+	call.Call, call.Ask = nil, nil
 	return call, nil
 }
 
