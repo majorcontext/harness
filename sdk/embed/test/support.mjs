@@ -47,12 +47,15 @@ export async function fakeModel(replies) {
       const list = await (await fetch(url + "/__requests")).json();
       return (list ?? []).map((r) => ({ ...r, headers: Object.fromEntries(Object.entries(r.headers).map(([k, v]) => [k.toLowerCase(), v[0]])) }));
     },
+    async modelRequests() {
+      return (await this.requests()).filter((r) => r.path.endsWith("/messages") || r.path.endsWith("/responses"));
+    },
     close: () => child.kill("SIGTERM"),
   };
 }
 
 export function userConfig(baseURL) {
-  const anthropic = {};
+  const anthropic = { auth: "injected" };
   if (baseURL) anthropic.base_url = baseURL;
   return { model: "anthropic/claude-fable-5", providers: { anthropic } };
 }

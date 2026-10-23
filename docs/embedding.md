@@ -87,8 +87,10 @@ config file, and `CodexAuthFile` names the login file; it has no default in Go.
 For Claude Code, set `Model: "claude-code/sonnet"` and no `CodexAuthFile`: the
 runtime runs the `claude` CLI, which keeps its own login. For an API key, set
 `Model` to an `anthropic/` or `openai/` model. `Getenv` lets the runtime read
-the API-key variables; without it, a provider has no key unless
-`ModelTransport` supplies the credentials. The later snippets show `Options`
+the API-key variables. A native API-key provider without credentials is unavailable.
+If `ModelTransport` supplies its credentials, set `Auth: config.AuthInjected` on
+that provider entry. A base URL or transport alone does not make it available.
+The later snippets show `Options`
 without `Config`; add the same `Config` to each. `protocol.CreateSession{Model: ...}`
 picks the model of one session; empty selects `Config.Model`. `WorkDir` gives each session
 the built-in tools, bash among them. Leave it empty for a session with no file

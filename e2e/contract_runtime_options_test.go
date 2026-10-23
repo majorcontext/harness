@@ -104,7 +104,7 @@ func errorOfOneTurn(t *testing.T, getenv func(string) string, providers map[stri
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: model})
 	if err != nil {
-		t.Fatal(err)
+		return err.Error()
 	}
 	turn, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
 	if err != nil {
@@ -141,9 +141,9 @@ func rowATurnWithNoAPIKeySaysWhereTheKeyWasRead(t *testing.T) {
 		{"compat_no_api_key_env", os.Getenv, compat(""), "bifrost/gpt-test",
 			"openaicompat(bifrost): no API key: the providers entry sets no api_key_env"},
 		{"anthropic_nil_getenv", nil, nil, "anthropic/claude-fable-5",
-			"anthropic: no API key: Options.Getenv is nil, so ANTHROPIC_API_KEY is unread"},
+			"harness: model unavailable: no provider \"anthropic\" is configured for anthropic/claude-fable-5"},
 		{"openai_empty_variable", empty, nil, "openai/gpt-5",
-			"openai: no API key: OPENAI_API_KEY is empty"},
+			"harness: model unavailable: no provider \"openai\" is configured for openai/gpt-5"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := errorOfOneTurn(t, c.getenv, c.providers, c.model); got != c.want {

@@ -34,7 +34,7 @@ test("a tool call of the module reaches the run function of the page and returns
     const c = acpClient(h);
     const result = await c.prompt(await c.session(), "go");
     assert.equal(result.stopReason, "end_turn");
-    const requests = await model.requests();
+    const requests = await model.modelRequests();
     assert.ok(requests[0].body.tools.some((t) => t.name === "js_echo"));
     assert.match(bodyText(requests[1]), /echo:hi/);
   } finally {
@@ -51,7 +51,7 @@ test("a tool failure on the page is an error result for the model", async () => 
     const c = acpClient(h);
     const result = await c.prompt(await c.session(), "go");
     assert.equal(result.stopReason, "end_turn");
-    assert.match(bodyText((await model.requests())[1]), /disk on fire/);
+    assert.match(bodyText((await model.modelRequests())[1]), /disk on fire/);
   } finally {
     await h.close();
     model.close();
@@ -80,7 +80,7 @@ test("a WebMCP tool of the page is a page tool that the model calls", async () =
     h = await harness({ config: userConfig(model.url), tools: await webmcpTools() });
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    const requests = await model.requests();
+    const requests = await model.modelRequests();
     const spec = requests[0].body.tools.find((t) => t.name === "webmcp__lookup");
     assert.equal(spec.description, "Looks a word up.\nRead-only.");
     assert.deepEqual(spec.input_schema, wm.inputSchema);
@@ -121,16 +121,16 @@ test("a cancel aborts the signal of a running page tool", async () => {
   }
 });
 
-test("proxy.baseURL carries the model request of a config with no provider and proxy.headers reach the request", async () => {
+test("proxy.baseURL routes an injected native provider and proxy.headers reach the request", async () => {
   const model = await fakeModel([{ text: "hello" }]);
   const h = await harness({
-    config: { model: "anthropic/claude-fable-5" },
+    config: { model: "anthropic/claude-fable-5", providers: { anthropic: { auth: "injected" } } },
     proxy: { baseURL: model.url, headers: { "x-proxy-token": "t1" } },
   });
   try {
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    assert.equal((await model.requests())[0].headers["x-proxy-token"], "t1");
+    assert.equal((await model.modelRequests())[0].headers["x-proxy-token"], "t1");
   } finally {
     await h.close();
     model.close();
@@ -143,7 +143,7 @@ test("a base_url that the config sets wins over proxy.baseURL", async () => {
   try {
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    assert.equal((await model.requests()).length, 1);
+    assert.equal((await model.modelRequests()).length, 1);
   } finally {
     await h.close();
     model.close();
@@ -161,10 +161,8 @@ test("a page fetch carries the model request and streams the response back", asy
   try {
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    assert.equal(seen.length, 1);
-    assert.equal(seen[0].method, "POST");
-    assert.equal(seen[0].url, model.url + "/v1/messages");
-    assert.deepEqual(JSON.parse(new TextDecoder().decode(seen[0].body)), (await model.requests())[0].body);
+    assert.deepEqual(seen.map((r) => [r.method, r.url]), [["GET", model.url + "/v1/models"], ["POST", model.url + "/v1/messages"]]);
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(seen[1].body)), (await model.modelRequests())[0].body);
     assert.ok(c.updates.some((u) => u.sessionUpdate === "agent_message_chunk" && u.content.text === "hello"));
   } finally {
     await h.close();
@@ -179,6 +177,7 @@ test("a cancel aborts the signal of a page fetch that has begun to stream", asyn
   let aborted;
   const sawAbort = new Promise((resolve) => (aborted = resolve));
   const pageFetch = async (url, init) => {
+    if (init.method !== "POST") return fetch(url, init);
     init.signal.addEventListener("abort", aborted);
     const res = await fetch(url, init);
     started();
@@ -273,7 +272,7 @@ test("proxy.headers go to the proxy origin and to no other provider origin", asy
   try {
     const c = acpClient(h);
     assert.equal((await c.prompt(await c.session(), "go")).stopReason, "end_turn");
-    const [request] = await direct.requests();
+    const [request] = await direct.modelRequests();
     assert.equal(request.headers["x-proxy-token"], undefined);
   } finally {
     await h.close();
@@ -290,7 +289,7 @@ test("proxy.providers makes the native codex entry injected, and the request car
   try {
     const c = acpClient(h);
     await c.prompt(await c.session(), "go").catch(() => {});
-    const request = (await model.requests()).find((r) => r.path === "/codex/responses");
+    const request = (await model.modelRequests()).find((r) => r.path === "/codex/responses");
     assert.ok(request, "the codex request did not reach the server path");
     for (const name of ["authorization", "chatgpt-account-id", "originator", "x-api-key"]) assert.equal(request.headers[name], undefined, name);
   } finally {
@@ -484,7 +483,7 @@ async function firstTools(options) {
   try {
     const c = acpClient(h);
     await c.prompt(await c.session(), "go");
-    return (await model.requests())[0].body.tools?.map((t) => t.name).sort() ?? [];
+    return (await model.modelRequests())[0].body.tools?.map((t) => t.name).sort() ?? [];
   } finally {
     await h.close();
     model.close();

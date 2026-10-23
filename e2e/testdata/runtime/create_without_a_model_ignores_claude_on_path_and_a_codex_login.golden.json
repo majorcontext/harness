@@ -3,27 +3,13 @@
   "sessions": {},
   "calls": {
     "create.(default)": {
-      "status": 201,
+      "status": 409,
       "body": {
-        "context": {
-          "compact_at": 800000,
-          "tokens": 0,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 2,
-        "id": "ses#1",
-        "model": "anthropic/claude-fable-5",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        },
-        "work_dir": "\u003cworkdir\u003e"
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: no provider \"anthropic\" is configured for anthropic/claude-fable-5"
+        }
       }
     }
   }

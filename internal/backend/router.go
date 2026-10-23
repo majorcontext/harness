@@ -85,6 +85,9 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	})
 	hidden := map[string]bool{}
 	for name, p := range cfg.Providers {
+		if config.NativeKeyEnv(name) != "" && !p.HasCredentials(name, env.Getenv) {
+			continue
+		}
 		if p.Type == config.TypeClaudeCodeCLI {
 			if env.NoProcess {
 				continue
@@ -146,13 +149,16 @@ func modelBackend(name string, p config.Provider, c provider.Provider, contextWi
 
 // client returns the model API client of entry name, or nil for an entry
 // that names no model API. An entry keyed by a native family may leave Type
-// empty. A transport may supply the credentials, so the key variable may be unset.
+// empty. A transport that supplies native API credentials declares auth injected.
 func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, codex func() *codexauth.Source, retries int) provider.Provider {
 	var hc *http.Client
 	if transport != nil {
 		if rt := transport(name); rt != nil {
 			hc = &http.Client{Transport: rt}
 		}
+	}
+	if hc == nil && p.HasCredentialHeader() {
+		hc = &http.Client{}
 	}
 	if p.Auth == config.AuthChatGPT && env.NoLogin {
 		hc = &http.Client{Transport: noLoginTransport{name: name}}

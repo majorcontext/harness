@@ -44,7 +44,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"pending_model\":\"anthropic/claude-fable-5\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+            "content": "{\"pending_model\":\"anthropic/claude-fable-5\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}"
           }
         ]
       },
@@ -69,7 +69,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"pending_model\":\"anthropic/claude-fable-5\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+            "content": "{\"pending_model\":\"anthropic/claude-fable-5\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}"
           }
         ]
       },

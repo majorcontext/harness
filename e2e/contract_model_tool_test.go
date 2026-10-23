@@ -1,9 +1,12 @@
 package e2e
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestContractModelTool(t *testing.T) {
@@ -32,13 +35,25 @@ func TestContractModelTool(t *testing.T) {
 		),
 		actions: oneTurn,
 	}, {
-		name: "model_tool_lists_the_registry_and_sets_native",
-		config: map[string]any{
-			"providers": map[string]any{
-				"gateway": map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
-			},
+		name:    "native_api_without_credentials_is_unavailable",
+		config:  map[string]any{"providers": map[string]any{"openai": map[string]any{"base_url": "http://127.0.0.1:1"}}},
+		model:   toolChain(model("action", "list"), model("action", "status"), model("action", "set", "model", "openai/gpt-native-1"), model("action", "status")),
+		actions: []action{providerModels{"openai", false}, create{as: "a"}, setModel{"a", "openai/gpt-native-1"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}},
+	}, {
+		name: "native_api_with_credentials_is_available",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := map[string]any{"providers": map[string]any{
+				"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL},
+				"openai":    map[string]any{"base_url": "http://127.0.0.1:1"},
+			}}
+			return inTreeEnv(nil, "", cfg, map[string]string{"OPENAI_API_KEY": "test-placeholder"})(t, h, modelURL)
 		},
-		model:   toolChain(model("action", "list"), model("action", "set", "model", "openai/gpt-native-1"))[:2],
+		model:   toolChain(model("action", "list"), model("action", "status")),
+		actions: append([]action{providerModels{"openai", true}}, append(oneTurn, setModel{"a", "openai/gpt-native-1"})...),
+	}, {
+		name:    "native_api_configured_header_runs_without_key_env",
+		entry:   map[string]any{"api_key_env": "HEADER_ONLY_KEY", "extra_headers": map[string]string{"X-API-Key": "e2e-dummy-key"}},
+		model:   []harnesstest.Step{{Name: "hello", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "hello"}}},
 		actions: oneTurn,
 	}, {
 		name:    "model_tool_false_removes_the_model_tool",
@@ -46,6 +61,38 @@ func TestContractModelTool(t *testing.T) {
 		model:   toolChain(),
 		actions: oneTurn,
 	}})
+}
+
+var credentialProviderRows = map[string]runtimeRow{
+	"native_api_configured_header_runs_without_key_env": sameAsServe(),
+	"native_api_without_credentials_is_unavailable":     sameAsServe(),
+	"native_api_with_credentials_is_available":          sameAsServe(),
+}
+
+type providerModels struct {
+	name    string
+	present bool
+}
+
+func (a providerModels) run(t *testing.T, r *run) {
+	raw, err := json.Marshal(r.drv.Models(t).Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models []protocol.Model
+	if err := json.Unmarshal(raw, &models); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, model := range models {
+		if strings.HasPrefix(model.ID, a.name+"/") {
+			found = true
+			break
+		}
+	}
+	if found != a.present {
+		t.Fatalf("provider %q in model list = %v, want %v", a.name, found, a.present)
+	}
 }
 
 func TestContractTaskSpawnModelAndEffort(t *testing.T) {

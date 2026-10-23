@@ -84,8 +84,9 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider. nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Getenv reads the variables that hold provider API keys, by the api_key_env of the provider or its
-	// default name. nil: New and the runtime read no variable, so a provider has no key unless
-	// ModelTransport supplies the credentials. A backend child process, such as the claude CLI, a plugin,
+	// default name. nil: New and the runtime read no variable. A native API provider then needs
+	// configured auth or a credential header. A transport that supplies auth sets auth injected.
+	// A backend child process, such as the claude CLI, a plugin,
 	// an MCP stdio server, a process, or a bash call, still inherits the environment of this process.
 	Getenv func(key string) string
 	// Logins holds the sign-in state of the injected providers. The hosts of this module set it; nil: the runtime makes its own from ModelTransport.

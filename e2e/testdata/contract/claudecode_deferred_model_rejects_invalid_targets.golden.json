@@ -45,7 +45,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "model: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: []; configured providers: [anthropic claude-code codex openai])"
+            "content": "model: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: []; configured providers: [anthropic claude-code codex])"
           }
         ]
       },
@@ -72,7 +72,7 @@
             "type": "tool_result",
             "call_id": "toolu#2",
             "is_error": true,
-            "content": "model: provider \"nope\" is not configured (valid aliases: []; configured providers: [anthropic claude-code codex openai])"
+            "content": "model: provider \"nope\" is not configured (valid aliases: []; configured providers: [anthropic claude-code codex])"
           }
         ]
       },
@@ -97,7 +97,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#3",
-            "content": "{\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+            "content": "{\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}"
           }
         ]
       },
@@ -123,7 +123,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#4",
-            "content": "{\"pending_model\":\"claude-code/opus\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+            "content": "{\"pending_model\":\"claude-code/opus\",\"effect\":\"next_turn\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}"
           }
         ]
       },
@@ -150,7 +150,7 @@
             "type": "tool_result",
             "call_id": "toolu#5",
             "is_error": true,
-            "content": "model: provider \"nope\" is not configured (valid aliases: []; configured providers: [anthropic claude-code codex openai])"
+            "content": "model: provider \"nope\" is not configured (valid aliases: []; configured providers: [anthropic claude-code codex])"
           }
         ]
       },
@@ -175,7 +175,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#6",
-            "content": "{\"pending_model\":\"claude-code/opus\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"openai\",\"billing\":\"api\"}]}"
+            "content": "{\"pending_model\":\"claude-code/opus\",\"model\":\"claude-code/sonnet\",\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"}]}"
           }
         ]
       },

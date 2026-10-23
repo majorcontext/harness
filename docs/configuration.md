@@ -6,6 +6,26 @@ use a subscription login; `anthropic` and `openai` use an API key) or a key
 from `providers`. The sections for OpenAI-compatible and Responses endpoints
 are for API keys.
 
+## Provider availability
+
+Native API-key providers (`anthropic` and `openai`) are available only with
+credentials. Harness reads the selected key variable through `Options.Getenv`.
+The entry's `api_key_env` wins over the native key variable. A configured `auth`
+source or a non-empty `Authorization` or `x-api-key` header also counts.
+Harness checks presence, not whether a remote service accepts the credential.
+
+A base URL alone, including one from `WithProxyBase`, is not a credential.
+A generic `ModelTransport` alone is not a credential either. An embedder whose
+transport supplies native credentials sets `auth: "injected"` explicitly.
+
+The available registry owns this rule. The model list, model tool, session
+settings, default model use, title calls, and goal evaluator use that registry.
+An unavailable provider fails with `model_unavailable`; no other model replaces it.
+
+Codex and Claude Code discovery stays unchanged. `harness.New` performs no file
+I/O, and Claude Code login requires its CLI to inspect. Login failures remain
+first-use errors. Explicit keyless project entries keep their existing behavior.
+
 ## Default model
 
 `model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose the first match:

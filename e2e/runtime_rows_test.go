@@ -509,7 +509,6 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"messages_page_after_compaction":                                           reGolden(specMessages, specBootstrapGone, specErrors),
 	"messages_page_windows":                                                    reGolden(specMessages, specBootstrapGone, specErrors),
 	"model_tool_false_removes_the_model_tool":                                  sameAsServe(),
-	"model_tool_lists_the_registry_and_sets_native":                            sameAsServe(),
 	"model_tool_reports_lists_and_switches_the_model":                          sameAsServe(),
 	"one_tool_round_trip":                                                      sameAsServe(),
 	"openai_key_http_sse_text_turn":                                            reGolden(specItems),
@@ -797,4 +796,4 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"git_changes_refusals": reGolden(specGitOracle, specErrors, specInvalidReason),
 
 	"commands_menu_lists_prompt_commands_under_a_symlinked_ancestor": reGolden(specCmdMenuRoutes, specCmdUnsupport),
-}, cancelRows, upfrontRows, boxReplyRows)
+}, cancelRows, upfrontRows, boxReplyRows, credentialProviderRows)

@@ -102,6 +102,28 @@ func (c Config) WithProxyBase(base string) Config {
 	return c
 }
 
+// HasCredentialHeader reports an explicit credential header in the provider configuration.
+func (p Provider) HasCredentialHeader() bool {
+	for name, value := range p.ExtraHeaders {
+		if value != "" && (strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "x-api-key")) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCredentials reports a key, configured auth, or explicit keyless behavior without probing a login.
+func (p Provider) HasCredentials(name string, getenv func(string) string) bool {
+	if p.Keyless() || p.Auth != "" || p.UsesClaudeCLI() || p.HasCredentialHeader() {
+		return true
+	}
+	env := p.KeyEnv(name)
+	if WireOf(name, p) == WireNone {
+		env = p.APIKeyEnv
+	}
+	return env != "" && getenv != nil && getenv(env) != ""
+}
+
 // Provider is per-family provider configuration.
 type Provider struct {
 	// Vendor links this provider entry to an opaque per-session subscription account.
