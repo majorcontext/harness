@@ -110,7 +110,23 @@ func (i *rateLimitInfo) exhausted(failure error) *provider.Error {
 }
 
 type modelUsage struct {
-	ContextWindow int64 `json:"contextWindow,omitempty"`
+	ContextWindow            int64 `json:"contextWindow,omitempty"`
+	InputTokens              int64 `json:"inputTokens,omitempty"`
+	OutputTokens             int64 `json:"outputTokens,omitempty"`
+	CacheReadInputTokens     int64 `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cacheCreationInputTokens,omitempty"`
+}
+
+// totalModelUsage sums the token counts of every model.
+func totalModelUsage(m map[string]modelUsage) protocol.Usage {
+	var u protocol.Usage
+	for _, mu := range m {
+		u.InputTokens += mu.InputTokens
+		u.OutputTokens += mu.OutputTokens
+		u.CacheReadTokens += mu.CacheReadInputTokens
+		u.CacheWriteTokens += mu.CacheCreationInputTokens
+	}
+	return u
 }
 
 type compactMetadata struct {

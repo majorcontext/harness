@@ -87,7 +87,9 @@ type run struct {
 	owed, waiting bool
 	// cost is the total_cost_usd of the previous result of the run, which the
 	// CLI reports as a running total.
-	cost              float64
+	cost float64
+	// models is the summed modelUsage of the previous result of the run.
+	models            protocol.Usage
 	mainModel         string
 	lastCall          *usage
 	compactPostTokens int64
@@ -597,7 +599,7 @@ func (r *run) settle(env envelope) error {
 func (r *run) telemetry(env envelope) {
 	cost := max(0, env.TotalCostUSD-r.cost)
 	r.cost = env.TotalCostUSD
-	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &cost, Call: callMetrics(env)}
+	t := turn.Telemetry{Usage: r.resultUsage(env), SubscriptionUsage: r.limits, CostUSD: &cost, Call: callMetrics(env)}
 	if r.limits != nil && r.account != "" {
 		limits := *r.limits
 		limits.Account = r.account
@@ -616,6 +618,21 @@ func (r *run) telemetry(env envelope) {
 	t.Context.Window = env.ModelUsage[r.mainModel].ContextWindow
 	t.Context.Source = stateKey
 	r.out.Telemetry(t)
+}
+
+// resultUsage is the usage of the result. A /compact result reports zero in
+// usage and the call in modelUsage, a running total of the CLI process.
+func (r *run) resultUsage(env envelope) protocol.Usage {
+	total := totalModelUsage(env.ModelUsage)
+	delta := protocol.Usage{
+		InputTokens: max(0, total.InputTokens-r.models.InputTokens), OutputTokens: max(0, total.OutputTokens-r.models.OutputTokens),
+		CacheReadTokens: max(0, total.CacheReadTokens-r.models.CacheReadTokens), CacheWriteTokens: max(0, total.CacheWriteTokens-r.models.CacheWriteTokens),
+	}
+	r.models = total
+	if u := env.Usage.usage(); u != (protocol.Usage{}) || delta == (protocol.Usage{}) {
+		return u
+	}
+	return delta
 }
 
 // callMetrics reads the timing of the result. A first-token time without a
