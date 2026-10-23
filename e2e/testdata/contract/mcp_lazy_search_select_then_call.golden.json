@@ -106,7 +106,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__forecast",
         "model",
         "process",
         "read_file",
@@ -175,7 +174,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__forecast\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__forecast\",\"description\":\"Get the weather forecast for a city\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -194,7 +193,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__forecast",
         "model",
         "process",
         "read_file",
@@ -263,7 +261,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__forecast\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__forecast\",\"description\":\"Get the weather forecast for a city\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -274,9 +272,13 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "mcp__weather__forecast",
+              "tool_name": "mcp",
               "tool_input": {
-                "city": "Oslo"
+                "action": "call",
+                "arguments": {
+                  "city": "Oslo"
+                },
+                "tool": "mcp__weather__forecast"
               },
               "tool_use_id": "toolu#3"
             }
@@ -288,8 +290,152 @@
             {
               "kind": "tool_result",
               "text": "Oslo: 3C, snow",
-              "tool_name": "mcp__weather__forecast",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "search",
+                "query": "forecast"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"matches\":[{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":false}],\"total\":1,\"truncated\":false}",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "select",
+                "tools": [
+                  "mcp__weather__forecast"
+                ]
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__forecast\",\"description\":\"Get the weather forecast for a city\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "call",
+                "arguments": {
+                  "city": "Oslo"
+                },
+                "tool": "mcp__weather__forecast"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "call",
+                "arguments": {
+                  "command": "echo hi"
+                },
+                "tool": "bash"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "no such tool available: bash",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#4",
+              "is_error": true
             }
           ]
         }
@@ -358,7 +504,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"selected\":[\"mcp__weather__forecast\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"mcp__weather__forecast\",\"description\":\"Get the weather forecast for a city\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },
@@ -369,9 +515,13 @@
           {
             "type": "tool_call",
             "call_id": "toolu#3",
-            "name": "mcp__weather__forecast",
+            "name": "mcp",
             "arguments": {
-              "city": "Oslo"
+              "action": "call",
+              "arguments": {
+                "city": "Oslo"
+              },
+              "tool": "mcp__weather__forecast"
             }
           }
         ]
@@ -389,6 +539,36 @@
       },
       {
         "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "mcp",
+            "arguments": {
+              "action": "call",
+              "arguments": {
+                "command": "echo hi"
+              },
+              "tool": "bash"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "no such tool available: bash"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {

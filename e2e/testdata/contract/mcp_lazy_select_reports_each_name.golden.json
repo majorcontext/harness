@@ -46,7 +46,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__alerts",
         "model",
         "process",
         "read_file",
@@ -92,7 +91,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__alerts\"],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -111,7 +110,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__alerts",
         "model",
         "process",
         "read_file",
@@ -157,7 +155,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__alerts\"],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -184,7 +182,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[],\"already\":[\"mcp__weather__alerts\"],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -203,7 +201,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__alerts",
         "model",
         "process",
         "read_file",
@@ -249,7 +246,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__alerts\"],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -276,7 +273,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[],\"already\":[\"mcp__weather__alerts\"],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -321,7 +318,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__alerts",
         "model",
         "process",
         "read_file",
@@ -367,7 +363,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__alerts\"],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -394,7 +390,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[],\"already\":[\"mcp__weather__alerts\"],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -493,7 +489,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"selected\":[\"mcp__weather__alerts\"],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[\"mcp__weather__nope\",\"bogus\"],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },
@@ -521,7 +517,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"selected\":[],\"already\":[\"mcp__weather__alerts\"],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"mcp__weather__alerts\",\"description\":\"List active weather alerts\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },

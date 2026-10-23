@@ -178,7 +178,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__snow — Report the snowfall\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__snow — Report the snowfall\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -199,7 +199,6 @@
         "mcp__weather__echo",
         "mcp__weather__flaky",
         "mcp__weather__forecast",
-        "mcp__weather__snow",
         "mcp__weather__strict",
         "model",
         "process",
@@ -265,7 +264,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__snow — Report the snowfall\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__snow — Report the snowfall\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -290,7 +289,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__snow\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__snow\",\"description\":\"Report the snowfall\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -313,7 +312,6 @@
         "mcp__weather__echo",
         "mcp__weather__flaky",
         "mcp__weather__forecast",
-        "mcp__weather__snow",
         "mcp__weather__strict",
         "model",
         "process",
@@ -379,7 +377,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__snow — Report the snowfall\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__snow — Report the snowfall\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -404,7 +402,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__weather__snow\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__weather__snow\",\"description\":\"Report the snowfall\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -415,9 +413,13 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "mcp__weather__snow",
+              "tool_name": "mcp",
               "tool_input": {
-                "city": "Oslo"
+                "action": "call",
+                "arguments": {
+                  "city": "Oslo"
+                },
+                "tool": "mcp__weather__snow"
               },
               "tool_use_id": "toolu#3"
             }
@@ -429,7 +431,7 @@
             {
               "kind": "tool_result",
               "text": "{\"city\":\"Oslo\"}",
-              "tool_name": "mcp__weather__snow",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#3"
             }
           ]
@@ -518,7 +520,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"selected\":[\"mcp__weather__snow\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"mcp__weather__snow\",\"description\":\"Report the snowfall\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },
@@ -529,9 +531,13 @@
           {
             "type": "tool_call",
             "call_id": "toolu#3",
-            "name": "mcp__weather__snow",
+            "name": "mcp",
             "arguments": {
-              "city": "Oslo"
+              "action": "call",
+              "arguments": {
+                "city": "Oslo"
+              },
+              "tool": "mcp__weather__snow"
             }
           }
         ]

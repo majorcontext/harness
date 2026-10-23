@@ -381,34 +381,21 @@ func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed 
 	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Notices: []turn.Notice{{Kind: segmentKind, Text: strings.Join(segs, "\n\n")}}, Hooks: s}
 }
 
-// Late returns the plugin tools that the first tool read of the session did not reach, in name order: the tools
-// of the live set, and the tools that history loaded and the live set lost.
-func (s *Session) Late(history []protocol.LogMessage, allowed []string) []mcpsrc.Late {
-	h := s.p.live.Load().host
+// Late returns the plugin tools of the live set that the first tool read of the session did not reach and
+// allowed keeps, in name order.
+func (s *Session) Late(allowed []string) []mcpsrc.Late {
 	base := s.first().names
-	loaded := mcpsrc.Selected(history)
 	owner := map[string]string{}
-	for _, i := range h.Plugins() {
+	for _, i := range s.p.live.Load().host.Plugins() {
 		for _, t := range i.Tools {
-			owner[t] = i.Name
+			if !slices.Contains(base, t) && (allowed == nil || slices.Contains(allowed, t)) {
+				owner[t] = i.Name
+			}
 		}
 	}
-	s.p.dmu.Lock()
-	names := slices.Collect(maps.Keys(owner))
-	for n := range loaded {
-		if _, ok := s.p.seen[n]; ok {
-			names = append(names, n)
-		}
-	}
-	s.p.dmu.Unlock()
-	slices.Sort(names)
 	var out []mcpsrc.Late
-	for _, n := range slices.Compact(names) {
-		if slices.Contains(base, n) || allowed != nil && !slices.Contains(allowed, n) {
-			continue
-		}
-		_, isLive := owner[n]
-		out = append(out, mcpsrc.Late{Plugin: owner[n], Tool: s.toolOf(n), Loaded: loaded[n], Live: isLive})
+	for _, n := range slices.Sorted(maps.Keys(owner)) {
+		out = append(out, mcpsrc.Late{Plugin: owner[n], Tool: s.toolOf(n)})
 	}
 	return out
 }

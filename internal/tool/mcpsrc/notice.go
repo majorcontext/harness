@@ -18,8 +18,8 @@ const (
 	recovered  = "[mcp: every configured server is connected again.]"
 )
 
-const addedHeader = "[mcp: tools added after the first connect — %s. They are deferred: to use one you MUST first load it with " +
-	`mcp(action="select", tools=["mcp__server__tool"]), or find one with mcp(action="search", query="...").]`
+const addedHeader = "[mcp: tools added after the first connect — %s. They are deferred: to use one you MUST first read its definition with " +
+	`mcp(action="select", tools=["mcp__server__tool"]), then run it with mcp(action="call", tool="mcp__server__tool", arguments={...}). Find one with mcp(action="search", query="...").]`
 
 // unavailable renders the notice that names each server that is not
 // connected and has failed an attempt, with the reason, or "" when every server is connected.
@@ -162,17 +162,15 @@ func (v view) resources() bool {
 	return slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].resources })
 }
 
-const pluginsHeader = "[plugins: tools added after the first tool read — %s. They are deferred: to use one you MUST first load it with " +
-	`mcp(action="select", tools=["tool_name"]), or find one with mcp(action="search", query="...").]`
+const pluginsHeader = "[plugins: tools added after the first tool read — %s. They are deferred: to use one you MUST first read its definition with " +
+	`mcp(action="select", tools=["tool_name"]), then run it with mcp(action="call", tool="tool_name", arguments={...}). Find one with mcp(action="search", query="...").]`
 
 // addedPlugins renders the notice of the live plugin tools that the first tool read did not reach, one block for
 // each plugin in name order, or "" when there is none.
 func addedPlugins(late []Late) string {
 	byPlugin := map[string][]remote{}
 	for _, l := range late {
-		if l.Live {
-			byPlugin[l.Plugin] = append(byPlugin[l.Plugin], remote{spec: l.Tool.Spec()})
-		}
+		byPlugin[l.Plugin] = append(byPlugin[l.Plugin], remote{spec: l.Tool.Spec()})
 	}
 	names := slices.Sorted(maps.Keys(byPlugin))
 	if len(names) == 0 {

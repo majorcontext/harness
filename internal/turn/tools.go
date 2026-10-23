@@ -75,6 +75,13 @@ type Joiner interface {
 	Join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
 }
 
+// Forwarder is a Tool that has actions which run a deferred tool. Forward returns the call of
+// that tool, and false when c is another action. The call runs between the hooks, and only
+// a tool of Toolset.Deferred can answer it.
+type Forwarder interface {
+	Forward(c protocol.ToolCall) (protocol.ToolCall, bool)
+}
+
 // Source gives tools that can change between the model calls of a turn.
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
@@ -161,6 +168,8 @@ func (c chain) Join(ctx context.Context, call protocol.ToolCall, r protocol.Tool
 // runner runs the calls of one model call between the hooks of its Toolset.
 type runner struct {
 	runnable []Tool
+	// deferred are the tools that a Forwarder may run.
+	deferred []Tool
 	hooks    Hooks
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
@@ -168,6 +177,11 @@ type runner struct {
 }
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+	if f, ok := t.find(c.Name).(Forwarder); ok {
+		if fc, ok := f.Forward(c); ok {
+			return runTool(ctx, t.deferred, t.hooks, fc)
+		}
+	}
 	return runTool(ctx, t.runnable, t.hooks, c)
 }
 
@@ -228,6 +242,7 @@ func toolsetOf(ctx context.Context, call *Request, src Source) Toolset {
 // banner through to, and returns the runner of its calls. all describes every
 // tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
 func describe(call *Request, ts Toolset, to Turn, all bool) runner {
+	deferred := ts.Deferred
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
 	}
@@ -245,7 +260,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), hooks: ts.Hooks}
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, hooks: ts.Hooks}
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

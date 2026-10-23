@@ -174,7 +174,7 @@ func TestContractMCPLiveSet(t *testing.T) {
 			model: afterFirstTurn(
 				mcpAction("action", "connect", "server", "docs"),
 				mcpAction("action", "select", "tools", []string{"mcp__docs__search"}),
-				mcpTool("docs", "search"),
+				mcpAction("action", "call", "tool", "mcp__docs__search"),
 				mcpAction("action", "status"),
 			),
 			actions: append(liveTurns(add, awaitMCPConnected{put: add}),
@@ -242,7 +242,7 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 			model: afterFirstTurn(
 				mcpTool("weather", "echo", "city", "Oslo"),
 				mcpAction("action", "select", "tools", []string{"mcp__weather__snow"}),
-				mcpTool("weather", "snow", "city", "Oslo"),
+				mcpAction("action", "call", "tool", "mcp__weather__snow", "arguments", map[string]any{"city": "Oslo"}),
 			),
 			actions: append(liveTurns(changeMCPTools{server: "weather", tools: snow}), expectSystem{req: 2, sameAs: 1}),
 		},

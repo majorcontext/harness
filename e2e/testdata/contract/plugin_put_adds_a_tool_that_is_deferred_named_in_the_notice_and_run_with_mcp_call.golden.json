@@ -86,7 +86,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — fixture. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"tool_name\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — fixture. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -98,7 +98,6 @@
       "tools": [
         "bash",
         "edit_file",
-        "fixture_echo",
         "glob",
         "goal",
         "grep",
@@ -144,7 +143,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — fixture. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"tool_name\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — fixture. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -169,7 +168,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"fixture_echo\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"fixture_echo\",\"description\":\"Echo the text argument.\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -183,7 +182,6 @@
       "tools": [
         "bash",
         "edit_file",
-        "fixture_echo",
         "glob",
         "goal",
         "grep",
@@ -229,7 +227,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — fixture. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"tool_name\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — fixture. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -254,7 +252,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"fixture_echo\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"fixture_echo\",\"description\":\"Echo the text argument.\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -265,9 +263,13 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "fixture_echo",
+              "tool_name": "mcp",
               "tool_input": {
-                "text": "hi"
+                "action": "call",
+                "arguments": {
+                  "text": "hi"
+                },
+                "tool": "fixture_echo"
               },
               "tool_use_id": "toolu#2"
             }
@@ -279,7 +281,7 @@
             {
               "kind": "tool_result",
               "text": "echo: hi",
-              "tool_name": "fixture_echo",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
           ]
@@ -343,7 +345,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"selected\":[\"fixture_echo\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"fixture_echo\",\"description\":\"Echo the text argument.\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },
@@ -354,9 +356,13 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "fixture_echo",
+            "name": "mcp",
             "arguments": {
-              "text": "hi"
+              "action": "call",
+              "arguments": {
+                "text": "hi"
+              },
+              "tool": "fixture_echo"
             }
           }
         ]

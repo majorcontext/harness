@@ -46,7 +46,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__alerts",
         "model",
         "process",
         "read_file",
@@ -103,7 +102,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__alerts",
         "model",
         "process",
         "read_file",
@@ -167,7 +165,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"matches\":[{\"name\":\"mcp__weather__alerts\",\"server\":\"weather\",\"description\":\"List active weather alerts\",\"loaded\":true},{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":false}],\"total\":5,\"truncated\":true}",
+              "text": "{\"matches\":[{\"name\":\"mcp__weather__alerts\",\"server\":\"weather\",\"description\":\"List active weather alerts\",\"loaded\":false},{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":false}],\"total\":5,\"truncated\":true}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -234,7 +232,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"matches\":[{\"name\":\"mcp__weather__alerts\",\"server\":\"weather\",\"description\":\"List active weather alerts\",\"loaded\":true},{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":false}],\"total\":5,\"truncated\":true}"
+            "content": "{\"matches\":[{\"name\":\"mcp__weather__alerts\",\"server\":\"weather\",\"description\":\"List active weather alerts\",\"loaded\":false},{\"name\":\"mcp__weather__forecast\",\"server\":\"weather\",\"description\":\"Get the weather forecast for a city\",\"loaded\":false}],\"total\":5,\"truncated\":true}"
           }
         ]
       },

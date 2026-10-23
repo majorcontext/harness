@@ -109,7 +109,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__docs__search",
         "mcp__weather__alerts",
         "mcp__weather__echo",
         "mcp__weather__flaky",
@@ -180,13 +179,13 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__docs__search\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__docs__search\",\"description\":\"Search the docs\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -253,7 +252,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"selected\":[\"mcp__docs__search\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"mcp__docs__search\",\"description\":\"Search the docs\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },
