@@ -3,6 +3,7 @@ package main
 import (
 	"maps"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -128,6 +129,16 @@ func compactBoundaryPostTokens(f *fake) {
 	)
 }
 
+// cache1h prints a reply whose call wrote FAKE_CLAUDE_CACHE_WRITE tokens (default 50) to the 1h prompt cache.
+func cache1h(f *fake) {
+	written := 50
+	if n, err := strconv.Atoi(os.Getenv("FAKE_CLAUDE_CACHE_WRITE")); err == nil {
+		written = n
+	}
+	f.emit(say("ok"), success("ok", 0, 0).set("usage", obj{"input_tokens": 10, "output_tokens": 3, "cache_creation_input_tokens": written,
+		"cache_creation": obj{"ephemeral_1h_input_tokens": written, "ephemeral_5m_input_tokens": 0}}))
+}
+
 func hang(f *fake) {
 	f.emit()
 	time.Sleep(time.Hour)
@@ -139,13 +150,11 @@ func hang(f *fake) {
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
-	"cache_1h": func(f *fake) {
-		f.emit(say("ok"), success("ok", 0, 0).set("usage", obj{"input_tokens": 10, "output_tokens": 3, "cache_creation_input_tokens": 50,
-			"cache_creation": obj{"ephemeral_1h_input_tokens": 50, "ephemeral_5m_input_tokens": 0}}))
-	},
-	"one_shot":       func(f *fake) { f.emit(say("MET: ok"), success("MET: ok", 0, 0)) },
-	"parallel_calls": parallelCalls,
-	"builtin_tool":   builtinTool,
+	"cache_1h":               cache1h,
+	"compact_after_cache_1h": cache1h,
+	"one_shot":               func(f *fake) { f.emit(say("MET: ok"), success("MET: ok", 0, 0)) },
+	"parallel_calls":         parallelCalls,
+	"builtin_tool":           builtinTool,
 	"builtin_refused": func(f *fake) {
 		f.emit(say("Let me check that."), assistant(toolUse("toolu_b", "Bash", obj{"command": "ls"})),
 			user(toolResult("toolu_b", "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here.</tool_use_error>", true)).set("tool_use_result", "Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here."))
