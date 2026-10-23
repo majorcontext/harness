@@ -314,12 +314,12 @@
     "codex_chains": {
       "status": 200,
       "body": [
-        "chained 1",
-        "chained 1",
-        "chained 1",
-        "chained 2",
-        "chained 3",
-        "chained 3"
+        "ws chained 1",
+        "ws chained 1",
+        "ws chained 1",
+        "ws chained 2",
+        "ws chained 3",
+        "ws chained 3"
       ]
     }
   }

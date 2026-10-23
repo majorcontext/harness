@@ -401,8 +401,8 @@ var codexPluginRowKinds = map[string]runtimeRow{
 }
 
 // recordChains records each model request of the Responses server as
-// "chained <n>" when it names a previous response, else "full <n>", with n
-// its input items, in sorted order, so concurrent sessions record the same.
+// "<transport> chained <n>" when it names a previous response, else
+// "<transport> full <n>", with n its input items, in sorted order, so concurrent sessions record the same.
 type recordChains struct{}
 
 func (recordChains) run(t *testing.T, _ *run) {
@@ -418,7 +418,7 @@ func (recordChains) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 		if e.PreviousResponseID != "" {
 			mode = "chained"
 		}
-		chains = append(chains, fmt.Sprintf("%s %d", mode, e.InputItems))
+		chains = append(chains, fmt.Sprintf("%s %s %d", e.Transport, mode, e.InputItems))
 	}
 	slices.Sort(chains)
 	r.record(t, "codex_chains", "", callResult{Status: 200, Body: chains})
@@ -519,6 +519,19 @@ func codexChainRows() []codexScenario {
 			},
 			websocket: true,
 		},
+		{
+			scenario: scenario{
+				name:   "codex_ws_title_request_leaves_the_chain_of_the_turns",
+				config: map[string]any{"title_model": "codex/gpt-5.6-sol"},
+				model: []harnesstest.Step{
+					{Name: "title", Match: isTitleRequest, Reply: codexText("A title")},
+					{Name: "one", Match: harnesstest.LastUserText("one"), Reply: codexText("1")},
+					{Name: "two", Match: harnesstest.LastUserText("two"), Reply: codexText("2")},
+				},
+				actions: codexSession(codexTurn("a", "one"), []action{awaitTitle{as: "a", title: "A title"}}, codexTurn("a", "two"), []action{recordChains{}}),
+			},
+			websocket: true,
+		},
 	}
 }
 
@@ -543,7 +556,8 @@ func codexItemIDRows() []codexScenario {
 
 // codexChainRowKinds is the disposition of the rows that check the chain of a Codex websocket session.
 var codexChainRowKinds = map[string]runtimeRow{
-	"codex_ws_chains_the_turn_after_a_tool_call": reGolden(specItems, specWarm),
+	"codex_ws_chains_the_turn_after_a_tool_call":           reGolden(specItems, specWarm),
+	"codex_ws_title_request_leaves_the_chain_of_the_turns": reGolden(specItems, specWarm),
 }
 
 // codexItemIDRowKinds is the disposition of the rows that check the ids of the output items that a request sends back.

@@ -1260,7 +1260,7 @@ A third-party harness is a `Backend` with `OwnsLoop`, `OwnsContext`, and `Steeri
 
 ### Warm-up
 
-`turn` declares an optional `Warmer` interface, `Warm(ctx context.Context, req Request) error`, and an optional `WarmGate`, `CanWarm(model string) bool`. The session calls `Warm` once on create and on wake, fire-and-forget under the session context. The backend router forwards both to the backend of the model, and only `internal/backend/modelapi` warms, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn waits for an in-flight warm-up. An interrupt of that turn while it waits cancels the warm-up, which logs `cancelled`. No warm-up state lives on the session.
+`turn` declares an optional `Warmer` interface, `Warm(ctx context.Context, req Request) error`, and an optional `WarmGate`, `CanWarm(model string) bool`. The session calls `Warm` once on create and on wake, fire-and-forget under the session context. The backend router forwards both to the backend of the model, and only `internal/backend/modelapi` warms, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn waits for an in-flight warm-up. An interrupt of that turn while it waits cancels the warm-up, which logs `cancelled`. No warm-up state lives on the session. A model call that is not a turn (a title, a compaction summary, or a goal evaluator) goes over HTTP, so the websocket chain of the turns stays unchanged.
 
 ### Log lines of a model call
 
