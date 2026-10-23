@@ -56,6 +56,11 @@ func TestContractModelTool(t *testing.T) {
 		model:   []harnesstest.Step{{Name: "hello", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "hello"}}},
 		actions: oneTurn,
 	}, {
+		name:    "uncredentialed_evaluator_rejects_goal_before_another_turn",
+		config:  map[string]any{"goal_evaluator_model": "openai/gpt-evaluator"},
+		model:   toolChain(ftTool("goal", ftArgs("action", "set", "condition", "ship it"))),
+		actions: append(append([]action{}, oneTurn...), updateGoal{as: "a", condition: "ship it"}),
+	}, {
 		name:    "model_tool_false_removes_the_model_tool",
 		config:  map[string]any{"model_tool": false},
 		model:   toolChain(),
@@ -64,9 +69,10 @@ func TestContractModelTool(t *testing.T) {
 }
 
 var credentialProviderRows = map[string]runtimeRow{
-	"native_api_configured_header_runs_without_key_env": sameAsServe(),
-	"native_api_without_credentials_is_unavailable":     sameAsServe(),
-	"native_api_with_credentials_is_available":          sameAsServe(),
+	"uncredentialed_evaluator_rejects_goal_before_another_turn": sameAsServe(),
+	"native_api_configured_header_runs_without_key_env":         sameAsServe(),
+	"native_api_without_credentials_is_unavailable":             sameAsServe(),
+	"native_api_with_credentials_is_available":                  sameAsServe(),
 }
 
 type providerModels struct {

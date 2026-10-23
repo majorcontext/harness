@@ -206,8 +206,8 @@ func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
 	if strings.TrimSpace(g.Condition) == "" || g.MaxTurns < 0 {
 		return fmt.Errorf("%w: a goal needs a condition and max_turns >= 0", ErrInvalidRequest)
 	}
-	if s.r.evaluator == "" {
-		return fmt.Errorf("%w: a goal needs goal_evaluator_model", ErrInvalidRequest)
+	if err := s.r.checkEvaluator(); err != nil {
+		return err
 	}
 	return s.a.SetGoal(ctx, g.Condition, g.MaxTurns)
 }

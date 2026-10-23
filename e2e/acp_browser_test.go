@@ -87,6 +87,7 @@ func startACPBrowser(t *testing.T, wsEndpoint string, env acpEnv) (io.WriteClose
 	front := newCORSFront(t, provider["base_url"].(string), nil)
 	provider["base_url"] = front.URL
 	delete(provider, "api_key_env")
+	provider["auth"] = "injected"
 	page := browserPage(t, wasm, execJS, &sync.Map{})
 	b, err := json.Marshal(map[string]any{"origin": page.URL, "config": cfg, "wsEndpoint": wsEndpoint})
 	if err != nil {

@@ -63,9 +63,8 @@ function acpClient(h) {
 }
 
 function config(row) {
-  const anthropic = { auth: "injected" };
+  const anthropic = { extra_headers: { "x-api-key": "browser-test-key", ...row.extraHeaders } };
   if (row.baseURL) anthropic.base_url = row.baseURL;
-  if (row.extraHeaders) anthropic.extra_headers = row.extraHeaders;
   return { model: "anthropic/claude-fable-5", providers: { anthropic }, ...row.settings };
 }
 

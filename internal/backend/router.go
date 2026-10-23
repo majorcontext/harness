@@ -34,7 +34,8 @@ var ErrUnavailable = &protocol.Error{Code: protocol.CodeModelUnavailable, Messag
 // Router is the turn.Backend of a runtime. It routes each turn to the backend
 // of its model's provider.
 type Router struct {
-	backends map[string]turn.Backend
+	backends    map[string]turn.Backend
+	unavailable map[string]string
 	// listed holds the models of each provider whose entry sets models.
 	listed map[string][]modelmeta.Model
 	// hidden holds the providers that the host cannot serve, which List leaves out.
@@ -84,8 +85,10 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
 	})
 	hidden := map[string]bool{}
+	unavailable := map[string]string{}
 	for name, p := range cfg.Providers {
 		if config.NativeKeyEnv(name) != "" && !p.HasCredentials(name, env.Getenv) {
+			_, unavailable[name] = env.key(p.KeyEnv(name))
 			continue
 		}
 		if p.Type == config.TypeClaudeCodeCLI {
@@ -121,7 +124,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		}
 	}
 	r := NewRouter(backends)
-	r.hidden = hidden
+	r.hidden, r.unavailable = hidden, unavailable
 	for name, p := range cfg.Providers {
 		if _, ok := backends[name]; ok && len(p.Models) > 0 {
 			r.listModels(name, modelmeta.Named(p.Models, modelmeta.Models(name)))
@@ -157,9 +160,6 @@ func client(name string, p config.Provider, transport func(provider string) http
 			hc = &http.Client{Transport: rt}
 		}
 	}
-	if hc == nil && p.HasCredentialHeader() {
-		hc = &http.Client{}
-	}
 	if p.Auth == config.AuthChatGPT && env.NoLogin {
 		hc = &http.Client{Transport: noLoginTransport{name: name}}
 	} else if p.Auth == config.AuthChatGPT {
@@ -177,19 +177,19 @@ func client(name string, p config.Provider, transport func(provider string) http
 		if p.Auth == "" {
 			key, reason = env.key(p.KeyEnv(name))
 		}
-		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL, Log: env.Log,
+		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless() || p.HasCredentialHeader(), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin(), CacheTTL: cacheTTL, LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
-		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless(), BaseURL: p.BaseURL,
+		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless() || p.HasCredentialHeader(), BaseURL: p.BaseURL,
 			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
 		key, reason := "", "the entry uses the "+p.Auth+" login"
 		if p.Auth == "" {
 			key, reason = env.key(p.KeyEnv(name))
 		}
-		return &anthropic.Client{APIKey: key, NoKeyReason: reason, BaseURL: p.BaseURL,
+		return &anthropic.Client{APIKey: key, NoKeyReason: reason, NoKey: p.HasCredentialHeader(), BaseURL: p.BaseURL,
 			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
@@ -233,6 +233,9 @@ func (e Env) key(name string) (key, reason string) {
 func (m *Router) Check(ref modelref.ModelRef) (turn.Backend, error) {
 	be, ok := m.backends[ref.Provider]
 	if !ok {
+		if reason := m.unavailable[ref.Provider]; reason != "" {
+			return nil, fmt.Errorf("%w: provider %q is unavailable for %s: %s", ErrUnavailable, ref.Provider, ref, reason)
+		}
 		return nil, fmt.Errorf("%w: no provider %q is configured for %s", ErrUnavailable, ref.Provider, ref)
 	}
 	return be, nil

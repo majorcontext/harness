@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,7 +73,15 @@ func (c *Config) ProviderEntries() map[string]Provider {
 func NativeKeyEnv(name string) string { return nativeProviderKeys[name] }
 
 // KeyEnv returns the variable that holds the API key of the provider name with entry p: the api_key_env of the entry, else the variable of the built-in provider.
-func (p Provider) KeyEnv(name string) string { return cmp.Or(p.APIKeyEnv, NativeKeyEnv(name)) }
+func (p Provider) KeyEnv(name string) string {
+	if p.APIKeyEnv != "" {
+		return p.APIKeyEnv
+	}
+	if WireOf(name, p) == WireNone {
+		return ""
+	}
+	return NativeKeyEnv(name)
+}
 
 // WithProxyBase returns a copy of c in which every request goes to base: the native providers and each
 // providers entry that sets no BaseURL get it. A Claude Code CLI entry keeps no base URL. An empty base
@@ -118,9 +125,6 @@ func (p Provider) HasCredentials(name string, getenv func(string) string) bool {
 		return true
 	}
 	env := p.KeyEnv(name)
-	if WireOf(name, p) == WireNone {
-		env = p.APIKeyEnv
-	}
 	return env != "" && getenv != nil && getenv(env) != ""
 }
 

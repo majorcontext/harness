@@ -87,6 +87,10 @@ func newCORSFront(t *testing.T, upstream string, allow func(requested string) st
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		proxy.ServeHTTP(w, r)
 	}))
 	t.Cleanup(f.Close)

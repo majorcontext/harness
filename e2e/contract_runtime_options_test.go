@@ -141,9 +141,9 @@ func rowATurnWithNoAPIKeySaysWhereTheKeyWasRead(t *testing.T) {
 		{"compat_no_api_key_env", os.Getenv, compat(""), "bifrost/gpt-test",
 			"openaicompat(bifrost): no API key: the providers entry sets no api_key_env"},
 		{"anthropic_nil_getenv", nil, nil, "anthropic/claude-fable-5",
-			"harness: model unavailable: no provider \"anthropic\" is configured for anthropic/claude-fable-5"},
+			"harness: model unavailable: provider \"anthropic\" is unavailable for anthropic/claude-fable-5: Options.Getenv is nil, so ANTHROPIC_API_KEY is unread"},
 		{"openai_empty_variable", empty, nil, "openai/gpt-5",
-			"harness: model unavailable: no provider \"openai\" is configured for openai/gpt-5"},
+			"harness: model unavailable: provider \"openai\" is unavailable for openai/gpt-5: OPENAI_API_KEY is empty"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := errorOfOneTurn(t, c.getenv, c.providers, c.model); got != c.want {
