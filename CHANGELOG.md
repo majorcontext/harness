@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Chat fixture tail deltas** (`harnesstest`) — `NewChat` streams `Reply.Tail` after the first release and honors `TailBlock` until the tail release, as `NewAnthropic` does.
+
 - **Goal judge account exhaustion** (`protocol`, `internal/session`) — a goal evaluation that reaches a provider usage limit adds `cause`, `model` (the resolved evaluator model ref), and optional `resets_at` to `goal.changed`. A host can move the session to another account before the next judge retry.
 - **Goal evaluator transcript limit** (`internal/modelmeta`, `internal/backend/claudecode`, `internal/session`) — Claude Code aliases use the latest matching Anthropic context window. The evaluator transcript budget does not exceed 391,808 bytes. Session views use the latest window reported by Claude Code when available.
 

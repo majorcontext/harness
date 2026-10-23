@@ -251,6 +251,12 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, n int, name 
 		if rep.Block && !s.block(r, name) {
 			return
 		}
+		if rep.Tail != "" {
+			chunk(obj{"content": rep.Tail}, nil)
+			if rep.TailBlock && !s.block(r, name+":tail") {
+				return
+			}
+		}
 	}
 	for i, tc := range rep.ToolCalls {
 		input := tc.Input
