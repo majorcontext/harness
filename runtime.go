@@ -56,7 +56,7 @@ var (
 	ErrOwnershipLost = session.ErrOwnershipLost
 	// ErrInputConflict reports a repeated input ID with another body.
 	ErrInputConflict = session.ErrInputConflict
-	// ErrTurnMismatch reports a turn ID that is not the running turn.
+	// ErrTurnMismatch reports a turn ID that is not the turn the call expects.
 	ErrTurnMismatch = session.ErrTurnMismatch
 	// ErrSessionBusy reports a Compact while a turn runs or inputs wait.
 	ErrSessionBusy = session.ErrBusy

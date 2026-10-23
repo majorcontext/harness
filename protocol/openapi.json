@@ -305,6 +305,9 @@
         "properties": {
           "keep_turns": {
             "type": "integer"
+          },
+          "expected_turn_id": {
+            "type": "string"
           }
         },
         "additionalProperties": false,

@@ -48,7 +48,7 @@ func TestSideCallsKeepTheParametersOfTheEngine(t *testing.T) {
 		}
 		a.Run()
 		converse(t, a, "one", "two")
-		if _, _, err := a.Compact(context.Background(), 0); err != nil {
+		if _, _, err := a.Compact(context.Background(), 0, ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := a.SetGoal(context.Background(), "say done", 0); err != nil {
