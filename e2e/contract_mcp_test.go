@@ -400,7 +400,7 @@ func TestContractMCPLazyLoading(t *testing.T) {
 	forecastLine := "mcp__weather__forecast \u2014 Get the weather forecast for a city"
 	runScenarios(t, []scenario{
 		{
-			name: "mcp_lazy_search_select_then_call", prefixBreaks: mcpSelectBreak(true),
+			name:  "mcp_lazy_search_select_then_call",
 			setup: mcpSetup(lazy, weather),
 			model: toolChain(
 				mcpAction("action", "search", "query", "forecast"),
@@ -421,7 +421,7 @@ func TestContractMCPLazyLoading(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name: "mcp_lazy_select_reports_each_name", prefixBreaks: mcpSelectBreak(true),
+			name:  "mcp_lazy_select_reports_each_name",
 			setup: mcpSetup(lazy, weather),
 			model: toolChain(
 				mcpAction("action", "select", "tools", []string{"mcp__weather__alerts", "mcp__weather__nope", "bogus"}),
@@ -563,7 +563,7 @@ func TestContractMCPAvailability(t *testing.T) {
 	pinSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), failInit: 1})
 	runScenarios(t, append(pinPrefixRows(), []scenario{
 		{
-			name: "mcp_unavailable_at_start_then_connect", prefixBreaks: mcpConnectBreak(),
+			name:  "mcp_unavailable_at_start_then_connect",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts."), failInit: 1}),
 			model: toolChain(
 				mcpAction("action", "connect", "server", "weather"),
@@ -578,7 +578,7 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 		},
 		{
-			name: "mcp_connect_adds_tools_but_not_instructions", prefixBreaks: mcpConnectBreak(),
+			name: "mcp_connect_adds_tools_but_not_instructions",
 			setup: mcpSetup(nil,
 				mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts."), failInit: 1},
 				mcpServerDef{name: "docs", spec: mcpDocs()}),
@@ -619,8 +619,8 @@ func TestContractMCPAvailability(t *testing.T) {
 				expectBannerStable{n: 2, at: 0},
 			},
 		},
-		{name: "mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: joinBreaks(mcpConnectBreak(), compactionBreak()), setup: pinSetup, model: pinModel, actions: pinActions},
-		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: joinBreaks(mcpConnectBreak(), compactionBreak()), chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
+		{name: "mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: compactionBreak(), setup: pinSetup, model: pinModel, actions: pinActions},
+		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: compactionBreak(), chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
 	}...))
 }
 
@@ -734,7 +734,7 @@ func TestContractMCPRefusals(t *testing.T) {
 			actions: append([]action{stopMCPServer{server: "weather"}}, oneTurn...),
 		},
 		{
-			name: "mcp_search_ranks_the_tools", prefixBreaks: mcpSelectBreak(true),
+			name:  "mcp_search_ranks_the_tools",
 			setup: mcpSetup(lazy, weather),
 			model: toolChain(
 				mcpTool("weather", "alerts"),

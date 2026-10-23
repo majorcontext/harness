@@ -169,7 +169,7 @@ func TestContractMCPLiveSet(t *testing.T) {
 	}}
 	runScenarios(t, []scenario{
 		{
-			name: "mcp_put_adds_a_server_whose_tools_arrive_deferred", prefixBreaks: mcpSelectBreak(false),
+			name:  "mcp_put_adds_a_server_whose_tools_arrive_deferred",
 			setup: mcpSetup(nil, weather, unlisted),
 			model: afterFirstTurn(
 				mcpAction("action", "connect", "server", "docs"),
@@ -237,7 +237,7 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 			},
 		},
 		{
-			name: "mcp_list_changed_adds_a_deferred_tool_that_the_notice_names", prefixBreaks: mcpSelectBreak(false),
+			name:  "mcp_list_changed_adds_a_deferred_tool_that_the_notice_names",
 			setup: mcpSetup(nil, sse),
 			model: afterFirstTurn(
 				mcpTool("weather", "echo", "city", "Oslo"),
@@ -288,7 +288,7 @@ func TestContractMCPLiveSetTiming(t *testing.T) {
 	sel.ID = "toolu_1"
 	runScenarios(t, []scenario{
 		{
-			name: "mcp_select_reads_the_live_set_when_it_runs", prefixBreaks: mcpSelectBreak(false),
+			name:  "mcp_select_reads_the_live_set_when_it_runs",
 			setup: mcpSetup(nil, weather, docs),
 			model: []harnesstest.Step{
 				{Name: "first", Match: assistantTurns(0), Reply: harnesstest.Reply{Text: "hi"}},

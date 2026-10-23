@@ -35,6 +35,12 @@ func (searchOffered) run(t *testing.T, r *run) {
 	}
 }
 
+func first(req []byte, key string) json.RawMessage {
+	var body map[string]json.RawMessage
+	_ = json.Unmarshal(req, &body)
+	return body[key]
+}
+
 // claudePromptStable checks that every spawn of the CLI got the same system prompt text and the same tool list.
 type claudePromptStable struct{}
 
