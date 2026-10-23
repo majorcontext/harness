@@ -75,6 +75,13 @@ type Joiner interface {
 	Join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
 }
 
+// Forwarder is a Tool that has actions which run a deferred tool. Forward returns the call of
+// that tool, and false when c is another action. The call runs between the hooks, and only
+// a tool of Toolset.Deferred can answer it.
+type Forwarder interface {
+	Forward(c protocol.ToolCall) (protocol.ToolCall, bool)
+}
+
 // Source gives tools that can change between the model calls of a turn.
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
@@ -161,6 +168,8 @@ func (c chain) Join(ctx context.Context, call protocol.ToolCall, r protocol.Tool
 // runner runs the calls of one model call between the hooks of its Toolset.
 type runner struct {
 	runnable []Tool
+	// deferred are the tools that a Forwarder may run.
+	deferred []Tool
 	hooks    Hooks
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
@@ -168,7 +177,23 @@ type runner struct {
 }
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-	return runTool(ctx, t.runnable, t.hooks, c)
+	tools, c := t.target(c)
+	return runTool(ctx, tools, t.hooks, c)
+}
+
+// target returns the tools and the call that c runs. A tool whose Spec panics runs c itself.
+func (t runner) target(c protocol.ToolCall) (tools []Tool, call protocol.ToolCall) {
+	defer func() {
+		if recover() != nil {
+			tools, call = t.runnable, c
+		}
+	}()
+	if f, ok := findIn(t.runnable, c.Name).(Forwarder); ok {
+		if fc, ok := f.Forward(c); ok {
+			return t.deferred, fc
+		}
+	}
+	return t.runnable, c
 }
 
 func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
@@ -177,27 +202,31 @@ func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolRe
 		defer t.joinMu.Unlock()
 	}
 	if j, ok := t.hooks.(Joiner); ok {
+		_, c = t.target(c)
 		return j.Join(ctx, c, r)
 	}
 	return r
 }
 
-func (t runner) find(name string) Tool {
-	if i := slices.IndexFunc(t.runnable, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
-		return t.runnable[i]
+func (t runner) find(name string) Tool { return findIn(t.runnable, name) }
+
+func findIn(tools []Tool, name string) Tool {
+	if i := slices.IndexFunc(tools, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
+		return tools[i]
 	}
 	return nil
 }
 
-// alone reports whether the tool name runs Alone. A tool whose Spec panics is
+// alone reports whether the tool that c runs is Alone. A tool whose Spec panics is
 // Alone, so that its panic reaches the result of its own call.
-func (t runner) alone(name string) (alone bool) {
+func (t runner) alone(c protocol.ToolCall) (alone bool) {
 	defer func() {
 		if recover() != nil {
 			alone = true
 		}
 	}()
-	_, ok := t.find(name).(Alone)
+	tools, c := t.target(c)
+	_, ok := findIn(tools, c.Name).(Alone)
 	return ok
 }
 
@@ -210,7 +239,8 @@ func (t runner) key(c protocol.ToolCall) (key string) {
 			key = "panicking-key:" + c.Name
 		}
 	}()
-	if k, ok := t.find(c.Name).(Keyed); ok {
+	tools, c := t.target(c)
+	if k, ok := findIn(tools, c.Name).(Keyed); ok {
 		return k.Key(c)
 	}
 	return ""
@@ -228,6 +258,7 @@ func toolsetOf(ctx context.Context, call *Request, src Source) Toolset {
 // banner through to, and returns the runner of its calls. all describes every
 // tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
 func describe(call *Request, ts Toolset, to Turn, all bool) runner {
+	deferred := ts.Deferred
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
 	}
@@ -245,7 +276,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), hooks: ts.Hooks}
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, hooks: ts.Hooks}
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

@@ -46,7 +46,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__weather__forecast",
         "model",
         "process",
         "read_file",
@@ -74,9 +73,13 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "mcp__weather__forecast",
+              "tool_name": "mcp",
               "tool_input": {
-                "city": "Oslo"
+                "action": "call",
+                "arguments": {
+                  "city": "Oslo"
+                },
+                "tool": "mcp__weather__forecast"
               },
               "tool_use_id": "toolu#1"
             }
@@ -87,9 +90,10 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "Oslo: 3C, snow",
-              "tool_name": "mcp__weather__forecast",
-              "tool_use_id": "toolu#1"
+              "text": "denied by guard",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#1",
+              "is_error": true
             }
           ]
         }
@@ -115,9 +119,13 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "mcp__weather__forecast",
+            "name": "mcp",
             "arguments": {
-              "city": "Oslo"
+              "action": "call",
+              "arguments": {
+                "city": "Oslo"
+              },
+              "tool": "mcp__weather__forecast"
             }
           }
         ]
@@ -129,7 +137,8 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "Oslo: 3C, snow"
+            "is_error": true,
+            "content": "denied by guard"
           }
         ]
       },

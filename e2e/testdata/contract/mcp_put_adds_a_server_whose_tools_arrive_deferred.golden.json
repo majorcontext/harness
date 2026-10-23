@@ -96,7 +96,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -158,7 +158,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -200,7 +200,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__docs__search",
         "mcp__weather__alerts",
         "mcp__weather__echo",
         "mcp__weather__flaky",
@@ -246,122 +245,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "mcp",
-              "tool_input": {
-                "action": "connect",
-                "server": "docs"
-              },
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "{\"server\":\"docs\",\"connected\":true,\"message\":\"already connected\"}",
-              "tool_name": "mcp",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "mcp",
-              "tool_input": {
-                "action": "select",
-                "tools": [
-                  "mcp__docs__search"
-                ]
-              },
-              "tool_use_id": "toolu#2"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__docs__search\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
-              "tool_name": "mcp",
-              "tool_use_id": "toolu#2"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "mcp",
-        "mcp__docs__search",
-        "mcp__weather__alerts",
-        "mcp__weather__echo",
-        "mcp__weather__flaky",
-        "mcp__weather__forecast",
-        "mcp__weather__strict",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "go"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "hi"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "again"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -411,7 +295,121 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__docs__search\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__docs__search\",\"description\":\"Search the docs\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "hi"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "connect",
+                "server": "docs"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"server\":\"docs\",\"connected\":true,\"message\":\"already connected\"}",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "select",
+                "tools": [
+                  "mcp__docs__search"
+                ]
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"tools\":[{\"name\":\"mcp__docs__search\",\"description\":\"Search the docs\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -422,7 +420,11 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "mcp__docs__search",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "call",
+                "tool": "mcp__docs__search"
+              },
               "tool_use_id": "toolu#3"
             }
           ]
@@ -433,7 +435,7 @@
             {
               "kind": "tool_result",
               "text": "no hits",
-              "tool_name": "mcp__docs__search",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#3"
             }
           ]
@@ -451,7 +453,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__docs__search",
         "mcp__weather__alerts",
         "mcp__weather__echo",
         "mcp__weather__flaky",
@@ -497,7 +498,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first load it with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), or find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — docs. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"docs\"\u003e\nmcp__docs__search — Search the docs\n\nRead doc://guide before searching.\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -547,7 +548,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[\"mcp__docs__search\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}",
+              "text": "{\"tools\":[{\"name\":\"mcp__docs__search\",\"description\":\"Search the docs\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#2"
             }
@@ -558,7 +559,11 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "mcp__docs__search",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "call",
+                "tool": "mcp__docs__search"
+              },
               "tool_use_id": "toolu#3"
             }
           ]
@@ -569,7 +574,7 @@
             {
               "kind": "tool_result",
               "text": "no hits",
-              "tool_name": "mcp__docs__search",
+              "tool_name": "mcp",
               "tool_use_id": "toolu#3"
             }
           ]
@@ -683,7 +688,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "{\"selected\":[\"mcp__docs__search\"],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"selected tools are callable from the next request in this turn\"}"
+            "content": "{\"tools\":[{\"name\":\"mcp__docs__search\",\"description\":\"Search the docs\",\"input_schema\":{\"type\":\"object\"}}],\"already\":[],\"pending\":[],\"missing\":[],\"note\":\"call a tool with mcp(action=\\\"call\\\", tool=\\\"\\u003cname\\u003e\\\", arguments={...})\"}"
           }
         ]
       },
@@ -694,8 +699,11 @@
           {
             "type": "tool_call",
             "call_id": "toolu#3",
-            "name": "mcp__docs__search",
-            "arguments": {}
+            "name": "mcp",
+            "arguments": {
+              "action": "call",
+              "tool": "mcp__docs__search"
+            }
           }
         ]
       },

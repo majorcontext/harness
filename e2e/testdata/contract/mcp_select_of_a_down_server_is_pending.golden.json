@@ -97,7 +97,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"selected\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions\"}",
+              "text": "{\"tools\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no definition returned: every name you selected belongs to a server that is not connected. See the mcp tool's status and connect actions\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
             }
@@ -142,7 +142,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"selected\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions\"}"
+            "content": "{\"tools\":[],\"already\":[],\"pending\":[\"mcp__weather__forecast\"],\"missing\":[],\"note\":\"no definition returned: every name you selected belongs to a server that is not connected. See the mcp tool's status and connect actions\"}"
           }
         ]
       },

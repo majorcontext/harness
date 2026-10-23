@@ -177,15 +177,15 @@ func TestContractPluginLiveSet(t *testing.T) {
 			),
 		},
 		{
-			name:   "plugin_put_adds_a_tool_that_is_deferred_named_in_the_notice_and_loaded_with_mcp_select",
+			name:   "plugin_put_adds_a_tool_that_is_deferred_named_in_the_notice_and_run_with_mcp_call",
 			config: map[string]any{"plugins": []any{pluginEntry(t, "guard", nil)}},
 			model: afterFirstTurn(
 				mcpAction("action", "select", "tools", tools),
-				ftTool("fixture_echo", ftArgs("text", "hi")),
+				mcpAction("action", "call", "tool", "fixture_echo", "arguments", map[string]any{"text": "hi"}),
 			),
 			actions: append(liveTurns(putPlugins{plugins: []map[string]any{pluginEntry(t, "guard", nil), pluginEntry(t, "fixture", nil)}}),
 				expectTools{req: 2, sameAs: 1, lacks: tools, has: []string{"mcp"}, text: []string{"fixture_echo \u2014 Echo the text argument."}},
-				expectTools{req: 3, has: tools},
+				expectTools{req: 3, sameAs: 1, lacks: tools},
 				expectTools{req: 4, text: []string{"echo: hi"}},
 			),
 		},
@@ -203,10 +203,10 @@ func TestContractPluginLiveSet(t *testing.T) {
 
 // pluginLiveRows is the disposition of the rows of the live plugin set.
 var pluginLiveRows = map[string]runtimeRow{
-	"plugin_put_adds_a_plugin_and_its_before_hook_runs_on_the_next_tool_call":                sameAsServe(),
-	"plugin_put_with_one_bad_manifest_is_invalid_and_the_old_set_still_guards":               sameAsServe(),
-	"plugin_put_with_a_tool_named_mcp_is_invalid_because_the_loader_has_that_name":           sameAsServe(),
-	"plugin_put_mid_session_pins_the_new_system_transform_segment_at_the_next_call":          sameAsServe(),
-	"plugin_put_adds_a_tool_that_is_deferred_named_in_the_notice_and_loaded_with_mcp_select": sameAsServe(),
-	"plugin_put_removes_a_plugin_and_its_tool_answers_no_such_tool_available":                sameAsServe(),
+	"plugin_put_adds_a_plugin_and_its_before_hook_runs_on_the_next_tool_call":           sameAsServe(),
+	"plugin_put_with_one_bad_manifest_is_invalid_and_the_old_set_still_guards":          sameAsServe(),
+	"plugin_put_with_a_tool_named_mcp_is_invalid_because_the_loader_has_that_name":      sameAsServe(),
+	"plugin_put_mid_session_pins_the_new_system_transform_segment_at_the_next_call":     sameAsServe(),
+	"plugin_put_adds_a_tool_that_is_deferred_named_in_the_notice_and_run_with_mcp_call": sameAsServe(),
+	"plugin_put_removes_a_plugin_and_its_tool_answers_no_such_tool_available":           sameAsServe(),
 }

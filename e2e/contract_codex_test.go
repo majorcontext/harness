@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,8 +25,6 @@ type codexScenario struct {
 	// mcpSchema, when set, serves one MCP tool named "send" with this input
 	// schema as the server "srv".
 	mcpSchema string
-	// mcpLoading is the mcp_tool_loading of the mcpSchema server; the default is eager.
-	mcpLoading string
 	// bareKey configures the lane under the built-in "openai" provider key
 	// with no type, as a deployment that points "openai" at the endpoint.
 	bareKey bool
@@ -192,7 +189,7 @@ func configureCodexScenario(t *testing.T, sc codexScenario, o *harnesstest.OpenA
 		if extra == nil {
 			extra = map[string]any{}
 		}
-		extra["mcp_tool_loading"] = cmp.Or(sc.mcpLoading, "eager")
+		extra["mcp_tool_loading"] = "eager"
 		extra["mcp_servers"] = map[string]any{"srv": map[string]any{"url": serveMCPTool(t, sc.mcpSchema)}}
 	}
 	baseURL := o.URL()
@@ -319,7 +316,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexItemIDRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexItemIDRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -424,30 +421,6 @@ func (recordChains) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 	}
 	slices.Sort(chains)
 	r.record(t, "codex_chains", "", callResult{Status: 200, Body: chains})
-}
-
-func codexWarmRows() []codexScenario {
-	return []codexScenario{
-		{
-			// The first turn after a wake chains from the prewarm only when the
-			// prewarm holds the tools that the turn holds, and the tool that the
-			// log selected loads from the history that the warm-up reads.
-			scenario: scenario{
-				name: "codex_ws_restart_prewarms_with_a_tool_the_log_selected",
-				model: []harnesstest.Step{
-					{Name: "select", Match: harnesstest.LastUserText("select"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
-						{ID: "call_1", Name: "mcp", Input: map[string]any{"action": "select", "tools": []string{"mcp__srv__send"}}},
-					}}},
-					{Name: "selected", Match: harnesstest.LastToolResult("mcp"), Reply: codexText("selected")},
-					{Name: "again", Match: harnesstest.LastUserText("again"), Reply: codexText("again")},
-				},
-				actions: codexSession(codexTurn("a", "select"), []action{restart{}}, codexTurn("a", "again"), []action{recordWire{}}),
-			},
-			websocket:  true,
-			mcpSchema:  mcpToolSchemaWithRejectedKeywords,
-			mcpLoading: "lazy",
-		},
-	}
 }
 
 func codexWebSocketRows() []codexScenario {

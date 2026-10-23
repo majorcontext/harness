@@ -13,24 +13,24 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-const deferDescription = "Inspect this session's configured MCP servers, and load the schemas of deferred MCP tools. " +
+const deferDescription = "Inspect this session's configured MCP servers, and run deferred MCP tools. " +
 	"Some MCP tools are DEFERRED: the system prompt or an [mcp: ...] notice in the conversation lists their names and one-line descriptions, " +
-	"but their input schemas are not loaded and you cannot call them yet. Actions: " +
-	"search(query) ranks deferred and loaded tools by keyword over their names and descriptions, " +
-	"and reports whether each is already loaded; " +
-	"select(tools) loads the schemas of the named tools — they appear in your tool list on the " +
-	"next request and are then called directly, like any other tool. Select every tool you need " +
-	"in ONE call, and do not select a tool search already reports as loaded. " +
+	"but they are not in your tool list. Actions: " +
+	"search(query) ranks deferred and listed tools by keyword over their names and descriptions, " +
+	"and reports whether each is in your tool list; " +
+	"select(tools) returns the description and input schema of the named deferred tools. Select every tool you need " +
+	"in ONE call, and do not select a tool that search reports in your tool list. " +
+	"call(tool, arguments) runs a deferred tool with arguments that follow its input schema. " +
 	"status() reports every configured server's live connection state — connected, still " +
 	"retrying in the background, or parked (background retries exhausted); " +
 	"connect(server) makes ONE bounded, synchronous connect attempt for a server that is not " +
 	"yet connected — the only way to bring a parked server back once its automatic background " +
 	"retries have given up, and the way to discover the tools of a server that has never connected."
 
-const catalogHeader = "Deferred MCP tools. These tools exist but their input schemas are not loaded. " +
-	"To use one you MUST first load it with the mcp tool: " +
+const catalogHeader = "Deferred MCP tools. These tools exist but are not in your tool list. " +
+	"To use one you MUST first read its definition with the mcp tool: " +
 	`mcp(action="select", tools=["mcp__server__tool"]). ` +
-	"A selected tool appears in your tool list on the next request and is then called directly. " +
+	`Then run it with mcp(action="call", tool="mcp__server__tool", arguments={...}). ` +
 	`Select every tool you need in ONE call. Use mcp(action="search", query="...") to find a tool by keyword.`
 
 const (
@@ -48,6 +48,9 @@ type args struct {
 	Query  string   `json:"query"`
 	Limit  int      `json:"limit"`
 	Tools  []string `json:"tools"`
+	// Tool and Arguments are the deferred tool that the call action runs.
+	Tool      string          `json:"tool"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 // control is the mcp tool of one model call.
@@ -64,12 +67,23 @@ type control struct {
 
 func (c control) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: controlName, Description: deferDescription, InputSchema: json.RawMessage(`{"type":"object","properties":{` +
-		`"action":{"type":"string","enum":["status","connect","search","select"],"description":"The operation to perform"},` +
+		`"action":{"type":"string","enum":["status","connect","search","select","call"],"description":"The operation to perform"},` +
 		`"server":{"type":"string","description":"The configured server name (required for connect)"},` +
 		`"query":{"type":"string","description":"Keywords to rank tools by (required for search)"},` +
 		`"limit":{"type":"integer","description":"Maximum search results (default 20, max 50)"},` +
-		`"tools":{"type":"array","items":{"type":"string"},"description":"Namespaced tool names to load, e.g. mcp__github__create_issue (required for select)"}},` +
+		`"tools":{"type":"array","items":{"type":"string"},"description":"Namespaced tool names to read, e.g. mcp__github__create_issue (required for select)"},` +
+		`"tool":{"type":"string","description":"The namespaced name of the deferred tool to run (required for call)"},` +
+		`"arguments":{"type":"object","description":"The arguments of the tool, as its input schema describes (for call)"}},` +
 		`"required":["action"]}`)}
+}
+
+// Forward makes the call action run the deferred tool that it names, between the hooks of that tool.
+func (control) Forward(call protocol.ToolCall) (protocol.ToolCall, bool) {
+	var in args
+	if json.Unmarshal(call.Arguments, &in) != nil || in.Action != "call" || in.Tool == "" {
+		return call, false
+	}
+	return protocol.ToolCall{ID: call.ID, Name: in.Tool, Arguments: in.Arguments}, true
 }
 
 // Alone makes the mcp tool run with no other call of its model call in flight.
@@ -85,9 +99,7 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 		c.all = c.v.liveAll(c.ok)
 		if c.late != nil {
 			for _, l := range c.late() {
-				if l.Live {
-					c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
-				}
+				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
 			}
 		}
 	}
@@ -102,8 +114,10 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 		out, err = c.search(in.Query, in.Limit)
 	case in.Action == "select":
 		out, err = c.choose(in.Tools)
+	case in.Action == "call":
+		err = fmt.Errorf(`mcp: call requires a "tool" argument`)
 	default:
-		err = fmt.Errorf(`mcp: unknown action %q (want "status", "connect", "search" or "select")`, in.Action)
+		err = fmt.Errorf(`mcp: unknown action %q (want "status", "connect", "search", "select" or "call")`, in.Action)
 	}
 	if err != nil {
 		return protocol.ToolResult{}, err
@@ -188,21 +202,27 @@ func (c control) search(query string, limit int) (any, error) {
 	}{matches, len(hits), len(hits) > len(matches)}, nil
 }
 
-type choice struct {
-	Selected []string `json:"selected"`
-	Already  []string `json:"already"`
-	Pending  []string `json:"pending"`
-	Missing  []string `json:"missing"`
-	Note     string   `json:"note"`
+type definition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
-// choose sorts each name. A name of a configured server that is not
-// connected is pending: the log holds it, so it loads once the server connects.
+type choice struct {
+	Tools   []definition `json:"tools"`
+	Already []string     `json:"already"`
+	Pending []string     `json:"pending"`
+	Missing []string     `json:"missing"`
+	Note    string       `json:"note"`
+}
+
+// choose gives the definition of each deferred tool that names holds, and sorts the other names. A name of a configured server that is not
+// connected is pending: it has no definition until the server connects.
 func (c control) choose(names []string) (any, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf(`mcp: select requires a non-empty "tools" array`)
 	}
-	out := choice{Selected: []string{}, Already: []string{}, Pending: []string{}, Missing: []string{}}
+	out := choice{Tools: []definition{}, Already: []string{}, Pending: []string{}, Missing: []string{}}
 	seen := map[string]bool{}
 	for _, n := range names {
 		if seen[n] {
@@ -210,27 +230,34 @@ func (c control) choose(names []string) (any, error) {
 		}
 		seen[n] = true
 		server, _, _ := strings.Cut(strings.TrimPrefix(n, prefix), "__")
+		found := slices.IndexFunc(c.all, func(r remote) bool { return r.spec.Name == n })
 		switch {
 		case c.loaded[n]:
 			out.Already = append(out.Already, n)
-		case slices.ContainsFunc(c.all, func(r remote) bool { return r.spec.Name == n }):
-			out.Selected = append(out.Selected, n)
+		case found >= 0:
+			r := c.all[found]
+			out.Tools = append(out.Tools, definition{r.spec.Name, r.spec.Description, r.spec.InputSchema})
 		case strings.HasPrefix(n, prefix) && slices.Contains(c.v.names, server) && !c.v.live[server].up():
 			out.Pending = append(out.Pending, n)
 		default:
 			out.Missing = append(out.Missing, n)
 		}
 	}
-	loaded := len(out.Selected)+len(out.Already) > 0
 	switch {
-	case loaded && len(out.Pending) > 0:
-		out.Note = "the loaded tools are callable from the next request in this turn; the pending ones load once their server reconnects"
-	case loaded:
-		out.Note = "selected tools are callable from the next request in this turn"
+	case len(out.Tools) > 0:
+		out.Note = `call a tool with mcp(action="call", tool="<name>", arguments={...})`
+		if len(out.Already) > 0 {
+			out.Note += "; a tool in already is in your tool list, so call it directly"
+		}
+		if len(out.Pending) > 0 {
+			out.Note += "; the pending tools have no definition until their server reconnects"
+		}
+	case len(out.Already) > 0:
+		out.Note = "every tool you selected is in your tool list: call it directly"
 	case len(out.Pending) > 0:
-		out.Note = "no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions"
+		out.Note = "no definition returned: every name you selected belongs to a server that is not connected. See the mcp tool's status and connect actions"
 	default:
-		out.Note = "no tool was loaded"
+		out.Note = "no tool matched"
 	}
 	return out, nil
 }

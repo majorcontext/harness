@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -109,7 +110,7 @@ func readBlob(ctx context.Context, st Blobs, key string) ([]byte, error) {
 // failed write keeps the whole result: a result is better than none. The
 // blob is written outside the actor, as SaveState writes its blob.
 func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) protocol.ToolResult {
-	if tool == toolresult.ToolName || len(res.Text) <= toolresult.Inline {
+	if tool == toolresult.ToolName || tool == mcpsrc.ToolName || len(res.Text) <= toolresult.Inline {
 		return res
 	}
 	masked := toolresult.Mask(res.Text)

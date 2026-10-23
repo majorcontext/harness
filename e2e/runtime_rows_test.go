@@ -484,7 +484,8 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"mcp_eager_lists_namespaced_tools":                                         sameAsServe(),
 	"mcp_http_sse_reply":                                                       sameAsServe(),
 	"mcp_instructions_in_system_prompt":                                        sameAsServe(),
-	"mcp_lazy_call_without_select_loads_the_tool":                              sameAsServe(),
+	"mcp_call_of_a_deferred_tool_goes_through_the_plugin_guard":                sameAsServe(),
+	"mcp_lazy_native_call_of_a_deferred_tool_runs_it":                          sameAsServe(),
 	"mcp_lazy_search_select_then_call":                                         sameAsServe(),
 	"mcp_lazy_select_reports_each_name":                                        sameAsServe(),
 	"mcp_non_text_results_become_text_and_blobs":                               reGolden(specToolImages),
@@ -760,7 +761,6 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"goal_judges_the_last_turn_after_a_restart":                                           reGolden(specView, specGoalRestart),
 	"claudecode_child_and_goal_sessions_ask_no_question":                                  sameAsServe(),
 	"codex_ws_restart_warms_the_websocket_again":                                          reGolden(specItems, specWarm),
-	"codex_ws_restart_prewarms_with_a_tool_the_log_selected":                              reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":                      sameAsServe(),
 	"a_failed_summary_keeps_its_usage_in_the_session":                                     reGolden(specView, specOverflowFails),
 

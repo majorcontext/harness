@@ -219,44 +219,6 @@ func extendsMessages(next, prev []harnesstest.Message) bool {
 	return tail.Role == got.Role && len(got.Parts) >= len(tail.Parts) && reflect.DeepEqual(got.Parts[:len(tail.Parts)], tail.Parts)
 }
 
-type expectMCPCalls struct {
-	server string
-	want   []harnesstest.MCPCall
-}
-
-func (a expectMCPCalls) run(t *testing.T, r *run) {
-	t.Helper()
-	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
-	if !ok {
-		t.Fatalf("no HTTP MCP server %q", a.server)
-	}
-	if got := srv.Calls(); !reflect.DeepEqual(got, a.want) {
-		t.Errorf("server %s calls = %+v, want %+v", a.server, got, a.want)
-	}
-}
-
-type stopMCPServer struct{ server string }
-
-func (a stopMCPServer) run(t *testing.T, r *run) {
-	t.Helper()
-	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
-	if !ok {
-		t.Fatalf("no HTTP MCP server %q", a.server)
-	}
-	srv.Close()
-}
-
-type refuseMCPServer struct{ server string }
-
-func (a refuseMCPServer) run(t *testing.T, r *run) {
-	t.Helper()
-	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
-	if !ok {
-		t.Fatalf("no HTTP MCP server %q", a.server)
-	}
-	srv.SetAvailable(false)
-}
-
 // mcpEchoTools is a spec of n tools named t01, t02, ...
 func mcpEchoTools(n int) harnesstest.MCPSpec {
 	spec := harnesstest.MCPSpec{Name: "weather"}
@@ -443,15 +405,17 @@ func TestContractMCPLazyLoading(t *testing.T) {
 			model: toolChain(
 				mcpAction("action", "search", "query", "forecast"),
 				mcpAction("action", "select", "tools", []string{"mcp__weather__forecast"}),
-				mcpTool("weather", "forecast", "city", "Oslo"),
+				mcpAction("action", "call", "tool", "mcp__weather__forecast", "arguments", map[string]any{"city": "Oslo"}),
+				mcpAction("action", "call", "tool", "bash", "arguments", map[string]any{"command": "echo hi"}),
 			),
 			actions: append(append([]action{}, oneTurn...),
 				expectSystem{req: 1, has: []string{"Deferred MCP tools", forecastLine}},
-				expectSystem{req: 3, has: []string{"Deferred MCP tools"}, lacks: []string{forecastLine}},
+				expectSystem{req: 3, has: []string{"Deferred MCP tools", forecastLine}, sameAs: 1},
+				expectToolsStable{},
 			),
 		},
 		{
-			name:    "mcp_lazy_call_without_select_loads_the_tool",
+			name:    "mcp_lazy_native_call_of_a_deferred_tool_runs_it",
 			setup:   mcpSetup(lazy, weather),
 			model:   toolChain(mcpTool("weather", "forecast", "city", "Oslo")),
 			actions: oneTurn,
@@ -486,6 +450,12 @@ func TestContractMCPLazyLoading(t *testing.T) {
 				lacks: []string{"mcp__weather__t95 ", "mcp__weather__t99 "},
 			}),
 		},
+	})
+}
+
+func TestContractMCPAutoLoading(t *testing.T) {
+	weather := mcpServerDef{name: "weather", spec: mcpWeather("")}
+	runScenarios(t, []scenario{
 		{
 			name:    "mcp_auto_default_threshold_stays_eager_at_20_tools",
 			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto"}, mcpServerDef{name: "weather", spec: mcpEchoTools(20)}),
@@ -747,6 +717,15 @@ func TestContractMCPRefusals(t *testing.T) {
 				submit{as: "a", text: "again"},
 				waitIdle{as: "a"},
 			},
+		},
+		{
+			name: "mcp_call_of_a_deferred_tool_goes_through_the_plugin_guard",
+			setup: func(t *testing.T, fx map[string]any) map[string]any {
+				guard := map[string]any{"plugins": []any{pluginEntry(t, "guard", map[string]any{"deny_tool": "mcp__weather__forecast"})}, "mcp_tool_loading": "lazy"}
+				return mcpSetup(guard, weather)(t, fx)
+			},
+			model:   toolChain(mcpAction("action", "call", "tool", "mcp__weather__forecast", "arguments", map[string]any{"city": "Oslo"})),
+			actions: append(append([]action{}, oneTurn...), expectNoMCPToolCall{server: "weather"}),
 		},
 		{
 			name:    "mcp_select_of_a_down_server_is_pending",

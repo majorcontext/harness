@@ -13,7 +13,7 @@ const MaxParallel = 8
 // Alone is a Tool that runs with no other call of its model call in flight:
 // each earlier call ends before it starts, and it ends before a later call
 // starts. A tool that changes what the next call sees, such as the model,
-// the goal, or the loaded MCP tools, is Alone.
+// the goal, or the MCP servers, is Alone. A forwarded call is Alone only when its tool is.
 type Alone interface {
 	Alone()
 }
@@ -39,7 +39,7 @@ type batch struct {
 	ctx, step context.Context
 	run       func(context.Context, protocol.ToolCall) protocol.ToolResult
 	join      func(context.Context, protocol.ToolCall, protocol.ToolResult) protocol.ToolResult
-	alone     func(name string) bool
+	alone     func(c protocol.ToolCall) bool
 	key       func(c protocol.ToolCall) string
 	calls     []protocol.ToolCall
 	outs      []outcome
@@ -107,7 +107,7 @@ func (b *batch) schedule() {
 	slots := make(chan struct{}, min(MaxParallel, len(b.calls)))
 	tail := map[string]chan struct{}{}
 	for i, c := range b.calls {
-		if b.alone(c.Name) {
+		if b.alone(c) {
 			wg.Wait()
 			b.exec(i)
 			continue
