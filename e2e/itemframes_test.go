@@ -209,5 +209,25 @@ func TestContractLateSubscriber(t *testing.T) {
 				itemFrames{as: "a", past: true},
 			},
 		},
+		{
+			name: "chat_subscriber_past_the_item_start_receives_no_frame_of_the_item",
+			chat: true,
+			model: []harnesstest.Step{
+				{Name: "slow", Reply: harnesstest.Reply{Text: "partial ", Tail: "answer", Block: true, TailBlock: true}},
+				{Name: "next", Repeat: true, Reply: harnesstest.Reply{Text: "next answer"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				watchItems{as: "a"},
+				submit{as: "a", text: "go"},
+				watchItems{as: "a", late: true},
+				enqueue{as: "a", text: "more"},
+				release{step: "slow"},
+				watchItems{as: "a", past: true},
+				release{step: "slow:tail"},
+				waitIdle{as: "a"},
+				itemFrames{as: "a", past: true},
+			},
+		},
 	})
 }

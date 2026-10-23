@@ -41,7 +41,7 @@ type Reply struct {
 	RetryAfter string
 	// Hangup closes the connection with no response. It sets no status. The websocket transport of the Responses server ignores it.
 	Hangup bool
-	// Tail is text that the Anthropic server streams as a second text delta
+	// Tail is text that the Anthropic and chat-completions servers stream as a second text delta
 	// after Text, and after Release when Block is set.
 	Tail string
 	// TailBlock makes the reply wait after Tail for Release of the step name plus ":tail".
