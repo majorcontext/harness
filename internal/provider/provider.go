@@ -211,12 +211,12 @@ type RequestMetadata struct {
 	// plain int: item 0 is a real and common answer, so "no item" needs a
 	// value of its own. A number is also directly aggregatable, which a
 	// rendered locator never was.
-	ChainRefusal       ChainRefusal `json:"chain_refusal,omitempty"`
-	ChainRefusalDetail string       `json:"chain_refusal_detail,omitempty"`
-	ChainRefusalItem   *int         `json:"chain_refusal_item,omitempty"`
-	ChainRefusalOffset      *int `json:"chain_refusal_offset,omitempty"`
-	ChainRefusalPreviousLen *int `json:"chain_refusal_previous_len,omitempty"`
-	ChainRefusalCurrentLen  *int `json:"chain_refusal_current_len,omitempty"`
+	ChainRefusal            ChainRefusal `json:"chain_refusal,omitempty"`
+	ChainRefusalDetail      string       `json:"chain_refusal_detail,omitempty"`
+	ChainRefusalItem        *int         `json:"chain_refusal_item,omitempty"`
+	ChainRefusalOffset      *int         `json:"chain_refusal_offset,omitempty"`
+	ChainRefusalPreviousLen *int         `json:"chain_refusal_previous_len,omitempty"`
+	ChainRefusalCurrentLen  *int         `json:"chain_refusal_current_len,omitempty"`
 }
 
 // Event is one streaming event from a model call.
