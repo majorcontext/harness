@@ -364,7 +364,7 @@ sleep-based synchronization.
 
 ## Observability
 
-Harness records no response ID value in logs or metrics.
+Harness logs the id of a response only as `response_id` on `turn_metrics`, which joins the line to a request log. It records the id nowhere else.
 
 A completed WebSocket model call reports `provider.RequestMetadata` on its
 `EventDone`. The engine copies these fields into `turn_metrics`:
@@ -376,7 +376,7 @@ A completed WebSocket model call reports `provider.RequestMetadata` on its
 - `chain_recovered`.
 - `chain_refusal` and `chain_refusal_detail`, on a refused call only.
 
-HTTP calls and providers that omit request metadata omit all projection fields.
+HTTP calls and providers that report no projection omit all projection fields.
 A successful full-request recovery after `previous_response_not_found` reports
 `request_mode=full`, `previous_response_used=false`, and
 `chain_recovered=true`.
@@ -393,7 +393,7 @@ the reason where it makes the decision (`internal/provider/openai/ws_pool.go`).
 | `no_lineage` | No usable lineage: the session's first call, or a lineage that a partial, failed, canceled, or concurrent call invalidated | omitted | omitted |
 | `connection_idle` | The pooled connection sat idle past `wsDefaultIdleTimeout` (5 minutes) and took its lineage with it | omitted | omitted |
 | `connection_aged` | The pooled connection reached `wsDefaultMaxConnectionAge` (55 minutes) | omitted | omitted |
-| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` | omitted; for `instructions`, `chain_refusal_offset` (the first differing byte), `chain_refusal_previous_len`, and `chain_refusal_current_len` (byte lengths) |
+| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` | omitted; for `instructions`, `chain_refusal_offset` (the first differing byte), `chain_refusal_previous_len`, and `chain_refusal_current_len` (byte lengths); for `tools`, `chain_refusal_tool` (the first tool whose entry differs) and `chain_refusal_tool_part` (`name`, `description`, `schema`, `order`, or `other`) |
 | `prefix_changed` | The input prefix is no longer byte-identical to the lineage call's input plus its response | omitted | the index of the first item that differs, `0` included |
 | `prefix_changed` | The input is too short to extend the prefix at all, so no item index exists | `input_shorter_than_prefix` | omitted |
 
@@ -576,8 +576,7 @@ Validate behavior and the shipped metrics before broad rollout:
 6. Monitor provider errors and truncated-stream rate.
 
 Use `startup_prewarm.status` to compare eligibility, readiness, and first-turn
-consumption. Use `turn_metrics.chain_recovered` to monitor chain misses without
-exposing response IDs. Group `turn_metrics.chain_refusal` to rank why full
+consumption. Use `turn_metrics.chain_recovered` to monitor chain misses. Group `turn_metrics.chain_refusal` to rank why full
 requests happen, alongside the count of Codex rows carrying no `request_mode`
 (see "`connection_idle` undercounts idle loss").
 

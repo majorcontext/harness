@@ -545,7 +545,7 @@ func TestWebSocketIncompleteAndFailedResponsesClearLineage(t *testing.T) {
 }
 
 func TestSendResponseCreateDecodeErrorNamesResponseCreate(t *testing.T) {
-	err := sendResponseCreate(context.Background(), nil, []byte("{"))
+	_, err := sendResponseCreate(context.Background(), nil, []byte("{"))
 	if err == nil {
 		t.Fatal("sendResponseCreate returned nil error for invalid request JSON")
 	}

@@ -139,12 +139,17 @@ func TestContractTurnMetricsLineOfEachModelCall(t *testing.T) {
 		t.Fatalf("turn-purpose lines = %d, want 2", len(turnCalls))
 	}
 	wantFields(t, "first call", turnCalls[0], map[string]any{"retry": 1.0, "input_tokens": 11.0, "output_tokens": 7.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0})
-	wantFields(t, "second call", turnCalls[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0})
+	wantFields(t, "second call", turnCalls[1], map[string]any{"retry": 0.0, "input_tokens": 13.0, "output_tokens": 5.0, "cache_read_tokens": 0.0, "cache_write_tokens": 0.0,
+		"stop_reason": "end_turn", "provider_input_tokens": 13.0, "provider_output_tokens": 5.0})
 	for _, rec := range initial {
 		if rec["purpose"] != "turn" {
 			continue
 		}
-		wantNumbers(t, "turn", rec, "ttft_ms", "stream_ms", "system_len", "tools_count")
+		wantNumbers(t, "turn", rec, "ttft_ms", "stream_ms", "system_len", "tools_count", "request_bytes", "instructions_bytes", "tools_bytes", "history_bytes", "max_output_tokens", "provider_input_tokens", "provider_output_tokens", "provider_cached_tokens")
+		if id, _ := rec["response_id"].(string); id == "" {
+			t.Errorf("turn response_id = %v, want the provider message id\n%v", rec["response_id"], rec)
+		}
+		wantAbsent(t, "turn", rec, "error_class", "incomplete_reason")
 		if rec["system_len"].(float64) == 0 || rec["tools_count"].(float64) == 0 {
 			t.Errorf("turn system_len %v and tools_count %v, want the size of the request that the call sent", rec["system_len"], rec["tools_count"])
 		}

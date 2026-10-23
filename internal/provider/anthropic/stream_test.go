@@ -132,6 +132,10 @@ func TestStreamAssembly(t *testing.T) {
 		done.Usage.CacheWriteTokens != 50 || done.Usage.CacheReadTokens != 25 {
 		t.Errorf("usage = %+v", done.Usage)
 	}
+	if md := done.RequestMetadata; md == nil || md.ResponseID != done.Message.ID || md.RequestBytes == 0 || md.HistoryBytes == 0 ||
+		md.MaxOutputTokens == 0 || md.ProviderUsage == nil || md.ProviderUsage.Output != 42 {
+		t.Errorf("request metadata = %+v, want response id, sizes, and provider usage", md)
+	}
 
 	msg := done.Message
 	if msg.ID != "msg_01" || msg.Role != message.RoleAssistant || len(msg.Parts) != 3 {

@@ -109,6 +109,7 @@ type wsStreamRequest struct {
 	URL        string
 	Headers    http.Header
 	Body       []byte // the marshaled apiRequest, same bytes the HTTP path POSTs
+	Sizes      wireSizes
 	Model      modelref.ModelRef
 	Family     string
 	HTTPClient *http.Client
@@ -152,7 +153,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	case idled:
 		chainRefusal = provider.ChainRefusalConnectionIdle
 	}
-	var chainRefusalDetail string
+	var chainRefusalDetail, chainRefusalTool, chainRefusalToolPart string
 	var chainRefusalItem, chainRefusalOffset, chainRefusalPreviousLen, chainRefusalCurrentLen *int
 
 	if !reuse {
@@ -212,6 +213,9 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 			previousLen, currentLen := len(entry.lineage.request.Instructions), len(completeRequest.Instructions)
 			chainRefusalPreviousLen, chainRefusalCurrentLen = &previousLen, &currentLen
 		}
+		if property == "tools" {
+			chainRefusalTool, chainRefusalToolPart = toolsDiff(entry.lineage.request.Tools, completeRequest.Tools)
+		}
 	} else if suffix, item, ok := incrementalInputDiff(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
 		createOptions.PreviousResponseID = entry.lineage.responseID
 		createOptions.Input = suffix
@@ -223,10 +227,16 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	}
 	entry.mu.Unlock()
 
-	if err := sendResponseCreate(ctx, conn, req.Body, createOptions); err != nil {
+	frameBytes, err := sendResponseCreate(ctx, conn, req.Body, createOptions)
+	if err != nil {
 		p.handleTransportError(entry, err)
 		p.release(entry)
 		return nil, false
+	}
+	sizes := req.Sizes
+	sizes.request = frameBytes
+	if createOptions.InputSet {
+		sizes.history = inputBytes(createOptions.Input)
 	}
 
 	firstName, firstData, err := readFirstFrame(ctx, conn, p.idleTimeout)
@@ -281,18 +291,16 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		}
 	}
 
-	metadata := &provider.RequestMetadata{
-		Mode:                    provider.RequestModeFull,
-		CompleteInputItems:      len(completeRequest.Input),
-		SentInputItems:          len(completeRequest.Input),
-		PreviousResponseUsed:    false,
-		ChainRefusal:            chainRefusal,
-		ChainRefusalDetail:      chainRefusalDetail,
-		ChainRefusalItem:        chainRefusalItem,
-		ChainRefusalOffset:      chainRefusalOffset,
-		ChainRefusalPreviousLen: chainRefusalPreviousLen,
-		ChainRefusalCurrentLen:  chainRefusalCurrentLen,
-	}
+	metadata := sizes.metadata()
+	metadata.Mode = provider.RequestModeFull
+	metadata.CompleteInputItems = len(completeRequest.Input)
+	metadata.SentInputItems = len(completeRequest.Input)
+	metadata.ChainRefusal = chainRefusal
+	metadata.ChainRefusalDetail = chainRefusalDetail
+	metadata.ChainRefusalItem = chainRefusalItem
+	metadata.ChainRefusalOffset = chainRefusalOffset
+	metadata.ChainRefusalPreviousLen, metadata.ChainRefusalCurrentLen = chainRefusalPreviousLen, chainRefusalCurrentLen
+	metadata.ChainRefusalTool, metadata.ChainRefusalToolPart = chainRefusalTool, chainRefusalToolPart
 	if chainedRequest {
 		metadata.Mode = provider.RequestModeIncremental
 		metadata.SentInputItems = len(createOptions.Input)
@@ -374,7 +382,8 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 			generation = entry.generation
 			entry.mu.Unlock()
 			conn = newConn
-			if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
+			fullBytes, err := sendResponseCreate(ctx, conn, req.Body)
+			if err != nil {
 				p.handleTransportError(entry, err)
 				p.release(entry)
 				return nil, nil, provider.MarkStreamTruncated(err)
@@ -385,13 +394,13 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 				p.release(entry)
 				return nil, nil, provider.MarkStreamTruncated(err)
 			}
-			fullMetadata := &provider.RequestMetadata{
-				Mode:                 provider.RequestModeFull,
-				CompleteInputItems:   len(completeRequest.Input),
-				SentInputItems:       len(completeRequest.Input),
-				PreviousResponseUsed: false,
-				ChainRecovered:       true,
-			}
+			fullSizes := req.Sizes
+			fullSizes.request = fullBytes
+			fullMetadata := fullSizes.metadata()
+			fullMetadata.Mode = provider.RequestModeFull
+			fullMetadata.CompleteInputItems = len(completeRequest.Input)
+			fullMetadata.SentInputItems = len(completeRequest.Input)
+			fullMetadata.ChainRecovered = true
 			return newSource(name, data), fullMetadata, nil
 		}
 	}
