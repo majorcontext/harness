@@ -177,12 +177,23 @@ type runner struct {
 }
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-	if f, ok := t.find(c.Name).(Forwarder); ok {
+	tools, c := t.target(c)
+	return runTool(ctx, tools, t.hooks, c)
+}
+
+// target returns the tools and the call that c runs. A tool whose Spec panics runs c itself.
+func (t runner) target(c protocol.ToolCall) (tools []Tool, call protocol.ToolCall) {
+	defer func() {
+		if recover() != nil {
+			tools, call = t.runnable, c
+		}
+	}()
+	if f, ok := findIn(t.runnable, c.Name).(Forwarder); ok {
 		if fc, ok := f.Forward(c); ok {
-			return runTool(ctx, t.deferred, t.hooks, fc)
+			return t.deferred, fc
 		}
 	}
-	return runTool(ctx, t.runnable, t.hooks, c)
+	return t.runnable, c
 }
 
 func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
@@ -191,27 +202,31 @@ func (t runner) join(ctx context.Context, c protocol.ToolCall, r protocol.ToolRe
 		defer t.joinMu.Unlock()
 	}
 	if j, ok := t.hooks.(Joiner); ok {
+		_, c = t.target(c)
 		return j.Join(ctx, c, r)
 	}
 	return r
 }
 
-func (t runner) find(name string) Tool {
-	if i := slices.IndexFunc(t.runnable, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
-		return t.runnable[i]
+func (t runner) find(name string) Tool { return findIn(t.runnable, name) }
+
+func findIn(tools []Tool, name string) Tool {
+	if i := slices.IndexFunc(tools, func(x Tool) bool { return x.Spec().Name == name }); i >= 0 {
+		return tools[i]
 	}
 	return nil
 }
 
-// alone reports whether the tool name runs Alone. A tool whose Spec panics is
+// alone reports whether the tool that c runs is Alone. A tool whose Spec panics is
 // Alone, so that its panic reaches the result of its own call.
-func (t runner) alone(name string) (alone bool) {
+func (t runner) alone(c protocol.ToolCall) (alone bool) {
 	defer func() {
 		if recover() != nil {
 			alone = true
 		}
 	}()
-	_, ok := t.find(name).(Alone)
+	tools, c := t.target(c)
+	_, ok := findIn(tools, c.Name).(Alone)
 	return ok
 }
 
@@ -224,7 +239,8 @@ func (t runner) key(c protocol.ToolCall) (key string) {
 			key = "panicking-key:" + c.Name
 		}
 	}()
-	if k, ok := t.find(c.Name).(Keyed); ok {
+	tools, c := t.target(c)
+	if k, ok := findIn(tools, c.Name).(Keyed); ok {
 		return k.Key(c)
 	}
 	return ""

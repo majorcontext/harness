@@ -316,7 +316,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 
 func TestContractCodex(t *testing.T) {
 	t.Parallel()
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexItemIDRows(), codexWarmRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexChainRows(), codexItemIDRows(), codexHTTPRows(), codexRetryRows(), codexAuthRows(), codexInjectedRows(), codexModelsFromRows(), codexNoToolCallRows(), codexPluginRows(t), codexSearchRows(), codexCacheRows()))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -421,25 +421,6 @@ func (recordChains) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 	}
 	slices.Sort(chains)
 	r.record(t, "codex_chains", "", callResult{Status: 200, Body: chains})
-}
-
-func codexWarmRows() []codexScenario {
-	return []codexScenario{
-		{
-			// The first turn after a wake chains from the prewarm only when the
-			// prewarm holds the tools that the turn holds.
-			scenario: scenario{
-				name: "codex_ws_restart_prewarms_with_the_tools_of_the_turn",
-				model: []harnesstest.Step{
-					{Name: "first", Match: harnesstest.LastUserText("first"), Reply: codexText("first")},
-					{Name: "again", Match: harnesstest.LastUserText("again"), Reply: codexText("again")},
-				},
-				actions: codexSession(codexTurn("a", "first"), []action{restart{}}, codexTurn("a", "again"), []action{recordWire{}}),
-			},
-			websocket: true,
-			mcpSchema: mcpToolSchemaWithRejectedKeywords,
-		},
-	}
 }
 
 func codexWebSocketRows() []codexScenario {

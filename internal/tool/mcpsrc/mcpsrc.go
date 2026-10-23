@@ -28,9 +28,12 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// ToolName names the mcp tool.
+const ToolName = "mcp"
+
 const (
 	prefix         = "mcp__"
-	controlName    = "mcp"
+	controlName    = ToolName
 	listName       = "list_mcp_resources"
 	readName       = "read_mcp_resource"
 	connectTimeout = 15 * time.Second
@@ -200,7 +203,7 @@ type Late struct {
 	Tool   turn.Tool
 }
 
-// Plugins gives the plugin tools that a session loads with the mcp tool.
+// Plugins gives the plugin tools that the mcp tool runs for a session.
 type Plugins interface {
 	// Present reports whether the session had a plugin at its first tool read.
 	Present() bool
@@ -208,7 +211,7 @@ type Plugins interface {
 	Late(allowed []string) []Late
 }
 
-// With returns s as a turn.Source that also defers the late tools of pl and loads them with the mcp tool.
+// With returns s as a turn.Source that also defers the late tools of pl and runs them with the mcp tool.
 func (s *Source) With(pl Plugins) turn.Source { return withPlugins{s, pl} }
 
 type withPlugins struct {

@@ -71,7 +71,7 @@ func (c control) Spec() protocol.ToolSpec {
 		`"server":{"type":"string","description":"The configured server name (required for connect)"},` +
 		`"query":{"type":"string","description":"Keywords to rank tools by (required for search)"},` +
 		`"limit":{"type":"integer","description":"Maximum search results (default 20, max 50)"},` +
-		`"tools":{"type":"array","items":{"type":"string"},"description":"Namespaced tool names to load, e.g. mcp__github__create_issue (required for select)"},` +
+		`"tools":{"type":"array","items":{"type":"string"},"description":"Namespaced tool names to read, e.g. mcp__github__create_issue (required for select)"},` +
 		`"tool":{"type":"string","description":"The namespaced name of the deferred tool to run (required for call)"},` +
 		`"arguments":{"type":"object","description":"The arguments of the tool, as its input schema describes (for call)"}},` +
 		`"required":["action"]}`)}

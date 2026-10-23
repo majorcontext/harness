@@ -219,61 +219,6 @@ func extendsMessages(next, prev []harnesstest.Message) bool {
 	return tail.Role == got.Role && len(got.Parts) >= len(tail.Parts) && reflect.DeepEqual(got.Parts[:len(tail.Parts)], tail.Parts)
 }
 
-// expectToolsStable checks that the tools array of every model request equals that of the first.
-type expectToolsStable struct{}
-
-func (expectToolsStable) run(t *testing.T, r *run) {
-	t.Helper()
-	reqs := r.fake.RawRequests()
-	if len(reqs) < 3 {
-		t.Fatalf("model requests = %d, want at least 3", len(reqs))
-	}
-	want := first(reqs[0], "tools")
-	for i, req := range reqs[1:] {
-		if got := first(req, "tools"); string(got) != string(want) {
-			t.Errorf("request %d: tools differ from request 1:\n got %s\nwant %s", i+2, got, want)
-		}
-	}
-}
-
-type expectMCPCalls struct {
-	server string
-	want   []harnesstest.MCPCall
-}
-
-func (a expectMCPCalls) run(t *testing.T, r *run) {
-	t.Helper()
-	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
-	if !ok {
-		t.Fatalf("no HTTP MCP server %q", a.server)
-	}
-	if got := srv.Calls(); !reflect.DeepEqual(got, a.want) {
-		t.Errorf("server %s calls = %+v, want %+v", a.server, got, a.want)
-	}
-}
-
-type stopMCPServer struct{ server string }
-
-func (a stopMCPServer) run(t *testing.T, r *run) {
-	t.Helper()
-	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
-	if !ok {
-		t.Fatalf("no HTTP MCP server %q", a.server)
-	}
-	srv.Close()
-}
-
-type refuseMCPServer struct{ server string }
-
-func (a refuseMCPServer) run(t *testing.T, r *run) {
-	t.Helper()
-	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
-	if !ok {
-		t.Fatalf("no HTTP MCP server %q", a.server)
-	}
-	srv.SetAvailable(false)
-}
-
 // mcpEchoTools is a spec of n tools named t01, t02, ...
 func mcpEchoTools(n int) harnesstest.MCPSpec {
 	spec := harnesstest.MCPSpec{Name: "weather"}
@@ -772,6 +717,15 @@ func TestContractMCPRefusals(t *testing.T) {
 				submit{as: "a", text: "again"},
 				waitIdle{as: "a"},
 			},
+		},
+		{
+			name: "mcp_call_of_a_deferred_tool_goes_through_the_plugin_guard",
+			setup: func(t *testing.T, fx map[string]any) map[string]any {
+				guard := map[string]any{"plugins": []any{pluginEntry(t, "guard", map[string]any{"deny_tool": "mcp__weather__forecast"})}, "mcp_tool_loading": "lazy"}
+				return mcpSetup(guard, weather)(t, fx)
+			},
+			model:   toolChain(mcpAction("action", "call", "tool", "mcp__weather__forecast", "arguments", map[string]any{"city": "Oslo"})),
+			actions: append(append([]action{}, oneTurn...), expectNoMCPToolCall{server: "weather"}),
 		},
 		{
 			name:    "mcp_select_of_a_down_server_is_pending",

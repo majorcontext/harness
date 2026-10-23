@@ -102,6 +102,8 @@ var config struct {
 	Deny string `json:"deny"`
 	// DenyAsk denies a call to ask_user_question whose arguments contain this substring.
 	DenyAsk string `json:"deny_ask"`
+	// DenyTool denies a call to the tool of this name.
+	DenyTool string `json:"deny_tool"`
 	// DenyFetch denies a call to web_fetch whose arguments contain this substring.
 	DenyFetch string `json:"deny_fetch"`
 	// DenyOnFailure flags tool.execute.before as deny-on-failure in the manifest.
@@ -408,6 +410,9 @@ func before(params json.RawMessage) (any, *rpcError) {
 		} `json:"args"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if config.DenyTool != "" && req.Tool == config.DenyTool {
+		return map[string]any{"deny": "denied by " + cmp.Or(config.Name, "fixture")}, nil
+	}
 	if req.Tool == "ask_user_question" && config.BeforeDelayMS > 0 {
 		time.Sleep(time.Duration(config.BeforeDelayMS) * time.Millisecond)
 	}

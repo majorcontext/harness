@@ -2,7 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
-      "model": "gpt-5.6-sol",
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -11,7 +11,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__srv__send",
         "model",
         "process",
         "read_file",
@@ -26,7 +25,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -38,7 +37,7 @@
     },
     {
       "system_has_goal_evaluator": false,
-      "model": "gpt-5.6-sol",
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -47,7 +46,6 @@
         "grep",
         "ls",
         "mcp",
-        "mcp__srv__send",
         "model",
         "process",
         "read_file",
@@ -62,7 +60,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -74,8 +72,16 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "text",
-              "text": "first"
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "call",
+                "arguments": {
+                  "city": "Oslo"
+                },
+                "tool": "mcp__weather__forecast"
+              },
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -83,8 +89,11 @@
           "role": "user",
           "parts": [
             {
-              "kind": "text",
-              "text": "again"
+              "kind": "tool_result",
+              "text": "denied by guard",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#1",
+              "is_error": true
             }
           ]
         }
@@ -99,7 +108,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "first"
+            "text": "go"
           }
         ]
       },
@@ -108,18 +117,28 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "first"
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "mcp",
+            "arguments": {
+              "action": "call",
+              "arguments": {
+                "city": "Oslo"
+              },
+              "tool": "mcp__weather__forecast"
+            }
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "again"
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "denied by guard"
           }
         ]
       },
@@ -129,71 +148,10 @@
         "parts": [
           {
             "type": "text",
-            "text": "again"
+            "text": "done"
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "codex_wire": {
-      "status": 200,
-      "body": {
-        "events": [
-          {
-            "beta_header": true,
-            "conn": 1,
-            "event": "dial",
-            "transport": "ws"
-          },
-          {
-            "conn": 1,
-            "event": "prewarm",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "reasoning_summary": "auto",
-            "transport": "ws"
-          },
-          {
-            "conn": 1,
-            "event": "request",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "input_items": 2,
-            "previous_response_id": "resp_warm_1",
-            "reasoning_summary": "auto",
-            "transport": "ws"
-          },
-          {
-            "beta_header": true,
-            "conn": 2,
-            "event": "dial",
-            "transport": "ws"
-          },
-          {
-            "conn": 2,
-            "event": "prewarm",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "reasoning_summary": "auto",
-            "transport": "ws"
-          },
-          {
-            "conn": 2,
-            "event": "request",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "input_items": 4,
-            "previous_response_id": "resp_warm_2",
-            "reasoning_summary": "auto",
-            "transport": "ws"
-          }
-        ]
-      }
-    }
   }
 }
