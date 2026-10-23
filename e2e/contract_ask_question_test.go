@@ -359,7 +359,7 @@ func TestContractModelAPIQuestionStops(t *testing.T) {
 			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitCall{as: "a", callID: "toolu_ask"}, interrupt{as: "a"}, awaitTurnEnd{as: "a"}, waitIdle{as: "a"}, getSession{as: "a"}},
 		},
 		{
-			name:   "model_api_goal_set_during_a_model_call_refuses_the_question",
+			name: "model_api_goal_set_during_a_model_call_refuses_the_question", prefixBreaks: prefixBreak("a goal removes ask_user_question from the tools of the session", breakTools),
 			driver: askLane(true),
 			model: []harnesstest.Step{
 				{Name: "ask", Match: harnesstest.LastUserText("pick a db"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{askCall("toolu_ask", "Which?")}, Block: true}},

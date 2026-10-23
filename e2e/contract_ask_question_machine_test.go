@@ -78,7 +78,7 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 				dismissQuestion{as: "a", callID: "toolu_ask"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "model_api_goal_set_while_machine_input_waits_behind_a_question_dismisses_it",
+			name: "model_api_goal_set_while_machine_input_waits_behind_a_question_dismisses_it", prefixBreaks: prefixBreak("a goal removes ask_user_question from the tools of the session", breakTools),
 			driver: askLane(true),
 			model: []harnesstest.Step{
 				askSteps()[0], evaluatorStep("judge", "MET: ok", true), {Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},

@@ -98,7 +98,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "auto_compaction_runs_again_after_a_model_change_moves_the_window",
+			name: "auto_compaction_runs_again_after_a_model_change_moves_the_window", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 0, "compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900_000),
@@ -115,7 +115,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			),
 		},
 		{
-			name:   "auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again",
+			name: "auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),

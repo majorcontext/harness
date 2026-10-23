@@ -27,6 +27,8 @@ type scenario struct {
 	model      []harnesstest.Step
 	actions    []action
 	driver     func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
+	// prefixBreaks declares the breaks of the cached request prefix that the spec designs, each kind (tools, system, cache_key, history) with its reason. Every scenario fails on any other break, and on a declared break that never happens.
+	prefixBreaks map[string]string
 	// inject makes the Anthropic fake a credential-injecting server. entry sets keys of the anthropic provider entry; a nil value deletes the key.
 	inject *harnesstest.InjectedOptions
 	entry  map[string]any
@@ -502,6 +504,7 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 			t.Errorf("journal: %s", v)
 		}
 	}
+	checkPrefixes(t, fake.RawRequests(), sc.prefixBreaks)
 	reqs := fake.Requests()
 	if sc.concurrent {
 		reqs = groupByConversation(reqs)

@@ -209,7 +209,7 @@ func TestContractFileToolsLimits(t *testing.T) {
 				restart{}, submit{as: "a", text: "again"}, waitIdle{as: "a"}),
 		},
 		{
-			name: "a_missing_tool_result_image_leaves_the_text_for_the_model",
+			name: "a_missing_tool_result_image_leaves_the_text_for_the_model", prefixBreaks: prefixBreak("the row deletes the blob of a tool result image that an earlier request sent", breakHistory),
 			model: append(toolChain(ftRead(ftArgs("path", "a.png"))),
 				harnesstest.Step{Name: "again", Match: assistantTurns(2), Reply: harnesstest.Reply{Text: "seen again"}}),
 			actions: append(append([]action{writeFile{path: "a.png", body: string(png)}}, oneTurn...),
