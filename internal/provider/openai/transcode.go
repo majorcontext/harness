@@ -120,6 +120,18 @@ func responsesRequestPropertyDiff(previous, current *apiRequest) string {
 	return ""
 }
 
+// firstDifferingOffset returns the byte offset of the first byte that differs
+// between a and b, or the shorter length when one is a prefix of the other.
+func firstDifferingOffset(a, b string) int {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
+
 func apiToolsEqual(previous, current []apiToolDef) bool {
 	if len(previous) != len(current) {
 		return false

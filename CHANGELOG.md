@@ -56,6 +56,7 @@ First tagged release.
 
 ### Changed
 
+- **Instructions change offset in chain refusals** (`openai`, `internal/turn`, `internal/backend/modelapi`) — a `turn_metrics` line of a call that did not chain because the instructions changed now has `chain_refusal_offset`, the byte offset of the first byte that differs, with `chain_refusal_previous_len` and `chain_refusal_current_len`, so an operator can tell a change in the base prompt from a change in a later section. The line never holds the instructions text.
 - **Deferred MCP tools** (`internal/tool/mcpsrc`, `internal/turn`, `internal/tool/pluginsrc`) — `mcp(action="select")` now returns the description and input schema of each named deferred tool, and the new `mcp(action="call", tool, arguments)` runs it, so a deferred tool never joins the `tools` array and a select no longer breaks the prompt cache of the session.
 - **Cache routing headers on the ChatGPT login** (`openai`, `backend`) — a request that the ChatGPT login authenticates, over HTTP and over the websocket handshake, sends the session key as the `session_id` and `x-client-request-id` headers, so the backend routes the prompt cache of a session to the same place. A request with no session key sends neither.
 - **Process status as a pinned notice** (`internal/tool/proc`, `internal/selftool`, `internal/prompt`) — the process status line moves from the system prompt to a notice that the model reads as a pin, so a process start or end no longer changes the system prompt or breaks the provider prompt cache from the first message.

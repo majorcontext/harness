@@ -195,7 +195,9 @@ type RequestMetadata struct {
 	//
 	// ChainRefusalDetail and ChainRefusalItem are the two locator shapes a
 	// reason can carry, and a reason carries at most one. Both are empty
-	// for a reason that needs no locator.
+	// for a reason that needs no locator. A change of instructions also
+	// carries ChainRefusalOffset, its first differing byte, and the byte
+	// lengths ChainRefusalPreviousLen and ChainRefusalCurrentLen.
 	//
 	// ChainRefusalDetail is a NAME: a wire property name for
 	// ChainRefusalPropertyChanged, or "input_shorter_than_prefix" for the
@@ -209,9 +211,12 @@ type RequestMetadata struct {
 	// plain int: item 0 is a real and common answer, so "no item" needs a
 	// value of its own. A number is also directly aggregatable, which a
 	// rendered locator never was.
-	ChainRefusal       ChainRefusal `json:"chain_refusal,omitempty"`
-	ChainRefusalDetail string       `json:"chain_refusal_detail,omitempty"`
-	ChainRefusalItem   *int         `json:"chain_refusal_item,omitempty"`
+	ChainRefusal            ChainRefusal `json:"chain_refusal,omitempty"`
+	ChainRefusalDetail      string       `json:"chain_refusal_detail,omitempty"`
+	ChainRefusalItem        *int         `json:"chain_refusal_item,omitempty"`
+	ChainRefusalOffset      *int         `json:"chain_refusal_offset,omitempty"`
+	ChainRefusalPreviousLen *int         `json:"chain_refusal_previous_len,omitempty"`
+	ChainRefusalCurrentLen  *int         `json:"chain_refusal_current_len,omitempty"`
 }
 
 // Event is one streaming event from a model call.

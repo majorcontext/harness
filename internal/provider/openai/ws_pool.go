@@ -153,7 +153,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		chainRefusal = provider.ChainRefusalConnectionIdle
 	}
 	var chainRefusalDetail string
-	var chainRefusalItem *int
+	var chainRefusalItem, chainRefusalOffset, chainRefusalPreviousLen, chainRefusalCurrentLen *int
 
 	if !reuse {
 		p.invalidate(entry)
@@ -206,6 +206,12 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	} else if property := responsesRequestPropertyDiff(entry.lineage.request, &completeRequest); property != "" {
 		chainRefusal = provider.ChainRefusalPropertyChanged
 		chainRefusalDetail = property
+		if property == "instructions" {
+			offset := firstDifferingOffset(entry.lineage.request.Instructions, completeRequest.Instructions)
+			chainRefusalOffset = &offset
+			previousLen, currentLen := len(entry.lineage.request.Instructions), len(completeRequest.Instructions)
+			chainRefusalPreviousLen, chainRefusalCurrentLen = &previousLen, &currentLen
+		}
 	} else if suffix, item, ok := incrementalInputDiff(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
 		createOptions.PreviousResponseID = entry.lineage.responseID
 		createOptions.Input = suffix
@@ -276,13 +282,16 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	}
 
 	metadata := &provider.RequestMetadata{
-		Mode:                 provider.RequestModeFull,
-		CompleteInputItems:   len(completeRequest.Input),
-		SentInputItems:       len(completeRequest.Input),
-		PreviousResponseUsed: false,
-		ChainRefusal:         chainRefusal,
-		ChainRefusalDetail:   chainRefusalDetail,
-		ChainRefusalItem:     chainRefusalItem,
+		Mode:                    provider.RequestModeFull,
+		CompleteInputItems:      len(completeRequest.Input),
+		SentInputItems:          len(completeRequest.Input),
+		PreviousResponseUsed:    false,
+		ChainRefusal:            chainRefusal,
+		ChainRefusalDetail:      chainRefusalDetail,
+		ChainRefusalItem:        chainRefusalItem,
+		ChainRefusalOffset:      chainRefusalOffset,
+		ChainRefusalPreviousLen: chainRefusalPreviousLen,
+		ChainRefusalCurrentLen:  chainRefusalCurrentLen,
 	}
 	if chainedRequest {
 		metadata.Mode = provider.RequestModeIncremental

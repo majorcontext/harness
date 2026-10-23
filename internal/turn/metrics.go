@@ -18,8 +18,10 @@ type CallMetrics struct {
 	PreviousResponseUsed, ChainRecovered bool
 	// ChainRefusal says why a call that could have chained sent the whole
 	// input; ChainRefusalDetail names it and ChainRefusalItem locates it.
-	ChainRefusal, ChainRefusalDetail string
-	ChainRefusalItem                 *int
+	ChainRefusal, ChainRefusalDetail                string
+	ChainRefusalItem                                *int
+	ChainRefusalOffset                              *int
+	ChainRefusalPreviousLen, ChainRefusalCurrentLen *int
 }
 
 // Chained reports a call that sent only the input that the earlier response
@@ -108,6 +110,12 @@ func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 		// A number: the log ingest reads "input[139]" as a path and keeps only "input".
 		if m.ChainRefusalItem != nil {
 			args = append(args, "chain_refusal_item", *m.ChainRefusalItem)
+		}
+		if m.ChainRefusalOffset != nil {
+			args = append(args, "chain_refusal_offset", *m.ChainRefusalOffset)
+		}
+		if m.ChainRefusalPreviousLen != nil && m.ChainRefusalCurrentLen != nil {
+			args = append(args, "chain_refusal_previous_len", *m.ChainRefusalPreviousLen, "chain_refusal_current_len", *m.ChainRefusalCurrentLen)
 		}
 	}
 	log.Info("turn_metrics", args...)
