@@ -46,7 +46,7 @@ func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedT
 			return
 		}
 		if old, seq, ok := a.state.Input(in.InputID); ok {
-			if !sameJSON(old, in) {
+			if !sameJSON(untraced(old), untraced(in)) {
 				reply(receipt{}, ErrInputConflict)
 				return
 			}
@@ -96,6 +96,12 @@ func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...
 		}
 	}
 	return seq, nil
+}
+
+// untraced returns in without its trace context, which a retry of one input may change.
+func untraced(in protocol.InputAdmitted) protocol.InputAdmitted {
+	in.Traceparent, in.Tracestate = "", ""
+	return in
 }
 
 func sameJSON(x, y any) bool {

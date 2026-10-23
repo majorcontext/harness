@@ -75,7 +75,6 @@ linters:
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/cwdruntimes
             - github.com/majorcontext/harness/internal/injectedauth
-            - go.opentelemetry.io/otel/trace
         acp-acpauth:
           files:
             - "**/internal/acp/acpauth/**"

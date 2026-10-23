@@ -62,6 +62,7 @@ func begin(ctx context.Context, lim Limits, b Backend, req Request, ownsLoop boo
 	r.start = startAttrs(b.Capabilities(req.Model), req, r.call)
 	if !ownsLoop {
 		r.call.callIdent = nextIdent(ctx)
+		r.start = append(r.start, identAttrs(r.call.callIdent)...)
 		ctx, r.span = lim.Trace.StartCall(ctx, "chat "+tracing.ModelID(req.Model), trace.WithAttributes(r.start...))
 	}
 	return ctx, r
@@ -87,6 +88,14 @@ func startAttrs(caps Capabilities, req Request, c callInfo) []attribute.KeyValue
 	}
 	if req.Compacted {
 		attrs = append(attrs, attribute.Bool("gen_ai.conversation.compacted", true))
+	}
+	return attrs
+}
+
+func identAttrs(id callIdent) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{attribute.String("harness.call_id", id.callID)}
+	if id.turnID != "" {
+		attrs = append(attrs, attribute.String("harness.turn_id", id.turnID), attribute.Int("harness.call_seq", id.seq))
 	}
 	return attrs
 }

@@ -196,6 +196,7 @@ func traceRowLink(t *testing.T, h host) {
 		t.Errorf("a refused input left messages: %+v", msgs)
 	}
 	d.expect(t, http.StatusCreated, http.MethodPost, path, traceInput("in1", "hi", map[string]any{"traceparent": rowTraceparent, "tracestate": "vendor=1"}), nil)
+	d.expect(t, http.StatusOK, http.MethodPost, path, traceInput("in1", "hi", map[string]any{"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b8-01", "tracestate": "vendor=1"}), nil)
 	d.WaitIdle(t, id)
 	turn := spansNamed(spans(2), "invoke_agent")
 	if len(turn) != 1 || !slices.Equal(turn[0].Links, []string{"4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"}) || turn[0].TraceID == "4bf92f3577b34da6a3ce929d0e0e4736" {

@@ -276,14 +276,14 @@ func WireOf(name string, p Provider) Wire {
 // TraceName returns the gen_ai.provider.name of the entry name: anthropic, openai, or aws.bedrock for an
 // entry that speaks that API, else the name of the entry.
 func TraceName(name string, p Provider) string {
+	if u, err := url.Parse(p.BaseURL); err == nil && strings.HasPrefix(u.Hostname(), "bedrock-") {
+		return "aws.bedrock"
+	}
 	switch wire := WireOf(name, p); {
 	case p.Type == TypeClaudeCodeCLI, wire == WireAnthropic:
 		return "anthropic"
 	case wire == WireResponses:
 		return "openai"
-	}
-	if u, err := url.Parse(p.BaseURL); err == nil && strings.HasPrefix(u.Hostname(), "bedrock-") {
-		return "aws.bedrock"
 	}
 	return name
 }

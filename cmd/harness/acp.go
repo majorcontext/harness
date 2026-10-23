@@ -104,7 +104,7 @@ func acpRuntimes(logger *slog.Logger, logins *injectedauth.Logins, trace tracing
 		Getenv:     os.Getenv,
 		Logger:     logger,
 
-		TracerProvider: trace.provider, CaptureMessageContent: trace.content,
+		Customize: func(o *harness.Options) { o.TracerProvider, o.CaptureMessageContent = trace.provider, trace.content },
 	})
 }
 
