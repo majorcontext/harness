@@ -385,9 +385,14 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 			{Role: "user", Parts: []Part{{Kind: "tool_result", Text: "boom", ToolName: "bash", ToolUseID: "tu_1", IsError: true}}},
 		},
 	}
-	if got := s.Requests(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+	if got := s.Requests(); len(got) != 1 || !reflect.DeepEqual(withoutHeader(got[0]), want) {
 		t.Errorf("requests = %+v, want [%+v]", got, want)
 	}
+}
+
+func withoutHeader(r Request) Request {
+	r.Header = nil
+	return r
 }
 
 func TestHTTPErrorReply(t *testing.T) {

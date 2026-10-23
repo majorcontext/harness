@@ -100,6 +100,9 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
 		return protocol.Admitted{}, invalidInput(in.ID, err)
 	}
+	if err := admit.TraceContext(in); err != nil {
+		return protocol.Admitted{}, invalidInput(in.ID, err)
+	}
 	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
 		p, next, err := s.resolve(in)
 		if err != nil {

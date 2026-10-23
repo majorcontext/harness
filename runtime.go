@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -29,6 +31,7 @@ import (
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
 	"github.com/majorcontext/harness/internal/tool/proc"
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/internal/tree"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/plugin"
@@ -125,6 +128,10 @@ type Options struct {
 	Plugins []*plugin.Plugin
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
+	// TracerProvider receives the spans of turns, model calls, and tool calls. nil: no span is recorded.
+	TracerProvider trace.TracerProvider
+	// CaptureMessageContent adds the messages, tool definitions, and tool arguments and results to the spans. It is off by default.
+	CaptureMessageContent bool
 }
 
 // HostLimits says what the host of a Runtime cannot do.
@@ -226,7 +233,8 @@ func New(opts Options) (*Runtime, error) {
 		threshold:  positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
-		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log}
+		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
+		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent)}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
 	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
@@ -778,21 +786,3 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 // Models returns the models of the configured providers, by ID. A provider with
 // auth "chatgpt" fetches its list once, within 3 s or until ctx ends.
 func (r *Runtime) Models(ctx context.Context) []protocol.Model { return r.models.List(ctx) }
-
-func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) turn.CallParams {
-	if plug == nil {
-		return nil
-	}
-	return plug.ChatParams
-}
-
-// firstRecord reads the first record of a session of st.
-func firstRecord(st Store) func(context.Context, string) ([]byte, error) {
-	return func(ctx context.Context, id string) ([]byte, error) {
-		recs, err := st.Read(ctx, id, 0, 1)
-		if err != nil || len(recs) == 0 {
-			return nil, err
-		}
-		return recs[0].Data, nil
-	}
-}

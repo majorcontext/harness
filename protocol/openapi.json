@@ -755,6 +755,12 @@
           },
           "expected_turn_id": {
             "type": "string"
+          },
+          "traceparent": {
+            "type": "string"
+          },
+          "tracestate": {
+            "type": "string"
           }
         },
         "additionalProperties": false,
@@ -790,6 +796,12 @@
               "$ref": "#/components/schemas/LogPart"
             },
             "type": "array"
+          },
+          "traceparent": {
+            "type": "string"
+          },
+          "tracestate": {
+            "type": "string"
           }
         },
         "type": "object",

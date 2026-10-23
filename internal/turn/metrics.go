@@ -1,9 +1,6 @@
 package turn
 
-import (
-	"log/slog"
-	"time"
-)
+import "time"
 
 // CallMetrics is what a backend measured of one completed model call: the
 // transport timing and, for a transport that projects the request, its shape.
@@ -27,6 +24,8 @@ type CallMetrics struct {
 	// ResponseID is the provider id of the response. StopReason is the stop reason as the backend maps it,
 	// IncompleteReason the raw reason of an incomplete response, and ErrorClass the class of a call that failed.
 	ResponseID, StopReason, IncompleteReason, ErrorClass string
+	// PreviousResponseID is the response that a chained call continued; it is for the model-call span and no log line.
+	PreviousResponseID string
 	// ProviderTokens is the usage as the provider reported it, or nil when its terminal event had none.
 	ProviderTokens *ProviderTokens
 	// The byte sizes of the request and its parts. RequestBytes 0 means the backend reports none.
@@ -64,32 +63,35 @@ type callInfo struct {
 	systemLen, tools               int
 	// retry counts the earlier attempts of the call that failed.
 	retry int
+	callIdent
 }
 
-// callOf names a call. A backend that owns its loop reports no request size
+// callOf names a call. A backend that owns the loop reports no request size
 // and no tier or effort.
-func callOf(req Request, retry int, ownsLoop bool) callInfo {
+func callOf(req Request, id callIdent, retry int, ownsLoop bool) callInfo {
 	if ownsLoop {
-		return callInfo{sessionID: req.SessionID, model: req.Model, purpose: req.Purpose, retry: retry}
+		return callInfo{sessionID: req.SessionID, model: req.Model, purpose: req.Purpose, retry: retry, callIdent: id}
 	}
 	return callInfo{sessionID: req.SessionID, model: req.Model, tier: req.Settings.ServiceTier, effort: req.Settings.Effort,
-		purpose: req.Purpose, systemLen: len(req.Instructions), tools: len(req.Tools), retry: retry}
+		purpose: req.Purpose, systemLen: len(req.Instructions), tools: len(req.Tools), retry: retry, callIdent: id}
 }
 
 // Telemetry logs the turn_metrics line of a completed model call, then passes t on.
 func (s *sink) Telemetry(t Telemetry) {
 	if t.Call != nil {
-		logCall(s.log, s.call, t)
+		s.rec.record(t)
 	}
 	s.Turn.Telemetry(t)
 }
 
-// logCall writes one turn_metrics line. A key that means "the backend chose"
-// when absent is left out, so a query counts it apart from any named value.
-func logCall(log *slog.Logger, c callInfo, t Telemetry) {
+// callArgs are the keys of the turn_metrics line of a completed model call.
+// A key that means "the backend chose" when absent is left out, so a query
+// counts it apart from any named value.
+func callArgs(c callInfo, t Telemetry) []any {
 	m := t.Call
 	args := []any{
 		"session_id", c.sessionID,
+		"call_id", c.callID,
 		"model", c.model,
 		"purpose", string(c.purpose),
 		"ttft_ms", m.TTFT.Milliseconds(),
@@ -101,6 +103,9 @@ func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 		"system_len", c.systemLen,
 		"tools_count", c.tools,
 		"retry", c.retry,
+	}
+	if c.turnID != "" {
+		args = append(args, "turn_id", c.turnID, "call_seq", c.seq)
 	}
 	if m.RequestMode != "" {
 		args = append(args,
@@ -133,7 +138,7 @@ func logCall(log *slog.Logger, c callInfo, t Telemetry) {
 			args = append(args, "chain_refusal_previous_len", *m.ChainRefusalPreviousLen, "chain_refusal_current_len", *m.ChainRefusalCurrentLen)
 		}
 	}
-	log.Info("turn_metrics", append(args, requestArgs(m)...)...)
+	return append(args, requestArgs(m)...)
 }
 
 // requestArgs are the keys of a turn_metrics line that name the response and the size of the request.

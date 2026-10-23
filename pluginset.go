@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/tool/pluginsrc"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -41,4 +43,11 @@ func (r *Runtime) SetPlugins(ctx context.Context, plugins []config.PluginSpec) (
 		return nil, err
 	}
 	return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+}
+
+func chatParams(plug *pluginsrc.Session) func(context.Context, turn.CallParams) turn.CallParams {
+	if plug == nil {
+		return nil
+	}
+	return plug.ChatParams
 }

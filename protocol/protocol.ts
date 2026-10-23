@@ -216,6 +216,8 @@ export interface Input {
   source_id?: string;
   source_label?: string;
   expected_turn_id?: string;
+  traceparent?: string;
+  tracestate?: string;
 }
 
 export interface InputAdmitted {
@@ -225,6 +227,8 @@ export interface InputAdmitted {
   source_id?: string;
   source_label?: string;
   parts: LogPart[];
+  traceparent?: string;
+  tracestate?: string;
 }
 
 export interface InputPromoted {

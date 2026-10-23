@@ -1,14 +1,13 @@
 package turn
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -43,7 +42,7 @@ func SummaryRequest(ctx context.Context, b Backend, req Request, src Source) (Re
 	if err != nil {
 		return Request{}, err
 	}
-	describe(&call, ts, nil, caps.OwnsLoop)
+	describe(&call, ts, nil, caps.OwnsLoop, tracing.Scope{})
 	call.Call, call.Ask = nil, nil
 	return call, nil
 }
@@ -71,20 +70,23 @@ func Ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 	return ask(ctx, b, req, lim)
 }
 
-func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, protocol.Usage, error) {
+func ask(ctx context.Context, b Backend, req Request, lim Limits) (_ string, _ protocol.Usage, err error) {
 	req.Input, req.Steered = nil, nil
 	req.AcceptCut, req.OneShot = true, true
 	ownsLoop := b.Capabilities(req.Model).OwnsLoop
 	if ownsLoop {
 		lim.Retries = 0
 	}
-	a := answer{log: cmp.Or(lim.Log, slog.Default())}
-	a.call = callOf(req, 0, ownsLoop)
-	err := watch(ctx, b, req, &a, lim.Idle)
+	var a answer
+	ctx, a.rec = begin(ctx, lim, b, req, ownsLoop)
+	defer func() { a.rec.end(req, a.items, err) }()
+	err = watch(ctx, b, req, &a, lim.Idle)
+	a.rec.attempt(1, err)
 	for n := 1; n <= lim.Retries && a.text.Len() == 0 && retryable(err); n++ {
 		if err = sleep(ctx, retryDelay(n, err)); err == nil {
-			a.call = callOf(req, n, ownsLoop)
+			a.rec.retry(n)
 			err = watch(ctx, b, req, &a, lim.Idle)
+			a.rec.attempt(n+1, err)
 		}
 	}
 	if err != nil {
@@ -96,12 +98,13 @@ func ask(ctx context.Context, b Backend, req Request, lim Limits) (string, proto
 // answer is the Sink of ask. It keeps the text and the usage.
 type answer struct {
 	text  strings.Builder
+	items []protocol.LogMessage
 	usage protocol.Usage
-	log   *slog.Logger
-	call  callInfo
+	rec   *recorder
 }
 
 func (a *answer) Item(m protocol.LogMessage) error {
+	a.items = append(a.items, m)
 	for _, p := range m.Parts {
 		if p.Type == protocol.LogPartText {
 			a.text.WriteString(p.Text)
@@ -112,7 +115,7 @@ func (a *answer) Item(m protocol.LogMessage) error {
 
 func (a *answer) Telemetry(t Telemetry) {
 	if t.Call != nil {
-		logCall(a.log, a.call, t)
+		a.rec.record(t)
 	}
 	a.usage = a.usage.Add(t.Usage)
 }

@@ -39,6 +39,8 @@ type Options struct {
 	Logins *injectedauth.Logins
 	// Host is the harness.Options.Host of every runtime.
 	Host harness.HostLimits
+	// Customize sets more fields of the harness.Options of every runtime. nil: none.
+	Customize func(*harness.Options)
 }
 
 // Runtimes implements acp.Runtimes.
@@ -90,9 +92,13 @@ func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (
 			return nil, err
 		}
 	}
-	rt, err := harness.New(harness.Options{Host: r.opts.Host, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
+	hostOpts := harness.Options{Host: r.opts.Host, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
 		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
-		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
+		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion}
+	if r.opts.Customize != nil {
+		r.opts.Customize(&hostOpts)
+	}
+	rt, err := harness.New(hostOpts)
 	if err != nil {
 		return nil, err
 	}

@@ -133,6 +133,7 @@ func replyTo(msg message, result any, err error) message {
 
 func (c *conn) call(ctx context.Context, method string, params, result any) error {
 	id := c.nextID.Add(1)
+	annotateCall(ctx, method, id, "")
 	idJSON, err := json.Marshal(id)
 	if err != nil {
 		return err

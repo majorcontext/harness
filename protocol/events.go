@@ -284,6 +284,8 @@ type InputAdmitted struct {
 	SourceID    string    `json:"source_id,omitempty"`
 	SourceLabel string    `json:"source_label,omitempty"`
 	Parts       []LogPart `json:"parts"`
+	Traceparent string    `json:"traceparent,omitempty"`
+	Tracestate  string    `json:"tracestate,omitempty"`
 }
 
 // InputPromoted moves a queued steer input into the running turn.

@@ -120,7 +120,13 @@ func runCmd(args []string) error {
 		return err
 	}
 	owner, replica := replication(cfg)
-	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv, Logger: logger})
+	trace, err := startTracing(context.Background())
+	if err != nil {
+		return err
+	}
+	defer trace.flush()
+	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, Getenv: os.Getenv, Logger: logger,
+		TracerProvider: trace.provider, CaptureMessageContent: trace.content})
 	if err != nil {
 		return err
 	}

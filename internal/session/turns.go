@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/provider"
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -44,7 +46,7 @@ func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedT
 			return
 		}
 		if old, seq, ok := a.state.Input(in.InputID); ok {
-			if !sameJSON(old, in) {
+			if !sameJSON(untraced(old), untraced(in)) {
 				reply(receipt{}, ErrInputConflict)
 				return
 			}
@@ -96,6 +98,12 @@ func (a *Actor) admit(in protocol.InputAdmitted, expectedTurn string, before ...
 	return seq, nil
 }
 
+// untraced returns in without its trace context, which a retry of one input may change.
+func untraced(in protocol.InputAdmitted) protocol.InputAdmitted {
+	in.Traceparent, in.Tracestate = "", ""
+	return in
+}
+
 func sameJSON(x, y any) bool {
 	bx, errx := json.Marshal(x)
 	by, erry := json.Marshal(y)
@@ -105,7 +113,7 @@ func sameJSON(x, y any) bool {
 // modelRequest returns the request of the next model call before its inputs:
 // the conversation as the model reads it, with each pinned segment.
 func (a *Actor) modelRequest() turn.Request {
-	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Purpose: turn.PurposeTurn, Settings: a.state.Settings(), Instructions: a.cfg.Prompt(), Skills: a.cfg.Skills, Sent: a.cfg.Sent,
+	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Compacted: a.state.CompactionCount() > 0, Purpose: turn.PurposeTurn, Settings: a.state.Settings(), Instructions: a.cfg.Prompt(), Skills: a.cfg.Skills, Sent: a.cfg.Sent,
 		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params}
 }
 
@@ -130,7 +138,9 @@ func (a *Actor) callRequest(id string) turn.Request {
 }
 
 func (a *Actor) start(id string, inputIDs []string) {
-	r := a.newRun(kindTurn, id)
+	base, span := a.startSpan(id, inputIDs)
+	r := a.newRunUnder(base, kindTurn, id)
+	r.span = span
 	req := a.callRequest(id)
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
@@ -205,6 +215,9 @@ func (a *Actor) steer(r *running) ([]protocol.LogMessage, error) {
 			continue
 		}
 		e := protocol.InputPromoted{InputID: in.InputID, TurnID: r.id}
+		if l, ok := inputLink(in); ok {
+			r.span.AddLink(l)
+		}
 		if eventlog.IsReport(in.Parts) {
 			reports = append(reports, e)
 		} else {
@@ -255,7 +268,11 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseGoalCleared}, interrupted)
 		next = true
 	default:
-		err = a.endTurn(a.cfg.Base, failedEnd(turnID, runErr), cutOff, a.goalStop(runErr, r.kind)...)
+		failed := failedEnd(turnID, runErr)
+		if r.span != nil {
+			tracing.Fail(r.span, cmp.Or(string(failed.ErrorClass), string(failed.Cause), "_OTHER"))
+		}
+		err = a.endTurn(a.cfg.Base, failed, cutOff, a.goalStop(runErr, r.kind)...)
 		next = !errors.Is(runErr, turn.ErrExhausted)
 	}
 	var after func() error

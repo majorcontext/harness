@@ -24,6 +24,7 @@ import (
 	"github.com/majorcontext/harness/internal/provider/anthropic"
 	responses "github.com/majorcontext/harness/internal/provider/openai"
 	"github.com/majorcontext/harness/internal/provider/openaicompat"
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -40,6 +41,8 @@ type Router struct {
 	listed map[string][]modelmeta.Model
 	// hidden holds the providers that the host cannot serve, which List leaves out.
 	hidden map[string]bool
+	// traceNames holds the gen_ai.provider.name of each provider.
+	traceNames map[string]string
 }
 
 // NewRouter returns a Router over backends, by provider name.
@@ -84,9 +87,10 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	codex := sync.OnceValue(func() *codexauth.Source {
 		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
 	})
-	hidden := map[string]bool{}
+	hidden, traceNames := map[string]bool{}, map[string]string{}
 	unavailable := map[string]string{}
 	for name, p := range cfg.Providers {
+		traceNames[name] = config.TraceName(name, p)
 		if config.NativeKeyEnv(name) != "" && !p.HasCredentials(name, env.Getenv) {
 			_, unavailable[name] = env.key(p.KeyEnv(name))
 			continue
@@ -124,7 +128,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 		}
 	}
 	r := NewRouter(backends)
-	r.hidden, r.unavailable = hidden, unavailable
+	r.hidden, r.unavailable, r.traceNames = hidden, unavailable, traceNames
 	for name, p := range cfg.Providers {
 		if _, ok := backends[name]; ok && len(p.Models) > 0 {
 			r.listModels(name, modelmeta.Named(p.Models, modelmeta.Models(name)))
@@ -167,6 +171,12 @@ func client(name string, p config.Provider, transport func(provider string) http
 	} else if e := env.Logins.Of(name, p); e != nil {
 		hc = e.Client(hc)
 	}
+	traced := func(hasCredential bool) *http.Client {
+		if hc == nil && !hasCredential {
+			return nil
+		}
+		return tracing.Client(hc)
+	}
 	var cacheTTL time.Duration
 	if p.UsesChatGPTLogin() {
 		cacheTTL = responses.ChatGPTCacheTTL
@@ -178,19 +188,19 @@ func client(name string, p config.Provider, transport func(provider string) http
 			key, reason = env.key(p.KeyEnv(name))
 		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless() || p.HasCredentialHeader(), BaseURL: p.BaseURL, Log: env.Log,
-			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
+			HTTPClient: traced(key != "" || p.Keyless() || p.HasCredentialHeader()), ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
 			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin(), CacheTTL: cacheTTL, LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless() || p.HasCredentialHeader(), BaseURL: p.BaseURL,
-			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
+			HTTPClient: traced(key != "" || p.Keyless() || p.HasCredentialHeader()), ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey, RequestRetries: retries}
 	case p.Type == "" && name == anthropic.Family:
 		key, reason := "", "the entry uses the "+p.Auth+" login"
 		if p.Auth == "" {
 			key, reason = env.key(p.KeyEnv(name))
 		}
 		return &anthropic.Client{APIKey: key, NoKeyReason: reason, NoKey: p.HasCredentialHeader(), BaseURL: p.BaseURL,
-			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
+			HTTPClient: traced(key != "" || p.HasCredentialHeader()), CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
 }
@@ -262,7 +272,11 @@ func (m *Router) Capabilities(model string) turn.Capabilities {
 	if err != nil {
 		return turn.Capabilities{}
 	}
-	return be.Capabilities(model)
+	caps := be.Capabilities(model)
+	if ref, err := modelref.ParseModelRef(model); err == nil {
+		caps.Provider = m.traceNames[ref.Provider]
+	}
+	return caps
 }
 
 // Run runs the turn on the backend of req.Model.

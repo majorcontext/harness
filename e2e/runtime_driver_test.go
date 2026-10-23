@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,7 @@ type runtimeDriver struct {
 	args       []string
 	client     *http.Client
 	wire       *wireReport
+	traced     *traceWiring
 	inputs     int
 	lastInput  map[string]string
 	lastTyped  map[string]string
@@ -88,6 +90,9 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 		t.Fatalf("apply env: %v", err)
 	}
 	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, webSeam: webSeamOf(env), getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	if w, ok := tracedRuntimes.Load(configPath); ok {
+		d.traced = w.(*traceWiring)
+	}
 	if proxy := env["E2E_MODEL_PROXY"]; proxy != "" {
 		u, err := url.Parse(proxy)
 		if err != nil {
@@ -136,7 +141,11 @@ func (d *runtimeDriver) start(t *testing.T) {
 		return
 	}
 	mcpsrc.HoldRetries()
-	rt, err := newWired(t, harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, ModelTransport: d.modelTransport, AskUserQuestion: d.ask, WebTest: d.webSeam})
+	opts := harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, ModelTransport: d.modelTransport, AskUserQuestion: d.ask, WebTest: d.webSeam}
+	if w := d.traced; w != nil {
+		opts.TracerProvider, opts.CaptureMessageContent, opts.Logger = w.provider, w.content, slog.New(slog.NewJSONHandler(w.logs, nil))
+	}
+	rt, err := newWired(t, opts)
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
@@ -201,6 +210,9 @@ func (d *runtimeDriver) Restart(t *testing.T, kill bool) {
 func (d *runtimeDriver) Stderr() string {
 	if d.serve {
 		return d.proc.stderr.String()
+	}
+	if d.traced != nil {
+		return d.traced.logs.String()
 	}
 	return "(the runtime runs in the test process)"
 }

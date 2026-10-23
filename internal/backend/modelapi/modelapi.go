@@ -192,7 +192,7 @@ func callMetrics(sentAt, firstAt, doneAt time.Time, ev provider.Event, cut error
 	if md := ev.RequestMetadata; md != nil {
 		m.RequestMode = string(md.Mode)
 		m.CompleteInputItems, m.SentInputItems = md.CompleteInputItems, md.SentInputItems
-		m.PreviousResponseUsed, m.ChainRecovered = md.PreviousResponseUsed, md.ChainRecovered
+		m.PreviousResponseUsed, m.ChainRecovered, m.PreviousResponseID = md.PreviousResponseUsed, md.ChainRecovered, md.PreviousResponseID
 		m.ChainRefusal, m.ChainRefusalDetail, m.ChainRefusalItem = string(md.ChainRefusal), md.ChainRefusalDetail, md.ChainRefusalItem
 		m.ChainRefusalOffset = md.ChainRefusalOffset
 		m.ChainRefusalPreviousLen, m.ChainRefusalCurrentLen = md.ChainRefusalPreviousLen, md.ChainRefusalCurrentLen

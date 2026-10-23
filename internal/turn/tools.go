@@ -7,6 +7,10 @@ import (
 	"strings"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -174,11 +178,31 @@ type runner struct {
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
 	joinMu *sync.Mutex
+	// scope starts the span of each call; session is the conversation it belongs to.
+	scope   tracing.Scope
+	session string
 }
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
 	tools, c := t.target(c)
-	return runTool(ctx, tools, t.hooks, c)
+	ctx, span := t.scope.Start(ctx, "execute_tool "+c.Name, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(
+		attribute.String("gen_ai.operation.name", "execute_tool"), attribute.String("gen_ai.tool.name", c.Name),
+		attribute.String("gen_ai.tool.call.id", c.ID), attribute.String("gen_ai.tool.type", "function")))
+	defer span.End()
+	if t.session != "" {
+		span.SetAttributes(attribute.String("gen_ai.conversation.id", t.session))
+	}
+	content := t.scope.Content() && span.IsRecording()
+	if content {
+		span.SetAttributes(attribute.String("gen_ai.tool.call.arguments", tracing.Arguments(c.Arguments)))
+	}
+	res := runTool(ctx, tools, t.hooks, c)
+	if res.IsError {
+		tracing.Fail(span, "tool_error")
+	} else if content {
+		span.SetAttributes(attribute.String("gen_ai.tool.call.result", tracing.Result(res.Text)))
+	}
+	return res
 }
 
 // target returns the tools and the call that c runs. A tool whose Spec panics runs c itself.
@@ -257,7 +281,7 @@ func toolsetOf(ctx context.Context, call *Request, src Source) Toolset {
 // describe sets the tools, prompt, and Call of call from ts, pins its notices and
 // banner through to, and returns the runner of its calls. all describes every
 // tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
-func describe(call *Request, ts Toolset, to Turn, all bool) runner {
+func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) runner {
 	deferred := ts.Deferred
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
@@ -276,7 +300,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool) runner {
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, hooks: ts.Hooks}
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, hooks: ts.Hooks, scope: sc, session: call.SessionID}
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

@@ -13,6 +13,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -339,6 +340,7 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string, accoun
 		seamDecided(child)
 		in := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliverySteer, Source: "parent",
 			Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
+		in.Traceparent, in.Tracestate = tracing.Headers(ctx)
 		expected := ""
 		if !rearm {
 			expected = turn

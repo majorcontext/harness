@@ -7,6 +7,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/majorcontext/harness/internal/tracing"
 )
 
 // Transport configures how a Client connects to an MCP server.
@@ -218,7 +220,7 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 // CallToolResult.IsError, not an error.
 func (c *Client) CallTool(ctx context.Context, name string, arguments any) (*CallToolResult, error) {
 	var result CallToolResult
-	if err := c.request(ctx, methodToolsCall, callToolParams{Name: name, Arguments: arguments}, &result); err != nil {
+	if err := c.request(ctx, methodToolsCall, callToolParams{Name: name, Arguments: arguments, Meta: tracing.Meta(ctx)}, &result); err != nil {
 		return nil, fmt.Errorf("mcp: tools/call %s: %w", name, err)
 	}
 	return &result, nil
