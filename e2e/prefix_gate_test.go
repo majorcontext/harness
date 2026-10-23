@@ -190,7 +190,7 @@ func prefixBreak(reason string, kinds ...string) map[string]string {
 	return out
 }
 
-// mcpSelectBreak is TEMPORARY until #738 lands: a tool that mcp(action="select") loads must not change the tools array of later requests, and today it does. The spec of the current main does not state this rule yet.
+// mcpSelectBreak is TEMPORARY until the change that stops select from changing the tools array lands: a tool that mcp(action="select") loads must not change the tools array of later requests, and today it does. The spec of the current main does not state this rule yet.
 func mcpSelectBreak(list bool) map[string]string {
 	if list {
 		return prefixBreak("mcp select adds the tool to the tools array", breakTools, breakSystem)
@@ -198,7 +198,7 @@ func mcpSelectBreak(list bool) map[string]string {
 	return prefixBreak("mcp select adds the tool to the tools array", breakTools)
 }
 
-// mcpConnectBreak is TEMPORARY until a fix after #738: a tool of a server that connects after a failed first connect is deferred by the spec (MCP tools, Deferral) and must not enter the tools array, and today it does.
+// mcpConnectBreak is TEMPORARY until the change that defers the tools of mcp connect lands: a tool of a server that connects after a failed first connect is deferred by the spec (MCP tools, Deferral) and must not enter the tools array, and today it does.
 func mcpConnectBreak() map[string]string {
 	return prefixBreak("mcp connect adds the tool to the tools array", breakTools)
 }
