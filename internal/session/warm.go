@@ -32,7 +32,7 @@ func (a *Actor) warm() {
 		return
 	}
 	req := a.modelRequest()
-	src := a.source(&running{})
+	src := a.source(nil)
 	ctx, cancel := context.WithTimeout(a.cfg.Base, warmTimeout)
 	w := &warmup{done: make(chan struct{}), cancel: cancel, startedAt: time.Now()}
 	a.warming = w

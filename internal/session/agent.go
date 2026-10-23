@@ -13,7 +13,7 @@ import (
 )
 
 // source returns the Source of turn r: the Source of the session, then the
-// tools of the actor.
+// tools of the actor. A nil r is the next turn, for a warm-up that runs no tool.
 func (a *Actor) source(r *running) turn.Source {
 	var srcs turn.Sources
 	if a.cfg.Source != nil {
