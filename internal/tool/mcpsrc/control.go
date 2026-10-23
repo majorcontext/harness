@@ -37,6 +37,8 @@ const (
 	instructionsMax = 4000
 	toolNamesMax    = 2048
 	catalogMax      = 200
+	catalogBytes    = 16384
+	selectBytes     = 65536
 	cutMarker       = "… [truncated]"
 )
 
@@ -213,6 +215,7 @@ type choice struct {
 	Already []string     `json:"already"`
 	Pending []string     `json:"pending"`
 	Missing []string     `json:"missing"`
+	LeftOut []string     `json:"left_out,omitempty"`
 	Note    string       `json:"note"`
 }
 
@@ -224,6 +227,7 @@ func (c control) choose(names []string) (any, error) {
 	}
 	out := choice{Tools: []definition{}, Already: []string{}, Pending: []string{}, Missing: []string{}}
 	seen := map[string]bool{}
+	used := 0
 	for _, n := range names {
 		if seen[n] {
 			continue
@@ -236,6 +240,12 @@ func (c control) choose(names []string) (any, error) {
 			out.Already = append(out.Already, n)
 		case found >= 0:
 			r := c.all[found]
+			size := schemaBytes(r.spec)
+			if len(out.LeftOut) > 0 || len(out.Tools) > 0 && used+size > selectBytes {
+				out.LeftOut = append(out.LeftOut, n)
+				continue
+			}
+			used += size
 			out.Tools = append(out.Tools, definition{r.spec.Name, r.spec.Description, r.spec.InputSchema})
 		case strings.HasPrefix(n, prefix) && slices.Contains(c.v.names, server) && !c.v.live[server].up():
 			out.Pending = append(out.Pending, n)
@@ -251,6 +261,9 @@ func (c control) choose(names []string) (any, error) {
 		}
 		if len(out.Pending) > 0 {
 			out.Note += "; the pending tools have no definition until their server reconnects"
+		}
+		if len(out.LeftOut) > 0 {
+			out.Note += "; the definitions passed the size limit, so select fewer tools at once and select the tools in left_out again"
 		}
 	case len(out.Already) > 0:
 		out.Note = "every tool you selected is in your tool list: call it directly"
@@ -271,17 +284,21 @@ func catalog(deferred []remote) string {
 	return catalogHeader + "\n" + toolLines(deferred)
 }
 
-// toolLines lists the first catalogMax tools, one on each line, and counts the rest.
+// toolLines lists the tools, one on each line, up to catalogMax tools and catalogBytes bytes, and counts the rest.
 func toolLines(deferred []remote) string {
-	shown := deferred[:min(len(deferred), catalogMax)]
 	var b strings.Builder
-	for _, r := range shown {
+	shown := 0
+	for _, r := range deferred[:min(len(deferred), catalogMax)] {
+		if b.Len() >= catalogBytes {
+			break
+		}
 		b.WriteString("\n" + r.spec.Name)
 		if d := line(r.spec.Description); d != "" {
 			b.WriteString(" — " + d)
 		}
+		shown++
 	}
-	if rest := len(deferred) - len(shown); rest > 0 {
+	if rest := len(deferred) - shown; rest > 0 {
 		fmt.Fprintf(&b, "\n... and %d more tools; use mcp(action=\"search\", query=\"...\") to find them", rest)
 	}
 	return b.String()

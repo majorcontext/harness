@@ -81,8 +81,8 @@ func mergeScalars(out, over *Config) {
 	if over.MCPToolLoading != "" {
 		out.MCPToolLoading = over.MCPToolLoading
 	}
-	if over.MCPToolLoadingThreshold != 0 {
-		out.MCPToolLoadingThreshold = over.MCPToolLoadingThreshold
+	if over.MCPSchemaBytes != 0 {
+		out.MCPSchemaBytes = over.MCPSchemaBytes
 	}
 }
 

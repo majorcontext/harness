@@ -7,18 +7,15 @@ import (
 	"time"
 )
 
-// validMCPToolLoading lists the accepted mcp_tool_loading values. "auto" is global-only: the threshold measures the whole catalog.
+// validMCPToolLoading lists the accepted mcp_tool_loading values. "auto" is global-only: the budget measures the whole catalog.
 var validMCPToolLoading = map[string]bool{"": true, "eager": true, "auto": true, "lazy": true}
 
 var validMCPServerToolLoading = map[string]bool{"": true, "eager": true, "lazy": true}
 
-// validateMCPToolLoading rejects an unknown mode and a negative threshold, which would defer every catalog.
-func validateMCPToolLoading(mode string, threshold int) error {
+// validateMCPToolLoading rejects an unknown mode.
+func validateMCPToolLoading(mode string) error {
 	if !validMCPToolLoading[mode] {
 		return fmt.Errorf("mcp_tool_loading: unknown value %q; valid values: \"\" (default), \"eager\", \"auto\", \"lazy\"", mode)
-	}
-	if threshold < 0 {
-		return fmt.Errorf("mcp_tool_loading_threshold: must not be negative (got %d)", threshold)
 	}
 	return nil
 }

@@ -43,6 +43,37 @@ const (
 	requestBound  = 30 * time.Second
 )
 
+// budgetLine is the prompt line for the eager tools that the schema budget deferred.
+const budgetLine = "Some of these tools are deferred because the schemas of the MCP tools passed mcp_schema_bytes (%d)."
+
+// schemaBytes is the size of a tool in a request: its name, description, and input schema.
+func schemaBytes(s protocol.ToolSpec) int {
+	return len(s.Name) + len(s.Description) + len(s.InputSchema)
+}
+
+func schemaBudget(n int) int {
+	if n > 0 {
+		return n
+	}
+	return config.Defaults().MCPSchemaBytes
+}
+
+// budget hands out schema bytes to the eager tools in order. After the first tool that does not fit, none fits.
+type budget struct {
+	left int
+	over bool
+}
+
+func (b *budget) fits(s protocol.ToolSpec) bool {
+	n := schemaBytes(s)
+	if b.over || n > b.left {
+		b.over = true
+		return false
+	}
+	b.left -= n
+	return true
+}
+
 // Reserved reports whether name belongs to the tools of a Source.
 func Reserved(name string) bool {
 	return name == controlName || name == listName || name == readName || strings.HasPrefix(name, prefix)
@@ -61,11 +92,11 @@ func Reserved(name string) bool {
 // of the request prefix of each session. A tool that arrives later is
 // deferred, and a tool that a session sent stays in its definitions.
 type Source struct {
-	workDir   string
-	log       *slog.Logger
-	parent    *Source
-	mode      string
-	threshold int
+	workDir string
+	log     *slog.Logger
+	parent  *Source
+	mode    string
+	budget  int
 	// httpClient is the client of the HTTP servers; nil is the default client. A test sets it.
 	httpClient *http.Client
 
@@ -139,8 +170,8 @@ func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPSe
 
 func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger) *Source {
 	s := &Source{workDir: workDir, log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
-		threshold: cmp.Or(cfg.MCPToolLoadingThreshold, config.Defaults().MCPToolLoadingThreshold),
-		inbox:     make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
+		budget: schemaBudget(cfg.MCPSchemaBytes),
+		inbox:  make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	a := newActor(s)
 	for name, spec := range specs {
@@ -232,7 +263,8 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		return turn.Toolset{}
 	}
 	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
-	autoDefer := v.baseCount(ok) > s.threshold
+	autoDefer := v.baseBytes(ok) > s.budget
+	fill := budget{left: s.budget}
 	ctl := control{s: s, loaded: map[string]bool{}, v: v, ok: ok}
 	var late []Late
 	if pl != nil {
@@ -241,11 +273,14 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	}
 	var ts turn.Toolset
 	var listed []remote
+	cutAny := false
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
 		m := v.mem[name]
-		deferred := m.loading == "lazy" || m.loading == "auto" && autoDefer
 		for _, r := range v.remotes(name, ok) {
 			base := m.base[r.name]
+			cut := base && m.loading == "eager" && !fill.fits(r.spec)
+			cutAny = cutAny || cut
+			deferred := m.loading == "lazy" || m.loading == "auto" && autoDefer || cut
 			if r.listed {
 				ctl.all = append(ctl.all, r)
 			}
@@ -275,7 +310,11 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	}
 	ts.Tools = append(head, ts.Tools...)
 	ts.MCPInstructions = v.perServer()
-	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), catalog(listed)}, func(p string) bool { return p == "" }), "\n\n")
+	cat := catalog(listed)
+	if cutAny {
+		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
+	}
+	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
 	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok, late)}}
 	return ts
 }
@@ -293,13 +332,17 @@ func (v view) liveAll(ok func(string) bool) []remote {
 	return out
 }
 
-// baseCount counts the tools that the first connect reached and ok allows.
-func (v view) baseCount(ok func(string) bool) int {
+// baseBytes sums the schema bytes of the tools that the first connect reached and ok allows, for the servers that
+// are not lazy.
+func (v view) baseBytes(ok func(string) bool) int {
 	n := 0
 	for name, m := range v.mem {
-		for tn := range m.base {
-			if ok(prefix + name + "__" + tn) {
-				n++
+		if m.loading == "lazy" {
+			continue
+		}
+		for _, r := range v.remotes(name, ok) {
+			if m.base[r.name] {
+				n += schemaBytes(r.spec)
 			}
 		}
 	}

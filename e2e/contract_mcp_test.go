@@ -454,33 +454,57 @@ func TestContractMCPLazyLoading(t *testing.T) {
 }
 
 func TestContractMCPAutoLoading(t *testing.T) {
-	weather := mcpServerDef{name: "weather", spec: mcpWeather("")}
+	big := mcpServerDef{name: "weather", spec: mcpSizedTools(10, 8000)}
+	toolNames := func(from, to int) []string {
+		var out []string
+		for i := from; i <= to; i++ {
+			out = append(out, fmt.Sprintf("mcp__weather__t%02d", i))
+		}
+		return out
+	}
 	runScenarios(t, []scenario{
 		{
-			name:    "mcp_auto_default_threshold_stays_eager_at_20_tools",
-			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto"}, mcpServerDef{name: "weather", spec: mcpEchoTools(20)}),
+			name:    "mcp_unset_loading_defers_every_tool_over_the_schema_budget",
+			setup:   mcpSetup(nil, big),
 			model:   textReply("hi"),
-			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"Deferred MCP tools"}}),
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{"Deferred MCP tools", "mcp__weather__t01 \u2014", "mcp__weather__t10 \u2014"}}, expectTools{req: 1, has: []string{"mcp"}, lacks: toolNames(1, 10)}),
 		},
 		{
-			name:    "mcp_auto_default_threshold_defers_at_21_tools",
-			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto"}, mcpServerDef{name: "weather", spec: mcpEchoTools(21)}),
+			name:    "mcp_unset_loading_keeps_the_tools_under_the_schema_budget",
+			setup:   mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
 			model:   textReply("hi"),
-			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{"Deferred MCP tools"}}),
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"Deferred MCP tools"}}, expectTools{req: 1, has: []string{"mcp__weather__forecast", "mcp__weather__strict"}}),
 		},
 		{
-			name:    "mcp_auto_defers_over_threshold",
-			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto", "mcp_tool_loading_threshold": 2}, weather),
-			model:   textReply("hi"),
-			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{"Deferred MCP tools"}}),
+			name:  "mcp_eager_defers_the_tools_past_the_schema_budget",
+			setup: mcpSetup(map[string]any{"mcp_tool_loading": "eager", "mcp_schema_bytes": 100}, mcpServerDef{name: "weather", spec: mcpEchoTools(5)}),
+			model: toolChain(
+				mcpAction("action", "select", "tools", []string{"mcp__weather__t05"}),
+				mcpAction("action", "call", "tool", "mcp__weather__t05", "arguments", map[string]any{"city": "Oslo"}),
+			),
+			actions: append(append([]action{}, oneTurn...),
+				expectTools{req: 1, has: append([]string{"mcp"}, toolNames(1, 2)...), lacks: toolNames(3, 5)},
+				expectSystem{req: 1, has: []string{"Deferred MCP tools", "mcp__weather__t03 \u2014", "mcp_schema_bytes"}, lacks: []string{"mcp__weather__t02 \u2014"}},
+			),
 		},
 		{
-			name:    "mcp_auto_stays_eager_under_threshold",
-			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto", "mcp_tool_loading_threshold": 6}, weather),
-			model:   textReply("hi"),
-			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"Deferred MCP tools"}}),
+			name:  "mcp_select_stops_at_the_byte_cap_and_names_the_tools_left_out",
+			setup: mcpSetup(map[string]any{"mcp_tool_loading": "lazy"}, big),
+			model: toolChain(
+				mcpAction("action", "select", "tools", toolNames(1, 10)),
+			),
+			actions: oneTurn,
 		},
 	})
+}
+
+// mcpSizedTools is a spec of n tools named t01, t02, ... whose descriptions hold descBytes bytes.
+func mcpSizedTools(n, descBytes int) harnesstest.MCPSpec {
+	spec := harnesstest.MCPSpec{Name: "weather"}
+	for i := 1; i <= n; i++ {
+		spec.Tools = append(spec.Tools, harnesstest.MCPTool{Name: fmt.Sprintf("t%02d", i), Description: strings.Repeat("d", descBytes), Echo: true})
+	}
+	return spec
 }
 
 func answeredTool(tool string) harnesstest.Matcher {
