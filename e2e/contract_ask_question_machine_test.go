@@ -161,7 +161,7 @@ func TestContractClaudeCodeQuestionKeptOpenByMachineInput(t *testing.T) {
 			claudeInputs{as: "a"},
 		),
 	}, {
-		name:   "claudecode_held_machine_input_runs_when_a_model_of_another_provider_dismisses_the_question",
+		name: "claudecode_held_machine_input_runs_when_a_model_of_another_provider_dismisses_the_question", prefixBreaks: foreignHistoryBreak(),
 		driver: lane,
 		model:  []harnesstest.Step{{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}},
 		actions: withActions(parked,

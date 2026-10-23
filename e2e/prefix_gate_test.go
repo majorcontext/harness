@@ -19,7 +19,7 @@ const (
 )
 
 // notTurnMarkers are texts of the system prompt of a request that is no turn of a session: a title, a summary, and a goal evaluator each have a stream of their own.
-var notTurnMarkers = []string{"Generate a short title for a conversation", "You are summarizing a prefix", "You are a strict goal-completion evaluator"}
+var notTurnMarkers = []string{"Generate a short title for a conversation", "You are summarizing a prefix", goalEvaluatorMarker}
 
 // checkPrefixes checks that each request of a session after the first sends the tools, the system prompt, and the cache key of the request before it, and a history that starts with the bytes of that request's history. Only the cache_control marker may move. A break that the spec designs is declared in breaks with its reason; a declared break that never happens fails.
 func checkPrefixes(t *testing.T, raws [][]byte, breaks map[string]string) {
@@ -30,7 +30,7 @@ func checkPrefixes(t *testing.T, raws [][]byte, breaks map[string]string) {
 		incr   bool
 	}
 	streams := map[string][]wireReq{}
-	var order []string
+	var order, restarts []string
 	for _, raw := range raws {
 		var body map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &body); err != nil {
@@ -54,6 +54,9 @@ func checkPrefixes(t *testing.T, raws [][]byte, breaks map[string]string) {
 		}
 		if _, seen := streams[key]; !seen {
 			order = append(order, key)
+			if strings.HasPrefix(key, anthropicStreamPrefix) && hasAssistant(body["messages"]) {
+				restarts = append(restarts, key)
+			}
 		}
 		streams[key] = append(streams[key], req)
 	}
@@ -64,6 +67,9 @@ func checkPrefixes(t *testing.T, raws [][]byte, breaks map[string]string) {
 			return
 		}
 		t.Errorf("session %s: request %d breaks the cached prefix (%s): %s", stream, n, kind, detail)
+	}
+	for _, stream := range restarts {
+		broke(breakHistory, stream, 1, "the first request of the stream holds an assistant message, so the first user text moved or the history restarted")
 	}
 	for _, stream := range order {
 		reqs := streams[stream]
@@ -94,6 +100,21 @@ func checkPrefixes(t *testing.T, raws [][]byte, breaks map[string]string) {
 	}
 }
 
+const anthropicStreamPrefix = "first user text "
+
+// hasAssistant reports whether messages holds a message of the assistant. The first request of a session holds user content only.
+func hasAssistant(messages json.RawMessage) bool {
+	var msgs []struct {
+		Role string `json:"role"`
+	}
+	_ = json.Unmarshal(messages, &msgs)
+	return slices.ContainsFunc(msgs, func(m struct {
+		Role string `json:"role"`
+	}) bool {
+		return m.Role == "assistant"
+	})
+}
+
 // sessionStream names the session of a request, or reports false for a request that is no turn. The Anthropic wire carries no session key, so its first user text names it.
 func sessionStream(body map[string]json.RawMessage) (string, bool) {
 	var head string
@@ -105,6 +126,7 @@ func sessionStream(body map[string]json.RawMessage) (string, bool) {
 	if len(msgs) > 0 {
 		head += string(msgs[0])
 	}
+	head = strings.NewReplacer(`\u003c`, "<", `\u003e`, ">").Replace(head)
 	for _, m := range notTurnMarkers {
 		if strings.Contains(head, m) {
 			return "", false
@@ -130,7 +152,7 @@ func sessionStream(body map[string]json.RawMessage) (string, bool) {
 	if json.Unmarshal(first.Content, &text) != nil && json.Unmarshal(first.Content, &blocks) == nil && len(blocks) > 0 {
 		text = blocks[0].Text
 	}
-	return "first user text " + fmt.Sprintf("%q", text), true
+	return anthropicStreamPrefix + fmt.Sprintf("%q", text), true
 }
 
 // historyBlocks splits an Anthropic message into its content blocks, because the wire merges neighbor messages of one role and a provider caches by block. Any other item is one entry.
@@ -168,7 +190,7 @@ func prefixBreak(reason string, kinds ...string) map[string]string {
 	return out
 }
 
-// mcpSelectBreak is TEMPORARY: a tool that mcp(action="select") loads must not enter the tools array of later requests (spec MCP tools, Request prefix).
+// mcpSelectBreak is TEMPORARY until #738 lands: a tool that mcp(action="select") loads must not change the tools array of later requests, and today it does. The spec of the current main does not state this rule yet.
 func mcpSelectBreak(list bool) map[string]string {
 	if list {
 		return prefixBreak("mcp select adds the tool to the tools array", breakTools, breakSystem)
@@ -176,7 +198,7 @@ func mcpSelectBreak(list bool) map[string]string {
 	return prefixBreak("mcp select adds the tool to the tools array", breakTools)
 }
 
-// mcpConnectBreak is TEMPORARY: a tool of a server that connects after the first connect is deferred and must not enter the tools array (spec MCP tools, Request prefix).
+// mcpConnectBreak is TEMPORARY until a fix after #738: a tool of a server that connects after a failed first connect is deferred by the spec (MCP tools, Deferral) and must not enter the tools array, and today it does.
 func mcpConnectBreak() map[string]string {
 	return prefixBreak("mcp connect adds the tool to the tools array", breakTools)
 }
@@ -191,4 +213,8 @@ func joinBreaks(parts ...map[string]string) map[string]string {
 		maps.Copy(out, p)
 	}
 	return out
+}
+
+func foreignHistoryBreak() map[string]string {
+	return prefixBreak("the first request to this model replays history that another backend or model produced", breakHistory)
 }

@@ -38,7 +38,7 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "a_negative_compaction_threshold_is_the_default_threshold",
+			name: "a_negative_compaction_threshold_is_the_default_threshold", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1, "compaction_threshold": -1},
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 500), text("three", 900),
@@ -53,7 +53,7 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 			),
 		},
 		{
-			name:   "auto_compaction_uses_the_window_of_the_session_model",
+			name: "auto_compaction_uses_the_window_of_the_session_model", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 0, "compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", 300_000), text("two", 300_000),
@@ -76,7 +76,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 	text := usedText
 	runScenarios(t, []scenario{
 		{
-			name:   "auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens",
+			name: "auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: strings.Repeat("x", 4000), Usage: harnesstest.Usage{Output: 1}}},
@@ -87,7 +87,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens",
+			name: "auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5),
@@ -153,7 +153,7 @@ func TestContractSessionStoppedCompaction(t *testing.T) {
 	text := usedText
 	runScenarios(t, []scenario{
 		{
-			name:   "restart_during_auto_compaction_runs_the_queued_input_on_the_next_owner",
+			name: "restart_during_auto_compaction_runs_the_queued_input_on_the_next_owner", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),
