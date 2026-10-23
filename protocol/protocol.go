@@ -199,10 +199,9 @@ type Input struct {
 	SourceLabel string `json:"source_label,omitempty"`
 	// ExpectedTurnID makes a steer input fail unless that turn is running.
 	ExpectedTurnID string `json:"expected_turn_id,omitempty"`
-	// Traceparent is the W3C trace context of the request that sent the input; the turn that takes the input links to it.
+	// Traceparent and Tracestate are the W3C trace context of the request that sent the input; the turn that takes the input links to it.
 	Traceparent string `json:"traceparent,omitempty"`
-	// Tracestate is the W3C tracestate that goes with Traceparent.
-	Tracestate string `json:"tracestate,omitempty"`
+	Tracestate  string `json:"tracestate,omitempty"`
 }
 
 // QueuedInput is an input that no turn has taken. Its parts hold the text of each text part and, for an attachment, its media type, size, and Key, never its data.
