@@ -115,8 +115,12 @@ func (s *Source) settle(ctx context.Context) bool {
 // barrier returns once the actor has handled and published every message sent before it.
 func (s *Source) barrier(ctx context.Context) bool {
 	done := make(chan struct{})
-	if !s.send(barrierMsg{done}) {
+	select {
+	case s.inbox <- barrierMsg{done}:
+	case <-s.done:
 		return true
+	case <-ctx.Done():
+		return false
 	}
 	select {
 	case <-done:
