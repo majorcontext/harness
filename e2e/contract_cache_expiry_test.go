@@ -35,7 +35,7 @@ func TestContractSessionCacheExpiryAndCompactionPoint(t *testing.T) {
 	onHosts(t, func(t *testing.T, h host) {
 		t.Run("a model API session expires its cache one hour after the reading and loses it on compaction", func(t *testing.T) {
 			d, _ := startOn(t, h, t.TempDir(), map[string]any{"compaction_keep_turns": 1},
-				harnesstest.Step{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}},
+				harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
 				replyText("hi"))
 			window, ok := modelmeta.ContextWindow(modelref.ModelRef{Provider: "anthropic", Model: "claude-opus-5"})
 			if !ok {
