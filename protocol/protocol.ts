@@ -168,6 +168,8 @@ export interface GoalChanged {
   state: "active" | "paused" | "blocked" | "achieved" | "failed" | "exhausted" | "cleared";
   reason?: string;
   retry_at?: string;
+  cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
+  resets_at?: number;
 }
 
 export interface GoalEvaluated {

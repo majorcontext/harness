@@ -150,10 +150,14 @@ func New(p config.Provider, system []string, workDir string, toolLoading string)
 }
 
 // Capabilities reports that the CLI runs the loop with the harness tools,
-// owns its context, and takes steer input. It reports
-// the context window itself.
-func (b *Backend) Capabilities(string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, Steering: true, Tools: slices.Clone(builtins), Efforts: modelmeta.ClaudeCodeEfforts(), WebSearch: true}
+// owns its context, takes steer input, and reports the model window from metadata.
+func (b *Backend) Capabilities(model string) turn.Capabilities {
+	var window int
+	if ref, err := modelref.ParseModelRef(model); err == nil {
+		window, _ = modelmeta.ClaudeCodeContextWindow(ref.Model)
+	}
+	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, Steering: true, Tools: slices.Clone(builtins),
+		ContextWindow: window, Efforts: modelmeta.ClaudeCodeEfforts(), WebSearch: true}
 }
 
 // Run runs one turn of the CLI on the external session in the saved state.

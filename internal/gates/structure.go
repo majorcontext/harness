@@ -30,7 +30,7 @@ var providerOwners = []string{
 	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
 	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders", "config/provider.go#WithProxyBase", "config/provider.go#WireOf", "config/provider.go#UsesClaudeCLI",
 	"internal/backend/probe.go#ProbeOf", "internal/backend/router.go#New", "internal/backend/router.go#client",
-	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#Models", "internal/modelmeta/modelmeta.go#infoOf",
+	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#ClaudeCodeContextWindow", "internal/modelmeta/modelmeta.go#Models", "internal/modelmeta/modelmeta.go#infoOf",
 	"internal/modelmeta/internal/genctx/main.go#",
 	"internal/provider/",
 }
@@ -81,6 +81,12 @@ var nodeRules = []nodeRule{
 		detail: "modelmeta.ContextWindow is read only by the model API backend's Capabilities (spec: Backend)",
 		match:  selectsImport(modulePath+"/internal/modelmeta", "ContextWindow"),
 		allow:  []string{"internal/modelmeta/", "internal/backend/modelapi/modelapi.go#Capabilities"},
+	},
+	{
+		name:   "claude_code_context_window_resolver",
+		detail: "modelmeta.ClaudeCodeContextWindow is read only by the Claude Code backend's Capabilities (spec: Backend)",
+		match:  selectsImport(modulePath+"/internal/modelmeta", "ClaudeCodeContextWindow"),
+		allow:  []string{"internal/modelmeta/", "internal/backend/claudecode/claudecode.go#Capabilities"},
 	},
 	{
 		name:   "context_window_config",

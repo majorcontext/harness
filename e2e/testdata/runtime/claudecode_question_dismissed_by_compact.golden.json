@@ -139,7 +139,7 @@
       "body": {
         "context": {
           "tokens": 10,
-          "window": 0
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 10,
@@ -173,7 +173,7 @@
       "body": {
         "context": {
           "tokens": 113,
-          "window": 0
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 19,

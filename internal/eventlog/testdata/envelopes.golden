@@ -17,7 +17,7 @@
 {"v":1,"seq":6,"t":"2026-10-02T12:00:00Z","k":"context.measured","d":{"tokens":7,"window":7,"window_estimated":true,"source":"Source","usage":{"input_tokens":7,"output_tokens":7,"cache_read_tokens":7,"cache_write_tokens":7,"web_search_requests":7},"subscription_usage":{"provider":"Provider","account":"Account","plan":"Plan","windows":[{"key":"Key","label":"Label","used_percent":1.5,"resets_at":7}],"overage":{"in_use":true,"status":"Status","resets_at":7},"captured_at":7,"session_cost_usd":1.5},"cost_usd":1.5}}
 {"v":1,"seq":6,"t":"2026-10-02T12:00:00Z","k":"context.measured","d":{"tokens":0,"window":0,"source":"","subscription_usage":{"provider":"","plan":"","windows":[],"overage":{"in_use":false,"status":"","resets_at":0},"captured_at":0,"session_cost_usd":0},"cost_usd":0}}
 {"v":1,"seq":7,"t":"2026-10-02T12:00:00Z","k":"goal.changed","d":{"state":""}}
-{"v":1,"seq":7,"t":"2026-10-02T12:00:00Z","k":"goal.changed","d":{"state":"State","reason":"Reason","retry_at":"2026-10-02T12:00:00Z"}}
+{"v":1,"seq":7,"t":"2026-10-02T12:00:00Z","k":"goal.changed","d":{"state":"State","reason":"Reason","retry_at":"2026-10-02T12:00:00Z","cause":"Cause","resets_at":7}}
 {"v":1,"seq":7,"t":"2026-10-02T12:00:00Z","k":"goal.changed","d":{"state":""}}
 {"v":1,"seq":8,"t":"2026-10-02T12:00:00Z","k":"goal.evaluated","d":{"turn_id":"","verdict":""}}
 {"v":1,"seq":8,"t":"2026-10-02T12:00:00Z","k":"goal.evaluated","d":{"turn_id":"TurnID","verdict":"Verdict","guidance":"Guidance"}}

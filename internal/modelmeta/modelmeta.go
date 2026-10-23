@@ -18,9 +18,8 @@ import (
 )
 
 // ContextWindow reports ref's advertised context window in tokens. It returns
-// false for an unrecognized provider or model. A claude-code ref is
-// unrecognized: the CLI resolves a bare alias itself, so its backend owns the
-// window and reports it during a turn.
+// false for an unrecognized provider or model. A Claude Code alias is resolved
+// by ClaudeCodeContextWindow.
 //
 // ref.Model is normalized before lookup because the boxes platform
 // (majorcontext/bailey internal/api/bifrost_models.go) passes THREE-segment
@@ -87,6 +86,32 @@ func ContextWindow(ref modelref.ModelRef) (tokens int, ok bool) {
 		}
 	}
 	return tokens, ok
+}
+
+// ClaudeCodeContextWindow reports the latest matching Anthropic context window for alias.
+func ClaudeCodeContextWindow(alias string) (int, bool) {
+	if !slices.ContainsFunc(claudeCodeModels, func(model Model) bool { return model.ID == alias }) {
+		return 0, false
+	}
+	prefix := "claude-" + alias + "-"
+	var latestModel, released string
+	found := false
+	for id, info := range anthropicInfo {
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		window, ok := anthropicContextWindows[id]
+		if !ok {
+			continue
+		}
+		if !found || info.released > released || info.released == released && window > anthropicContextWindows[latestModel] {
+			latestModel, released, found = id, info.released, true
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	return ContextWindow(modelref.ModelRef{Provider: "anthropic", Model: latestModel})
 }
 
 // codexModels are the models that the ChatGPT subscription backend accepts.

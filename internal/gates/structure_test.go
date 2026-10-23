@@ -61,6 +61,22 @@ var structureCases = []struct {
 		want: []string{"context_window_resolver:internal/backend/modelapi/modelapi.go"},
 	},
 	{
+		name:  "the_claude_code_window_is_read_outside_capabilities",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile(`import "github.com/majorcontext/harness/internal/modelmeta"`, "func F() { modelmeta.ClaudeCodeContextWindow(\"haiku\") }")},
+		want:  []string{"claude_code_context_window_resolver:x.go"},
+	},
+	{
+		name: "the_claude_code_window_is_read_in_backend_capabilities",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
+			"internal/backend/claudecode/claudecode.go": goFile(`import "github.com/majorcontext/harness/internal/modelmeta"`, "func Capabilities() { modelmeta.ClaudeCodeContextWindow(\"haiku\") }")},
+	},
+	{
+		name: "the_claude_code_window_is_read_in_another_backend_function",
+		files: fstest.MapFS{"config/c.go": goFile("", ""), "x.go": goFile("", ""),
+			"internal/backend/claudecode/claudecode.go": goFile(`import "github.com/majorcontext/harness/internal/modelmeta"`, "func Run() { modelmeta.ClaudeCodeContextWindow(\"haiku\") }")},
+		want: []string{"claude_code_context_window_resolver:internal/backend/claudecode/claudecode.go"},
+	},
+	{
 		name: "the_configured_window_is_read_outside_the_backend_construction",
 		files: fstest.MapFS{"config/c.go": goFile("", "func F(c C) { _ = c.ContextWindowTokens }"), "x.go": goFile("", "func G(c C) { _ = c.ContextWindowTokens }"),
 			"internal/backend/router.go": goFile("", "func New(c C) { _ = c.ContextWindowTokens }\nfunc Other(c C) { _ = c.ContextWindowTokens }")},

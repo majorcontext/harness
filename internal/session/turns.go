@@ -248,7 +248,7 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseGoalCleared}, interrupted)
 		next = true
 	default:
-		err = a.endTurn(a.cfg.Base, failedEnd(turnID, runErr), cutOff, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, failedEnd(turnID, runErr), cutOff, a.goalStop(runErr, r.kind)...)
 		next = !errors.Is(runErr, turn.ErrExhausted)
 	}
 	var after func() error
@@ -323,17 +323,25 @@ func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text stri
 	return a.appendCtx(ctx, append(events, after...)...)
 }
 
+func providerExhaustionDetails(err error) (protocol.Cause, *provider.Error) {
+	if !errors.Is(err, turn.ErrExhausted) {
+		return "", nil
+	}
+	exhausted, _ := provider.AsProviderExhausted(err)
+	return protocol.CauseProviderExhausted, exhausted
+}
+
 // failedEnd is the end of a turn that err failed. A usage limit of the
 // provider is a cause of its own, and its message keeps no sentinel. Any other
 // failure holds its class and message, so a reader never parses the text.
 func failedEnd(turnID string, err error) protocol.TurnEnded {
 	ended := protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopFailed}
-	if errors.Is(err, turn.ErrExhausted) {
-		ended.Cause = protocol.CauseProviderExhausted
+	if cause, exhausted := providerExhaustionDetails(err); cause != "" {
+		ended.Cause = cause
 		ended = withError(ended, strings.TrimPrefix(err.Error(), turn.ErrExhausted.Error()+": "))
-		if pe, ok := provider.AsProviderExhausted(err); ok {
-			ended.RecoverHint = boundedText(pe.RecoverHint, hintCap)
-			ended.ResetsAt = pe.ResetsAt
+		if exhausted != nil {
+			ended.RecoverHint = boundedText(exhausted.RecoverHint, hintCap)
+			ended.ResetsAt = exhausted.ResetsAt
 		}
 		return ended
 	}

@@ -41,7 +41,9 @@ type acpScenario struct {
 	files map[string]string
 	// wireOnly leaves the requests, the sessions, and the usage_update and session_info_update frames out of the golden, for a row whose turn depends on timing.
 	wireOnly bool
-	steps    []acpStep
+	// usageUpdateOrderUnspecified lets the golden ignore ordering between usage and other session updates.
+	usageUpdateOrderUnspecified bool
+	steps                       []acpStep
 	// needsExec marks a row that runs bash, a process, or git. needsMCP marks
 	// one that passes an mcpServers entry. The Node wasm host skips both.
 	needsExec, needsMCP bool
@@ -292,6 +294,34 @@ func acpGoldenOf(t *testing.T, c *acpConn, wireOnly bool) acpGolden {
 	return acpObserve(t, c)
 }
 
+func acpUsageUpdatesLast(wire []acpFrame) []acpFrame {
+	out := make([]acpFrame, 0, len(wire))
+	var group []acpFrame
+	flush := func() {
+		for _, frame := range group {
+			if updateKind(frame) != "usage_update" {
+				out = append(out, frame)
+			}
+		}
+		for _, frame := range group {
+			if updateKind(frame) == "usage_update" {
+				out = append(out, frame)
+			}
+		}
+		group = group[:0]
+	}
+	for _, frame := range wire {
+		if updateKind(frame) != "" {
+			group = append(group, frame)
+			continue
+		}
+		flush()
+		out = append(out, frame)
+	}
+	flush()
+	return out
+}
+
 func acpHosts() []acpHost {
 	return []acpHost{
 		{name: "binary", start: startACPBinary},
@@ -395,6 +425,9 @@ func runACPScenarios(t *testing.T, hosts []acpHost) {
 				c.finish(stop)
 				update := *updateGoldens && (host.name == "binary" || (len(sc.allowed) > 0 || sc.afterRead != nil || sc.login != nil && sc.login.clock) && host.name == "in-process" || (sc.jsTool || sc.wasmOnly) && host.name == nodeHostName)
 				got := acpGoldenOf(t, c, sc.wireOnly)
+				if sc.usageUpdateOrderUnspecified {
+					got.Wire = acpUsageUpdatesLast(got.Wire)
+				}
 				if (host.name == nodeHostName || host.name == browserHostName) && !sc.wasmOnly {
 					got = alignNodeGolden(t, got)
 				}

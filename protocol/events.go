@@ -378,12 +378,15 @@ type GoalEvaluated struct {
 	Guidance string  `json:"guidance,omitempty"`
 }
 
-// GoalChanged moves the goal to another state. A paused goal resumes at
-// RetryAt. A blocked goal has no RetryAt and resumes at an input.
+// GoalChanged moves a goal to another state. A paused goal resumes at
+// RetryAt. A blocked goal has no RetryAt and resumes at an input. Cause and
+// ResetsAt identify a judge run that hit an exhausted provider.
 type GoalChanged struct {
-	State   GoalState `json:"state"`
-	Reason  string    `json:"reason,omitempty"`
-	RetryAt time.Time `json:"retry_at,omitzero"`
+	State    GoalState `json:"state"`
+	Reason   string    `json:"reason,omitempty"`
+	RetryAt  time.Time `json:"retry_at,omitzero"`
+	Cause    Cause     `json:"cause,omitempty"`
+	ResetsAt int64     `json:"resets_at,omitempty"`
 }
 
 // CompactionApplied replaces the records from FromSeq to ToSeq with Summary, the plain text of the summary.

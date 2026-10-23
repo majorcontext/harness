@@ -1,11 +1,14 @@
 package e2e
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func evaluatorTranscript(t *testing.T, fake *harnesstest.Server) string {
@@ -115,7 +118,112 @@ func TestContractGoalEvaluatorTranscriptBudget(t *testing.T) {
 				t.Errorf("transcript = %d bytes, want between %d and %d", len(body), budget-pair, budget)
 			}
 		})
+
+		t.Run("a large evaluator window is capped at the 200k transcript budget", func(t *testing.T) {
+			t.Parallel()
+			const budget = (200000/2 - 2048) * 4
+			body := evaluatorBudget(t, h, map[string]any{"context_window_tokens": 1050000, "compaction_threshold": 0.99}, 48)
+			if len(body) > budget+128 || len(body) < budget-pair {
+				t.Errorf("transcript = %d bytes, want between %d and %d", len(body), budget-pair, budget+128)
+			}
+		})
+
+		t.Run("Claude Code aliases provide metadata windows to the goal evaluator", func(t *testing.T) {
+			t.Parallel()
+			claudeCodeGoalEvaluatorBudget(t, h)
+		})
 	})
+}
+
+func claudeCodeGoalEvaluatorBudget(t *testing.T, h host) {
+	lane := claudeLane{mode: "one_shot", extra: map[string]any{"goal_evaluator_model": "claude-code/haiku"}}
+	d := lane.newDriver(t, h, "http://model.test").(*claudeDriver)
+	var models []protocol.Model
+	body, err := json.Marshal(d.Models(t).Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &models); err != nil {
+		t.Fatalf("decode model catalog: %v", err)
+	}
+	wantWindows := map[string]int{"claude-code/haiku": 1000000, "claude-code/sonnet": 1000000, "claude-code/opus": 1000000}
+	for _, model := range models {
+		if want, ok := wantWindows[model.ID]; ok {
+			if model.ContextWindow != want {
+				t.Errorf("%s context_window = %d, want %d", model.ID, model.ContextWindow, want)
+			}
+			delete(wantWindows, model.ID)
+		}
+	}
+	if len(wantWindows) != 0 {
+		t.Fatalf("model catalog omitted Claude Code aliases: %v", wantWindows)
+	}
+	id := d.Create(t)
+	part := strings.Repeat("x", 4097)
+	for range 10 {
+		d.Submit(t, id, part)
+		d.WaitIdle(t, id)
+	}
+	d.SetGoal(t, id, "say done", 0, false)
+	runtime := d.laneHost.(*runtimeDriver)
+	runtime.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+		if ev.Kind != protocol.KindGoalChanged {
+			return false
+		}
+		var changed struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal(ev.Data, &changed); err != nil {
+			t.Fatalf("decode goal.changed: %v", err)
+		}
+		return changed.State == string(protocol.GoalAchieved)
+	})
+	budget := (200000/2 - 2048) * 4
+	floor := (16000/2 - 2048) * 4
+	transcript := claudeEvaluatorTranscript(t, d)
+	if len(transcript) <= floor || len(transcript) > budget+128 {
+		t.Errorf("Claude Code evaluator transcript = %d bytes, want more than %d and no more than %d", len(transcript), floor, budget+128)
+	}
+}
+
+func claudeEvaluatorTranscript(t *testing.T, d *claudeDriver) string {
+	t.Helper()
+	data, err := os.ReadFile(d.stdinLog)
+	if err != nil {
+		t.Fatalf("read Claude Code inputs: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var input struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &input); err != nil {
+			t.Fatalf("decode Claude Code input: %v", err)
+		}
+		if input.Type != "user" || input.Message.Role != "user" {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(input.Message.Content, &text); err != nil {
+			var parts []struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(input.Message.Content, &parts); err != nil {
+				t.Fatalf("decode Claude Code user content: %v", err)
+			}
+			for _, part := range parts {
+				text += part.Text
+			}
+		}
+		if _, transcript, ok := strings.Cut(text, "CONVERSATION TRANSCRIPT:\n"); ok {
+			return transcript
+		}
+	}
+	t.Fatal("no goal evaluator transcript reached Claude Code")
+	return ""
 }
 
 func TestContractAgentProfileWithAnUnknownKeyAndAnotherError(t *testing.T) {
