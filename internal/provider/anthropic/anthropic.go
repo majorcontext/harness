@@ -80,7 +80,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if err != nil {
 		return nil, err
 	}
-	resp, bodyBytes, err := c.send(ctx, wire, ttl)
+	resp, body, err := c.send(ctx, wire, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		body:            resp.Body,
 		r:               bufio.NewReader(resp.Body),
 		model:           req.Model,
-		requestMetadata: measureRequest(wire, bodyBytes),
+		requestMetadata: measureBody(body, wire.MaxTokens),
 		resume: func(blocks []apiBlock) (*http.Response, error) {
 			next := *wire
 			next.Messages = append(slices.Clone(wire.Messages), apiMessage{Role: "assistant", Content: blocks})
@@ -99,27 +99,18 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	}, nil
 }
 
-// measureRequest sizes the parts of wire. bodyBytes is the size of the serialized request.
-func measureRequest(wire *apiRequest, bodyBytes int) *provider.RequestMetadata {
-	size := func(v any) int {
-		b, _ := json.Marshal(v)
-		return len(b)
-	}
-	md := &provider.RequestMetadata{RequestBytes: bodyBytes, MaxOutputTokens: wire.MaxTokens, HistoryBytes: size(wire.Messages)}
-	if len(wire.System) > 0 {
-		md.InstructionsBytes = size(wire.System)
-	}
-	if len(wire.Tools) > 0 {
-		md.ToolsBytes = size(wire.Tools)
-	}
-	return md
+// measureBody sizes the parts of a serialized request body of maxTokens output tokens.
+func measureBody(body []byte, maxTokens int) *provider.RequestMetadata {
+	parts := provider.BodyParts(body)
+	return &provider.RequestMetadata{RequestBytes: len(body), MaxOutputTokens: maxTokens,
+		InstructionsBytes: len(parts["system"]), ToolsBytes: len(parts["tools"]), HistoryBytes: len(parts["messages"])}
 }
 
-// send posts one Messages request and returns its response, which has the status 200, and the size of the request body.
-func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.Response, int, error) {
+// send posts one Messages request and returns its response, which has the status 200, and the request body.
+func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.Response, []byte, error) {
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	base := c.BaseURL
 	if base == "" {
@@ -127,7 +118,7 @@ func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return nil, len(body), err
+		return nil, body, err
 	}
 	for k, v := range c.ExtraHeaders {
 		httpReq.Header.Set(k, v)
@@ -148,13 +139,13 @@ func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.
 	}
 	resp, err := provider.Do(ctx, hc, httpReq, c.RequestRetries)
 	if err != nil {
-		return nil, len(body), err
+		return nil, body, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, len(body), apiError(resp)
+		return nil, body, apiError(resp)
 	}
-	return resp, len(body), nil
+	return resp, body, nil
 }
 
 func apiError(resp *http.Response) error {

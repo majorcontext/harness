@@ -320,3 +320,11 @@ type Provider interface {
 	Name() string
 	Stream(ctx context.Context, req *Request) (Stream, error)
 }
+
+// BodyParts returns the serialized value of each top-level key of a JSON request body.
+// It returns nil for a body that is not a JSON object.
+func BodyParts(body []byte) map[string]json.RawMessage {
+	var parts map[string]json.RawMessage
+	_ = json.Unmarshal(body, &parts)
+	return parts
+}

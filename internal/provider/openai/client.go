@@ -198,7 +198,7 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 		url:     responsesURL(c.BaseURL, c.ResponsesPath),
 		headers: headers,
 		client:  c.httpClient(),
-		sizes:   measureRequest(wire, len(body)),
+		sizes:   measureBody(body, wire.MaxOutputTokens),
 	}, nil
 }
 

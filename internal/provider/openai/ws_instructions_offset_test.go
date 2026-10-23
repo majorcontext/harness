@@ -33,7 +33,7 @@ func TestWebSocketInstructionsRefusalReportsFirstDifferingOffset(t *testing.T) {
 
 func TestWebSocketToolsRefusalNamesFirstDifferingTool(t *testing.T) {
 	server := newWSLineageServer(t)
-	for _, responseID := range []string{"resp_one", "resp_two"} {
+	for _, responseID := range []string{"resp_one", "resp_two", "resp_three"} {
 		server.scripts <- wsLineageScript{beforeWait: completedLineageFrames(responseID, "two")}
 	}
 	client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
@@ -49,9 +49,16 @@ func TestWebSocketToolsRefusalNamesFirstDifferingTool(t *testing.T) {
 	streamLineageTurn(t, client, first)
 
 	second := lineageRequest("tools", userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three"))
-	second.Tools = tools("write a file atomically")
+	second.Tools, second.WebSearch = tools("write a file atomically"), true
 	got := lineageTerminalMetadata(t, streamLineageTurn(t, client, second))
 	if got.ChainRefusalDetail != "tools" || got.ChainRefusalTool != "write" || got.ChainRefusalToolPart != "description" {
 		t.Fatalf("refusal = %q tool %q part %q, want tools, write, description", got.ChainRefusalDetail, got.ChainRefusalTool, got.ChainRefusalToolPart)
+	}
+
+	third := lineageRequest("tools", userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three"), assistantMessage("resp_two", "two"), userMessage("four"))
+	third.Tools, third.WebSearch = append(tools("write a file atomically"), provider.ToolDef{Name: "grep", Description: "search", InputSchema: []byte(`{"type":"object"}`)}), true
+	got = lineageTerminalMetadata(t, streamLineageTurn(t, client, third))
+	if got.ChainRefusalTool != "grep" || got.ChainRefusalToolPart != "name" {
+		t.Fatalf("with web search on, refusal tool %q part %q, want grep, name", got.ChainRefusalTool, got.ChainRefusalToolPart)
 	}
 }
