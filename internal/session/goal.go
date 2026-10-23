@@ -319,8 +319,8 @@ func parseVerdict(answer string) (protocol.Verdict, string) {
 
 // transcriptBudget returns the bytes of transcript that the evaluator model
 // reads: half its window less a reserve for the rest of the request, never
-// less than the reserve. A window that the backend only estimates counts as
-// transcriptFloorWindow.
+// less than the reserve or more than `transcriptBudgetCap` bytes. An absent
+// or estimated window counts as `transcriptFloorWindow`.
 func (a *Actor) transcriptBudget() int {
 	caps := a.cfg.Backend.Capabilities(a.cfg.Evaluator)
 	window := caps.ContextWindow
