@@ -259,6 +259,7 @@ func codexObservation(t *testing.T, sc codexScenario, r *run, o *harnesstest.Ope
 			t.Errorf("journal: %s", violation)
 		}
 	}
+	checkPrefixes(t, r.fake.RawRequests(), sc.prefixBreaks)
 	requests := o.Requests()
 	if sc.concurrent {
 		slices.SortStableFunc(requests, func(a, b harnesstest.Request) int { return strings.Compare(a.LastUserText(), b.LastUserText()) })
@@ -622,7 +623,7 @@ func codexRetryRows() []codexScenario {
 		},
 		{
 			scenario: scenario{
-				name:   "codex_http_context_overflow_compacts_and_runs_the_turn_again",
+				name: "codex_http_context_overflow_compacts_and_runs_the_turn_again", prefixBreaks: compactionBreak(),
 				config: map[string]any{"compaction_keep_turns": 1},
 				model: []harnesstest.Step{
 					turn("alpha", "alpha", "re alpha"), turn("bravo", "bravo", "re bravo"),

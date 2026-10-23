@@ -38,7 +38,7 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "a_negative_compaction_threshold_is_the_default_threshold",
+			name: "a_negative_compaction_threshold_is_the_default_threshold", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1, "compaction_threshold": -1},
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 500), text("three", 900),
@@ -53,7 +53,7 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 			),
 		},
 		{
-			name:   "auto_compaction_uses_the_window_of_the_session_model",
+			name: "auto_compaction_uses_the_window_of_the_session_model", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 0, "compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", 300_000), text("two", 300_000),
@@ -76,7 +76,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 	text := usedText
 	runScenarios(t, []scenario{
 		{
-			name:   "auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens",
+			name: "auto_compaction_estimates_the_context_when_no_call_reports_prompt_tokens", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: strings.Repeat("x", 4000), Usage: harnesstest.Usage{Output: 1}}},
@@ -87,7 +87,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens",
+			name: "auto_compaction_estimates_the_context_when_the_newest_turn_reports_no_prompt_tokens", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5),
@@ -98,7 +98,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "auto_compaction_runs_again_after_a_model_change_moves_the_window",
+			name: "auto_compaction_runs_again_after_a_model_change_moves_the_window", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 0, "compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900_000),
@@ -115,7 +115,7 @@ func TestContractSessionAutoCompactionGuards(t *testing.T) {
 			),
 		},
 		{
-			name:   "auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again",
+			name: "auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),
@@ -153,7 +153,7 @@ func TestContractSessionStoppedCompaction(t *testing.T) {
 	text := usedText
 	runScenarios(t, []scenario{
 		{
-			name:   "restart_during_auto_compaction_runs_the_queued_input_on_the_next_owner",
+			name: "restart_during_auto_compaction_runs_the_queued_input_on_the_next_owner", prefixBreaks: compactionBreak(),
 			config: overThreshold,
 			model: []harnesstest.Step{
 				text("one", 5), text("two", 900),
@@ -277,19 +277,19 @@ func TestContractSessionMidTurnCompaction(t *testing.T) {
 	oneTurn := []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}, messagesPage{as: "a"}}
 	runScenarios(t, []scenario{
 		{
-			name:    "a_turn_that_passes_the_threshold_compacts_before_its_next_model_call",
+			name: "a_turn_that_passes_the_threshold_compacts_before_its_next_model_call", prefixBreaks: compactionBreak(),
 			config:  overThreshold,
 			model:   []harnesstest.Step{echo(0, "toolu_1", "one", 10), echo(1, "toolu_2", "two", 900), summary, done},
 			actions: oneTurn,
 		},
 		{
-			name:    "context_overflow_in_a_single_turn_folds_the_turn_and_calls_the_model_again",
+			name: "context_overflow_in_a_single_turn_folds_the_turn_and_calls_the_model_again", prefixBreaks: compactionBreak(),
 			config:  map[string]any{"compaction_keep_turns": 1},
 			model:   []harnesstest.Step{echo(0, "toolu_1", "one", 10), echo(1, "toolu_2", "two", 10), overflow, summary, done},
 			actions: oneTurn,
 		},
 		{
-			name:   "a_summary_that_overflows_is_retried_without_its_oldest_message_after_the_first",
+			name: "a_summary_that_overflows_is_retried_without_its_oldest_message_after_the_first", prefixBreaks: compactionBreak(),
 			config: map[string]any{"compaction_keep_turns": 1},
 			model: []harnesstest.Step{echo(0, "toolu_1", "one", 10), echo(1, "toolu_2", "two", 10), echo(2, "toolu_3", "three", 10),
 				{Name: "overflow", Match: func(r harnesstest.Request) bool { return !summaryRequest(r) && assistantTurns(3)(r) },

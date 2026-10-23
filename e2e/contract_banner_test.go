@@ -85,7 +85,7 @@ func TestContractEngineBanner(t *testing.T) {
 			},
 		},
 		{
-			name:   "banner_and_history_prefix_stay_the_same_after_a_compaction_and_a_restart",
+			name: "banner_and_history_prefix_stay_the_same_after_a_compaction_and_a_restart", prefixBreaks: compactionBreak(),
 			config: map[string]any{"compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", "one", "1"), text("two", "two", "2"),

@@ -51,7 +51,7 @@ func TestContractChildReportPinned(t *testing.T) {
 			actions:    slices.Concat(busyParent, []action{submit{as: "a", text: "next"}, waitIdle{as: "a"}}),
 		},
 		{
-			name:       "child_report_to_a_busy_parent_stays_through_a_compaction",
+			name: "child_report_to_a_busy_parent_stays_through_a_compaction", prefixBreaks: compactionBreak(),
 			concurrent: true,
 			config:     map[string]any{"compaction_keep_turns": 1},
 			model:      busyParentSteps(summary),
@@ -127,7 +127,7 @@ func TestContractChildReportPinnedAcrossTurns(t *testing.T) {
 	keepOne := map[string]any{"compaction_keep_turns": 1}
 	runScenarios(t, []scenario{
 		{
-			name:       "child_report_to_a_busy_parent_after_the_cut_of_a_compaction",
+			name: "child_report_to_a_busy_parent_after_the_cut_of_a_compaction", prefixBreaks: compactionBreak(),
 			concurrent: true,
 			config:     keepOne,
 			model:      busyParentSteps(hello, summary),
@@ -147,7 +147,7 @@ func TestContractChildReportPinnedAcrossTurns(t *testing.T) {
 			},
 		},
 		{
-			name:       "child_report_to_a_busy_parent_folded_with_a_long_kept_tail",
+			name: "child_report_to_a_busy_parent_folded_with_a_long_kept_tail", prefixBreaks: compactionBreak(),
 			concurrent: true,
 			config:     keepOne,
 			model: busyParentSteps(summary,
@@ -162,7 +162,7 @@ func TestContractChildReportPinnedAcrossTurns(t *testing.T) {
 			}),
 		},
 		{
-			name:       "child_report_to_a_busy_parent_stays_through_an_in_turn_compaction",
+			name: "child_report_to_a_busy_parent_stays_through_an_in_turn_compaction", prefixBreaks: compactionBreak(),
 			concurrent: true,
 			config:     keepOne,
 			model: busyParentSteps(unused,

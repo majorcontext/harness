@@ -203,7 +203,7 @@ func TestContractPluginCompaction(t *testing.T) {
 		return harnesstest.Step{Name: user, Match: matchAll(append([]harnesstest.Matcher{harnesstest.LastUserText(user)}, m...)...), Reply: harnesstest.Reply{Text: "ok " + user}}
 	}
 	runScenarios(t, []scenario{{
-		name:   "plugin_segment_that_changes_keeps_only_its_newest_version_after_a_compaction",
+		name: "plugin_segment_that_changes_keeps_only_its_newest_version_after_a_compaction", prefixBreaks: compactionBreak(),
 		config: config,
 		model: []harnesstest.Step{
 			turn("one", holdsText("LAST-USER: one", true)),

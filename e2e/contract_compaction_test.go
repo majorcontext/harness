@@ -24,7 +24,7 @@ func TestContractBanner(t *testing.T) {
 		return harnesstest.Step{Name: name, Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: reply}}
 	}
 	runScenarios(t, []scenario{{
-		name: "banner_holds_its_place_when_a_turn_compacts_in_the_middle",
+		name: "banner_holds_its_place_when_a_turn_compacts_in_the_middle", prefixBreaks: compactionBreak(),
 		model: []harnesstest.Step{
 			answer("alpha"), answer("bravo"),
 			{Name: "overflow", Match: harnesstest.LastUserText("charlie"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
@@ -42,7 +42,7 @@ func TestContractBanner(t *testing.T) {
 			submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
 		},
 	}, {
-		name:   "banner_stays_after_the_results_when_a_compaction_follows_two_calls",
+		name: "banner_stays_after_the_results_when_a_compaction_follows_two_calls", prefixBreaks: compactionBreak(),
 		config: map[string]any{"compaction_keep_turns": 1},
 		model: []harnesstest.Step{
 			text("alpha", "alpha", "re alpha"),
@@ -73,7 +73,7 @@ func TestContractCompaction(t *testing.T) {
 	keepOne := map[string]any{"compaction_keep_turns": 1}
 	runScenarios(t, []scenario{
 		{
-			name:   "compact_manual",
+			name: "compact_manual", prefixBreaks: compactionBreak(),
 			config: keepOne,
 			model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3")},
 			actions: append(append([]action{}, twoTurns...),
@@ -85,7 +85,7 @@ func TestContractCompaction(t *testing.T) {
 			),
 		},
 		{
-			name:   "compact_logs_the_plain_summary_and_the_model_reads_it_with_the_banner",
+			name: "compact_logs_the_plain_summary_and_the_model_reads_it_with_the_banner", prefixBreaks: compactionBreak(),
 			config: keepOne,
 			model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3")},
 			actions: append(append([]action{}, twoTurns...),
@@ -95,7 +95,7 @@ func TestContractCompaction(t *testing.T) {
 			),
 		},
 		{
-			name:   "compact_survives_restart",
+			name: "compact_survives_restart", prefixBreaks: compactionBreak(),
 			config: keepOne,
 			model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3")},
 			actions: append(append([]action{}, twoTurns...),
@@ -110,7 +110,7 @@ func TestContractCompaction(t *testing.T) {
 			),
 		},
 		{
-			name:   "auto_compact_on_threshold",
+			name: "auto_compact_on_threshold", prefixBreaks: compactionBreak(),
 			config: map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1},
 			model: []harnesstest.Step{
 				text("one", "one", "1"),

@@ -143,7 +143,7 @@ func TestContractWebSearch(t *testing.T) {
 			},
 		},
 		{
-			name:    "web_search_is_offered_to_a_model_call_after_the_model_tool_switches_to_a_model_with_search",
+			name: "web_search_is_offered_to_a_model_call_after_the_model_tool_switches_to_a_model_with_search", prefixBreaks: foreignHistoryBreak(),
 			driver:  midTurnSwitchDriver,
 			model:   []harnesstest.Step{{Name: "after", Match: harnesstest.LastToolResult("model"), Reply: harnesstest.Reply{Text: "ok"}}},
 			actions: []action{create{as: "a"}, submit{as: "a", text: "switch now"}, waitIdle{as: "a"}, recordOtherRequests{}},

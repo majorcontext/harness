@@ -66,7 +66,7 @@ func TestContractSessionUsage(t *testing.T) {
 		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "re " + user, Usage: harnesstest.Usage{Input: in, Output: in}}}
 	}
 	runScenarios(t, []scenario{{
-		name:   "session_usage_counts_every_model_call_but_the_evaluation",
+		name: "session_usage_counts_every_model_call_but_the_evaluation", prefixBreaks: compactionBreak(),
 		config: map[string]any{"compaction_keep_turns": 1},
 		model: []harnesstest.Step{
 			used("one", "one", 1), used("two", "two", 1),

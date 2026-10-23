@@ -398,7 +398,7 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 func TestContractClaudeCodeHistory(t *testing.T) {
 	native := harnesstest.Step{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}
 	runScenarios(t, []scenario{{
-		name:   "claudecode_history_bridge_after_a_mid_turn_model_change",
+		name: "claudecode_history_bridge_after_a_mid_turn_model_change", prefixBreaks: foreignHistoryBreak(),
 		driver: claudeLane{mode: "normal", historyTool: true}.newDriver,
 		model: []harnesstest.Step{
 			{Name: "call", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
@@ -418,7 +418,7 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 			claudeHistoryTool{as: "a"},
 		),
 	}, {
-		name:   "claudecode_history_bridge_after_a_turn_whose_cli_never_started",
+		name: "claudecode_history_bridge_after_a_turn_whose_cli_never_started", prefixBreaks: foreignHistoryBreak(),
 		driver: claudeLane{mode: "normal", historyTool: true, spawnModes: "2=crash_before_init"}.newDriver,
 		model:  []harnesstest.Step{native},
 		actions: withActions(claudeOneTurn,
@@ -454,7 +454,7 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 			submit{as: "a", text: "native"}, waitIdle{as: "a"},
 		),
 	}, {
-		name:   "claudecode_history_bridge_after_native_turn",
+		name: "claudecode_history_bridge_after_native_turn", prefixBreaks: foreignHistoryBreak(),
 		driver: claudeLane{mode: "normal", historyTool: true}.newDriver,
 		model:  []harnesstest.Step{native},
 		actions: withActions(claudeOneTurn,
@@ -549,7 +549,7 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}},
 		},
 		{
-			name:   "claudecode_answered_question_replays_to_a_model_api_session",
+			name: "claudecode_answered_question_replays_to_a_model_api_session", prefixBreaks: foreignHistoryBreak(),
 			driver: lane,
 			model:  []harnesstest.Step{{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}},
 			actions: withActions(parked,
@@ -698,7 +698,7 @@ func TestContractClaudeCodeTools(t *testing.T) {
 		driver:  claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"bash", map[string]any{"command": "true"}}}}}.newDriver,
 		actions: claudeOneTurn,
 	}, {
-		name:   "claudecode_bridge_image_result_reaches_the_log_and_a_model_api_replay",
+		name: "claudecode_bridge_image_result_reaches_the_log_and_a_model_api_replay", prefixBreaks: foreignHistoryBreak(),
 		driver: claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{{{"read_file", map[string]any{"path": "pic.png"}}}}}.newDriver,
 		model:  []harnesstest.Step{{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}},
 		actions: append([]action{writeFile{path: "pic.png", body: pngBody()}},

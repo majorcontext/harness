@@ -78,7 +78,7 @@ func TestContractModelAPIQuestionKeptOpenByMachineInput(t *testing.T) {
 				dismissQuestion{as: "a", callID: "toolu_ask"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 		{
-			name:   "model_api_goal_set_while_machine_input_waits_behind_a_question_dismisses_it",
+			name: "model_api_goal_set_while_machine_input_waits_behind_a_question_dismisses_it", prefixBreaks: prefixBreak("a goal removes ask_user_question from the tools of the session", breakTools),
 			driver: askLane(true),
 			model: []harnesstest.Step{
 				askSteps()[0], evaluatorStep("judge", "MET: ok", true), {Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
@@ -161,7 +161,7 @@ func TestContractClaudeCodeQuestionKeptOpenByMachineInput(t *testing.T) {
 			claudeInputs{as: "a"},
 		),
 	}, {
-		name:   "claudecode_held_machine_input_runs_when_a_model_of_another_provider_dismisses_the_question",
+		name: "claudecode_held_machine_input_runs_when_a_model_of_another_provider_dismisses_the_question", prefixBreaks: foreignHistoryBreak(),
 		driver: lane,
 		model:  []harnesstest.Step{{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true}},
 		actions: withActions(parked,

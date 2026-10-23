@@ -69,7 +69,7 @@ func TestContractToolResultAcrossTurns(t *testing.T) {
 		return harnesstest.Step{Name: name, Match: matchAll(harnesstest.LastUserText(user), harnesstest.LastToolResult("bash")), Reply: harnesstest.Reply{Text: "ok"}}
 	}
 	runScenarios(t, []scenario{{
-		name:   "tool_result_handles_continue_across_turns_and_a_restart",
+		name: "tool_result_handles_continue_across_turns_and_a_restart", prefixBreaks: compactionBreak(),
 		config: map[string]any{"compaction_keep_turns": 1},
 		model: []harnesstest.Step{
 			bash("one", "one"), done("one_done", "one"),

@@ -48,7 +48,7 @@ func TestContractClaudeCodeDeferredModel(t *testing.T) {
 			requireSessionModel{as: "a", model: "claude-code/sonnet"}, interrupt{as: "a"}, waitIdle{as: "a"},
 			requireSessionModel{as: "a", model: "anthropic/claude-fable-5"}, claudeTurnEnds{as: "a"}},
 	}, {
-		name: "claudecode_deferred_model_runs_the_next_turn",
+		name: "claudecode_deferred_model_runs_the_next_turn", prefixBreaks: foreignHistoryBreak(),
 		driver: claudeLane{mode: "turn_calls", turnCalls: [][]turnCall{set("quick"), status},
 			extra: map[string]any{"aliases": map[string]any{"quick": "anthropic/claude-fable-5"}}}.newDriver,
 		model: []harnesstest.Step{{Name: "new model", Match: harnesstest.LastUserText("next"), Reply: harnesstest.Reply{Text: "new model reply"}}},
