@@ -40,7 +40,7 @@ These are pointers. Open the section named, read the current text, and check the
 | One owner and one writer per piece of state | `Goals and non-goals`, `Four rules` |
 | One goroutine owns a session; others read views | `Four rules`, `session` `Actor` |
 | Interface lives in its consumer; no backend or provider name branches | `Four rules`, `Backend` |
-| One resolver per concept (the context window is `Capabilities(model)` of the backend and nothing else) | `Backend`, `Model API backend` |
+| `Capabilities(model)` resolves the model window; an owned-context session gauge prefers its latest nonzero measured window | `Backend`, `Model API backend`, `Claude Code` |
 | One error envelope and its code table | `Errors` |
 | One route table, mounted routes equal the spec's routes | `Routes`, `Contract source` |
 | Public API is the packages that `Public packages` lists; the rest is `internal/` | `Public packages`, `Internal packages` |
