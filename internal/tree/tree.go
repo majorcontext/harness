@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/tracing"
 )
 
 // Node is a session that the runtime runs, as the tree sees it.
@@ -177,6 +178,7 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice)
 	c.Origin, c.AllowedTools = "task", t.available(c.Model, narrow(p.Tools, c.AllowedTools))
 	first := protocol.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: protocol.DeliveryQueue, Source: "parent",
 		Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: task}}}
+	first.Traceparent, first.Tracestate = tracing.Headers(ctx)
 	ctx = context.WithoutCancel(ctx)
 	if err := t.s.Create(ctx, id, c, first, p); err != nil {
 		return "", errors.Join(err, ps.Actor.Settle(ctx, protocol.ChildSettled{ChildID: id, Outcome: protocol.OutcomeFailed}, nil))

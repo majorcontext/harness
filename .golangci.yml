@@ -34,8 +34,12 @@ linters:
             - $gostd
             - github.com/majorcontext/harness/internal/backoff
             - github.com/majorcontext/harness/internal/eventlog
+            - github.com/majorcontext/harness/internal/modelref
+            - github.com/majorcontext/harness/internal/tracing
             - github.com/majorcontext/harness/internal/turn
             - github.com/majorcontext/harness/protocol
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/trace
         backend-and-tool-below-session:
           files:
             - "**/internal/backend/**"
@@ -71,6 +75,7 @@ linters:
             - github.com/majorcontext/harness/internal/acp
             - github.com/majorcontext/harness/internal/acp/cwdruntimes
             - github.com/majorcontext/harness/internal/injectedauth
+            - go.opentelemetry.io/otel/trace
         acp-acpauth:
           files:
             - "**/internal/acp/acpauth/**"

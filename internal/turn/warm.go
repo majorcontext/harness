@@ -1,6 +1,10 @@
 package turn
 
-import "context"
+import (
+	"context"
+
+	"github.com/majorcontext/harness/internal/tracing"
+)
 
 // Warmer is an optional Backend capability. Warm prepares the transport for
 // req, the first model call of a session, and makes no call that is recorded.
@@ -25,7 +29,7 @@ func Warm(ctx context.Context, b Backend, req Request, src Source) error {
 	if err != nil {
 		return err
 	}
-	describe(&call, ts, nil, caps.OwnsLoop)
+	describe(&call, ts, nil, caps.OwnsLoop, tracing.Scope{})
 	return b.(Warmer).Warm(ctx, call)
 }
 

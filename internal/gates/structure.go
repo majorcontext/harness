@@ -27,7 +27,7 @@ var publicAllow = map[string]string{}
 // provider wires (spec: Four rules, 3; Model API backend; Contract source).
 var providerOwners = []string{
 	"config/load.go#validateAppendSystemPromptArgs",
-	"config/provider.go#buildsResponsesAdapter", "config/provider.go#validateCacheTTL",
+	"config/provider.go#buildsResponsesAdapter", "config/provider.go#TraceName", "config/provider.go#validateCacheTTL",
 	"config/provider.go#validateClaudeCodeFields", "config/provider.go#validateProviders", "config/provider.go#WithProxyBase", "config/provider.go#WireOf", "config/provider.go#UsesClaudeCLI",
 	"internal/backend/probe.go#ProbeOf", "internal/backend/router.go#New", "internal/backend/router.go#client",
 	"internal/modelmeta/modelmeta.go#ContextWindow", "internal/modelmeta/modelmeta.go#ClaudeCodeContextWindow", "internal/modelmeta/modelmeta.go#Models", "internal/modelmeta/modelmeta.go#infoOf",

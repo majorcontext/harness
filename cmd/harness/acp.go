@@ -38,7 +38,12 @@ func acpCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logins := injectedauth.New(injectedauth.Options{Probe: backend.ProbeOf})
-	err := acp.Serve(ctx, acpRuntimes(logger, logins), os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger, MCP: true, List: acpDir() != "", Auth: acpLogin(logins)})
+	trace, err := startTracing(ctx)
+	if err != nil {
+		return err
+	}
+	defer trace.flush()
+	err = acp.Serve(ctx, acpRuntimes(logger, logins, trace), os.Stdin, os.Stdout, acp.Config{Version: version, Logger: logger, MCP: true, List: acpDir() != "", Auth: acpLogin(logins)})
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		return nil
 	}
@@ -74,7 +79,7 @@ func acpLogin(logins *injectedauth.Logins) acp.Auth {
 // acpRuntimes wires the real config loading, session directory, and owner into
 // the runtimes of the acp command. The first work directory decides the session
 // directory and the owner epoch.
-func acpRuntimes(logger *slog.Logger, logins *injectedauth.Logins) *cwdruntimes.Runtimes {
+func acpRuntimes(logger *slog.Logger, logins *injectedauth.Logins, trace tracing) *cwdruntimes.Runtimes {
 	dir := acpDir()
 	return cwdruntimes.New(cwdruntimes.Options{
 		Config: func(cwd string) (*config.Config, error) {
@@ -98,6 +103,8 @@ func acpRuntimes(logger *slog.Logger, logins *injectedauth.Logins) *cwdruntimes.
 		Version:    version,
 		Getenv:     os.Getenv,
 		Logger:     logger,
+
+		TracerProvider: trace.provider, CaptureMessageContent: trace.content,
 	})
 }
 

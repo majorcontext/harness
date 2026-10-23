@@ -115,6 +115,10 @@ func (t *httpTransport) recordSession(resp *http.Response) {
 
 func (t *httpTransport) call(ctx context.Context, method string, params, result any) error {
 	id := t.nextID.Add(1)
+	t.mu.Lock()
+	sessionID := t.sessionID
+	t.mu.Unlock()
+	annotateCall(ctx, method, id, sessionID)
 	idJSON, err := json.Marshal(id)
 	if err != nil {
 		return err

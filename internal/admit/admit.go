@@ -19,6 +19,7 @@ import (
 
 	_ "golang.org/x/image/webp" // register the WebP decoder for image.DecodeConfig
 
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -53,7 +54,8 @@ var attachmentTypes = map[string]func(mediaType string, data []byte) error{
 // Input returns the record of in and the blobs of its attachments. Its error
 // names the part that is not valid.
 func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
-	ev := protocol.InputAdmitted{InputID: in.ID, Delivery: protocol.Delivery(in.Delivery), Source: in.Source, SourceID: in.SourceID}
+	ev := protocol.InputAdmitted{InputID: in.ID, Delivery: protocol.Delivery(in.Delivery), Source: in.Source, SourceID: in.SourceID,
+		Traceparent: in.Traceparent, Tracestate: in.Tracestate}
 	if ev.Delivery == "" {
 		ev.Delivery = protocol.DeliverySteer
 	}
@@ -70,6 +72,9 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 	}
 	label, err := Provenance(in.SourceID, in.SourceLabel)
 	if err != nil {
+		return ev, nil, err
+	}
+	if err := TraceContext(in); err != nil {
 		return ev, nil, err
 	}
 	ev.SourceLabel = label
@@ -90,6 +95,18 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 		}
 	}
 	return ev, blobs, nil
+}
+
+// TraceContext checks the traceparent and tracestate of an input. An input
+// with neither passes.
+func TraceContext(in protocol.Input) error {
+	if in.Traceparent == "" && in.Tracestate != "" {
+		return fmt.Errorf("tracestate needs a traceparent")
+	}
+	if _, err := tracing.Parse(in.Traceparent, in.Tracestate); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Provenance checks the source_id and source_label of an input and returns the

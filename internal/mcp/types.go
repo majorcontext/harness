@@ -142,8 +142,9 @@ func (c Content) MarshalJSON() ([]byte, error) {
 
 // callToolParams is the tools/call request payload.
 type callToolParams struct {
-	Name      string `json:"name"`
-	Arguments any    `json:"arguments,omitempty"`
+	Name      string            `json:"name"`
+	Arguments any               `json:"arguments,omitempty"`
+	Meta      map[string]string `json:"_meta,omitempty"`
 }
 
 // CallToolResult is the tools/call response payload. IsError indicates a

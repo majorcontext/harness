@@ -33,3 +33,14 @@ type Record struct {
 // ErrConflict reports an Append whose expectedSeq is not the session head,
 // or a SyncBatch whose records differ from the records of the receiver.
 var ErrConflict = session.ErrConflict
+
+// firstRecord reads the first record of a session of st.
+func firstRecord(st Store) func(context.Context, string) ([]byte, error) {
+	return func(ctx context.Context, id string) ([]byte, error) {
+		recs, err := st.Read(ctx, id, 0, 1)
+		if err != nil || len(recs) == 0 {
+			return nil, err
+		}
+		return recs[0].Data, nil
+	}
+}

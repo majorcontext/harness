@@ -102,8 +102,13 @@ func serveCmd(args []string) error {
 	}
 	store := newObservedStore(store.NewDiskStore(dir), logger)
 	owner, replica := replication(cfg)
+	trace, err := startTracing(context.Background())
+	if err != nil {
+		return err
+	}
+	defer trace.flush()
 	rt, err := harness.New(harness.Options{Store: store, Owner: owner, Sync: replica, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask, Getenv: os.Getenv, Logger: logger,
-		ServeURL: serveURLForAddr(bound), RunToken: token})
+		ServeURL: serveURLForAddr(bound), RunToken: token, TracerProvider: trace.provider, CaptureMessageContent: trace.content})
 	if err != nil {
 		return err
 	}

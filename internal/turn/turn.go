@@ -2,15 +2,16 @@
 package turn
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/internal/backoff"
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -43,6 +44,8 @@ type Capabilities struct {
 	// Steering is a backend that owns the loop and calls Sink.Steer.
 	Steering      bool
 	ContextWindow int
+	// Provider is the gen_ai.provider.name of the model. Empty: none.
+	Provider string
 	// WindowEstimated marks ContextWindow as the default for an unknown model.
 	WindowEstimated bool
 	// Efforts are the levels the model lists; none: unknown.
@@ -103,6 +106,8 @@ type Request struct {
 	WebSearch     bool // offers the native web search of the provider
 	// Foreign reports History messages that another provider recorded.
 	Foreign bool
+	// Compacted says that History is the view that a compaction left.
+	Compacted bool
 	// Banner is the engine status of the session. It comes from the log, so
 	// every process sends the same text. Empty: none.
 	Banner string
@@ -202,6 +207,8 @@ type Limits struct {
 	Idle time.Duration
 	// Log receives the turn_metrics line of each model call. nil: slog.Default().
 	Log *slog.Logger
+	// Trace starts the spans of model calls and tool calls. The zero value records nothing.
+	Trace tracing.Tracer
 }
 
 // Turn is what a running turn reports through, bound to its turn. Started
@@ -238,7 +245,10 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context.
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
-	ctx, step = context.WithValue(ctx, turnIDKey{}, req.TurnID), context.WithValue(step, turnIDKey{}, req.TurnID)
+	calls := new(atomic.Int64)
+	for _, c := range []*context.Context{&ctx, &step} {
+		*c = context.WithValue(context.WithValue(*c, turnIDKey{}, req.TurnID), seqKey{}, calls)
+	}
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
@@ -270,7 +280,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err
 		}
-		s := &sink{Turn: to, log: cmp.Or(lim.Log, slog.Default())}
+		s := &sink{Turn: to}
 		call, ts, err := nextCall(step, b, caps, req, src)
 		if err != nil {
 			return err
@@ -281,7 +291,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			}
 			call.History = req.History
 		}
-		t := describe(&call, ts, to, caps.OwnsLoop)
+		t := describe(&call, ts, to, caps.OwnsLoop, lim.Trace.Scope(ctx))
 		err = callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
@@ -315,14 +325,17 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 // callModel runs one model call. It calls b again, at most lim.Retries
 // times, after an ErrRetryable error that came before any item. The wait is
 // the advice of the provider, else backoff.Delay.
-func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) error {
-	s.call = callOf(req, 0, ownsLoop)
-	err := watch(ctx, b, req, s, lim.Idle)
+func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) (err error) {
+	ctx, s.rec = begin(ctx, lim, b, req, ownsLoop)
+	defer func() { s.rec.end(req, s.items, err) }()
+	err = watch(ctx, b, req, s, lim.Idle)
+	s.rec.attempt(1, err)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && retryable(err); n++ {
 		s.Discard("")
 		if err = s.wait(ctx, n, err); err == nil {
-			s.call = callOf(req, n+1, ownsLoop)
+			s.rec.retry(n + 1)
 			err = watch(ctx, b, req, s, lim.Idle)
+			s.rec.attempt(n+2, err)
 		}
 	}
 	return err
@@ -421,9 +434,8 @@ type sink struct {
 	items []protocol.LogMessage
 	// item is the item that the deltas since the last Item build, or "".
 	item string
-	// call describes the model call in flight, for its turn_metrics line.
-	call callInfo
-	log  *slog.Logger
+	// rec reports the model call in flight.
+	rec *recorder
 }
 
 // Delta streams d into the next item. The backend item ID is not used: one

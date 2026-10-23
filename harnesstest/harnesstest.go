@@ -113,7 +113,7 @@ type Request struct {
 	Tools            []string // sorted names
 	// ToolSpecs holds the description and the input schema of each tool by name. Only the Anthropic wire fills it.
 	ToolSpecs map[string]ToolSpec
-	// Header holds the HTTP request headers. Only NewChat fills it.
+	// Header holds the HTTP request headers. Only NewChat and NewAnthropic fill it.
 	Header http.Header
 	// raw is the body of the request, after the removal of any content encoding. RawRequests reads it.
 	raw []byte
@@ -181,7 +181,11 @@ type codec struct {
 }
 
 var anthropicCodec = codec{
-	decode: func(body []byte, _ http.Header) (Request, error) { return decodeRequest(body) },
+	decode: func(body []byte, h http.Header) (Request, error) {
+		req, err := decodeRequest(body)
+		req.Header = h.Clone()
+		return req, err
+	},
 	stream: (*Server).stream, writeError: writeError, replyError: writeReplyError,
 }
 

@@ -119,6 +119,9 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 func (t *turnRun) Ended(runErr error) {
 	_, _ = call(context.Background(), t.a, func(reply func(struct{}, error)) {
 		t.a.ended(t.r, runErr)
+		if t.r.span != nil {
+			t.r.span.End()
+		}
 		reply(struct{}{}, nil)
 	})
 }

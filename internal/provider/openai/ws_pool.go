@@ -305,6 +305,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		metadata.Mode = provider.RequestModeIncremental
 		metadata.SentInputItems = len(createOptions.Input)
 		metadata.PreviousResponseUsed = true
+		metadata.PreviousResponseID = createOptions.PreviousResponseID
 	}
 
 	st := &stream{

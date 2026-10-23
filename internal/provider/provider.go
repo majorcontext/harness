@@ -194,6 +194,8 @@ type RequestMetadata struct {
 	CompleteInputItems   int         `json:"complete_input_items"`
 	SentInputItems       int         `json:"sent_input_items"`
 	PreviousResponseUsed bool        `json:"previous_response_used"`
+	// PreviousResponseID is the response that a chained call continued. It is for the model-call span and never goes to a log line or a store.
+	PreviousResponseID string `json:"-"`
 	// ChainRecovered is true when an incremental request received an immediate
 	// chain miss and completed after one full-request retry.
 	ChainRecovered bool `json:"chain_recovered"`

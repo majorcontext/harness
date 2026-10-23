@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -33,11 +35,18 @@ type running struct {
 	// waiters receive the outcome of the run: the error of the run, and the
 	// error of the append that records its end.
 	waiters []func(runErr, appendErr error)
+	// span is the span of a turn; nil for another kind of run.
+	span trace.Span
 }
 
 // newRun returns a run of kind with a ctx that Config.Base bounds.
 func (a *Actor) newRun(kind runKind, id string) *running {
-	ctx, cancel := context.WithCancelCause(a.cfg.Base)
+	return a.newRunUnder(a.cfg.Base, kind, id)
+}
+
+// newRunUnder returns a run of kind with a ctx that base bounds.
+func (a *Actor) newRunUnder(base context.Context, kind runKind, id string) *running {
+	ctx, cancel := context.WithCancelCause(base)
 	r := &running{id: id, kind: kind, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel}
 	if kind == kindTurn {
 		r.step, r.handoff = context.WithCancelCause(ctx)

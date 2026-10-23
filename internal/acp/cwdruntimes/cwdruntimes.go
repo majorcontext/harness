@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/trace"
 	"io"
 	"log/slog"
 	"net/http"
@@ -39,6 +40,9 @@ type Options struct {
 	Logins *injectedauth.Logins
 	// Host is the harness.Options.Host of every runtime.
 	Host harness.HostLimits
+	// TracerProvider and CaptureMessageContent are the matching harness.Options of every runtime.
+	TracerProvider        trace.TracerProvider
+	CaptureMessageContent bool
 }
 
 // Runtimes implements acp.Runtimes.
@@ -92,7 +96,8 @@ func (r *Runtimes) For(_ context.Context, cwd string, opts acp.RuntimeOptions) (
 	}
 	rt, err := harness.New(harness.Options{Host: r.opts.Host, Logins: r.logins(), Store: r.store, Owner: r.owner, Config: *cfg, WorkDir: cwd,
 		Version: r.opts.Version, Getenv: r.opts.Getenv, Logger: r.opts.Logger,
-		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion})
+		ModelTransport: r.opts.ModelTransport, Tools: r.opts.Tools, AskUserQuestion: opts.AskUserQuestion,
+		TracerProvider: r.opts.TracerProvider, CaptureMessageContent: r.opts.CaptureMessageContent})
 	if err != nil {
 		return nil, err
 	}
