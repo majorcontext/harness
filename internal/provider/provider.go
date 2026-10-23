@@ -62,6 +62,8 @@ type Request struct {
 	SessionKey string
 	// CacheKey, when set, is the prompt-cache routing key in place of SessionKey. It leaves the raw session key out of the request.
 	CacheKey string
+	// OneShot says that no later request continues this request.
+	OneShot bool
 }
 
 // StopReason is why the model stopped generating.
