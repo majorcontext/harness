@@ -264,7 +264,7 @@ func codexObservation(t *testing.T, sc codexScenario, r *run, o *harnesstest.Ope
 	if sc.concurrent {
 		slices.SortStableFunc(requests, func(a, b harnesstest.Request) int { return strings.Compare(a.LastUserText(), b.LastUserText()) })
 	}
-	return normalizeRun(requests, sessions, r.calls, r.ids, r.drv.Workdir())
+	return normalizeRun(titlesLast(requests), sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runCodexScenarios(t *testing.T, table []codexScenario) {
