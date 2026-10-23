@@ -61,6 +61,7 @@ First tagged release.
 
 ### Changed
 
+- **MCP tool loading defaults to `auto` with a byte budget** (`config`, `internal/tool/mcpsrc`) — an unset `mcp_tool_loading` is now `auto`: the tools of the servers stay in the tools array when their schemas fit `mcp_schema_bytes` (default 65536), and every tool is deferred otherwise. `mcp_tool_loading_threshold` is removed. With `eager`, the tools past the budget are deferred and the system prompt says so. The tool list in the system prompt stops at 16384 bytes, and an `mcp` `select` result holds at most 65536 bytes of definitions and names the tools it left out.
 - **Cache-reusing compaction summary** (`internal/turn`, `internal/session`) — the summary request of a compaction now sends the instructions, tools, settings, and whole history of the next model call, then one user message that asks for the summary, so a provider reads the cached prefix of the turns instead of the folded history at full price. The compaction still folds only the turns before the kept ones, and the summary now also covers the kept turns.
 
 - **Instructions change offset in chain refusals** (`openai`, `internal/turn`, `internal/backend/modelapi`) — a `turn_metrics` line of a call that did not chain because the instructions changed now has `chain_refusal_offset`, the byte offset of the first byte that differs, with `chain_refusal_previous_len` and `chain_refusal_current_len`, so an operator can tell a change in the base prompt from a change in a later section. The line never holds the instructions text.

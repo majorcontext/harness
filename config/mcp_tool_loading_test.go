@@ -37,16 +37,9 @@ func TestLoadMCPToolLoadingRejectsGarbage(t *testing.T) {
 	}
 }
 
-// TestLoadMCPToolLoadingThresholdRejectsNegative guards the always-defer
-// bug: len(catalog) > -1 holds even for an empty catalog, so a stray minus
-// sign would silently defer everything under "auto".
-func TestLoadMCPToolLoadingThresholdRejectsNegative(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "config.json")
-	writeFile(t, p, `{"mcp_tool_loading": "auto", "mcp_tool_loading_threshold": -1}`)
-	if _, err := Load(p); err == nil {
-		t.Fatal("Load accepted a negative mcp_tool_loading_threshold")
-	} else if !strings.Contains(err.Error(), "mcp_tool_loading_threshold") {
-		t.Errorf("error %q does not name mcp_tool_loading_threshold", err.Error())
+func TestDefaultMCPSchemaBytes(t *testing.T) {
+	if got := Defaults().MCPSchemaBytes; got != 64<<10 {
+		t.Errorf("default MCPSchemaBytes = %d, want 65536", got)
 	}
 }
 
@@ -92,17 +85,17 @@ func TestLoadMCPServerToolLoading(t *testing.T) {
 
 func TestMergeMCPToolLoading(t *testing.T) {
 	t.Run("empty project inherits user", func(t *testing.T) {
-		base := &Config{MCPToolLoading: "lazy", MCPToolLoadingThreshold: 7}
+		base := &Config{MCPToolLoading: "lazy", MCPSchemaBytes: 7}
 		got := merge(base, &Config{})
-		if got.MCPToolLoading != "lazy" || got.MCPToolLoadingThreshold != 7 {
-			t.Errorf("merged = (%q, %d), want inherited (\"lazy\", 7)", got.MCPToolLoading, got.MCPToolLoadingThreshold)
+		if got.MCPToolLoading != "lazy" || got.MCPSchemaBytes != 7 {
+			t.Errorf("merged = (%q, %d), want inherited (\"lazy\", 7)", got.MCPToolLoading, got.MCPSchemaBytes)
 		}
 	})
 	t.Run("non-empty project overrides", func(t *testing.T) {
-		base := &Config{MCPToolLoading: "lazy", MCPToolLoadingThreshold: 7}
-		got := merge(base, &Config{MCPToolLoading: "auto", MCPToolLoadingThreshold: 30})
-		if got.MCPToolLoading != "auto" || got.MCPToolLoadingThreshold != 30 {
-			t.Errorf("merged = (%q, %d), want project (\"auto\", 30)", got.MCPToolLoading, got.MCPToolLoadingThreshold)
+		base := &Config{MCPToolLoading: "lazy", MCPSchemaBytes: 7}
+		got := merge(base, &Config{MCPToolLoading: "auto", MCPSchemaBytes: 30})
+		if got.MCPToolLoading != "auto" || got.MCPSchemaBytes != 30 {
+			t.Errorf("merged = (%q, %d), want project (\"auto\", 30)", got.MCPToolLoading, got.MCPSchemaBytes)
 		}
 	})
 	// A same-name project entry replaces the user entry wholesale, so the

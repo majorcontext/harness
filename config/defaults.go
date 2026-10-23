@@ -6,17 +6,17 @@ const DefaultModel = "anthropic/claude-fable-5"
 // Defaults returns the built-in value of every defaulted key.
 func Defaults() Config {
 	return Config{
-		Model:                   DefaultModel,
-		RequestMaxRetries:       new(4),
-		StreamMaxRetries:        new(5),
-		StreamIdleTimeoutS:      300,
-		CompactionThreshold:     0.8,
-		CompactionKeepTurns:     2,
-		ModelTool:               new(true),
-		InstructionsMaxBytes:    64 << 10,
-		MCPToolLoadingThreshold: 20,
-		MaxTaskDepth:            3,
-		MaxConcurrentTasks:      20,
+		Model:                DefaultModel,
+		RequestMaxRetries:    new(4),
+		StreamMaxRetries:     new(5),
+		StreamIdleTimeoutS:   300,
+		CompactionThreshold:  0.8,
+		CompactionKeepTurns:  2,
+		ModelTool:            new(true),
+		InstructionsMaxBytes: 64 << 10,
+		MCPSchemaBytes:       64 << 10,
+		MaxTaskDepth:         3,
+		MaxConcurrentTasks:   20,
 	}
 }
 

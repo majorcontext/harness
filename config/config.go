@@ -167,31 +167,18 @@ type Config struct {
 	// Zero (omitted) defaults to 2 (see Defaults); the effective value
 	// can never go below 1.
 	CompactionKeepTurns int `json:"compaction_keep_turns,omitempty"`
-	// MCPToolLoading selects when a session defers MCP tool SCHEMAS instead
-	// of registering every one of them up front (see
-	// docs/design/mcp-lazy-tools.md). "eager" (the default, and what an
-	// absent value means) keeps today's behaviour: every tool of every
-	// connected server registers with its full JSON Schema. "lazy" defers
-	// every server: its tools appear as a name-only catalog in the system
-	// prompt, and the model loads the schema it needs with the mcp tool's
-	// select action. "auto" defers only once the live catalog holds more
-	// tools than MCPToolLoadingThreshold. An unrecognized value is rejected
-	// by validateMCPToolLoading rather than falling back to the default:
-	// deferral changes what the model can call without asking, so a typo
-	// must never decide it silently.
+	// MCPToolLoading selects when a session defers MCP tool schemas (see
+	// docs/architecture.md, MCP tools). "auto" (the default) keeps the tools of
+	// the servers in the tools array while their schemas fit MCPSchemaBytes,
+	// and defers them all otherwise. "eager" keeps the tools of eager servers
+	// in the tools array up to MCPSchemaBytes and defers the rest. "lazy"
+	// defers every tool. An unrecognized value is rejected: deferral changes
+	// what the model can call without asking.
 	MCPToolLoading string `json:"mcp_tool_loading,omitempty"`
-	// MCPToolLoadingThreshold is the tool COUNT "auto" compares the live
-	// catalog against. It is consulted in "auto" mode ONLY: with "eager" or
-	// "lazy" the decision needs no catalog size, so a threshold set beside
-	// either of them is accepted and inert. It is not rejected there,
-	// because a config that switches mode back to "auto" should not have to
-	// re-supply it; 0/absent leaves the threshold at its default of 20
-	// (see Defaults). A count rather than a token estimate: the
-	// runtime has no tokenizer on the request path. A NEGATIVE value cannot
-	// possibly be wired -- len(catalog) > -1 holds even for an empty
-	// catalog, so a stray minus sign would silently turn "auto" into "always
-	// defer" -- and is rejected loudly, like MCPServerSpec.ConnectTimeoutS.
-	MCPToolLoadingThreshold int `json:"mcp_tool_loading_threshold,omitempty"`
+	// MCPSchemaBytes is the budget of the schema bytes (name, description, and
+	// input schema) of the MCP tools in the tools array. Zero or less is the
+	// default.
+	MCPSchemaBytes int `json:"mcp_schema_bytes,omitempty"`
 	// SubscriptionDefault lets an unset model resolve to the subscription of the user (see defaultModel). Only the
 	// composition root of a command that a person runs sets it. No file, variable, or flag does.
 	SubscriptionDefault bool `json:"-" env:"-"`

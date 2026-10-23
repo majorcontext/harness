@@ -28,7 +28,7 @@ func (c *Config) validateFile() error {
 		validateMCPServers(c.MCPServers),
 		validateProcesses(c.Processes),
 		validateSync(c.OwnerEpoch, c.Sync),
-		validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold),
+		validateMCPToolLoading(c.MCPToolLoading),
 		c.validateTaskLimits(),
 		validateMaxTokens(c.MaxTokens),
 		validateRetries(c.RequestMaxRetries, c.StreamMaxRetries),

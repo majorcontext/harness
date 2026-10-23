@@ -139,7 +139,7 @@ func (a *actor) add(name string, spec config.MCPServerSpec) *entry {
 	e := &entry{name: name, spec: cloneSpec(spec)}
 	e.ctx, e.cancel = context.WithCancel(a.s.ctx)
 	a.entries[name] = e
-	loading := cmp.Or(spec.ToolLoading, a.s.mode, "eager")
+	loading := cmp.Or(spec.ToolLoading, a.s.mode, "auto")
 	switch m := a.mem[name]; {
 	case m == nil:
 		a.mem[name] = &memory{loading: loading, seen: map[string]mcp.Tool{}, base: map[string]bool{}}

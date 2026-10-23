@@ -30,8 +30,8 @@ progressive-disclosure model the engine already uses for Agent Skills
 (`engine/skills.go`): stage 1 is name plus one-line description, stage 2 is
 an explicit fetch.
 
-The behaviour is opt-in. A config that does not ask for it keeps today's
-eager registration, byte for byte.
+The default mode is `auto`: a catalog whose schemas fit `mcp_schema_bytes`
+keeps its tools in the tools array.
 
 ## 1. What the model sees
 
@@ -59,7 +59,7 @@ Global policy, in `config.Config` (`config/config.go`):
 ```json
 {
   "mcp_tool_loading": "auto",
-  "mcp_tool_loading_threshold": 20
+  "mcp_schema_bytes": 65536
 }
 ```
 
@@ -67,25 +67,13 @@ Global policy, in `config.Config` (`config/config.go`):
 
 | Value | Meaning |
 |---|---|
-| `"eager"` | Today's behaviour. Every MCP tool registers with its schema. The default when the key is absent. |
-| `"auto"` | Defer when the live catalog holds more tools than the threshold. |
+| `"auto"` | The default when the key is absent. Defer every tool of the `auto` servers when the schema bytes of all tools in the tools array pass the budget. |
+| `"eager"` | Keep the tools in the tools array up to the budget, in the order of server name, then tool name. Defer the rest. |
 | `"lazy"` | Always defer, whatever the catalog size. |
 
-`mcp_tool_loading_threshold` is the tool COUNT `"auto"` compares against.
-`0` or absent means the engine default (`defaultMCPDeferThreshold`, 20).
-
-`Config.validate` rejects a NEGATIVE value, exactly as `connect_timeout_s`
-is rejected today. The reason is that `len(catalog) > -1` holds even for an
-empty catalog. A stray minus sign would silently turn `"auto"` into
-"always defer". The engine resolves any non-positive value it is handed to
-that same default of 20. An embedder that bypasses config validation
-therefore stays safe. The engine never clamps to a floor of 1: that value
-would BE the always-defer bug.
-A count, not a token estimate. The engine has no tokenizer on the request
-path, and a count is deterministic and testable. Twenty is the point where
-a typical catalog's schema block stops being small enough to ignore. A
-listing of twenty names costs a fraction of twenty schemas. The value is a
-default, not a law: a box with unusually large schemas lowers it.
+`mcp_schema_bytes` is the budget of the schema bytes (name, description, and
+input schema) of the MCP tools in the tools array. `0` or less means the
+default of 65536. The decision is made once, at the first connect.
 
 Per-server override, in `config.MCPServerSpec`:
 
@@ -99,7 +87,7 @@ Per-server override, in `config.MCPServerSpec`:
 ```
 
 `tool_loading` accepts `"eager"` or `"lazy"` only. It does NOT accept
-`"auto"`: the threshold measures whole-catalog context pressure, which is
+`"auto"`: the budget measures the whole catalog, which is
 not a property of one server. An absent value inherits the global mode.
 
 `validateMCPServers` (`config/config.go`) rejects an unknown value, the
@@ -113,8 +101,8 @@ The policy travels on `engine.Config`, not on `engine.MCPServerConfig`:
 ```go
 // MCPToolLoading selects when this session defers MCP tool schemas ...
 MCPToolLoading MCPToolLoading
-// MCPToolLoadingThreshold is the tool count "auto" compares against ...
-MCPToolLoadingThreshold int
+// MCPSchemaBytes is the budget of the schema bytes of the tools array ...
+MCPSchemaBytes int
 // MCPToolLoadingByServer overrides MCPToolLoading for one named server ...
 MCPToolLoadingByServer map[string]MCPToolLoading
 ```
@@ -148,8 +136,8 @@ is unambiguous), and `Description` supplies the listing text. Growing
    over the global mode absolutely.
 2. Otherwise the global mode applies.
 3. The selected mode decides: `eager` registers, `lazy` defers, and `auto`
-   defers when `len(catalog) > threshold`, where `catalog` is every tool
-   `Tools(ctx)` returned on THIS request, across every connected server.
+   defers when the schema bytes of `catalog` pass `mcp_schema_bytes`, where
+   `catalog` is every tool of an `eager` or `auto` server at the first connect.
 
 Rule 1 selects a mode; it does not by itself decide eager-or-defer. The
 distinction matters because `MCPToolLoadingByServer` is typed
@@ -157,12 +145,12 @@ distinction matters because `MCPToolLoadingByServer` is typed
 `config.validateMCPServers` rejects a per-server `auto`, so no config file
 can produce one, but an embedder setting `engine.Config` directly can.
 `resolveMCPLoading` handles it the only sane way: a per-server `auto` is
-`auto`, resolved against the same whole-catalog threshold as the global
+`auto`, resolved against the same whole-catalog budget as the global
 mode. It is not an error, and it is not silently read as `eager`.
 
 Rule 3 counts the WHOLE catalog, including the tools of a server pinned
 `eager` by rule 1. A pinned server's schemas fill the prompt like any
-other, so they are part of the pressure the threshold measures. Pinning a
+other, so they are part of the pressure the budget measures. Pinning a
 large server `eager` therefore makes `auto` defer the rest sooner, which is
 the intended reading: the pin says "always keep these loaded", not "ignore
 their cost".
@@ -184,7 +172,7 @@ change.
 
 Rule 3 reads live state, so the decision can flip mid-session: a second
 server connects (a background retry commits, or the `mcp` tool's `connect`
-action succeeds), the catalog crosses the threshold, and tools that were
+action succeeds), the catalog crosses the budget, and tools that were
 registered eagerly on turn N are deferred on turn N+1. This is deliberate.
 The alternative — latch the first decision — freezes a session on a
 one-server catalog it no longer has.
@@ -211,7 +199,7 @@ session-level gate would still write one for every tool of that pinned
 server, merely because some OTHER server in the same session is `lazy`.
 The rule is therefore: record when `resolveMCPLoading`'s selected mode for
 that tool's server is not `eager` (`auto` counts, since a catalog can cross
-the threshold at any moment).
+the budget at any moment).
 
 That also keeps the whole mechanism off the default path: under a plain
 `eager` config no server can ever defer, so nothing is recorded at all,
@@ -389,7 +377,7 @@ sessionCanDefer = the session holds the mcp tool
 
 A server's policy mode is its `MCPToolLoadingByServer` override when set,
 and the global mode otherwise. `auto` counts as "not eager" here, because a
-catalog can cross the threshold at any moment.
+catalog can cross the budget at any moment.
 
 Both halves of the predicate matter, in both directions:
 
@@ -487,7 +475,7 @@ the model is deciding about. A `pending` selection is not
 loaded — no catalog holds it — and it never appears in a result anyway,
 since `search` ranks the live catalog only. It deliberately does not report set membership: what the
 model needs to know is whether it must call `select` before it calls the
-tool, and under `auto` below the threshold — where nothing defers — the
+tool, and under `auto` below the budget — where nothing defers — the
 honest answer for every tool is `true`. A `selected` flag would answer
 `false` there and send the model into a `select` call it does not need.
 
@@ -594,7 +582,7 @@ Rules:
   record exists only to survive a flip to deferred, so the question "can
   this server ever flip" has one answer, whichever writer is asking.
   - A server whose selected mode is `auto` — resolving eager today because
-    the catalog is under the threshold — CAN flip. Its tool is `selected`
+    the catalog is under the budget — CAN flip. Its tool is `selected`
     and journaled, and that record is what keeps it loaded across the flip
     and across a reload.
   - A server whose selected mode is `eager` can NEVER flip, so its tool is
@@ -717,7 +705,7 @@ array grows at the same instant.
   remains the explicit re-trigger. Once it connects, its tools appear on
   the very next request — in the catalog listing if deferred, or in the
   tools array with full schemas if the server's resolved mode registers
-  them eagerly (`eager`, or `auto` below the threshold).
+  them eagerly (`eager`, or `auto` below the budget).
 - **`select` for a tool of a degraded server.** The name is `pending`: it
   is journaled, and it arms itself when the server reconnects (§4). The
   ambient status block already tells the model why the server is down.
@@ -751,7 +739,7 @@ Each slice lands with its own tests. No test sleeps; timer-free by
 construction, since nothing here has a schedule.
 
 1. **Deferral core.** Effective-mode table test across global mode,
-   per-server override, and the `auto` threshold boundary (at, one below,
+   per-server override, and the `auto` budget boundary (at, one below,
    one above), with a server pinned `eager` still counted in the total. A
    session with no `mcp` tool defers nothing, even under
    global `lazy` — the subagent-lockout guard. Tools-array partition: a
@@ -801,7 +789,7 @@ The action gate, in both directions: a global-`eager` session
    the hallucinated-name hole without breaking self-heal. Red-verify each
    guard against the pre-fix code.
 4. **End-to-end.** An `httptest` MCP server (the `fakeMCPHTTPServer` shape
-   in `engine/mcp_test.go`) serving a catalog above the threshold, driven
+   in `engine/mcp_test.go`) serving a catalog above the budget, driven
    through a real `MCPManager` and a real `Session`: the first request
    carries the catalog segment and no MCP schemas, `select` runs through
    the real tool, and the next request carries exactly the selected
