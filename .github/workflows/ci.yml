@@ -404,16 +404,29 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Cache the Chromium download
+        id: chromium-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: chromium-${{ runner.os }}-${{ hashFiles('sdk/embed/package-lock.json') }}
 
       - name: Install Chromium
-        # A cache hit skips the download; --with-deps always installs the
-        # system libraries.
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
         working-directory: sdk/embed
         run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Install Chromium (cache hit)
+        # --with-deps always runs apt-get, even when the runner image already
+        # has every library, and a slow mirror stalls the job. A launch is
+        # the check that matters; install the libraries only when it fails.
+        if: steps.chromium-cache.outputs.cache-hit == 'true'
+        working-directory: sdk/embed
+        run: |
+          npx playwright install --only-shell chromium
+          if ! node -e "require('playwright').chromium.launch().then((b) => b.close())"; then
+            echo 'Chromium failed to launch; installing system dependencies.'
+            npx playwright install-deps chromium
+          fi
 
       - name: Browser rows
         # HARNESS_E2E_BROWSER=1 makes a missing node, Playwright, or Chromium
