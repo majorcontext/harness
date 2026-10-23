@@ -20,8 +20,13 @@ func Warm(ctx context.Context, b Backend, req Request, src Source) error {
 	if !CanWarm(b, req.Model) {
 		return nil
 	}
-	describe(&req, toolsetOf(ctx, &req, src), nil, b.Capabilities(req.Model).OwnsLoop)
-	return b.(Warmer).Warm(ctx, req)
+	caps := b.Capabilities(req.Model)
+	call, ts, err := nextCall(ctx, b, caps, req, src)
+	if err != nil {
+		return err
+	}
+	describe(&call, ts, nil, caps.OwnsLoop)
+	return b.(Warmer).Warm(ctx, call)
 }
 
 // CanWarm reports whether b has a warm-up to run for model.

@@ -22,6 +22,8 @@ type codexScenario struct {
 	scenario
 	opts      harnesstest.OpenAIOptions
 	websocket bool
+	// ask starts the host with --ask-user-question.
+	ask bool
 	// mcpSchema, when set, serves one MCP tool named "send" with this input
 	// schema as the server "srv".
 	mcpSchema string
@@ -160,7 +162,7 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	}
 	o := harnesstest.NewOpenAI(t, sc.opts, sc.model...)
 	cfg, env, proxyUsers := configureCodexScenario(t, sc, o, ca)
-	drv := codexDriver(t, h, ca, env, o.URL(), cfg)
+	drv := codexDriver(t, h, ca, env, o.URL(), cfg, sc.ask)
 	r := &run{codex: ca, drv: drv, fake: o.Server, ids: map[string]string{}, noIdle: map[string]bool{}, keys: map[string]int{}}
 	return codexObservation(t, sc, r, o, proxyUsers)
 }
@@ -444,6 +446,11 @@ func codexWebSocketRows() []codexScenario {
 			websocket: true,
 		},
 		{
+			scenario:  scenario{name: "codex_ws_prewarm_keeps_the_tools_of_a_session_that_may_ask", model: codexHi, actions: codexSession(codexTurn("a", "hello"), wire)},
+			websocket: true,
+			ask:       true,
+		},
+		{
 			scenario:  scenario{name: "codex_ws_tool_round_trip", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), wire)},
 			websocket: true,
 		},
@@ -556,8 +563,9 @@ func codexItemIDRows() []codexScenario {
 
 // codexChainRowKinds is the disposition of the rows that check the chain of a Codex websocket session.
 var codexChainRowKinds = map[string]runtimeRow{
-	"codex_ws_chains_the_turn_after_a_tool_call":           reGolden(specItems, specWarm),
-	"codex_ws_title_request_leaves_the_chain_of_the_turns": reGolden(specItems, specWarm),
+	"codex_ws_prewarm_keeps_the_tools_of_a_session_that_may_ask": reGolden(specItems, specWarm),
+	"codex_ws_chains_the_turn_after_a_tool_call":                 reGolden(specItems, specWarm),
+	"codex_ws_title_request_leaves_the_chain_of_the_turns":       reGolden(specItems, specWarm),
 }
 
 // codexItemIDRowKinds is the disposition of the rows that check the ids of the output items that a request sends back.
@@ -677,11 +685,15 @@ func codexRetryRows() []codexScenario {
 }
 
 // codexDriver opens h on the config.
-func codexDriver(t *testing.T, h host, ca *codexAuthRun, env map[string]string, modelURL string, cfg map[string]any) driver {
+func codexDriver(t *testing.T, h host, ca *codexAuthRun, env map[string]string, modelURL string, cfg map[string]any, ask bool) driver {
 	t.Helper()
 	path := writeGoalConfigWith(t, modelURL, scenarioConfig(cfg))
 	if ca != nil {
 		ca.configPath = path
 	}
-	return h.openIn(t, path, t.TempDir(), env)
+	var args []string
+	if ask {
+		args = append(args, "--ask-user-question")
+	}
+	return h.openIn(t, path, t.TempDir(), env, args...)
 }

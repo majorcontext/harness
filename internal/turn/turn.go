@@ -270,12 +270,11 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err
 		}
-		s, call := &sink{Turn: to, log: cmp.Or(lim.Log, slog.Default())}, req
-		if err := applyParams(step, b, caps, req, &call); err != nil {
+		s := &sink{Turn: to, log: cmp.Or(lim.Log, slog.Default())}
+		call, ts, err := nextCall(step, b, caps, req, src)
+		if err != nil {
 			return err
 		}
-		call.WebSearch = call.SearchAllowed && b.Capabilities(call.Model).WebSearch
-		ts := toolsetOf(step, &call, src)
 		if first {
 			if err := answerAsks(ctx, runner{hooks: ts.Hooks}, to, &req, record); err != nil {
 				return err
@@ -283,7 +282,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			call.History = req.History
 		}
 		t := describe(&call, ts, to, caps.OwnsLoop)
-		err := callModel(step, b, call, s, lim, caps.OwnsLoop)
+		err = callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
 				req.History = h
@@ -463,6 +462,17 @@ func (s *sink) Steer() ([]protocol.LogMessage, error) {
 	in, err := s.Turn.Steer()
 	s.items = append(s.items, in...)
 	return in, err
+}
+
+// nextCall returns the next model call of req and its tools, before describe.
+// A turn, a summary, and a warm-up build their call here, so they cannot differ.
+func nextCall(ctx context.Context, b Backend, caps Capabilities, req Request, src Source) (Request, Toolset, error) {
+	call := req
+	if err := applyParams(ctx, b, caps, req, &call); err != nil {
+		return Request{}, Toolset{}, err
+	}
+	call.WebSearch = call.SearchAllowed && b.Capabilities(call.Model).WebSearch
+	return call, toolsetOf(ctx, &call, src), nil
 }
 
 // applyParams runs the Params hook of req and sets its result on call.

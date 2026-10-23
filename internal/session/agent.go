@@ -13,7 +13,7 @@ import (
 )
 
 // source returns the Source of turn r: the Source of the session, then the
-// tools of the actor.
+// tools of the actor. A nil r is the next turn, for a warm-up that runs no tool.
 func (a *Actor) source(r *running) turn.Source {
 	var srcs turn.Sources
 	if a.cfg.Source != nil {
@@ -56,7 +56,7 @@ func (s actorTools) Toolset(ctx context.Context, _ []protocol.LogMessage, allowe
 // mayAsk reports whether the session may ask a question now. A goal that
 // becomes active during a turn takes the permission away for the later model calls.
 func (s actorTools) mayAsk(ctx context.Context) bool {
-	ok, _ := call(ctx, s.a, func(reply func(bool, error)) { reply(s.a.run == s.r && s.a.questions(), nil) })
+	ok, _ := call(ctx, s.a, func(reply func(bool, error)) { reply((s.r == nil || s.a.run == s.r) && s.a.questions(), nil) })
 	return ok
 }
 
