@@ -44,6 +44,7 @@ type openAIBody struct {
 
 	params         []string // optional params present on the wire
 	schemaKeywords []string // keywords the Codex tool-schema validator rejects
+	openObjects    []string // paths of object schemas that declare no fields and allow any
 	reasoningItems int      // reasoning items replayed in Input
 	hostedTools    []string // types of the tools that are not functions
 }
@@ -66,6 +67,7 @@ func decodeOpenAIBody(raw []byte) (openAIBody, error) {
 		}
 	}
 	b.schemaKeywords = rejectedSchemaKeywords(b)
+	b.openObjects = openObjectPaths(b)
 	for _, t := range b.Tools {
 		if t.Type != "function" {
 			b.hostedTools = append(b.hostedTools, t.Type)
@@ -103,6 +105,35 @@ func rejectedSchemaKeywords(b openAIBody) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func openObjectPaths(b openAIBody) []string {
+	var out []string
+	for _, t := range b.Tools {
+		var schema any
+		if json.Unmarshal(t.Parameters, &schema) == nil {
+			collectOpenObjects(schema, t.Name, &out)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func collectOpenObjects(node any, path string, out *[]string) {
+	switch v := node.(type) {
+	case []any:
+		for i, e := range v {
+			collectOpenObjects(e, fmt.Sprintf("%s[%d]", path, i), out)
+		}
+	case map[string]any:
+		props, _ := v["properties"].(map[string]any)
+		if v["type"] == "object" && len(props) == 0 && v["additionalProperties"] == true {
+			*out = append(*out, path)
+		}
+		for k, e := range v {
+			collectOpenObjects(e, path+"."+k, out)
+		}
+	}
 }
 
 func collectRejected(node any, found map[string]bool) {

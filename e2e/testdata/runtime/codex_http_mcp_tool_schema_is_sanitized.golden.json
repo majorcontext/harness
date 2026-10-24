@@ -73,6 +73,10 @@
               "reasoning.encrypted_content"
             ],
             "input_items": 2,
+            "open_objects": [
+              "mcp.properties.arguments",
+              "mcp__srv__send.properties.filter"
+            ],
             "reasoning_summary": "auto",
             "transport": "sse"
           }

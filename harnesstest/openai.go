@@ -130,6 +130,9 @@ type WireEvent struct {
 	// RejectedSchemaKeywords lists the tool-schema keywords the request
 	// carries that the live backend refuses.
 	RejectedSchemaKeywords []string `json:"rejected_schema_keywords,omitempty"`
+	// OpenObjects lists the paths of the tool-schema objects that declare no
+	// properties and allow any, as tool name then schema keys.
+	OpenObjects []string `json:"open_objects,omitempty"`
 	// ReasoningItems counts the reasoning items that the request replays.
 	ReasoningItems int `json:"reasoning_items,omitempty"`
 	// HostedTools lists the types of the hosted tools of the request, those other than function.
@@ -179,7 +182,7 @@ func newWireEvent(transport, event string, conn int, b openAIBody) WireEvent {
 		Transport: transport, Event: event, Conn: conn, PreviousResponseID: b.PreviousResponseID,
 		InputItems: len(b.Input), Params: b.params, Include: b.Include,
 		ReasoningEffort: b.Reasoning.Effort, ReasoningSummary: b.Reasoning.Summary, ReasoningItems: b.reasoningItems,
-		RejectedSchemaKeywords: b.schemaKeywords, HostedTools: b.hostedTools,
+		RejectedSchemaKeywords: b.schemaKeywords, OpenObjects: b.openObjects, HostedTools: b.hostedTools,
 	}
 }
 

@@ -155,14 +155,19 @@ func TestSanitizeToolSchemaDefs(t *testing.T) {
 	}
 }
 
-// TestSanitizeToolSchemaObjectGetsEmptyProperties: an object-typed node with
-// no properties must gain an empty properties object, matching opencode's
-// rebuild (some validators require it).
+// TestSanitizeToolSchemaObjectGetsEmptyProperties: an object node with no
+// properties gains an empty properties object, and stays open unless the
+// source declares fields or additionalProperties.
 func TestSanitizeToolSchemaObjectGetsEmptyProperties(t *testing.T) {
-	got := mustSanitize(t, `{"type": "object"}`)
-	props, ok := got["properties"].(map[string]interface{})
-	if !ok || len(props) != 0 {
-		t.Errorf("properties = %#v, want empty object", got["properties"])
+	for schema, want := range map[string]interface{}{
+		`{"type": "object"}`: true,
+		`{"type": "object", "additionalProperties": false}`: false,
+		`{"type": "object", "properties": {"x": {}}}`:       nil,
+	} {
+		got := mustSanitize(t, schema)
+		if _, ok := got["properties"].(map[string]interface{}); !ok || got["additionalProperties"] != want {
+			t.Errorf("%s -> %#v, want additionalProperties %v", schema, got, want)
+		}
 	}
 }
 
