@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/command"
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -388,6 +389,9 @@ func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, &in, maxInputBody); err != nil {
 		return err
 	}
+	if in.Traceparent == "" && in.Tracestate == "" {
+		in.Traceparent, in.Tracestate = tracing.FromHeaders(r.Header)
+	}
 	a, err := s.Admit(r.Context(), in)
 	if err != nil {
 		return err
@@ -425,7 +429,7 @@ func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error 
 	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
-	c, err := s.Compact(r.Context(), req)
+	c, err := s.Compact(tracing.ContextFromHeaders(r.Context(), r.Header), req)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/testpoll"
@@ -132,6 +133,8 @@ func TestContractTraceRows(t *testing.T) {
 		{"an_input_with_a_traceparent_links_its_turn_and_a_malformed_one_is_refused", traceRowLink},
 		{"a_parent_turn_that_a_child_report_starts_links_to_the_turn_of_the_child", traceRowChildReport},
 		{"a_goal_continuation_turn_links_to_the_turn_that_the_judge_evaluated", traceRowGoalContinuation},
+		{"request_headers_supply_the_trace_context_of_an_input_unless_the_body_has_one_and_an_invalid_header_is_ignored", traceRowInputHeaders},
+		{"request_headers_link_the_summary_call_of_a_compaction", traceRowCompactHeaders},
 		{"message_content_is_off_by_default_and_recorded_as_the_details_event_when_on", traceRowContent},
 	}
 	onHosts(t, func(t *testing.T, h host) {
@@ -289,5 +292,105 @@ func traceRowGoalContinuation(t *testing.T, h host) {
 	}
 	if want := []string{first.TraceID + "-" + first.SpanID}; len(first.Links) != 0 || !slices.Equal(second.Links, want) {
 		t.Errorf("links = %v, %v, want the first turn unlinked and the second linked to %v", first.Links, second.Links, want)
+	}
+}
+
+const (
+	headerTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+	headerLink        = "0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331"
+	bodyLink          = "4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"
+)
+
+// postWith sends a POST with the request headers h and returns its status.
+func postWith(t *testing.T, d *runtimeDriver, path string, body any, h http.Header) int {
+	t.Helper()
+	resp := d.send(t, t.Context(), http.MethodPost, path, body, h)
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+func traceRowInputHeaders(t *testing.T, h host) {
+	for _, c := range []struct {
+		name   string
+		body   map[string]any
+		header http.Header
+		links  []string
+	}{
+		{"header_only", nil, http.Header{"Traceparent": {headerTraceparent}, "Tracestate": {"vendor=1"}}, []string{headerLink}},
+		{"body_wins", map[string]any{"traceparent": rowTraceparent}, http.Header{"Traceparent": {headerTraceparent}}, []string{bodyLink}},
+		{"long_tracestate", nil, http.Header{"Traceparent": {headerTraceparent}, "Tracestate": {"v=" + strings.Repeat("a", 511)}}, []string{headerLink}},
+		{"invalid_header", nil, http.Header{"Traceparent": {"00-nothex-b7ad6b7169203331-01"}}, nil},
+		{"state_without_head", nil, http.Header{"Tracestate": {"vendor=1"}}, nil},
+	} {
+		d, _, spans := startTraced(t, h, false, replyText("ok"))
+		id := d.Create(t)
+		if got := postWith(t, d, "/sessions/"+id+"/inputs", traceInput("in1", "hi", c.body), c.header); got != http.StatusCreated {
+			t.Fatalf("%s: status = %d, want 201", c.name, got)
+		}
+		d.WaitIdle(t, id)
+		turn := spansNamed(spans(2), "invoke_agent")
+		if len(turn) != 1 || !slices.Equal(turn[0].Links, c.links) {
+			t.Errorf("%s: turn spans = %+v, want links %v", c.name, turn, c.links)
+		}
+	}
+}
+
+func traceRowCompactHeaders(t *testing.T, h host) {
+	d, _, spans := startTraced(t, h, false, replyText("ok"))
+	id := runTurn(t, d, "one")
+	d.Submit(t, id, "two")
+	d.WaitIdle(t, id)
+	header := http.Header{"Traceparent": {headerTraceparent}}
+	if got := postWith(t, d, "/sessions/"+id+"/compact", map[string]any{"keep_turns": 1}, header); got != http.StatusOK {
+		t.Fatalf("compact status = %d, want 200", got)
+	}
+	var linked []harnesstest.Span
+	for _, s := range spansNamed(spans(5), "chat ") {
+		if len(s.Links) > 0 {
+			linked = append(linked, s)
+		}
+	}
+	if len(linked) != 1 || linked[0].ParentSpanID != "" || !slices.Equal(linked[0].Links, []string{headerLink}) {
+		t.Errorf("linked chat spans = %+v, want the root summary call linked to the header", linked)
+	}
+}
+
+func TestContractTraceClaudeCodeCompactLinks(t *testing.T) {
+	skipShort(t)
+	rows, _ := ccCompactionRows()
+	var stream []map[string]any
+	for _, r := range rows {
+		if r.name == "claude_code_compaction_sends_compacting_then_running_at_the_boundary" {
+			stream = r.frames
+		}
+	}
+	l := newCCLane(t, "", ccStream(t, stream...))
+	l.recorder = tracetest.NewSpanRecorder()
+	r := l.runtime()
+	s := l.create(r)
+	sc, err := tracing.Parse(headerTraceparent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := s.Snapshot().HeadSeq
+	if _, err := s.Compact(oteltrace.ContextWithRemoteSpanContext(t.Context(), sc), protocol.Compact{}); err != nil {
+		t.Fatal(err)
+	}
+	for e, err := range s.Events(t.Context(), head-1) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == "turn.ended" && !e.Ephemeral {
+			break
+		}
+	}
+	l.close(r)
+	var turn []harnesstest.Span
+	for _, sp := range l.recorder.Ended() {
+		turn = append(turn, spanOfSDK(sp))
+	}
+	turn = spansNamed(turn, "invoke_agent")
+	if len(turn) != 1 || !slices.Equal(turn[0].Links, []string{headerLink}) {
+		t.Errorf("turn spans = %+v, want one linked to the span context of the compaction", turn)
 	}
 }
