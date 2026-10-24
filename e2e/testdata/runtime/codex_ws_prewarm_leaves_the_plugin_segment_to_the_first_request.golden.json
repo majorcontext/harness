@@ -86,6 +86,9 @@
             "include": [
               "reasoning.encrypted_content"
             ],
+            "open_objects": [
+              "mcp.properties.arguments"
+            ],
             "reasoning_summary": "auto",
             "transport": "ws"
           },
@@ -96,6 +99,9 @@
               "reasoning.encrypted_content"
             ],
             "input_items": 3,
+            "open_objects": [
+              "mcp.properties.arguments"
+            ],
             "previous_response_id": "resp_warm_1",
             "reasoning_summary": "auto",
             "transport": "ws"

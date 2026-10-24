@@ -45,7 +45,7 @@ type codexScenario struct {
 	entry map[string]any
 }
 
-const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
+const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}},"filter":{"type":"object"}}}`
 
 func serveMCPTool(t *testing.T, schema string) string {
 	t.Helper()

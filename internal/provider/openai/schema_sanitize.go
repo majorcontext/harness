@@ -189,6 +189,9 @@ func sanitizeSchemaObject(value map[string]interface{}) map[string]interface{} {
 	if containsString(inferredTypes, "object") {
 		if _, ok := result["properties"]; !ok {
 			result["properties"] = map[string]interface{}{}
+			if !hasAnyKey(value, "properties", "additionalProperties") {
+				result["additionalProperties"] = true
+			}
 		}
 	}
 	if containsString(inferredTypes, "array") {
