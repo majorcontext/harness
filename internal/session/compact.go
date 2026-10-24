@@ -47,7 +47,9 @@ func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c pro
 		case owns:
 			in := protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliveryQueue, Source: "harness",
 				Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: compactCommand}}}
+			a.compactInput = in.InputID
 			if _, err := a.admit(in, "", a.dismissRequests()...); err != nil {
+				a.compactInput = ""
 				reply(result{}, err)
 				return
 			}
