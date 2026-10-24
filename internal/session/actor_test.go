@@ -10,6 +10,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/majorcontext/harness/protocol"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -151,7 +153,7 @@ func TestAStoppedActorReleasesAfterItsTurnExits(t *testing.T) {
 func TestAppendedSeesTheStateThatTheAppendProduced(t *testing.T) {
 	cfg := actorConfig(t, &memLog{}, owned{}, newHeldBackend(false))
 	var heads []uint64
-	cfg.Appended = func(_ []protocol.Payload, st *eventlog.State) { heads = append(heads, st.Head()) }
+	cfg.Appended = func(_ []protocol.Payload, st *eventlog.State, _ trace.SpanContext) { heads = append(heads, st.Head()) }
 	if _, err := Create(context.Background(), cfg, protocol.SessionCreated{Model: "m/m"}, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -130,6 +130,8 @@ func TestContractTraceRows(t *testing.T) {
 	}{
 		{"a_turn_with_a_tool_call_records_agent_model_and_tool_spans_that_the_request_and_the_log_name", traceRowSpans},
 		{"an_input_with_a_traceparent_links_its_turn_and_a_malformed_one_is_refused", traceRowLink},
+		{"a_parent_turn_that_a_child_report_starts_links_to_the_turn_of_the_child", traceRowChildReport},
+		{"a_goal_continuation_turn_links_to_the_turn_that_the_judge_evaluated", traceRowGoalContinuation},
 		{"message_content_is_off_by_default_and_recorded_as_the_details_event_when_on", traceRowContent},
 	}
 	onHosts(t, func(t *testing.T, h host) {
@@ -237,5 +239,55 @@ func traceRowContent(t *testing.T, h host) {
 		if args, _ := tool.Attrs["gen_ai.tool.call.arguments"].(string); !strings.Contains(args, "echo hi") {
 			t.Errorf("gen_ai.tool.call.arguments = %q, want the command", args)
 		}
+	}
+}
+
+func traceRowChildReport(t *testing.T, h host) {
+	d, fake, spans := startTraced(t, h, false,
+		harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"}}}}},
+		harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child done", Block: true}},
+		harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+		harnesstest.Step{Name: "after", Reply: harnesstest.Reply{Text: "parent done"}, Repeat: true})
+	parent := d.Create(t)
+	d.Submit(t, parent, "delegate")
+	d.WaitIdle(t, parent)
+	fake.Release("child")
+	if !fake.AwaitRequests(4, waitBound) {
+		t.Fatalf("the report did not start a parent turn: %d requests", len(fake.Requests()))
+	}
+	d.WaitIdle(t, parent)
+	var child, parents []harnesstest.Span
+	for _, s := range spansNamed(spans(8), "invoke_agent") {
+		if s.Attrs["gen_ai.conversation.id"] == parent {
+			parents = append(parents, s)
+		} else {
+			child = append(child, s)
+		}
+	}
+	if len(child) != 1 || len(parents) != 2 {
+		t.Fatalf("turn spans = %d child, %d parent, want 1, 2", len(child), len(parents))
+	}
+	if want := []string{child[0].TraceID + "-" + child[0].SpanID}; !slices.Equal(parents[1].Links, want) && !slices.Equal(parents[0].Links, want) {
+		t.Errorf("parent turn links = %v, %v, want one turn linked to the turn of the child %v", parents[0].Links, parents[1].Links, want)
+	}
+}
+
+func traceRowGoalContinuation(t *testing.T, h host) {
+	d, _, spans := startTraced(t, h, false, agentStep("try", "try", false), evaluatorStep("judge1", "NOT MET: say done", false),
+		agentStep("finish", "done", false), evaluatorStep("judge2", "MET: said done", false))
+	id := d.Create(t)
+	d.SetGoal(t, id, "say done", 3, false)
+	d.WaitIdle(t, id)
+	turns := spansNamed(spans(6), "invoke_agent")
+	if len(turns) != 2 {
+		t.Fatalf("turn spans = %d, want 2", len(turns))
+	}
+	first, second := turns[0], turns[1]
+	if len(first.Links) != 0 {
+		first, second = second, first
+	}
+	if want := []string{first.TraceID + "-" + first.SpanID}; len(first.Links) != 0 || !slices.Equal(second.Links, want) {
+		t.Errorf("links = %v, %v, want the first turn unlinked and the second linked to %v", first.Links, second.Links, want)
 	}
 }

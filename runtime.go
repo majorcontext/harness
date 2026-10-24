@@ -461,8 +461,8 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 
 // appended gives the events of session id to its plugins, and reports the
 // end of a turn of a child to its parent.
-func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]protocol.Payload, *eventlog.State) {
-	return func(events []protocol.Payload, st *eventlog.State) {
+func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]protocol.Payload, *eventlog.State, trace.SpanContext) {
+	return func(events []protocol.Payload, st *eventlog.State, ended trace.SpanContext) {
 		if plug != nil {
 			plug.Appended(events)
 		}
@@ -471,6 +471,9 @@ func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]protocol.P
 			return
 		}
 		if s, report, ok := session.Settlement(id, st); ok {
+			if report != nil {
+				report.Caused(ended)
+			}
 			r.tree.Report(parent, s, report)
 		}
 	}
