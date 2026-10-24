@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
@@ -124,6 +127,8 @@ type ccLane struct {
 	epoch int
 	// fakeEnv sets the environment of each fakeclaude spawn of the lane.
 	fakeEnv []string
+	// recorder, when set, records the spans of the runtimes of the lane.
+	recorder *tracetest.SpanRecorder
 }
 
 // newCCLane starts a lane whose spawns replay fixtures in order, the last
@@ -147,7 +152,11 @@ func (l *ccLane) runtime() *harness.Runtime {
 		"providers": map[string]any{"claude-code": map[string]any{
 			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true, "extra_args": l.fakeEnv}},
 	})
-	r, err := newWired(l.t, harness.Options{Store: l.st, Config: cfg, Getenv: getenv(map[string]string{"HARNESS_E2E_KEY": "k"})})
+	opts := harness.Options{Store: l.st, Config: cfg, Getenv: getenv(map[string]string{"HARNESS_E2E_KEY": "k"})}
+	if l.recorder != nil {
+		opts.TracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(l.recorder))
+	}
+	r, err := newWired(l.t, opts)
 	if err != nil {
 		l.t.Fatal(err)
 	}

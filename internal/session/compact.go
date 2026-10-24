@@ -6,6 +6,9 @@ import (
 	"errors"
 	"slices"
 
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -21,16 +24,20 @@ const compactCommand = "/compact"
 
 // Compact folds the turns before the newest keep, or Config.KeepTurns when
 // keep is 0, into a summary, or runs compactCommand as a turn of a backend
-// that owns its context. It returns when the compaction ends, with the
-// compaction that it appended, or one with only ByBackend for a backend
-// that owns its context. It fails with ErrTurnMismatch when expectTurn is not
-// empty and is not the newest ended turn. When too few turns exist, it
+// that owns its context. The compaction links to the valid span context in
+// ctx: the input of the command holds it, and the summary call of a
+// compaction that the actor runs links to it. It returns when the compaction
+// ends, with the compaction that it appended, or one with only ByBackend for
+// a backend that owns its context. It fails with ErrTurnMismatch when
+// expectTurn is not empty and is not the newest ended turn. When too few turns exist, it
 // appends nothing and ran is false.
 func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c protocol.CompactionApplied, ran bool, err error) {
 	type result struct {
 		c   protocol.CompactionApplied
 		ran bool
 	}
+	link := trace.SpanContextFromContext(ctx)
+	traceparent, tracestate := tracing.Format(link)
 	r, err := call(ctx, a, func(reply func(result, error)) {
 		done := func(runErr, appendErr error) {
 			c, _ := a.state.Compaction()
@@ -46,6 +53,7 @@ func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c pro
 			reply(result{}, ErrKeepTurns)
 		case owns:
 			in := protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliveryQueue, Source: "harness",
+				Traceparent: traceparent, Tracestate: tracestate,
 				Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: compactCommand}}}
 			a.compactInput = in.InputID
 			if _, err := a.admit(in, "", a.dismissRequests()...); err != nil {
@@ -56,7 +64,7 @@ func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c pro
 			a.run.waiters = append(a.run.waiters, func(runErr, appendErr error) {
 				reply(result{protocol.CompactionApplied{ByBackend: true}, true}, errors.Join(runErr, appendErr))
 			})
-		case !a.compact(cmp.Or(keep, a.cfg.KeepTurns), done):
+		case !a.compact(cmp.Or(keep, a.cfg.KeepTurns), done, link):
 			reply(result{}, nil)
 		}
 	})
@@ -67,7 +75,7 @@ func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c pro
 func (a *Actor) autoCompact() bool {
 	return a.compactDue() && a.compact(a.cfg.KeepTurns, func(runErr, appendErr error) {
 		a.latched = appendErr == nil && (runErr == nil || errors.Is(runErr, turn.ErrEmptySummary))
-	})
+	}, trace.SpanContext{})
 }
 
 // compactDue reports whether the context passes Config.Threshold of the
@@ -96,8 +104,8 @@ func (a *Actor) compactDue() bool {
 
 // compact runs a summary of the turns before the newest keep as the run of
 // the actor, and reports false when no turn can fold. done, when it is not
-// nil, receives the outcome.
-func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
+// nil, receives the outcome. The summary call links to link when it is valid.
+func (a *Actor) compact(keep int, done func(runErr, appendErr error), link trace.SpanContext) bool {
 	id := newID("compaction")
 	req, c, ok := a.fold(id, keep)
 	if !ok {
@@ -112,7 +120,7 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	a.run = r
 	a.frame(protocol.KindStatus, protocol.StatusFrame{Status: protocol.StatusCompacting, TurnID: id})
 	a.spawn(func() {
-		summary, usage, err := a.summarize(r.ctx, req, src)
+		summary, usage, err := a.summarize(tracing.WithLink(r.ctx, link), req, src)
 		c.Summary, c.Index, c.Usage = summary, a.resultIndex(metas), usage
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)

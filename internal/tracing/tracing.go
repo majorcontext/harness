@@ -51,9 +51,50 @@ func (t Tracer) Start(ctx context.Context, name string, opts ...trace.SpanStartO
 
 type callKey struct{}
 
+type linkKey struct{}
+
+// WithLink returns ctx whose model calls link to sc. An invalid sc adds none.
+func WithLink(ctx context.Context, sc trace.SpanContext) context.Context {
+	if !sc.IsValid() {
+		return ctx
+	}
+	return context.WithValue(ctx, linkKey{}, sc)
+}
+
+// ContextFromHeaders returns ctx with the remote span context of the request
+// headers h, or ctx when they hold none.
+func ContextFromHeaders(ctx context.Context, h http.Header) context.Context {
+	tp, ts := FromHeaders(h)
+	sc, err := Parse(tp, ts)
+	if err != nil || !sc.IsValid() {
+		return ctx
+	}
+	return trace.ContextWithRemoteSpanContext(ctx, sc)
+}
+
+// FromHeaders returns the traceparent and tracestate of the request headers h.
+// A traceparent that is not valid gives empty strings. A tracestate that is too
+// long is dropped.
+func FromHeaders(h http.Header) (traceparent, tracestate string) {
+	tp := h.Get("traceparent")
+	if tp == "" {
+		return "", ""
+	}
+	if _, err := Parse(tp, ""); err != nil {
+		return "", ""
+	}
+	if ts := h.Get("tracestate"); len(ts) <= maxTracestate {
+		return tp, ts
+	}
+	return tp, ""
+}
+
 // StartCall starts the CLIENT span of a model call. The Transport of an HTTP
 // client sends its trace context on each request made under the returned ctx.
 func (t Tracer) StartCall(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	if sc, ok := ctx.Value(linkKey{}).(trace.SpanContext); ok {
+		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc}))
+	}
 	ctx, span := t.Start(ctx, name, append(opts, trace.WithSpanKind(trace.SpanKindClient))...)
 	return context.WithValue(ctx, callKey{}, true), span
 }

@@ -225,6 +225,7 @@ func (s *Session) ClearGoal(ctx context.Context) error { return s.a.ClearGoal(ct
 // what it folded, and fails with ErrSessionBusy while a turn runs or inputs
 // wait, and with ErrTurnMismatch when req.ExpectedTurnID is not the newest
 // ended turn. A session with too few turns folds nothing, with no error.
+// When ctx holds a valid span context, the compaction links to it.
 func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error) {
 	keep := 0
 	if req.KeepTurns != nil {
