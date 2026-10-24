@@ -29,8 +29,8 @@ const compactCommand = "/compact"
 // compaction that the actor runs links to it. It returns when the compaction
 // ends, with the compaction that it appended, or one with only ByBackend for
 // a backend that owns its context. It fails with ErrTurnMismatch when
-// expectTurn is not empty and is not the newest ended turn. When too few turns exist, it
-// appends nothing and ran is false.
+// expectTurn is not empty and is not the newest ended turn. When too few
+// turns exist, it appends nothing and ran is false.
 func (a *Actor) Compact(ctx context.Context, keep int, expectTurn string) (c protocol.CompactionApplied, ran bool, err error) {
 	type result struct {
 		c   protocol.CompactionApplied
