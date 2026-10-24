@@ -813,6 +813,7 @@
       "status": 200,
       "body": {
         "agent": "general-purpose",
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
           "compact_at": 800000,
           "tokens": 5,
@@ -857,6 +858,7 @@
       "status": 200,
       "body": {
         "agent": "general-purpose",
+        "cache_expires_at": "\u003ctime\u003e",
         "context": {
           "compact_at": 800000,
           "tokens": 5,

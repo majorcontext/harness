@@ -636,6 +636,7 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"anthropic_injected_403_is_not_login_required":                                       sameAsServe(),
 	"codex_injected_http_request_carries_no_credential_header":                           sameAsServe(),
 	"codex_injected_http_request_carries_the_hash_of_the_session_id_as_cache_key":        sameAsServe(),
+	"codex_injected_models_from_chatgpt_session_reports_a_cache_expiry":                  sameAsServe(),
 	"codex_injected_websocket_request_carries_the_hash_of_the_session_id_as_cache_key":   sameAsServe(),
 	"codex_injected_websocket_dial_carries_no_credential_header":                         sameAsServe(),
 	"codex_injected_extra_headers_pass_through_as_placeholders":                          sameAsServe(),

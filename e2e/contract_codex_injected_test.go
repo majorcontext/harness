@@ -127,6 +127,11 @@ func codexInjectedRows() []codexScenario {
 func codexModelsFromRows() []codexScenario {
 	return []codexScenario{
 		{
+			scenario: scenario{name: "codex_injected_models_from_chatgpt_session_reports_a_cache_expiry", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSession{as: "a"}})},
+			opts:     harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
+			entry:    injectedEntry(map[string]any{"models_from": "chatgpt"}),
+		},
+		{
 			scenario: scenario{name: "codex_models_from_chatgpt_lists_the_models_of_the_backend", actions: []action{models{}}},
 			opts:     harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}, Models: chatgptCatalog},
 			entry:    injectedEntry(map[string]any{"models_from": "chatgpt"}),
