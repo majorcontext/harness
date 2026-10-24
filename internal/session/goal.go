@@ -13,6 +13,8 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/turn"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 const evaluatorPrompt = `You are a strict goal-completion evaluator for an autonomous agent.
@@ -268,7 +270,7 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	g, _ := a.state.Goal()
 	var appendErr error
 	if stopped == nil && len(a.releasing) == 0 && g.State == protocol.GoalActive && g.Evaluated != turnID {
-		events := append(a.withdrawGoal(), verdict(turnID, g, answer)...)
+		events := append(a.withdrawGoal(), verdict(turnID, g, answer, a.endedSpan())...)
 		if err != nil {
 			events = a.goalStop(err, r.kind)
 		}
@@ -284,7 +286,7 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	a.finishRun(r, err, appendErr, next)
 }
 
-func verdict(turnID string, g eventlog.Goal, answer string) []protocol.Payload {
+func verdict(turnID string, g eventlog.Goal, answer string, cause trace.SpanContext) []protocol.Payload {
 	v, why := parseVerdict(answer)
 	ev := protocol.GoalEvaluated{TurnID: turnID, Verdict: v}
 	switch v {
@@ -297,8 +299,8 @@ func verdict(turnID string, g eventlog.Goal, answer string) []protocol.Payload {
 	if g.MaxTurns > 0 && g.Turns+1 >= g.MaxTurns {
 		return []protocol.Payload{ev, protocol.GoalChanged{State: protocol.GoalExhausted, Reason: fmt.Sprintf("max_turns %d reached", g.MaxTurns)}}
 	}
-	return []protocol.Payload{ev, goalInput("The goal has not been met yet.\n\nGOAL: " + g.Condition +
-		"\n\nEVALUATOR FEEDBACK: " + why + "\n\nKeep working until the goal is fully satisfied, then stop.")}
+	return []protocol.Payload{ev, causedBy(goalInput("The goal has not been met yet.\n\nGOAL: "+g.Condition+
+		"\n\nEVALUATOR FEEDBACK: "+why+"\n\nKeep working until the goal is fully satisfied, then stop."), cause)}
 }
 
 // parseVerdict reads a verdict prefix in any case, after markdown marks. A

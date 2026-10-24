@@ -104,6 +104,11 @@ func Headers(ctx context.Context) (traceparent, tracestate string) {
 	return h.Get("traceparent"), h.Get("tracestate")
 }
 
+// Format returns the traceparent and tracestate of sc, or empty strings when sc is not valid.
+func Format(sc trace.SpanContext) (traceparent, tracestate string) {
+	return Headers(trace.ContextWithSpanContext(context.Background(), sc))
+}
+
 // metaCarrier is a propagation carrier over a map.
 type metaCarrier map[string]string
 

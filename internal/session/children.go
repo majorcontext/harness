@@ -9,6 +9,8 @@ import (
 	"github.com/majorcontext/harness/protocol"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // sourceChild is the source of an input that reports the outcome of a child.
@@ -80,8 +82,13 @@ func (a *Actor) Relay(ctx context.Context, rep *Report) error {
 }
 
 func reportInput(rep *Report, text string) protocol.InputAdmitted {
-	return protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliverySteer, Source: sourceChild, Parts: rep.Parts(text)}
+	in := protocol.InputAdmitted{InputID: newID("input"), Delivery: protocol.DeliverySteer, Source: sourceChild, Parts: rep.Parts(text)}
+	return causedBy(in, rep.cause)
 }
+
+// Caused sets the span context of the child turn that produced the report,
+// so the turn of the parent that reads it links to that turn.
+func (r *Report) Caused(sc trace.SpanContext) { r.cause = sc }
 
 // Report is the outcome of a child as its parent reads it.
 type Report struct {
@@ -90,6 +97,7 @@ type Report struct {
 	reason, guidance   string
 	result             string
 	usage              protocol.Usage
+	cause              trace.SpanContext
 }
 
 // Reason returns why the child failed, as the report gives it.

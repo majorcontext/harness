@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Trace links for turns that harness starts** (`internal/session`, `internal/tracing`, `harness`) — a parent turn that starts from the report of a child links to the `invoke_agent` span of the child turn, and a goal continuation turn links to the `invoke_agent` span of the turn that the judge evaluated. The link is in the `traceparent` and `tracestate` of the `input.admitted` record.
+
 - **Compact only the expected turn** (`protocol`, `harness`, `internal/session`) — `protocol.Compact` gains `expected_turn_id`. When it is set and the newest ended turn has another ID, `Compact` fails with `turn_mismatch` and appends nothing, so a client that saw an idle session does not compact one whose cache a new turn refreshed.
 
 - **OpenTelemetry traces** (`harness`, `protocol`, `cmd/harness`, `internal/tracing`, `internal/turn`, `internal/session`, `internal/mcp`) — each turn makes an `invoke_agent` span with a `chat` span for each model call and an `execute_tool` span for each tool call, in the generative AI semantic conventions. `Options.TracerProvider` takes a provider; `serve`, `run`, and `acp` export over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set. Every HTTP model request carries `traceparent`, and an MCP call carries it in `params._meta`. An input takes `traceparent` and `tracestate`, and its turn links to them. A `turn_metrics` line gains `turn_id`, `call_seq`, and `call_id`. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` or `Options.CaptureMessageContent` adds message content. No span exists without a provider, and harness emits no metric.

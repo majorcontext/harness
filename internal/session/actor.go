@@ -19,6 +19,8 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -151,10 +153,11 @@ type Config struct {
 	Skills string
 	// Sent records the system prompt that a backend that builds its own sent.
 	Sent func(system string)
-	// Appended receives the events of each append, and the state after it,
-	// on the actor goroutine. It must not block, wait for the actor, or keep
-	// the state. nil: none.
-	Appended func([]protocol.Payload, *eventlog.State)
+	// Appended receives the events of each append, the state after it, and
+	// the span context of the last ended turn (zero when this process did not
+	// run it), on the actor goroutine. It must not block, wait for the actor,
+	// or keep the state. nil: none.
+	Appended func([]protocol.Payload, *eventlog.State, trace.SpanContext)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Log receives the log lines of the actor and of its turns. nil: slog.Default().
@@ -196,6 +199,8 @@ type Actor struct {
 	done chan struct{}
 	view atomic.Pointer[View]
 	live live
+	// lastTurn is the span of the newest turn that this actor started.
+	lastTurn turnSpan
 
 	// rejected closes when Sync rejects a batch for good.
 	rejected chan struct{}
@@ -660,7 +665,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 		a.stopRetry()
 	}
 	if a.cfg.Appended != nil {
-		a.cfg.Appended(events, a.state)
+		a.cfg.Appended(events, a.state, a.endedSpan())
 	}
 	a.publish(false, events...)
 	return nil
