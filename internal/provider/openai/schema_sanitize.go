@@ -34,7 +34,8 @@ var compositionKeys = [...]string{"anyOf", "oneOf", "allOf"}
 // Ported from opencode's sanitizeOpenAISchema (v1.18.23,
 // codex-request-normalize.ts) — same allowlist, same type-inference
 // fallback, same edge cases (boolean schema, const->enum, missing
-// object/array defaults).
+// object/array defaults), except that an object that declares no
+// properties and no additionalProperties stays open.
 //
 // An empty or unparseable schema passes through unchanged rather than risk
 // corrupting a tool definition this code does not understand; only
