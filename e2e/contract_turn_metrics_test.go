@@ -205,6 +205,22 @@ func TestContractTurnMetricsLineOfAClaudeCodeTurn(t *testing.T) {
 	wantAbsent(t, "turn", lines[0], "service_tier", "effort", "request_mode", "chain_refusal")
 }
 
+func TestContractTurnMetricsLineOfAClaudeCodeCompactionHasPurposeCompaction(t *testing.T) {
+	skipShort(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t, replyText("unused"))
+	d := claudeLane{mode: "compact_turn"}.newDriver(t, serveHost, fake.URL())
+	id := d.Create(t)
+	d.Submit(t, id, "run it")
+	d.WaitIdle(t, id)
+	before := len(logLines(d.Stderr(), "turn_metrics"))
+	if res := d.Compact(t, id); res.Status != http.StatusOK {
+		t.Fatalf("compact = %d %v", res.Status, res.Body)
+	}
+	lines := awaitLogLines(t, d, "turn_metrics", before+1)
+	wantPurposes(t, lines[before:], map[string]int{"compaction": 1})
+}
+
 func TestContractTurnMetricsLineOnTheStderrOfRun(t *testing.T) {
 	skipShort(t)
 	t.Parallel()

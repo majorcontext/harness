@@ -219,6 +219,8 @@ type Actor struct {
 	run          *running
 	pendingModel string
 	latched      bool
+	// compactInput is the ID of the queued compactCommand input that the next turn runs.
+	compactInput string
 	releasing    []func(struct{}, error)
 	stopped      bool
 	// endCause is the cause that a requested stop gives, and cause is the

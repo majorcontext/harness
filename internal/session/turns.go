@@ -142,6 +142,9 @@ func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRunUnder(base, kindTurn, id)
 	r.span = span
 	req := a.callRequest(id)
+	if a.compactInput != "" && slices.Contains(inputIDs, a.compactInput) {
+		req.Purpose, a.compactInput = turn.PurposeCompaction, ""
+	}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {
