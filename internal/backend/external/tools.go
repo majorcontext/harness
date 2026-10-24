@@ -73,7 +73,12 @@ func ServeTools(ctx context.Context, groups []Group, idMeta string,
 				t.handler(ctx, s.Name, idMeta, call))
 		}
 		path := base + "/" + strconv.Itoa(i) // a server name may hold pattern or URL syntax
-		mux.Handle("POST "+path, reg)
+		mux.Handle("POST "+path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if value := r.Header.Get(mcp.HarnessSessionIDHeader); value != "" {
+				r = r.WithContext(mcp.WithRequestHeader(r.Context(), mcp.HarnessSessionIDHeader, value))
+			}
+			reg.ServeHTTP(w, r)
+		}))
 		t.URLs[g.Server] = "http://" + ln.Addr().String() + path
 	}
 	t.srv.Handler = mux
@@ -99,9 +104,9 @@ func (t *Tools) handler(ctx context.Context, name, idMeta string,
 		if id == "" {
 			return mcp.CallToolResult{}, fmt.Errorf("the call has no %q in _meta", idMeta)
 		}
-		cctx, stop := context.WithCancel(ctx)
+		cctx, stop := context.WithCancel(rctx)
 		defer stop()
-		defer context.AfterFunc(rctx, stop)()
+		defer context.AfterFunc(ctx, stop)()
 		res, ok := t.run(cctx, call, protocol.ToolCall{ID: id, Name: name, Arguments: args})
 		if !ok || cctx.Err() != nil {
 			<-t.closed

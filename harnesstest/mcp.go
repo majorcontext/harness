@@ -127,10 +127,11 @@ func (r MCPResult) wire() mcp.CallToolResult {
 // MCPCall is a tools/call or resources/read the server received. Name is
 // the tool name or the resource URI.
 type MCPCall struct {
-	Method        string
-	Name          string
-	Args          any
-	Authorization string
+	Method          string
+	Name            string
+	Args            any
+	Authorization   string
+	SessionIDHeader string
 }
 
 // StdioEnv is the environment for a stdio stub that serves s.
@@ -172,7 +173,7 @@ type mcpResponse struct {
 }
 
 // handle answers one JSON-RPC message. It returns nil for a notification.
-func (h *mcpHandler) handle(raw []byte, auth string) []byte {
+func (h *mcpHandler) handle(raw []byte, auth, sessionIDHeader string) []byte {
 	var req mcpRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return encodeMCP(mcpResponse{ID: json.RawMessage("null"), Error: &mcp.RPCError{Code: -32700, Message: "parse error"}})
@@ -180,7 +181,7 @@ func (h *mcpHandler) handle(raw []byte, auth string) []byte {
 	if len(req.ID) == 0 {
 		return nil
 	}
-	result, rpcErr := h.dispatch(req, auth)
+	result, rpcErr := h.dispatch(req, auth, sessionIDHeader)
 	return encodeMCP(mcpResponse{ID: req.ID, Result: result, Error: rpcErr})
 }
 
@@ -193,7 +194,7 @@ func encodeMCP(r mcpResponse) []byte {
 	return b
 }
 
-func (h *mcpHandler) dispatch(req mcpRequest, auth string) (any, *mcp.RPCError) {
+func (h *mcpHandler) dispatch(req mcpRequest, auth, sessionIDHeader string) (any, *mcp.RPCError) {
 	switch req.Method {
 	case "initialize":
 		h.mu.Lock()
@@ -205,11 +206,11 @@ func (h *mcpHandler) dispatch(req mcpRequest, auth string) (any, *mcp.RPCError) 
 	case "tools/list":
 		return h.listTools(req.Params), nil
 	case "tools/call":
-		return h.callTool(req.Params, auth)
+		return h.callTool(req.Params, auth, sessionIDHeader)
 	case "resources/list":
 		return h.listResources(req.Params), nil
 	case "resources/read":
-		return h.readResource(req.Params, auth)
+		return h.readResource(req.Params, auth, sessionIDHeader)
 	}
 	return nil, &mcp.RPCError{Code: -32601, Message: "method not found: " + req.Method}
 }
@@ -261,13 +262,13 @@ func (h *mcpHandler) listTools(params json.RawMessage) any {
 	return mcp.ListToolsResult{Tools: tools, NextCursor: next}
 }
 
-func (h *mcpHandler) record(method, name string, args any, auth string) {
+func (h *mcpHandler) record(method, name string, args any, auth, sessionIDHeader string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.calls = append(h.calls, MCPCall{Method: method, Name: name, Args: args, Authorization: auth})
+	h.calls = append(h.calls, MCPCall{Method: method, Name: name, Args: args, Authorization: auth, SessionIDHeader: sessionIDHeader})
 }
 
-func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RPCError) {
+func (h *mcpHandler) callTool(params json.RawMessage, auth, sessionIDHeader string) (any, *mcp.RPCError) {
 	var p struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -279,7 +280,7 @@ func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RP
 	if len(p.Arguments) > 0 {
 		_ = json.Unmarshal(p.Arguments, &args)
 	}
-	h.record("tools/call", p.Name, args, auth)
+	h.record("tools/call", p.Name, args, auth, sessionIDHeader)
 	for _, t := range h.tools() {
 		if t.Name != p.Name {
 			continue
@@ -317,14 +318,14 @@ func (h *mcpHandler) listResources(params json.RawMessage) any {
 	return mcp.ListResourcesResult{Resources: list, NextCursor: next}
 }
 
-func (h *mcpHandler) readResource(params json.RawMessage, auth string) (any, *mcp.RPCError) {
+func (h *mcpHandler) readResource(params json.RawMessage, auth, sessionIDHeader string) (any, *mcp.RPCError) {
 	var p struct {
 		URI string `json:"uri"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, &mcp.RPCError{Code: -32602, Message: "invalid params"}
 	}
-	h.record("resources/read", p.URI, nil, auth)
+	h.record("resources/read", p.URI, nil, auth, sessionIDHeader)
 	for _, r := range h.spec.Resources {
 		if r.URI != p.URI {
 			continue
@@ -367,7 +368,7 @@ func ServeMCPStdio(r io.Reader, w io.Writer, spec MCPSpec) error {
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
-			if resp := h.handle(line, ""); resp != nil {
+			if resp := h.handle(line, "", ""); resp != nil {
 				if _, werr := w.Write(append(resp, '\n')); werr != nil {
 					return werr
 				}
@@ -623,7 +624,7 @@ func (s *MCPServer) serve(w http.ResponseWriter, r *http.Request) {
 		s.stream, s.streamCtx = w, r.Context()
 	}
 	s.mu.Unlock()
-	resp := s.h.handle(body, r.Header.Get("Authorization"))
+	resp := s.h.handle(body, r.Header.Get("Authorization"), r.Header.Get(mcp.HarnessSessionIDHeader))
 	if req.Method == "initialize" {
 		w.Header().Set("Mcp-Session-Id", mcpSessionID)
 	}

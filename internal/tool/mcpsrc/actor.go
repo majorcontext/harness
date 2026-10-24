@@ -122,6 +122,7 @@ func (a *actor) spawn(f func()) {
 func sameSpec(x, y config.MCPServerSpec) bool {
 	return slices.Equal(x.Command, y.Command) && slices.Equal(x.Env, y.Env) && x.Dir == y.Dir && x.URL == y.URL &&
 		maps.Equal(x.Headers, y.Headers) && x.ConnectTimeoutS == y.ConnectTimeoutS && x.ToolLoading == y.ToolLoading &&
+		x.IncludeSessionIDHeader == y.IncludeSessionIDHeader &&
 		x.ToolTimeout() == y.ToolTimeout()
 }
 
@@ -142,10 +143,13 @@ func (a *actor) add(name string, spec config.MCPServerSpec) *entry {
 	loading := cmp.Or(spec.ToolLoading, a.s.mode, "auto")
 	switch m := a.mem[name]; {
 	case m == nil:
-		a.mem[name] = &memory{loading: loading, seen: map[string]mcp.Tool{}, base: map[string]bool{}}
-	case len(m.base) == 0 && m.loading != loading:
+		a.mem[name] = &memory{loading: loading, seen: map[string]mcp.Tool{}, base: map[string]bool{}, sessionIDHeader: spec.IncludeSessionIDHeader && spec.URL != ""}
+	default:
 		c := *m
-		c.loading = loading
+		c.sessionIDHeader = spec.IncludeSessionIDHeader && spec.URL != ""
+		if len(m.base) == 0 {
+			c.loading = loading
+		}
 		a.mem[name] = &c
 	}
 	return e

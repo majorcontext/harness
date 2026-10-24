@@ -16,14 +16,38 @@ import (
 	"time"
 )
 
+type requestHeadersKey struct{}
+
+// WithRequestHeader adds an HTTP header to requests made with ctx.
+func WithRequestHeader(ctx context.Context, name, value string) context.Context {
+	headers, _ := ctx.Value(requestHeadersKey{}).(map[string]string)
+	copy := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		copy[k] = v
+	}
+	copy[name] = value
+	return context.WithValue(ctx, requestHeadersKey{}, copy)
+}
+
+// RequestHeader returns an HTTP header carried by ctx.
+func RequestHeader(ctx context.Context, name string) string {
+	return requestHeaders(ctx)[name]
+}
+
+func requestHeaders(ctx context.Context) map[string]string {
+	headers, _ := ctx.Value(requestHeadersKey{}).(map[string]string)
+	return headers
+}
+
 // sessionIDHeader and protocolVersionHeader are the Streamable HTTP
-// transport's well-known headers
-// (https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management,
+// transport's well-known headers (https://modelcontextprotocol.org/specification/2025-11-25/basic/transports#session-management,
 // #protocol-version-header). net/http canonicalizes header names, so any
 // casing works; these are written in their canonical form.
 const (
-	sessionIDHeader       = "Mcp-Session-Id"
-	protocolVersionHeader = "Mcp-Protocol-Version"
+	// HarnessSessionIDHeader carries the calling Harness session ID when a server opts in.
+	HarnessSessionIDHeader = "Harness-Session-Id"
+	sessionIDHeader        = "Mcp-Session-Id"
+	protocolVersionHeader  = "Mcp-Protocol-Version"
 )
 
 // HTTPTransport configures a client that speaks the Streamable HTTP
@@ -90,6 +114,9 @@ func (t *httpTransport) newRequest(ctx context.Context, body []byte) (*http.Requ
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	for k, v := range requestHeaders(ctx) {
 		req.Header.Set(k, v)
 	}
 	t.mu.Lock()

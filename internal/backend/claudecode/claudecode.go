@@ -21,6 +21,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/turn"
@@ -336,7 +337,11 @@ func (r *run) mcpArgs(ctx context.Context, req turn.Request) ([]string, error) {
 	}
 	servers := map[string]mcpServer{}
 	for _, name := range slices.Sorted(maps.Keys(urls)) {
-		servers[name] = mcpServer{Type: "http", URL: urls[name]}
+		server := mcpServer{Type: "http", URL: urls[name]}
+		if req.MCPInstructions.SessionIDHeaderServers[name] && req.SessionID != "" {
+			server.Headers = map[string]string{mcp.HarnessSessionIDHeader: req.SessionID}
+		}
+		servers[name] = server
 	}
 	path, err := r.writeMCPConfig(servers)
 	if err != nil {
@@ -392,6 +397,10 @@ func groupsOf(tools []protocol.ToolSpec, instructions turn.MCPInstructions) []ex
 func (r *run) serveTools(ctx context.Context, req turn.Request) (map[string]string, error) {
 	var err error
 	call := func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		if server, ok := mcpGroup(c.Name); ok && req.MCPInstructions.SessionIDHeaderServers[server] &&
+			mcp.RequestHeader(ctx, mcp.HarnessSessionIDHeader) != req.SessionID {
+			return protocol.ToolResult{Text: "MCP session ID header does not match this session", IsError: true}
+		}
 		if c.Name == turn.AskTool {
 			return r.ask(ctx, req, c)
 		}
@@ -413,8 +422,9 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (map[string]stri
 
 // mcpServer is one server of an --mcp-config file.
 type mcpServer struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // writeMCPConfig writes servers to an --mcp-config file and returns its

@@ -142,6 +142,12 @@ func (v view) perServer() turn.MCPInstructions {
 		out.Common = resourcesLine
 	}
 	for _, name := range v.reached {
+		if m := v.mem[name]; m != nil && m.sessionIDHeader {
+			if out.SessionIDHeaderServers == nil {
+				out.SessionIDHeaderServers = map[string]bool{}
+			}
+			out.SessionIDHeaderServers[name] = true
+		}
 		if text := v.serverText(name); text != "" {
 			if out.Servers == nil {
 				out.Servers = map[string]string{}

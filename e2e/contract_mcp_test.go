@@ -23,16 +23,17 @@ const mcpPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhf
 // mcpServerDef is one mcp_servers entry. An HTTP server is a fake that
 // requires mcpToken; a stdio server is the mcpstdio stub.
 type mcpServerDef struct {
-	name        string
-	spec        harnesstest.MCPSpec
-	stdio, sse  bool
-	failInit    int
-	down        bool
-	holdRetry   bool // the first initialize fails and every later one blocks, so no background retry ends
-	dir         bool // a stdio server starts in a directory named "stubdir"
-	toolLoading string
-	toolTimeout int  // tool_timeout_s of the entry; zero leaves it out
-	unlisted    bool // the fixture exists, and the config leaves it out
+	name                   string
+	spec                   harnesstest.MCPSpec
+	stdio, sse             bool
+	failInit               int
+	down                   bool
+	holdRetry              bool // the first initialize fails and every later one blocks, so no background retry ends
+	dir                    bool // a stdio server starts in a directory named "stubdir"
+	toolLoading            string
+	toolTimeout            int // tool_timeout_s of the entry; zero leaves it out
+	includeSessionIDHeader bool
+	unlisted               bool // the fixture exists, and the config leaves it out
 }
 
 func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[string]any) map[string]any {
@@ -72,6 +73,9 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 			}
 			if d.toolTimeout != 0 {
 				entry["tool_timeout_s"] = d.toolTimeout
+			}
+			if d.includeSessionIDHeader {
+				entry["include_session_id_header"] = true
 			}
 			if !d.unlisted {
 				servers[d.name] = entry
@@ -326,6 +330,17 @@ func TestContractMCPEager(t *testing.T) {
 			}}),
 		},
 	})
+}
+
+func TestContractMCPSessionIDHeader(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:  "mcp_opted_in_http_tool_call_sends_session_id_header",
+		setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), includeSessionIDHeader: true}),
+		model: toolChain(mcpTool("weather", "forecast", "city", "Oslo")),
+		actions: append(append([]action{}, oneTurn...), expectMCPCalls{server: "weather", session: "a", want: []harnesstest.MCPCall{
+			{Method: "tools/call", Name: "forecast", Args: map[string]any{"city": "Oslo"}, Authorization: mcpToken},
+		}}),
+	}})
 }
 
 func TestContractMCPInstructionsAndResources(t *testing.T) {

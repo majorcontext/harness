@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -25,8 +26,9 @@ func (expectToolsStable) run(t *testing.T, r *run) {
 }
 
 type expectMCPCalls struct {
-	server string
-	want   []harnesstest.MCPCall
+	server  string
+	session string
+	want    []harnesstest.MCPCall
 }
 
 func (a expectMCPCalls) run(t *testing.T, r *run) {
@@ -35,8 +37,14 @@ func (a expectMCPCalls) run(t *testing.T, r *run) {
 	if !ok {
 		t.Fatalf("no HTTP MCP server %q", a.server)
 	}
-	if got := srv.Calls(); !reflect.DeepEqual(got, a.want) {
-		t.Errorf("server %s calls = %+v, want %+v", a.server, got, a.want)
+	want := slices.Clone(a.want)
+	if a.session != "" {
+		for i := range want {
+			want[i].SessionIDHeader = r.ids[a.session]
+		}
+	}
+	if got := srv.Calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("server %s calls = %+v, want %+v", a.server, got, want)
 	}
 }
 

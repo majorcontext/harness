@@ -90,6 +90,7 @@ func (s *Source) list(ctx context.Context, name string) ([]mcp.Resource, bool, e
 	}
 	ctx, stop := bindLife(ctx, life)
 	defer stop()
+	ctx = s.sessionHeader(ctx, name)
 	var all []mcp.Resource
 	seen := map[string]bool{}
 	for cursor := ""; ; {
@@ -145,6 +146,7 @@ func (r reader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	}
 	ctx, stop := bindLife(ctx, life)
 	defer stop()
+	ctx = r.s.sessionHeader(ctx, in.Server)
 	res, err := c.ReadResource(ctx, in.URI)
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, hide(in.Server, err))

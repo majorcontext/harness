@@ -58,6 +58,8 @@ type MCPServerSpec struct {
 	ToolTimeoutS *int `json:"tool_timeout_s,omitempty"`
 	// ToolLoading overrides Config.MCPToolLoading for this server: "eager" or "lazy". "auto" is rejected here.
 	ToolLoading string `json:"tool_loading,omitempty"`
+	// IncludeSessionIDHeader sends the calling session ID in Harness-Session-Id on HTTP MCP tool and resource calls. Stdio servers do not support this.
+	IncludeSessionIDHeader bool `json:"include_session_id_header,omitempty"`
 }
 
 // PluginSpec configures one plugin process. Name and Command are required.
