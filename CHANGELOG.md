@@ -92,6 +92,7 @@ First tagged release.
 
 ### Fixed
 
+- **Cache expiry of an injected-auth ChatGPT entry** (`internal/backend`) — an entry with `auth` `injected` and `models_from` `chatgpt` targets the ChatGPT Codex backend and now reports `cache_expires_at` with the 30-minute lifetime, as an entry with `auth` `chatgpt` does.
 - **Open object schemas on the Codex lane** (`internal/provider/openai`) — a free-form object field in a tool schema, one with no `properties` and no `additionalProperties`, now keeps `additionalProperties: true`. The deferred `mcp` tool forwards the `arguments` of a `call`; before, the model could send only `{}`.
 - **Claude Code compaction usage** (`internal/backend/claudecode`) — a `/compact` result carries zero `usage` and the call in `modelUsage`. The turn now reports the `modelUsage` token counts when `usage` is zero.
 - **Warm-up tools match the first turn** (`internal/session`, `internal/turn`) — the Codex websocket warm-up omitted `ask_user_question` and ignored the `chat.params` hook and the native web search flag, so the first turn after a create or wake refused the chain with `chain_refusal_detail=tools`. The warm-up now builds its request as the first turn call does.

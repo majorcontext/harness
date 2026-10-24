@@ -178,7 +178,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		return tracing.Client(hc)
 	}
 	var cacheTTL time.Duration
-	if p.UsesChatGPTLogin() {
+	if p.UsesChatGPTLogin() || p.ModelsFrom == config.ModelsFromChatGPT {
 		cacheTTL = responses.ChatGPTCacheTTL
 	}
 	switch {
