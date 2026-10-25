@@ -26,6 +26,8 @@ type CallMetrics struct {
 	ResponseID, StopReason, IncompleteReason, ErrorClass string
 	// PreviousResponseID is the response that a chained call continued; it is for the model-call span and no log line.
 	PreviousResponseID string
+	// ResponseIDs are the provider ids of the model calls that one call span covers, in order; they are for the span events and no log line.
+	ResponseIDs []string
 	// ProviderTokens is the usage as the provider reported it, or nil when its terminal event had none.
 	ProviderTokens *ProviderTokens
 	// The byte sizes of the request and its parts. RequestBytes 0 means the backend reports none.
