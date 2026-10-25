@@ -311,6 +311,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	}
 	ts.Tools = append(head, ts.Tools...)
 	ts.MCPInstructions = v.perServer()
+	ts.Resolver = toolResolver{s: s, ok: ok}
 	cat := catalog(listed)
 	if cutAny {
 		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
@@ -318,6 +319,36 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
 	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok, late)}}
 	return ts
+}
+
+type toolResolver struct {
+	s  *Source
+	ok func(string) bool
+}
+
+func (r toolResolver) ResolveTool(ctx context.Context, name string) turn.Tool {
+	server, _, valid := remoteName(name)
+	if !valid || !r.ok(name) || r.s.owner(server) == nil {
+		return nil
+	}
+	if !r.s.refresh(ctx, server) {
+		return nil
+	}
+	for _, tool := range r.s.view().liveAll(r.ok) {
+		if tool.spec.Name == name {
+			return tool
+		}
+	}
+	return nil
+}
+
+// remoteName splits a namespaced MCP tool name.
+func remoteName(name string) (string, string, bool) {
+	if !strings.HasPrefix(name, prefix) {
+		return "", "", false
+	}
+	server, tool, ok := strings.Cut(strings.TrimPrefix(name, prefix), "__")
+	return server, tool, ok && server != "" && tool != ""
 }
 
 // liveAll returns the tools that their servers list now and ok allows.

@@ -104,6 +104,16 @@ func (a changeMCPTools) run(t *testing.T, r *run) {
 	srv.NotifyToolsChanged()
 }
 
+type setMCPTools struct {
+	server string
+	tools  []harnesstest.MCPTool
+}
+
+func (a setMCPTools) run(t *testing.T, r *run) {
+	t.Helper()
+	mcpFixture(t, r, a.server).SetTools(a.tools)
+}
+
 type expectMCPInitializes struct {
 	server string
 	n      int
@@ -146,6 +156,7 @@ var mcpLiveRows = map[string]runtimeRow{
 	"mcp_put_with_the_same_spec_keeps_the_client_and_the_call_in_flight":  sameAsServe(),
 	"mcp_put_that_removes_a_server_ends_the_call_in_flight_with_an_error": sameAsServe(),
 	"mcp_list_changed_adds_a_deferred_tool_that_the_notice_names":         sameAsServe(),
+	"mcp_missing_tool_refreshes_a_server_without_list_changed":            sameAsServe(),
 	"mcp_put_with_a_bad_body_is_invalid_and_keeps_the_set":                sameAsServe(),
 	"mcp_session_that_began_with_an_empty_set_never_gets_mcp_tools":       sameAsServe(),
 }
@@ -245,6 +256,15 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 				mcpAction("action", "call", "tool", "mcp__weather__snow", "arguments", map[string]any{"city": "Oslo"}),
 			),
 			actions: append(liveTurns(changeMCPTools{server: "weather", tools: snow}), expectSystem{req: 2, sameAs: 1}),
+		},
+		{
+			name:  "mcp_missing_tool_refreshes_a_server_without_list_changed",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), noListChanged: true}),
+			model: afterFirstTurn(
+				mcpAction("action", "select", "tools", []string{"mcp__weather__snow"}),
+				mcpAction("action", "call", "tool", "mcp__weather__snow", "arguments", map[string]any{"city": "Oslo"}),
+			),
+			actions: liveTurns(setMCPTools{server: "weather", tools: snow}),
 		},
 		{
 			name:  "mcp_put_with_a_bad_body_is_invalid_and_keeps_the_set",

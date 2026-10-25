@@ -35,6 +35,33 @@ func (s *Source) Set(servers map[string]config.MCPServerSpec) []protocol.MCPServ
 	return <-reply
 }
 
+func (s *Source) refresh(ctx context.Context, name string) bool {
+	owner := s.owner(name)
+	if owner == nil {
+		return false
+	}
+	sv, _ := owner.serverNow(name)
+	if !sv.up() || !s.wait(ctx) {
+		return false
+	}
+	sv, _ = owner.serverNow(name)
+	if !sv.up() {
+		return false
+	}
+	reply := make(chan bool, 1)
+	if !owner.send(refreshMsg{name, reply}) {
+		return false
+	}
+	select {
+	case refreshed := <-reply:
+		return refreshed
+	case <-ctx.Done():
+		return false
+	case <-owner.done:
+		return false
+	}
+}
+
 // connectNow makes one attempt to connect the server name unless it is connected or an attempt runs, which it waits
 // for. It reports whether it started the attempt.
 func (s *Source) connectNow(ctx context.Context, name string) (bool, error) {

@@ -37,6 +37,8 @@ type Toolset struct {
 	// Notices are statuses that the model reads inside the conversation, and
 	// not in the system prompt, so that the system prompt stays stable.
 	Notices []Notice
+	// Resolver finds a tool that a source can expose on demand.
+	Resolver ToolResolver
 	// Hooks run around each tool call. nil: none.
 	Hooks Hooks
 }
@@ -88,6 +90,11 @@ type Forwarder interface {
 	Forward(c protocol.ToolCall) (protocol.ToolCall, bool)
 }
 
+// ToolResolver finds a tool that a source can expose on demand.
+type ToolResolver interface {
+	ResolveTool(context.Context, string) Tool
+}
+
 // Source gives tools that can change between the model calls of a turn.
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
@@ -112,6 +119,7 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	var out Toolset
 	var prompts, common []string
 	var hooks chain
+	var resolvers toolResolvers
 	for _, src := range s {
 		ts := src.Toolset(ctx, history, allowed, model)
 		out.Tools, out.Deferred = append(out.Tools, ts.Tools...), append(out.Deferred, ts.Deferred...)
@@ -130,9 +138,15 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		}
 		maps.Copy(out.MCPInstructions.SessionIDHeaderServers, ts.MCPInstructions.SessionIDHeaderServers)
 		out.Notices = append(out.Notices, ts.Notices...)
+		if ts.Resolver != nil {
+			resolvers = append(resolvers, ts.Resolver)
+		}
 		if ts.Hooks != nil {
 			hooks = append(hooks, ts.Hooks)
 		}
+	}
+	if len(resolvers) > 0 {
+		out.Resolver = resolvers
 	}
 	out.Prompt, out.MCPInstructions.Common = strings.Join(prompts, "\n\n"), strings.Join(common, "\n\n")
 	switch len(hooks) {
@@ -143,6 +157,17 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		out.Hooks = hooks
 	}
 	return out
+}
+
+type toolResolvers []ToolResolver
+
+func (rs toolResolvers) ResolveTool(ctx context.Context, name string) Tool {
+	for _, r := range rs {
+		if t := r.ResolveTool(ctx, name); t != nil {
+			return t
+		}
+	}
+	return nil
 }
 
 // chain runs each Hooks in order. A deny ends the chain.
@@ -180,6 +205,7 @@ type runner struct {
 	runnable []Tool
 	// deferred are the tools that a Forwarder may run.
 	deferred []Tool
+	resolver ToolResolver
 	hooks    Hooks
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
@@ -202,7 +228,7 @@ func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResul
 	if content {
 		span.SetAttributes(attribute.String("gen_ai.tool.call.arguments", tracing.Arguments(c.Arguments)))
 	}
-	res := runTool(WithSessionID(ctx, t.session), tools, t.hooks, c)
+	res := runTool(WithSessionID(ctx, t.session), tools, t.hooks, t.resolver, c)
 	if res.IsError {
 		tracing.Fail(span, "tool_error")
 	} else if content {
@@ -306,7 +332,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) ru
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, hooks: ts.Hooks, scope: sc, session: call.SessionID}
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID}
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)
@@ -378,9 +404,9 @@ func toolCalls(items []protocol.LogMessage) []protocol.ToolCall {
 // model may not call, and turns an error into an error result that the
 // model sees. A canceled ctx after Before skips the run, and After still sees
 // the error result so that a hook which announced the call can announce its end.
-func runTool(ctx context.Context, tools []Tool, h Hooks, c protocol.ToolCall) protocol.ToolResult {
+func runTool(ctx context.Context, tools []Tool, h Hooks, resolver ToolResolver, c protocol.ToolCall) protocol.ToolResult {
 	if h == nil {
-		return invoke(ctx, tools, c)
+		return invoke(ctx, tools, resolver, c)
 	}
 	c, deny := h.Before(ctx, c)
 	if deny != "" {
@@ -389,11 +415,16 @@ func runTool(ctx context.Context, tools []Tool, h Hooks, c protocol.ToolCall) pr
 	if err := ctx.Err(); err != nil {
 		return h.After(ctx, c, protocol.ToolResult{Text: err.Error(), IsError: true})
 	}
-	return h.After(ctx, c, invoke(ctx, tools, c))
+	return h.After(ctx, c, invoke(ctx, tools, resolver, c))
 }
 
-func invoke(ctx context.Context, tools []Tool, c protocol.ToolCall) protocol.ToolResult {
+func invoke(ctx context.Context, tools []Tool, resolver ToolResolver, c protocol.ToolCall) protocol.ToolResult {
 	i := slices.IndexFunc(tools, func(t Tool) bool { return t.Spec().Name == c.Name })
+	if i < 0 && resolver != nil {
+		if t := resolver.ResolveTool(ctx, c.Name); t != nil {
+			tools, i = []Tool{t}, 0
+		}
+	}
 	if i < 0 {
 		return protocol.ToolResult{Text: "no such tool available: " + c.Name, IsError: true}
 	}
