@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Session headers on injected ChatGPT entries** (`internal/provider/openai`, `internal/backend`) — an entry with `auth: "injected"` and `models_from: "chatgpt"` sends the hash of the session id as `session_id` and `x-client-request-id`, so a request that no response chain covers reads the prompt cache of the ChatGPT backend. The raw session id never leaves the process.
+
 - **Message ids on the Claude Code chat span** (`internal/backend/claudecode`, `internal/turn`) — the `chat` span of a Claude Code turn has one `gen_ai.response` event for each distinct model call of the turn. The event carries the Anthropic message id as `gen_ai.response.id`. The `turn_metrics` line does not change.
 
 - **Trace links for turns that harness starts** (`internal/session`, `internal/tracing`, `harness`) — a parent turn that starts from the report of a child links to the `invoke_agent` span of the child turn, and a goal continuation turn links to the `invoke_agent` span of the turn that the judge evaluated. The link is in the `traceparent` and `tracestate` of the `input.admitted` record.

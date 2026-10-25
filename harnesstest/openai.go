@@ -149,6 +149,8 @@ type WireEvent struct {
 	CredentialHeaders map[string]string `json:"credential_headers,omitempty"`
 	// SessionHeader reports a session_id header equal to the x-client-request-id header.
 	SessionHeader bool `json:"session_header,omitempty"`
+	// SessionHeaderValue is the session_id header of the request. It is not in the JSON, because a session id differs between runs.
+	SessionHeaderValue string `json:"-"`
 	// ItemsWithoutServerID counts the output items that the request sends back (assistant messages,
 	// function calls, and reasoning) whose id is not an id that the server gave.
 	ItemsWithoutServerID int `json:"items_without_server_id,omitempty"`
@@ -174,6 +176,7 @@ func (o *OpenAI) stamp(w WireEvent, r *http.Request) WireEvent {
 	}
 	id := r.Header.Get("session_id")
 	w.SessionHeader = id != "" && id == r.Header.Get("x-client-request-id")
+	w.SessionHeaderValue = id
 	return w
 }
 
