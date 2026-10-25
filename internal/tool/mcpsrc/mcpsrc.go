@@ -419,6 +419,9 @@ func (r remote) Spec() protocol.ToolSpec { return r.spec }
 
 func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
 	sv, life := r.src.serverNow(r.server)
+	if !sv.has(r.name) && sv.up() && r.src.refresh(ctx, r.server) {
+		sv, life = r.src.serverNow(r.server)
+	}
 	if !sv.has(r.name) {
 		return protocol.ToolResult{Text: "no such tool available: " + call.Name, IsError: true}, nil
 	}
