@@ -32,6 +32,7 @@ type mcpServerDef struct {
 	dir                    bool // a stdio server starts in a directory named "stubdir"
 	toolLoading            string
 	toolTimeout            int // tool_timeout_s of the entry; zero leaves it out
+	noListChanged          bool
 	includeSessionIDHeader bool
 	unlisted               bool // the fixture exists, and the config leaves it out
 }
@@ -51,6 +52,7 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 					}
 				}
 			} else {
+				d.spec.NoListChanged = d.noListChanged
 				srv := harnesstest.NewMCPServer(t, d.spec)
 				srv.RequireAuthorization(mcpToken)
 				srv.FailInitialize(d.failInit)

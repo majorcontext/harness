@@ -115,7 +115,7 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 	case in.Action == "search":
 		out, err = c.search(in.Query, in.Limit)
 	case in.Action == "select":
-		out, err = c.choose(in.Tools)
+		out, err = c.choose(ctx, in.Tools)
 	case in.Action == "call":
 		err = fmt.Errorf(`mcp: call requires a "tool" argument`)
 	default:
@@ -221,9 +221,31 @@ type choice struct {
 
 // choose gives the definition of each deferred tool that names holds, and sorts the other names. A name of a configured server that is not
 // connected is pending: it has no definition until the server connects.
-func (c control) choose(names []string) (any, error) {
+func (c control) choose(ctx context.Context, names []string) (any, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf(`mcp: select requires a non-empty "tools" array`)
+	}
+	refreshed := map[string]bool{}
+	for _, n := range names {
+		server, _, ok := remoteName(n)
+		if seen := refreshed[server]; !ok || seen || c.loaded[n] || !c.ok(n) || slices.ContainsFunc(c.all, func(r remote) bool { return r.spec.Name == n }) {
+			continue
+		}
+		if sv, _ := c.s.serverNow(server); sv.up() {
+			if !c.s.refresh(ctx, server) && ctx.Err() != nil {
+				return nil, context.Cause(ctx)
+			}
+			refreshed[server] = true
+		}
+	}
+	if len(refreshed) > 0 {
+		c.v = c.s.view()
+		c.all = c.v.liveAll(c.ok)
+		if c.late != nil {
+			for _, l := range c.late() {
+				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
+			}
+		}
 	}
 	out := choice{Tools: []definition{}, Already: []string{}, Pending: []string{}, Missing: []string{}}
 	seen := map[string]bool{}

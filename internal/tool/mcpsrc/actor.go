@@ -16,7 +16,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// refreshTimeout bounds the read of a tool list after a list_changed notification.
+// refreshTimeout bounds a read of a tool list, and the wait for one after a missed tool name.
 const refreshTimeout = 15 * time.Second
 
 var errRemoved = errors.New("mcp: server removed")
@@ -46,6 +46,7 @@ type entry struct {
 	// readBusy is true while a read of the tool list is in flight, and readAgain when another one is due after it.
 	readBusy, readAgain bool
 	waiters             []waiter
+	refreshWaiters      []chan bool
 }
 
 type waiter struct {
@@ -172,6 +173,10 @@ func (a *actor) remove(e *entry) {
 		w.reply <- connectResult{err: errRemoved}
 	}
 	e.waiters = nil
+	for _, w := range e.refreshWaiters {
+		w <- false
+	}
+	e.refreshWaiters = nil
 }
 
 func (a *actor) closeClient(name string, c *mcp.Client) {
@@ -507,6 +512,22 @@ func (m changedMsg) handle(a *actor) {
 	}
 }
 
+// refreshMsg requests a tool-list read of a connected server.
+type refreshMsg struct {
+	name  string
+	reply chan bool
+}
+
+func (m refreshMsg) handle(a *actor) {
+	e := a.entries[m.name]
+	if a.closed || e == nil || !e.sv.up() {
+		m.reply <- false
+		return
+	}
+	e.refreshWaiters = append(e.refreshWaiters, m.reply)
+	a.startRead(e)
+}
+
 // listedMsg reports the end of a read of the tool list of a client.
 type listedMsg struct {
 	e      *entry
@@ -530,7 +551,16 @@ func (m listedMsg) handle(a *actor) {
 	if e.readAgain {
 		e.readAgain = false
 		a.startRead(e)
+		return
 	}
+	waiters := e.refreshWaiters
+	e.refreshWaiters = nil
+	// A waiter reads the view, so it wakes after the loop publishes the new list.
+	a.after = append(a.after, func() {
+		for _, reply := range waiters {
+			reply <- true
+		}
+	})
 }
 
 // closedMsg reports that a client of name closed.

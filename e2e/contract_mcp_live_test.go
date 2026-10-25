@@ -104,6 +104,16 @@ func (a changeMCPTools) run(t *testing.T, r *run) {
 	srv.NotifyToolsChanged()
 }
 
+type setMCPTools struct {
+	server string
+	tools  []harnesstest.MCPTool
+}
+
+func (a setMCPTools) run(t *testing.T, r *run) {
+	t.Helper()
+	mcpFixture(t, r, a.server).SetTools(a.tools)
+}
+
 type expectMCPInitializes struct {
 	server string
 	n      int
@@ -126,6 +136,11 @@ func afterFirstTurn(calls ...harnesstest.ToolCall) []harnesstest.Step {
 	return append(steps, harnesstest.Step{Name: "done", Match: assistantTurns(len(calls) + 1), Reply: harnesstest.Reply{Text: "done"}})
 }
 
+func withID(id string, c harnesstest.ToolCall) harnesstest.ToolCall {
+	c.ID = id
+	return c
+}
+
 func liveTurns(between ...action) []action {
 	acts := []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}}
 	acts = append(acts, between...)
@@ -146,6 +161,9 @@ var mcpLiveRows = map[string]runtimeRow{
 	"mcp_put_with_the_same_spec_keeps_the_client_and_the_call_in_flight":  sameAsServe(),
 	"mcp_put_that_removes_a_server_ends_the_call_in_flight_with_an_error": sameAsServe(),
 	"mcp_list_changed_adds_a_deferred_tool_that_the_notice_names":         sameAsServe(),
+	"mcp_missing_tool_refreshes_a_server_without_list_changed":            sameAsServe(),
+	"mcp_missing_tool_call_refreshes_a_server_without_list_changed":       sameAsServe(),
+	"mcp_sent_tool_that_its_server_lists_again_runs_after_a_read":         sameAsServe(),
 	"mcp_put_with_a_bad_body_is_invalid_and_keeps_the_set":                sameAsServe(),
 	"mcp_session_that_began_with_an_empty_set_never_gets_mcp_tools":       sameAsServe(),
 }
@@ -245,6 +263,42 @@ func TestContractMCPLiveSetCalls(t *testing.T) {
 				mcpAction("action", "call", "tool", "mcp__weather__snow", "arguments", map[string]any{"city": "Oslo"}),
 			),
 			actions: append(liveTurns(changeMCPTools{server: "weather", tools: snow}), expectSystem{req: 2, sameAs: 1}),
+		},
+		{
+			name:  "mcp_missing_tool_refreshes_a_server_without_list_changed",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), noListChanged: true}),
+			model: afterFirstTurn(
+				mcpAction("action", "select", "tools", []string{"mcp__weather__snow"}),
+				mcpAction("action", "call", "tool", "mcp__weather__snow", "arguments", map[string]any{"city": "Oslo"}),
+			),
+			actions: liveTurns(setMCPTools{server: "weather", tools: snow}),
+		},
+		{
+			name:  "mcp_missing_tool_call_refreshes_a_server_without_list_changed",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), noListChanged: true}),
+			model: afterFirstTurn(
+				mcpAction("action", "call", "tool", "mcp__weather__snow", "arguments", map[string]any{"city": "Oslo"}),
+				ftTool("mcp__weather__snow", ftArgs("city", "Bergen")),
+			),
+			actions: liveTurns(setMCPTools{server: "weather", tools: snow}),
+		},
+		{
+			name:  "mcp_sent_tool_that_its_server_lists_again_runs_after_a_read",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: harnesstest.MCPSpec{Name: "weather", Tools: snow}, sse: true}),
+			model: []harnesstest.Step{
+				{Name: "first", Match: assistantTurns(0), Reply: harnesstest.Reply{Text: "hi"}},
+				{Name: "forecast", Match: assistantTurns(1), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{withID("toolu_1", ftTool("mcp__weather__forecast", ftArgs("city", "Oslo")))}}},
+				{Name: "second", Match: assistantTurns(2), Reply: harnesstest.Reply{Text: "ok"}},
+				{Name: "snow", Match: assistantTurns(3), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{withID("toolu_2", ftTool("mcp__weather__snow", ftArgs("city", "Bergen")))}}},
+				{Name: "done", Match: assistantTurns(4), Reply: harnesstest.Reply{Text: "done"}},
+			},
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				changeMCPTools{server: "weather", tools: mcpWeather("").Tools},
+				submit{as: "a", text: "drop"}, waitIdle{as: "a"},
+				setMCPTools{server: "weather", tools: snow},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+			},
 		},
 		{
 			name:  "mcp_put_with_a_bad_body_is_invalid_and_keeps_the_set",

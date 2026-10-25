@@ -31,11 +31,12 @@ const mcpSessionID = "harnesstest-session"
 // MCPSpec scripts a fake MCP server: what it says at initialize and which
 // tools and resources it serves.
 type MCPSpec struct {
-	Name         string
-	Instructions string
-	Tools        []MCPTool
-	Resources    []MCPResource
-	PageSize     int // when positive, tools/list and resources/list answer in pages of this size
+	Name          string
+	Instructions  string
+	Tools         []MCPTool
+	Resources     []MCPResource
+	PageSize      int  // when positive, tools/list and resources/list answer in pages of this size
+	NoListChanged bool `json:",omitempty"` // when true, the fake server omits tools.listChanged
 }
 
 // MCPTool is one scripted tool. A tools/call answers with the first of
@@ -217,6 +218,9 @@ func (h *mcpHandler) dispatch(req mcpRequest, auth, sessionIDHeader string) (any
 
 func (h *mcpHandler) initialize() any {
 	caps := map[string]any{"tools": map[string]any{"listChanged": true}}
+	if h.spec.NoListChanged {
+		caps["tools"] = map[string]any{}
+	}
 	if len(h.spec.Resources) > 0 {
 		caps["resources"] = map[string]any{}
 	}
