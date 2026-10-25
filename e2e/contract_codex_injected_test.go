@@ -3,6 +3,7 @@ package e2e
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +60,36 @@ func (a recordCacheKey) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 		}
 	}
 	r.record(t, "cache_key", a.as, callResult{Status: 200, Body: state})
+}
+
+// recordSessionHeaders records whether the session_id and x-client-request-id headers of each HTTP request and websocket dial carry the cache key of the request body and never the session id.
+type recordSessionHeaders struct{ as string }
+
+func (recordSessionHeaders) run(t *testing.T, _ *run) {
+	t.Fatal("recordSessionHeaders runs only under runCodexScenario")
+}
+func (a recordSessionHeaders) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	id := r.id(t, a.as)
+	sum := sha256.Sum256([]byte(id))
+	want := hex.EncodeToString(sum[:])[:32]
+	state := map[string]any{"carriers": 0, "carriers_with_the_hash": 0, "carriers_with_the_session_id": 0}
+	var keys []string
+	for _, w := range o.WireEvents() {
+		if w.Event == "request" && w.Transport == "sse" || w.Event == "dial" {
+			state["carriers"] = state["carriers"].(int) + 1
+			if w.SessionHeader && w.SessionHeaderValue == want {
+				state["carriers_with_the_hash"] = state["carriers_with_the_hash"].(int) + 1
+			}
+			if strings.Contains(w.SessionHeaderValue, id) {
+				state["carriers_with_the_session_id"] = state["carriers_with_the_session_id"].(int) + 1
+			}
+		}
+		if w.PromptCacheKey != "" {
+			keys = append(keys, w.PromptCacheKey)
+		}
+	}
+	state["cache_keys_equal_the_hash"] = len(keys) > 0 && !slices.ContainsFunc(keys, func(k string) bool { return k != want })
+	r.record(t, "session_headers", a.as, callResult{Status: 200, Body: state})
 }
 
 func codexInjectedRows() []codexScenario {
@@ -127,7 +158,13 @@ func codexInjectedRows() []codexScenario {
 func codexModelsFromRows() []codexScenario {
 	return []codexScenario{
 		{
-			scenario: scenario{name: "codex_injected_models_from_chatgpt_session_reports_a_cache_expiry", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSession{as: "a"}})},
+			scenario:  scenario{name: "codex_injected_models_from_chatgpt_websocket_dial_carries_the_hash_as_session_headers", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordSessionHeaders{as: "a"}})},
+			opts:      harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
+			websocket: true,
+			entry:     injectedEntry(map[string]any{"models_from": "chatgpt"}),
+		},
+		{
+			scenario: scenario{name: "codex_injected_models_from_chatgpt_session_reports_a_cache_expiry", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSession{as: "a"}, recordSessionHeaders{as: "a"}})},
 			opts:     harnesstest.OpenAIOptions{Injected: &harnesstest.InjectedOptions{}},
 			entry:    injectedEntry(map[string]any{"models_from": "chatgpt"}),
 		},

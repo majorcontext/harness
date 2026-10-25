@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Session headers on injected ChatGPT entries** (`internal/provider/openai`, `internal/backend`) — an entry with `auth: "injected"` and `models_from: "chatgpt"` sends the hash of the session id as `session_id` and `x-client-request-id`, so a request that no response chain covers reads the prompt cache of the ChatGPT backend. The raw session id never leaves the process.
+
 - **Trace links for turns that harness starts** (`internal/session`, `internal/tracing`, `harness`) — a parent turn that starts from the report of a child links to the `invoke_agent` span of the child turn, and a goal continuation turn links to the `invoke_agent` span of the turn that the judge evaluated. The link is in the `traceparent` and `tracestate` of the `input.admitted` record.
 
 - **Trace context from request headers** (`internal/server`, `internal/tracing`, `internal/session`, `protocol`) — `POST /sessions/{id}/inputs` takes the `traceparent` and `tracestate` request headers as the trace context of the input when the body has no `traceparent`. `POST /sessions/{id}/compact` takes them as the trace context of the compaction: the `/compact` turn of a backend that owns its context links to it, and so does the summary call of a compaction that the runtime runs. A header that is not valid is ignored.

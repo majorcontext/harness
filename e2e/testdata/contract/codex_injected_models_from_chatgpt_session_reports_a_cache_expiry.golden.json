@@ -89,6 +89,15 @@
         },
         "work_dir": "\u003cworkdir\u003e"
       }
+    },
+    "session_headers.a": {
+      "status": 200,
+      "body": {
+        "cache_keys_equal_the_hash": true,
+        "carriers": 1,
+        "carriers_with_the_hash": 1,
+        "carriers_with_the_session_id": 0
+      }
     }
   }
 }
