@@ -36,7 +36,7 @@ type MCPSpec struct {
 	Tools         []MCPTool
 	Resources     []MCPResource
 	PageSize      int  // when positive, tools/list and resources/list answer in pages of this size
-	NoListChanged bool // when true, the fake server omits tools.listChanged
+	NoListChanged bool `json:",omitempty"` // when true, the fake server omits tools.listChanged
 }
 
 // MCPTool is one scripted tool. A tools/call answers with the first of
