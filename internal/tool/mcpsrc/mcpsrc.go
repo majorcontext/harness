@@ -328,15 +328,23 @@ type toolResolver struct {
 
 func (r toolResolver) ResolveTool(ctx context.Context, name string) turn.Tool {
 	server, _, valid := remoteName(name)
-	if !valid || !r.ok(name) || r.s.owner(server) == nil {
+	if !valid || !r.ok(name) || r.s.owner(server) == nil || r.live(name) != nil {
 		return nil
 	}
 	if !r.s.refresh(ctx, server) {
 		return nil
 	}
+	if t := r.live(name); t != nil {
+		return *t
+	}
+	return nil
+}
+
+// live returns the tool that its server lists now, or nil.
+func (r toolResolver) live(name string) *remote {
 	for _, tool := range r.s.view().liveAll(r.ok) {
 		if tool.spec.Name == name {
-			return tool
+			return &tool
 		}
 	}
 	return nil
