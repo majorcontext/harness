@@ -132,6 +132,9 @@ func (r *recorder) record(t Telemetry) {
 	end := time.Now()
 	_, span := r.tr.StartCall(r.ctx, "chat "+tracing.ModelID(r.call.model), trace.WithTimestamp(end.Add(-t.Call.TTFT-t.Call.Stream)),
 		trace.WithAttributes(append(attrs, r.start...)...))
+	for _, id := range t.Call.ResponseIDs {
+		span.AddEvent("gen_ai.response", trace.WithAttributes(attribute.String("gen_ai.response.id", id)))
+	}
 	span.End(trace.WithTimestamp(end))
 }
 
