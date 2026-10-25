@@ -127,12 +127,20 @@ func (r *recorder) record(t Telemetry) {
 	r.finished = r.finished || t.Call.StopReason != ""
 	if !owns {
 		r.span.SetAttributes(attrs...)
+		responseEvents(r.span, t.Call.ResponseIDs)
 		return
 	}
 	end := time.Now()
 	_, span := r.tr.StartCall(r.ctx, "chat "+tracing.ModelID(r.call.model), trace.WithTimestamp(end.Add(-t.Call.TTFT-t.Call.Stream)),
 		trace.WithAttributes(append(attrs, r.start...)...))
+	responseEvents(span, t.Call.ResponseIDs)
 	span.End(trace.WithTimestamp(end))
+}
+
+func responseEvents(span trace.Span, ids []string) {
+	for _, id := range ids {
+		span.AddEvent("gen_ai.response", trace.WithAttributes(attribute.String("gen_ai.response.id", id)))
+	}
 }
 
 // spanAttrs are the facts of a completed attempt: the keys of its turn_metrics

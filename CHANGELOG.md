@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Message ids on the Claude Code chat span** (`internal/backend/claudecode`, `internal/turn`) — the `chat` span of a Claude Code turn has one `gen_ai.response` event for each distinct model call of the turn. The event carries the Anthropic message id as `gen_ai.response.id`. The `turn_metrics` line does not change.
+
 - **Trace links for turns that harness starts** (`internal/session`, `internal/tracing`, `harness`) — a parent turn that starts from the report of a child links to the `invoke_agent` span of the child turn, and a goal continuation turn links to the `invoke_agent` span of the turn that the judge evaluated. The link is in the `traceparent` and `tracestate` of the `input.admitted` record.
 
 - **Trace context from request headers** (`internal/server`, `internal/tracing`, `internal/session`, `protocol`) — `POST /sessions/{id}/inputs` takes the `traceparent` and `tracestate` request headers as the trace context of the input when the body has no `traceparent`. `POST /sessions/{id}/compact` takes them as the trace context of the compaction: the `/compact` turn of a backend that owns its context links to it, and so does the summary call of a compaction that the runtime runs. A header that is not valid is ignored.

@@ -92,6 +92,7 @@ type run struct {
 	models            protocol.Usage
 	mainModel         string
 	lastCall          *usage
+	responseIDs       []string
 	compactPostTokens int64
 	compact           string
 	sawCompact        bool
@@ -459,6 +460,9 @@ func (r *run) settleCompaction(status protocol.Status) {
 
 func (r *run) assistant(env envelope) error {
 	m := decodeMessage(env.Message)
+	if m.ID != "" && !slices.Contains(r.responseIDs, m.ID) {
+		r.responseIDs = append(r.responseIDs, m.ID)
+	}
 	if m.Usage != nil {
 		r.lastCall = m.Usage
 		r.compactPostTokens = 0
@@ -600,6 +604,7 @@ func (r *run) telemetry(env envelope) {
 	cost := max(0, env.TotalCostUSD-r.cost)
 	r.cost = env.TotalCostUSD
 	t := turn.Telemetry{Usage: r.resultUsage(env), SubscriptionUsage: r.limits, CostUSD: &cost, Call: callMetrics(env)}
+	t.Call.ResponseIDs, r.responseIDs = r.responseIDs, nil
 	if r.limits != nil && r.account != "" {
 		limits := *r.limits
 		limits.Account = r.account

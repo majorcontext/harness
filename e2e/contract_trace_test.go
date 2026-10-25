@@ -394,3 +394,39 @@ func TestContractTraceClaudeCodeCompactLinks(t *testing.T) {
 		t.Errorf("turn spans = %+v, want one linked to the span context of the compaction", turn)
 	}
 }
+
+func TestContractTraceClaudeCodeResponseIDs(t *testing.T) {
+	skipShort(t)
+	text := func(id, body string) map[string]any {
+		return map[string]any{"type": "assistant", "message": map[string]any{"id": id, "role": "assistant", "content": []any{map[string]any{"type": "text", "text": body}}}}
+	}
+	frames := []map[string]any{
+		{"type": "system", "subtype": "init", "session_id": "S", "model": "claude-haiku-4-5-20251001", "tools": []string{}},
+		text("msg_one", "a"), text("msg_one", "b"), text("msg_two", "c"),
+		{"type": "result", "subtype": "success", "is_error": false, "num_turns": 2, "result": "c", "session_id": "S", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
+	}
+	l := newCCLane(t, "", ccStream(t, frames...))
+	l.recorder = tracetest.NewSpanRecorder()
+	r := l.runtime()
+	s := l.create(r)
+	l.send(s, "i1")
+	l.awaitText(s, "c")
+	l.close(r)
+	var spans []harnesstest.Span
+	for _, sp := range l.recorder.Ended() {
+		spans = append(spans, spanOfSDK(sp))
+	}
+	chats := spansNamed(spans, "chat ")
+	if len(chats) != 1 {
+		t.Fatalf("chat spans = %+v, want one", chats)
+	}
+	var got []any
+	for _, e := range chats[0].Events {
+		if e.Name == "gen_ai.response" {
+			got = append(got, e.Attrs["gen_ai.response.id"])
+		}
+	}
+	if !slices.Equal(got, []any{"msg_one", "msg_two"}) {
+		t.Errorf("gen_ai.response ids = %v, want [msg_one msg_two]", got)
+	}
+}
