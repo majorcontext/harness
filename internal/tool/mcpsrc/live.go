@@ -35,6 +35,9 @@ func (s *Source) Set(servers map[string]config.MCPServerSpec) []protocol.MCPServ
 	return <-reply
 }
 
+// refresh reads the tool list of the connected server name again and waits for
+// the read. A read that a reconnect discards releases no waiter, so the wait has
+// its own bound.
 func (s *Source) refresh(ctx context.Context, name string) bool {
 	owner := s.owner(name)
 	if owner == nil {
@@ -48,6 +51,8 @@ func (s *Source) refresh(ctx context.Context, name string) bool {
 	if !sv.up() {
 		return false
 	}
+	ctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+	defer cancel()
 	reply := make(chan bool, 1)
 	if !owner.send(refreshMsg{name, reply}) {
 		return false

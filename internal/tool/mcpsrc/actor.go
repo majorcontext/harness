@@ -16,7 +16,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// refreshTimeout bounds the read of a tool list after a list_changed notification.
+// refreshTimeout bounds a read of a tool list, and the wait for one after a missed tool name.
 const refreshTimeout = 15 * time.Second
 
 var errRemoved = errors.New("mcp: server removed")
