@@ -553,10 +553,14 @@ func (m listedMsg) handle(a *actor) {
 		a.startRead(e)
 		return
 	}
-	for _, reply := range e.refreshWaiters {
-		reply <- true
-	}
+	waiters := e.refreshWaiters
 	e.refreshWaiters = nil
+	// A waiter reads the view, so it wakes after the loop publishes the new list.
+	a.after = append(a.after, func() {
+		for _, reply := range waiters {
+			reply <- true
+		}
+	})
 }
 
 // closedMsg reports that a client of name closed.
