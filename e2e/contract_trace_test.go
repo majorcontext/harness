@@ -402,6 +402,7 @@ func TestContractTraceClaudeCodeResponseIDs(t *testing.T) {
 	}
 	frames := []map[string]any{
 		{"type": "system", "subtype": "init", "session_id": "S", "model": "claude-haiku-4-5-20251001", "tools": []string{}},
+		{"type": "stream_event", "event": map[string]any{"type": "message_start", "message": map[string]any{"id": "msg_dropped"}}},
 		text("msg_one", "a"), text("msg_one", "b"), text("msg_two", "c"),
 		{"type": "result", "subtype": "success", "is_error": false, "num_turns": 2, "result": "c", "session_id": "S", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
 	}
@@ -426,7 +427,7 @@ func TestContractTraceClaudeCodeResponseIDs(t *testing.T) {
 			got = append(got, e.Attrs["gen_ai.response.id"])
 		}
 	}
-	if !slices.Equal(got, []any{"msg_one", "msg_two"}) {
-		t.Errorf("gen_ai.response ids = %v, want [msg_one msg_two]", got)
+	if !slices.Equal(got, []any{"msg_dropped", "msg_one", "msg_two"}) {
+		t.Errorf("gen_ai.response ids = %v, want [msg_dropped msg_one msg_two]", got)
 	}
 }

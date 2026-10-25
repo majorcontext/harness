@@ -41,6 +41,7 @@ func (r *run) streamEvent(env envelope) error {
 			r.live = nil
 			return nil
 		}
+		r.addResponseID(ev.Message.ID)
 		if r.pending != nil && r.pendingID != ev.Message.ID {
 			if err := r.flush(); err != nil {
 				return err

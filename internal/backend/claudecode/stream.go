@@ -458,11 +458,15 @@ func (r *run) settleCompaction(status protocol.Status) {
 	}
 }
 
+func (r *run) addResponseID(id string) {
+	if id != "" && !slices.Contains(r.responseIDs, id) {
+		r.responseIDs = append(r.responseIDs, id)
+	}
+}
+
 func (r *run) assistant(env envelope) error {
 	m := decodeMessage(env.Message)
-	if m.ID != "" && !slices.Contains(r.responseIDs, m.ID) {
-		r.responseIDs = append(r.responseIDs, m.ID)
-	}
+	r.addResponseID(m.ID)
 	if m.Usage != nil {
 		r.lastCall = m.Usage
 		r.compactPostTokens = 0
