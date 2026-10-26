@@ -51,7 +51,7 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_skill_with_a_block_scalar_description_loads":                           sameAsServe(),
 	"mcp_skill_loaded_again_refreshes_a_stale_entry_of_a_file":                  sameAsServe(),
 	"mcp_skill_binary_file_is_verified_and_read_as_a_blob":                      sameAsServe(),
-	"mcp_skill_file_of_9_mib_reads_over_sse":                                    sameAsServe(),
+	"mcp_skill_file_over_8_mib_of_base64_reads_over_sse":                        sameAsServe(),
 	"mcp_skill_file_is_read_only_from_the_server_of_the_skill":                  sameAsServe(),
 }
 
@@ -118,10 +118,10 @@ func TestContractMCPSkills(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name: "mcp_skill_file_of_9_mib_reads_over_sse",
+			name: "mcp_skill_file_over_8_mib_of_base64_reads_over_sse",
 			setup: mcpSetup(nil, func() mcpServerDef {
 				d := skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) {
-					s.Blobs = map[string][]byte{"assets/big.bin": make([]byte, 9<<20)}
+					s.Blobs = map[string][]byte{"assets/big.bin": make([]byte, 13<<19)}
 				}))
 				d.sse = true
 				return d

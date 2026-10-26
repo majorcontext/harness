@@ -184,7 +184,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "[binary resource: skill://acme/billing/refunds/assets/big.bin, 9437184 bytes, image/png]",
+              "text": "[binary resource: skill://acme/billing/refunds/assets/big.bin, 6815744 bytes, image/png]",
               "tool_name": "read_mcp_resource",
               "tool_use_id": "toolu#2"
             }
@@ -253,7 +253,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "[binary resource: skill://acme/billing/refunds/assets/big.bin, 9437184 bytes, image/png]"
+            "content": "[binary resource: skill://acme/billing/refunds/assets/big.bin, 6815744 bytes, image/png]"
           }
         ]
       },
