@@ -78,7 +78,7 @@ async function lockStore(store) {
 async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log }) {
   if (transport.worker === false) {
     if (isNode) throw new Error("worker: false replaces the fs and process of Node: use the Worker mode under Node");
-    return startInProcess(transport, { config, proxy: resolveProxy(proxy), fetch: pageFetch, tools, builtinTools, store, log });
+    return startInProcess({ ...transport, module: absolute(transport.module), wasmExec: absolute(transport.wasmExec) }, { config, proxy: resolveProxy(proxy), fetch: pageFetch, tools, builtinTools, store, log });
   }
   if (transport.worker !== true) throw new Error("worker must be true or false");
   const options = {

@@ -1,4 +1,3 @@
-// The in-memory file system for a host that has no real one, such as a Cloudflare Worker.
 import { installFs, Vfs } from "./opfsfs.mjs";
 
 /**
