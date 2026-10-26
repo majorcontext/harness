@@ -40,21 +40,25 @@ const unhandled = [];
 addEventListener("unhandledrejection", (event) => unhandled.push(String(event.reason?.message ?? event.reason)));
 
 // settleAfterClose closes a harness whose model request is pending, then settles the request.
-async function settleAfterClose(start) {
+async function settleAfterClose(start, viaGlobalFetch) {
   let release;
   let started;
   const requested = new Promise((resolve) => (started = resolve));
   const held = new Promise((resolve) => (release = resolve));
-  const h = await start(() => {
+  const heldFetch = () => {
     started();
     return held;
-  });
+  };
+  const original = globalThis.fetch;
+  if (viaGlobalFetch) globalThis.fetch = heldFetch;
+  const h = await start(viaGlobalFetch ? null : heldFetch);
   const c = client(h);
   await c.request("initialize", initialize);
   const { sessionId } = await c.request("session/new", { cwd: "/work", mcpServers: [] });
   c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "wait" }] }).catch(() => {});
   await requested;
   await h.close();
+  globalThis.fetch = original;
   release(new Response("late", { status: 200 }));
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
@@ -71,11 +75,12 @@ export default {
       createHarness({
         transport: wasm({ module: harnessModule, wasmExec: () => import("./wasm_exec.js"), worker: false }),
         config: { model: "mine/m", providers: { mine: { type: "openai-compat", base_url: env.MODEL_URL } } },
-        fetch: pageFetch,
+        fetch: pageFetch ?? undefined,
       });
     // close() resolves only when the module has exited, so a module that stays alive hangs this request.
     await (await start()).close();
-    await settleAfterClose(start);
+    await settleAfterClose(start, false);
+    await settleAfterClose(start, true);
     const h = await start();
     try {
       const c = client(h);

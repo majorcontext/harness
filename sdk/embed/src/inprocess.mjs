@@ -78,7 +78,7 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
     builtinTools,
     defaultDir: workDir,
     proxy,
-    modelFetch: typeof pageFetch === "function" ? guardedFetch(state, pageFetch) : undefined,
+    modelFetch: guardedFetch(state, pageFetch ?? ((url, init) => globalThis.fetch(url, init))),
     tools: tools.map(({ name, description, schema, run }) => ({ name, description, schema, run: async (input, { signal }) => toolResult(await gate(state, Promise.resolve(run(input, { signal })))) })),
     onFrame: (frame) => stream.emit(JSON.parse(frame)),
     onLog: (line) => log?.(line),
