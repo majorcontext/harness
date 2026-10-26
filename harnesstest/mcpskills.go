@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/skill"
 )
@@ -31,10 +33,11 @@ type MCPSkill struct {
 
 func (s MCPSkill) root() string { return "skill://" + s.Path }
 
-// entry is the skill entry that describes files.
 func (s MCPSkill) entry(files map[string]string) mcp.Skill {
 	e := mcp.Skill{URI: s.root() + "/" + skill.Filename, Dynamic: s.Dynamic}
-	e.Frontmatter, _ = skill.Frontmatter(files[skill.Filename])
+	if head, _, err := skill.SplitFrontmatter(files[skill.Filename]); err == nil {
+		_ = yaml.Unmarshal([]byte(head+"\n"), &e.Frontmatter)
+	}
 	if s.Frontmatter != nil {
 		e.Frontmatter = s.Frontmatter
 	}
@@ -106,7 +109,6 @@ func cmpFiles(override, files map[string]string) map[string]string {
 	return out
 }
 
-// skillResources lists every skill file.
 func (h *mcpHandler) skillResources() []mcp.Resource {
 	var out []mcp.Resource
 	for _, s := range h.spec.Skills {
@@ -117,7 +119,6 @@ func (h *mcpHandler) skillResources() []mcp.Resource {
 	return out
 }
 
-// skillFile returns the content that resources/read serves for uri.
 func (h *mcpHandler) skillFile(uri string) (string, bool) {
 	for _, s := range h.spec.Skills {
 		files := cmpFiles(s.Served, s.Files)

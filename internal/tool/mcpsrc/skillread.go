@@ -3,6 +3,7 @@ package mcpsrc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -52,6 +53,11 @@ func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri strin
 		if err == nil {
 			return protocol.ToolResult{Text: string(b)}, true, nil
 		}
+		if _, dirRead := c.ServerCapabilities().SkillsSupport(); e.Dynamic && dirRead && errors.As(err, new(*mcp.RPCError)) {
+			if res, _, derr := s.listDirectory(ctx, c, server, e, uri, nil); derr == nil {
+				return res, true, nil
+			}
+		}
 	}
 	return protocol.ToolResult{}, true, fmt.Errorf("%w. Load the skill again with %s to read its current entry", err, loadName)
 }
@@ -98,8 +104,6 @@ func directory(e mcp.Skill, root, uri string) ([]mcp.Resource, bool) {
 	return out, true
 }
 
-// listDirectory answers a read of a skill directory: from the entry, or for a dynamic skill from
-// resources/directory/read when the server declared it.
 func (s *Source) listDirectory(ctx context.Context, c *mcp.Client, server string, e mcp.Skill, uri string, children []mcp.Resource) (protocol.ToolResult, bool, error) {
 	if e.Dynamic {
 		if _, dirRead := c.ServerCapabilities().SkillsSupport(); !dirRead {

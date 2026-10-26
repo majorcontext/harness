@@ -163,7 +163,6 @@ func (v view) serverText(name string) string {
 	return cutRunes(strings.TrimSpace(v.mem[name].inst), instructionsMax)
 }
 
-// common is the guidance on the resource tools, with the skills that the servers serve.
 func (v view) common() string {
 	if list := v.skillsBlock(); list != "" {
 		return resourcesLine + "\n" + list

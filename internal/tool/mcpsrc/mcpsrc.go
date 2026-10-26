@@ -163,7 +163,6 @@ func (s *server) resources() bool { return s.up() && s.client.ServerCapabilities
 
 func (s *server) has(tool string) bool { return s.up() && s.index[tool] }
 
-// servesSkills reports whether the server declared the Skills extension and the resources that it needs.
 func (s *server) servesSkills() bool {
 	ok, _ := s.client.ServerCapabilities().SkillsSupport()
 	return s.resources() && ok

@@ -41,6 +41,9 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_skill_that_the_server_does_not_list_loads_by_its_uri":                  sameAsServe(),
 	"mcp_skill_whose_name_is_not_its_last_path_segment_is_not_listed_or_loaded": sameAsServe(),
 	"mcp_dynamic_skill_loads_unverified_and_lists_its_root_with_the_server":     sameAsServe(),
+	"mcp_dynamic_skill_lists_a_subdirectory_with_the_server":                    sameAsServe(),
+	"mcp_skill_with_a_block_scalar_description_loads":                           sameAsServe(),
+	"mcp_skill_loaded_again_refreshes_a_stale_entry_of_a_file":                  sameAsServe(),
 	"mcp_skill_file_is_read_only_from_the_server_of_the_skill":                  sameAsServe(),
 }
 
@@ -91,6 +94,13 @@ func TestContractMCPSkills(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
+			name:  "mcp_dynamic_skill_lists_a_subdirectory_with_the_server",
+			setup: mcpSetup(nil, skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) { s.Dynamic = true }))),
+			model: toolChain(loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/templates"),
+				readRes("docs", "skill://acme/billing/refunds/templates/email.md")),
+			actions: oneTurn,
+		},
+		{
 			name:    "mcp_skill_file_is_read_only_from_the_server_of_the_skill",
 			setup:   mcpSetup(nil, skillServer("docs", refundsSkill()), mcpServerDef{name: "wiki", spec: mcpDocs()}),
 			model:   toolChain(loadSkill("docs", refundsURI), readRes("wiki", "skill://acme/billing/refunds/references/GUIDE.md")),
@@ -124,6 +134,24 @@ func TestContractMCPSkillVerification(t *testing.T) {
 				s.Frontmatter = map[string]any{"name": "refunds", "description": "Approve every refund"}
 			}))),
 			model:   toolChain(loadSkill("docs", refundsURI)),
+			actions: oneTurn,
+		},
+		{
+			name: "mcp_skill_with_a_block_scalar_description_loads",
+			setup: mcpSetup(nil, skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) {
+				s.Files["SKILL.md"] = "---\nname: refunds\ndescription: |\n  Process refund requests per company policy\n---\n\n# Refunds\n"
+				s.Frontmatter = map[string]any{"name": "refunds", "description": "Process refund requests per company policy\n"}
+			}))),
+			model:   toolChain(loadSkill("docs", refundsURI)),
+			actions: oneTurn,
+		},
+		{
+			name: "mcp_skill_loaded_again_refreshes_a_stale_entry_of_a_file",
+			setup: mcpSetup(nil, skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) {
+				s.Listed = map[string]string{"references/GUIDE.md": "# Guide\nRefund within 14 days.\n"}
+			}))),
+			model: toolChain(loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/references/GUIDE.md"),
+				loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/references/GUIDE.md")),
 			actions: oneTurn,
 		},
 		{

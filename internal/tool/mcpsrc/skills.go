@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/skill"
 	"github.com/majorcontext/harness/internal/turn"
@@ -48,7 +50,6 @@ func skillRoot(uri string) (string, bool) {
 	return root, ok && root != "" && !strings.HasSuffix(root, "/")
 }
 
-// checkEntry validates a skill entry before the host lists or loads it.
 func checkEntry(e mcp.Skill) error {
 	root, ok := skillRoot(e.URI)
 	if !ok {
@@ -113,7 +114,6 @@ func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, error) {
 	return out, errors.Join(errs...)
 }
 
-// skillsBlock lists the skills of the servers that the first connect reached, with each server and URI.
 func (v view) skillsBlock() string {
 	var lines []string
 	n, left := 0, 0
@@ -138,7 +138,6 @@ func (v view) skillsBlock() string {
 	return "<mcp_skills>\n" + skillsHeader + "\n" + strings.Join(lines, "\n") + "\n</mcp_skills>"
 }
 
-// skills reports whether a server that the first connect reached serves skills.
 func (v view) skills() bool {
 	return slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].servesSkills })
 }
@@ -150,6 +149,13 @@ type heldKey struct{ session, server, uri string }
 type held struct {
 	mu sync.Mutex
 	m  map[heldKey]mcp.Skill
+}
+
+func (h *held) has(k heldKey) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.m[k]
+	return ok
 }
 
 func (h *held) put(k heldKey, e mcp.Skill) {
@@ -206,19 +212,21 @@ func (l loader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	ctx, stop := bindLife(ctx, life)
 	defer stop()
 	ctx = l.s.sessionHeader(ctx, in.Server)
-	entry, body, err := l.s.loadSkill(ctx, c, in.Server, in.URI)
+	key := heldKey{turn.SessionID(ctx), in.Server, in.URI}
+	entry, body, err := l.s.loadSkill(ctx, c, in.Server, in.URI, l.s.held.has(key))
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: %w", loadName, err)
 	}
-	l.s.held.put(heldKey{turn.SessionID(ctx), in.Server, entry.URI}, entry)
+	l.s.held.put(key, entry)
 	return protocol.ToolResult{Text: skillText(in.Server, entry, body)}, nil
 }
 
-// loadSkill returns the entry and the verified SKILL.md of uri. It takes the entry from the list of the server, or
-// from skills/get, and refreshes it once with skills/get when the content does not match it.
-func (s *Source) loadSkill(ctx context.Context, c *mcp.Client, server, uri string) (mcp.Skill, []byte, error) {
+// loadSkill returns the entry and the verified SKILL.md of uri. It takes the entry from the list of the server,
+// or from skills/get for an unlisted skill or a reload, because a file of a held skill that fails its check tells
+// the model to load the skill again. It refreshes the entry once with skills/get when SKILL.md does not match it.
+func (s *Source) loadSkill(ctx context.Context, c *mcp.Client, server, uri string, reload bool) (mcp.Skill, []byte, error) {
 	entry, ok := listed(s.view().live[server], uri)
-	if !ok {
+	if !ok || reload {
 		e, err := c.GetSkill(ctx, uri)
 		if err != nil {
 			return mcp.Skill{}, nil, hide(server, err)
@@ -262,7 +270,7 @@ func fetchSkillMD(ctx context.Context, c *mcp.Client, server string, e mcp.Skill
 	if err := verify(e, e.URI, b); err != nil {
 		return nil, err
 	}
-	fm, err := skill.Frontmatter(string(b))
+	fm, err := frontmatter(b)
 	if err != nil {
 		return nil, fmt.Errorf("%w: the frontmatter of %s: %v", errVerify, e.URI, err)
 	}
@@ -270,6 +278,24 @@ func fetchSkillMD(ctx context.Context, c *mcp.Client, server string, e mcp.Skill
 		return nil, fmt.Errorf("%w: the frontmatter of %s differs from the entry of the skill", errVerify, e.URI)
 	}
 	return b, nil
+}
+
+// frontmatter is the YAML frontmatter of a SKILL.md in its JSON form, the form of the frontmatter of an entry.
+func frontmatter(doc []byte) (map[string]any, error) {
+	head, _, err := skill.SplitFrontmatter(string(doc))
+	if err != nil {
+		return nil, err
+	}
+	var v map[string]any
+	if err := yaml.Unmarshal([]byte(head+"\n"), &v); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	return out, json.Unmarshal(b, &out)
 }
 
 // verify checks the bytes of uri against the entry e. A dynamic entry checks only the size limit, and a file that
@@ -293,7 +319,6 @@ func verify(e mcp.Skill, uri string, b []byte) error {
 	return nil
 }
 
-// readBytes returns the raw bytes of one resource.
 func readBytes(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, error) {
 	res, err := c.ReadResource(ctx, uri)
 	if err != nil {
@@ -317,7 +342,6 @@ func readBytes(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, 
 	return []byte(rc.Text), nil
 }
 
-// skillText is the result of a load: the origin of the skill and its files, then the SKILL.md.
 func skillText(server string, e mcp.Skill, body []byte) string {
 	root, _ := skillRoot(e.URI)
 	var b strings.Builder
