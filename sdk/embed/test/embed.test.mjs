@@ -227,8 +227,10 @@ test("a store directory is exclusive to one harness and keeps the session", asyn
   await h2.close();
 });
 
-test("a transport that is not a Worker is refused", async () => {
-  await assert.rejects(createHarness({ transport: wasm({ ...moduleFiles(), worker: false }) }), /Worker/);
+test("the in-process mode is refused under Node and leaves the globals", async () => {
+  const before = { fs: globalThis.fs, process: globalThis.process };
+  await assert.rejects(createHarness({ transport: wasm({ ...moduleFiles(), worker: false }) }), /Worker mode under Node/);
+  assert.deepEqual({ fs: globalThis.fs, process: globalThis.process }, before);
 });
 
 // failWorker ends the Worker that the next createHarness starts, the way a crash does.

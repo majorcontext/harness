@@ -22,7 +22,7 @@ function describe(err) {
 }
 
 // toolResult maps what run returned to a string or {text, isError}.
-function toolResult(value) {
+export function toolResult(value) {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "object" && typeof value.text === "string") return { text: value.text, isError: Boolean(value.isError) };

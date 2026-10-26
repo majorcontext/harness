@@ -39,7 +39,7 @@ export interface HarnessFs {
 export interface WasmTransport {
   kind: "wasm";
   module: string | URL | ArrayBuffer | ArrayBufferView | WebAssembly.Module;
-  wasmExec: string | URL;
+  wasmExec: string | URL | (() => unknown);
   worker: boolean;
 }
 
@@ -92,7 +92,12 @@ export interface Harness {
 /** The tool set of a session when createHarness gets no builtinTools, before the names of the page tools. */
 export const defaultBuiltinTools: readonly string[];
 
-/** wasm names the WebAssembly transport. worker must be true. */
+/**
+ * wasm names the WebAssembly transport. By default the module runs in a Worker. With worker false it runs in the current
+ * JavaScript isolate on an in-memory file system, for a host that cannot start a Worker, such as a Cloudflare Worker: the
+ * store stays in memory (store.persist and store.dir reject), h.fs is undefined, and wasmExec may be a function that loads
+ * wasm_exec.js, for example () => import("./wasm_exec.js"). The mode replaces globalThis.fs, process, and path.
+ */
 export function wasm(options: {
   module: WasmTransport["module"];
   wasmExec: WasmTransport["wasmExec"];

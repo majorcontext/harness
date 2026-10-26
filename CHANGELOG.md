@@ -12,6 +12,8 @@ First tagged release.
 
 - **GPT-6.1 Terra on the ChatGPT backend** (`internal/modelmeta`) — the static codex catalog lists `gpt-6.1-terra`, with its models.dev name, efforts, and context window. A `codex/gpt-6.1-terra` session runs on the known window instead of the default one.
 
+- **WebAssembly module in a Cloudflare Worker** (`sdk/embed`, `cmd/harness-wasm`) — `wasm({module, wasmExec, worker: false})` runs the module in the current JavaScript isolate on an in-memory file system, for a host that cannot start a Worker. `module` may be a compiled `WebAssembly.Module`, and `wasmExec` may be a function that loads `wasm_exec.js`. The store stays in memory: `store.persist` and `store.dir` reject. `@majorcontext/harness-embed/memoryfs` exports `installMemoryFs()` for a host that loads the module itself. A host that installs no file system now gets `invalid_request` with a reason that says so and names `installMemoryFs`, not `cwd is not a directory`. A new CI job runs one ACP turn under `workerd`.
+
 - **Session headers on injected ChatGPT entries** (`internal/provider/openai`, `internal/backend`) — an entry with `auth: "injected"` and `models_from: "chatgpt"` sends the hash of the session id as `session_id` and `x-client-request-id`, so a request that no response chain covers reads the prompt cache of the ChatGPT backend. The raw session id never leaves the process.
 
 - **Message ids on the Claude Code chat span** (`internal/backend/claudecode`, `internal/turn`) — the `chat` span of a Claude Code turn has one `gen_ai.response` event for each distinct model call of the turn. The event carries the Anthropic message id as `gen_ai.response.id`. The `turn_metrics` line does not change.

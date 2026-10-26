@@ -2,6 +2,7 @@
 // worker_threads Worker), and the page speaks ACP to it by messages.
 import { pageBridge } from "./bridge.mjs";
 import { spawnWorker } from "./endpoint.mjs";
+import { startInProcess } from "./inprocess.mjs";
 import { acpStream } from "./stream.mjs";
 
 const isNode = typeof globalThis.process?.versions?.node === "string" && typeof globalThis.WorkerGlobalScope === "undefined";
@@ -9,8 +10,11 @@ const isNode = typeof globalThis.process?.versions?.node === "string" && typeof 
 /**
  * wasm names the WebAssembly transport. module is the harness module: a URL,
  * a path (Node), an ArrayBuffer, or a WebAssembly.Module. wasmExec is the URL
- * or path of the wasm_exec.js of the same Go version. The module runs in a
- * Worker; worker must be true.
+ * or path of the wasm_exec.js of the same Go version. By default the module
+ * runs in a Worker. With worker false it runs in the current JavaScript isolate
+ * on an in-memory file system, for a host that cannot start a Worker, such as a
+ * Cloudflare Worker: the store stays in memory, and wasmExec may also be a
+ * function that loads wasm_exec.js, for example () => import("./wasm_exec.js").
  */
 export function wasm({ module, wasmExec, worker = true }) {
   return { kind: "wasm", module, wasmExec, worker, supports: allOptions, defaultTools: defaultBuiltinTools, start: startWasm };
@@ -66,7 +70,11 @@ async function lockStore(store) {
 }
 
 async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log }) {
-  if (transport.worker !== true) throw new Error("the wasm transport runs in a Worker: set worker: true");
+  if (transport.worker === false) {
+    if (isNode) throw new Error("worker: false replaces the fs and process of Node: use the Worker mode under Node");
+    return startInProcess(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log });
+  }
+  if (transport.worker !== true) throw new Error("worker must be true or false");
   const options = {
     config,
     builtinTools,
