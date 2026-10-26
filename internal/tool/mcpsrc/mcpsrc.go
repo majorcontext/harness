@@ -36,6 +36,7 @@ const (
 	controlName    = ToolName
 	listName       = "list_mcp_resources"
 	readName       = "read_mcp_resource"
+	loadName       = "load_mcp_skill"
 	connectTimeout = 15 * time.Second
 	// requestMargin keeps the request bound of the client after the tool
 	// limit, so the limit ends a tool call first.
@@ -76,7 +77,7 @@ func (b *budget) fits(s protocol.ToolSpec) bool {
 
 // Reserved reports whether name belongs to the tools of a Source.
 func Reserved(name string) bool {
-	return name == controlName || name == listName || name == readName || strings.HasPrefix(name, prefix)
+	return name == controlName || name == listName || name == readName || name == loadName || strings.HasPrefix(name, prefix)
 }
 
 // Source connects every configured server on first use and gives the tools
@@ -107,6 +108,7 @@ type Source struct {
 	done      chan struct{}
 	ready     chan struct{}
 	snap      atomic.Pointer[snapshot]
+	held      held
 	workers   sync.WaitGroup
 	startOnce sync.Once
 	closeOnce sync.Once
@@ -122,6 +124,8 @@ type memory struct {
 	base            map[string]bool
 	inst            string
 	resources       bool
+	servesSkills    bool
+	skills          []mcp.Skill
 	sessionIDHeader bool
 	// up is true once the server connected.
 	up bool
@@ -132,6 +136,9 @@ type server struct {
 	tools  []mcp.Tool
 	index  map[string]bool
 	limit  time.Duration
+	// skills are the valid entries of skills/list; skillsErr names the entries that it left out.
+	skills    []mcp.Skill
+	skillsErr error
 }
 
 func newServer(c *mcp.Client, tools []mcp.Tool, limit time.Duration) *server {
@@ -155,6 +162,12 @@ func (s *server) clientOf() *mcp.Client {
 func (s *server) resources() bool { return s.up() && s.client.ServerCapabilities().Resources != nil }
 
 func (s *server) has(tool string) bool { return s.up() && s.index[tool] }
+
+// servesSkills reports whether the server declared the Skills extension and the resources that it needs.
+func (s *server) servesSkills() bool {
+	ok, _ := s.client.ServerCapabilities().SkillsSupport()
+	return s.resources() && ok
+}
 
 // New returns the Source of cfg.MCPServers. It dials nothing. A nil log is slog.Default(). Every client offers
 // workDir as its root; an empty workDir offers none. Close ends its goroutine.
@@ -217,7 +230,11 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 		return nil, err
 	}
 	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
-	return newServer(c, tools, spec.ToolTimeout()), nil
+	sv := newServer(c, tools, spec.ToolTimeout())
+	if sv.servesSkills() {
+		sv.skills, sv.skillsErr = listSkills(ctx, c)
+	}
+	return sv, nil
 }
 
 // Toolset returns the mcp tool, the resource tools when a server that the
@@ -308,6 +325,9 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	}
 	if v.resources() {
 		head = append(head, slices.DeleteFunc([]turn.Tool{lister{s}, reader{s}}, func(t turn.Tool) bool { return !ok(t.Spec().Name) })...)
+	}
+	if v.skills() && ok(loadName) {
+		head = append(head, loader{s})
 	}
 	ts.Tools = append(head, ts.Tools...)
 	ts.MCPInstructions = v.perServer()

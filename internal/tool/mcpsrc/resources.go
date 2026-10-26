@@ -147,6 +147,12 @@ func (r reader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	ctx, stop := bindLife(ctx, life)
 	defer stop()
 	ctx = r.s.sessionHeader(ctx, in.Server)
+	if res, handled, err := r.s.skillRead(ctx, c, in.Server, in.URI); handled {
+		if err != nil {
+			return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, err)
+		}
+		return res, nil
+	}
 	res, err := c.ReadResource(ctx, in.URI)
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, hide(in.Server, err))

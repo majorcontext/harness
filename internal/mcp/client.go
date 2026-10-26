@@ -84,7 +84,7 @@ func NewClient(t Transport, opts Options) (*Client, error) {
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	params := initializeParams{
 		ProtocolVersion: LatestProtocolVersion,
-		Capabilities:    ClientCapabilities{},
+		Capabilities:    ClientCapabilities{Extensions: map[string]json.RawMessage{SkillsExtension: json.RawMessage(`{}`)}},
 		ClientInfo:      c.opts.ClientInfo,
 	}
 	if c.opts.Root != "" {

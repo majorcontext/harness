@@ -51,6 +51,31 @@ func SplitFrontmatter(doc string) (frontmatter, body string, err error) {
 	return splitFrontmatter(doc)
 }
 
+// Frontmatter parses the frontmatter of a SKILL.md document into its JSON
+// form: each scalar field is a string, and metadata is a map of strings.
+func Frontmatter(doc string) (map[string]any, error) {
+	fm, _, err := splitFrontmatter(doc)
+	if err != nil {
+		return nil, err
+	}
+	fields, meta, err := parseFrontmatter(fm)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(fields)+1)
+	for k, v := range fields {
+		out[k] = v
+	}
+	if meta != nil {
+		m := make(map[string]any, len(meta))
+		for k, v := range meta {
+			m[k] = v
+		}
+		out["metadata"] = m
+	}
+	return out, nil
+}
+
 // ParseFrontmatterFields parses frontmatter scalars with the supplied allowed
 // keys. It uses the same parser as Agent Skills and stops at the first
 // problem, an unknown key included.

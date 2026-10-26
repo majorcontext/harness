@@ -16,11 +16,12 @@ type Implementation struct {
 }
 
 // ClientCapabilities describes optional client-served features. This
-// package implements roots only; it implements neither sampling nor
-// elicitation.
+// package implements roots and the Skills extension only; it implements
+// neither sampling nor elicitation.
 type ClientCapabilities struct {
 	Roots        *struct{}                  `json:"roots,omitempty"`
 	Experimental map[string]json.RawMessage `json:"experimental,omitempty"`
+	Extensions   map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
 // ToolsCapability describes the server's tools capability.
@@ -39,6 +40,7 @@ type ServerCapabilities struct {
 	Logging      map[string]json.RawMessage `json:"logging,omitempty"`
 	Completions  map[string]json.RawMessage `json:"completions,omitempty"`
 	Experimental map[string]json.RawMessage `json:"experimental,omitempty"`
+	Extensions   map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
 // initializeParams is the "initialize" request payload.

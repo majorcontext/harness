@@ -125,7 +125,7 @@ func (v view) instructions(ok func(string) bool) string {
 		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), listNames(tools), tag.Replace(text))
 	}
 	if v.resources() {
-		return "<mcp_instructions>\n" + resourcesLine + b.String() + "\n</mcp_instructions>"
+		return "<mcp_instructions>\n" + v.common() + b.String() + "\n</mcp_instructions>"
 	}
 	if b.Len() == 0 {
 		return ""
@@ -139,7 +139,7 @@ func (v view) instructions(ok func(string) bool) string {
 func (v view) perServer() turn.MCPInstructions {
 	var out turn.MCPInstructions
 	if v.resources() {
-		out.Common = resourcesLine
+		out.Common = v.common()
 	}
 	for _, name := range v.reached {
 		if m := v.mem[name]; m != nil && m.sessionIDHeader {
@@ -161,6 +161,14 @@ func (v view) perServer() turn.MCPInstructions {
 // serverText is the instructions of the server name that the first connect froze, cut at instructionsMax.
 func (v view) serverText(name string) string {
 	return cutRunes(strings.TrimSpace(v.mem[name].inst), instructionsMax)
+}
+
+// common is the guidance on the resource tools, with the skills that the servers serve.
+func (v view) common() string {
+	if list := v.skillsBlock(); list != "" {
+		return resourcesLine + "\n" + list
+	}
+	return resourcesLine
 }
 
 // resources reports whether a server that the first connect reached serves resources.
