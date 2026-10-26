@@ -274,7 +274,11 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, n int, name 
 		}
 	}
 	chunk(obj{}, finish)
-	tail, _ := json.Marshal(obj{"id": id, "object": "chat.completion.chunk", "choices": []obj{}, "usage": obj{"prompt_tokens": usage.Input, "completion_tokens": usage.Output}})
+	wireUsage := obj{"prompt_tokens": usage.Input, "completion_tokens": usage.Output}
+	if usage.Cached > 0 {
+		wireUsage["prompt_tokens_details"] = obj{"cached_tokens": usage.Cached}
+	}
+	tail, _ := json.Marshal(obj{"id": id, "object": "chat.completion.chunk", "choices": []obj{}, "usage": wireUsage})
 	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", tail)
 	f.Flush()
 }

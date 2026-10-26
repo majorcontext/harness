@@ -22,6 +22,7 @@ func TestContractRuntimeTurn(t *testing.T) {
 		run  func(t *testing.T)
 	}{
 		{"wait_returns_the_stop_reason_and_the_usage_of_the_turn", rowWaitReturnsTheStopReasonAndTheUsageOfTheTurn},
+		{"wait_splits_the_cached_prompt_tokens_that_the_chat_usage_reports", rowWaitSplitsTheCachedPromptTokensThatTheChatUsageReports},
 		{"events_end_with_the_turn_that_took_the_input", rowEventsEndWithTheTurnThatTookTheInput},
 		{"a_repeated_input_id_returns_the_turn_of_the_first_receipt", rowARepeatedInputIDReturnsTheTurnOfTheFirstReceipt},
 		{"turn_of_an_earlier_receipt_waits_on_a_reopened_session", rowTurnOfAnEarlierReceiptWaitsOnAReopenedSession},
@@ -92,6 +93,14 @@ func rowWaitReturnsTheStopReasonAndTheUsageOfTheTurn(t *testing.T) {
 	}
 	if res.Usage.OutputTokens != 4 || res.Usage.InputTokens != 7 {
 		t.Errorf("usage = %+v, want 7 in and 4 out", res.Usage)
+	}
+}
+
+func rowWaitSplitsTheCachedPromptTokensThatTheChatUsageReports(t *testing.T) {
+	_, s, _ := turnRuntime(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "done", Usage: harnesstest.Usage{Input: 100, Output: 4, Cached: 80}}})
+	res := waitTurn(t, promptTurn(t, s, textInput("a", "go")))
+	if res.Usage.InputTokens != 20 || res.Usage.CacheReadTokens != 80 || res.Usage.OutputTokens != 4 {
+		t.Errorf("usage = %+v, want 20 uncached in, 80 cache read, and 4 out", res.Usage)
 	}
 }
 
