@@ -164,8 +164,12 @@ func (s *server) resources() bool { return s.up() && s.client.ServerCapabilities
 func (s *server) has(tool string) bool { return s.up() && s.index[tool] }
 
 func (s *server) servesSkills() bool {
-	ok, _ := s.client.ServerCapabilities().SkillsSupport()
-	return s.resources() && ok
+	return s.resources() && servesSkills(s.client)
+}
+
+func servesSkills(c *mcp.Client) bool {
+	ok, _ := c.ServerCapabilities().SkillsSupport()
+	return ok
 }
 
 // New returns the Source of cfg.MCPServers. It dials nothing. A nil log is slog.Default(). Every client offers

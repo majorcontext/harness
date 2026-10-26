@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf16"
 
 	"gopkg.in/yaml.v3"
 
@@ -29,8 +30,8 @@ const (
 	maxSkillBytes = 16 << 20
 )
 
-// The skill list in the MCP segment stops at listMax runes, because a backend that owns the loop gets it as
-// server instructions, which its CLI cuts at 4096 UTF-16 code units.
+// The skill list in the MCP segment stops at listMax UTF-16 code units, with its fixed text, because a backend that
+// owns the loop gets it in server instructions, which its CLI cuts at 4096 units.
 const (
 	listMax        = 3500
 	descriptionMax = 300
@@ -115,28 +116,39 @@ func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, error) {
 }
 
 func (v view) skillsBlock() string {
-	var lines []string
-	n, left := 0, 0
+	const open, end = "<mcp_skills>\n" + skillsHeader + "\n", "</mcp_skills>"
+	more := func(n int) string {
+		return fmt.Sprintf("%d more skills are not listed. %s lists the skill:// files of each server.\n", n, listName)
+	}
+	used := units(open) + units(end) + units(more(1<<20))
+	var b strings.Builder
+	listed, left := 0, 0
 	for _, name := range v.reached {
 		for _, s := range v.mem[name].skills {
 			desc, _ := s.Frontmatter["description"].(string)
-			line := fmt.Sprintf(`<skill server="%s" uri="%s" name="%s">%s</skill>`, attr(name), attr(s.URI),
+			line := fmt.Sprintf("<skill server=\"%s\" uri=\"%s\" name=\"%s\">%s</skill>\n", attr(name), attr(s.URI),
 				attr(fmt.Sprint(s.Frontmatter["name"])), tag.Replace(cutRunes(strings.TrimSpace(desc), descriptionMax)))
-			if n += len([]rune(line)) + 1; n > listMax {
+			if left > 0 || used+units(line) > listMax {
 				left++
 				continue
 			}
-			lines = append(lines, line)
+			used += units(line)
+			listed++
+			b.WriteString(line)
 		}
 	}
-	if len(lines)+left == 0 {
+	if listed+left == 0 {
 		return ""
 	}
 	if left > 0 {
-		lines = append(lines, fmt.Sprintf("%d more skills are not listed. %s lists the skill:// files of each server.", left, listName))
+		b.WriteString(more(left))
 	}
-	return "<mcp_skills>\n" + skillsHeader + "\n" + strings.Join(lines, "\n") + "\n</mcp_skills>"
+	return open + b.String() + end
 }
+
+// units is the length of s in UTF-16 code units, the unit in which the CLI of a backend that owns the loop cuts
+// server instructions.
+func units(s string) int { return len(utf16.Encode([]rune(s))) }
 
 func (v view) skills() bool {
 	return slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].servesSkills })
@@ -203,7 +215,7 @@ func (l loader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 		return protocol.ToolResult{}, fmt.Errorf(`%s: requires "server" and "uri" arguments`, loadName)
 	}
 	c, life, err := l.s.resourceClient(in.Server)
-	if err == nil && !l.s.view().live[in.Server].servesSkills() {
+	if err == nil && !servesSkills(c) {
 		err = fmt.Errorf("mcp: server %q does not serve skills", in.Server)
 	}
 	if err != nil {

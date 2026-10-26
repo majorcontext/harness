@@ -297,10 +297,8 @@ func TestContractClaudeCodePlugins(t *testing.T) {
 // claudeMCPRows are the runtime rows of the MCP rows of the Claude Code lane
 // that runtimeRows does not list.
 var claudeMCPRows = map[string]runtimeRow{
-	"claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one":     sameAsServe(),
-	"claudecode_mcp_server_with_no_allowed_tool_keeps_its_instructions":      sameAsServe(),
-	"claudecode_mcp_skills_reach_the_cli_in_the_harness_server_instructions": sameAsServe(),
-	"claudecode_mcp_skill_loads_through_the_harness_endpoint":                sameAsServe(),
+	"claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one": sameAsServe(),
+	"claudecode_mcp_server_with_no_allowed_tool_keeps_its_instructions":  sameAsServe(),
 }
 
 func TestContractClaudeCodeMCPServers(t *testing.T) {
@@ -339,23 +337,6 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 			create{as: "a", allowed: []string{"bash", "mcp__alpha__forecast"}}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
 			claudeServerInstructions{as: "a", has: map[string]string{"zeta": "Call forecast before alerts."}},
 		},
-	}, {
-		name: "claudecode_mcp_skills_reach_the_cli_in_the_harness_server_instructions",
-		driver: func(t *testing.T, h host, modelURL string) driver {
-			cfg := mcpSetup(nil, skillServer("docs", refundsSkill()))(t, map[string]any{})
-			return claudeLane{mode: "normal", callTool: "server_instructions", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
-		},
-		actions: withActions(claudeOneTurn, claudeServerInstructions{as: "a", has: map[string]string{
-			"harness": `<skill server="docs" uri="skill://acme/billing/refunds/SKILL.md" name="refunds">Process refund requests per company policy</skill>`,
-		}}),
-	}, {
-		name: "claudecode_mcp_skill_loads_through_the_harness_endpoint",
-		driver: func(t *testing.T, h host, modelURL string) driver {
-			cfg := mcpSetup(nil, skillServer("docs", refundsSkill()))(t, map[string]any{})
-			return claudeLane{mode: "normal", callTool: "load_mcp_skill", callArgs: map[string]any{"server": "docs", "uri": refundsURI},
-				mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
-		},
-		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}})
 }
 

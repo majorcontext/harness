@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -32,8 +34,11 @@ func readRes(server, uri string) harnesstest.ToolCall {
 	return ftTool("read_mcp_resource", ftArgs("server", server, "uri", uri))
 }
 
-// mcpSkillRows are the runtime rows of TestContractMCPSkills and TestContractMCPSkillVerification.
+// mcpSkillRows are the runtime rows of the skill tests of this file.
 var mcpSkillRows = map[string]runtimeRow{
+	"claudecode_mcp_skills_reach_the_cli_in_the_harness_server_instructions":    sameAsServe(),
+	"claudecode_long_unicode_skill_list_fits_the_cli_cut_with_its_count":        sameAsServe(),
+	"claudecode_mcp_skill_loads_through_the_harness_endpoint":                   sameAsServe(),
 	"mcp_skills_are_listed_and_a_skill_loads_and_reads_its_files_on_demand":     sameAsServe(),
 	"mcp_skill_whose_content_does_not_match_its_entry_does_not_load":            sameAsServe(),
 	"mcp_skill_with_a_stale_listed_entry_loads_from_its_current_entry":          sameAsServe(),
@@ -161,4 +166,40 @@ func TestContractMCPSkillVerification(t *testing.T) {
 			actions: withTurn(expectSystem{req: 1, lacks: []string{"<mcp_skills>"}}),
 		},
 	})
+}
+
+func TestContractClaudeCodeMCPSkills(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name: "claudecode_mcp_skills_reach_the_cli_in_the_harness_server_instructions",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := mcpSetup(nil, skillServer("docs", refundsSkill()))(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "server_instructions", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeServerInstructions{as: "a", has: map[string]string{
+			"harness": `<skill server="docs" uri="skill://acme/billing/refunds/SKILL.md" name="refunds">Process refund requests per company policy</skill>`,
+		}}),
+	}, {
+		name: "claudecode_long_unicode_skill_list_fits_the_cli_cut_with_its_count",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			var skills []harnesstest.MCPSkill
+			for i := range 20 {
+				desc := strings.Repeat("\U0001F4B8", 300)
+				skills = append(skills, harnesstest.MCPSkill{Path: fmt.Sprintf("team%d/refunds", i),
+					Files: map[string]string{"SKILL.md": "---\nname: refunds\ndescription: " + desc + "\n---\n"}})
+			}
+			cfg := mcpSetup(nil, skillServer("docs", skills...))(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "server_instructions", mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeServerInstructions{as: "a", has: map[string]string{
+			"harness": "more skills are not listed. list_mcp_resources lists the skill:// files of each server.",
+		}}),
+	}, {
+		name: "claudecode_mcp_skill_loads_through_the_harness_endpoint",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			cfg := mcpSetup(nil, skillServer("docs", refundsSkill()))(t, map[string]any{})
+			return claudeLane{mode: "normal", callTool: "load_mcp_skill", callArgs: map[string]any{"server": "docs", "uri": refundsURI},
+				mcp: cfg["mcp_servers"].(map[string]any)}.newDriver(t, h, modelURL)
+		},
+		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
+	}})
 }
