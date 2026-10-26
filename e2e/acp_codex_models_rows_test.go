@@ -31,8 +31,8 @@ func acpCodexGroup(want ...string) acpCheck {
 
 func acpStaticCodexModels(t *testing.T, c *acpConn) {
 	t.Helper()
-	if got := len(acpGroups(t, acpNewOptions(c)[0])["codex"].order); got != 8 {
-		t.Errorf("the model option lists %d codex models, want the 8 static ones", got)
+	if got := len(acpGroups(t, acpNewOptions(c)[0])["codex"].order); got != 9 {
+		t.Errorf("the model option lists %d codex models, want the 9 static ones", got)
 	}
 }
 

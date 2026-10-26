@@ -417,8 +417,8 @@ var acpConfigScenarios = []acpScenario{
 			acpSetConfig{as: "a", id: "model", value: "codex/gpt-6-luna"},
 			acpCheck(func(t *testing.T, c *acpConn) {
 				groups := acpGroups(t, acpNewOptions(c)[0])
-				if got := len(groups["codex"].values); got != 8 || len(groups["anthropic"].values) == 0 {
-					t.Errorf("the model option lists %d codex and %d anthropic values, want the 8 codex models and the anthropic models", got, len(groups["anthropic"].values))
+				if got := len(groups["codex"].values); got != 9 || len(groups["anthropic"].values) == 0 {
+					t.Errorf("the model option lists %d codex and %d anthropic values, want the 9 codex models and the anthropic models", got, len(groups["anthropic"].values))
 				}
 			}),
 		},
