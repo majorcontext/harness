@@ -45,6 +45,7 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_skill_with_a_stale_listed_entry_loads_from_its_current_entry":          sameAsServe(),
 	"mcp_skill_whose_frontmatter_differs_from_its_entry_does_not_load":          sameAsServe(),
 	"mcp_skill_that_the_server_does_not_list_loads_by_its_uri":                  sameAsServe(),
+	"mcp_skill_listed_beyond_page_100_checks_its_files":                         sameAsServe(),
 	"mcp_skill_whose_name_is_not_its_last_path_segment_is_not_listed_or_loaded": sameAsServe(),
 	"mcp_dynamic_skill_loads_unverified_and_lists_its_root_with_the_server":     sameAsServe(),
 	"mcp_dynamic_skill_lists_a_subdirectory_with_the_server":                    sameAsServe(),
@@ -181,6 +182,21 @@ func TestContractMCPSkillVerification(t *testing.T) {
 			}))),
 			model: toolChain(loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/references/GUIDE.md"),
 				loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/references/GUIDE.md")),
+			actions: oneTurn,
+		},
+		{
+			name: "mcp_skill_listed_beyond_page_100_checks_its_files",
+			setup: mcpSetup(nil, func() mcpServerDef {
+				var skills []harnesstest.MCPSkill
+				for n := range 101 {
+					skills = append(skills, withSkill(func(s *harnesstest.MCPSkill) { s.Path = fmt.Sprintf("s%03d/refunds", n) }))
+				}
+				skills[100].Served = map[string]string{"references/GUIDE.md": "# Guide\nRefund always.\n"}
+				d := skillServer("docs", skills...)
+				d.spec.PageSize = 1
+				return d
+			}()),
+			model:   toolChain(readRes("docs", "skill://s100/refunds/references/GUIDE.md")),
 			actions: oneTurn,
 		},
 		{

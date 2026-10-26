@@ -15,7 +15,6 @@ const (
 	methodSkillsList        = "skills/list"
 	methodSkillsGet         = "skills/get"
 	methodResourcesDirRead  = "resources/directory/read"
-	maxListAllSkillsPages   = 100
 	dynamicSkillResources   = "dynamic"
 	directoryReadSettingKey = "directoryRead"
 )
@@ -93,15 +92,16 @@ func (c ServerCapabilities) SkillsSupport() (skills, directoryRead bool) {
 	return true, read
 }
 
-// ListAllSkills reads every page of skills/list. An entry that does not
-// decode is left out and its error joins the returned one, so the caller
-// keeps the valid entries.
+// ListAllSkills reads every page of skills/list until a page has no cursor or
+// repeats one; the deadline of ctx bounds a server that never stops. An entry
+// that does not decode is left out and its error joins the returned one, so
+// the caller keeps the valid entries.
 func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, error) {
 	var out []Skill
 	var bad []error
 	seen := map[string]bool{}
 	cursor := ""
-	for range maxListAllSkillsPages {
+	for {
 		var page ListSkillsResult
 		if err := c.request(ctx, methodSkillsList, listToolsParams{Cursor: cursor}, &page); err != nil {
 			return out, fmt.Errorf("mcp: skills/list: %w", err)
@@ -122,7 +122,6 @@ func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, error) {
 		}
 		seen[page.NextCursor], cursor = true, page.NextCursor
 	}
-	return out, fmt.Errorf("mcp: skills/list: exceeded %d pages without terminating", maxListAllSkillsPages)
 }
 
 // GetSkill reads the entry of the skill whose SKILL.md is uri.

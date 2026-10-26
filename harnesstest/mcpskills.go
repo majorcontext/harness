@@ -65,13 +65,13 @@ func (h *mcpHandler) skillMethod(method string, params json.RawMessage) (any, *m
 	_ = json.Unmarshal(params, &p)
 	switch method {
 	case "skills/list":
+		listed := slices.DeleteFunc(slices.Clone(h.spec.Skills), func(s MCPSkill) bool { return s.Unlisted })
+		start, end, next := h.page(params, len(listed))
 		var out []mcp.Skill
-		for _, s := range h.spec.Skills {
-			if !s.Unlisted {
-				out = append(out, s.entry(cmpFiles(s.Listed, s.Files)))
-			}
+		for _, s := range listed[start:end] {
+			out = append(out, s.entry(cmpFiles(s.Listed, s.Files)))
 		}
-		return map[string]any{"skills": out}, nil
+		return map[string]any{"skills": out, "nextCursor": next}, nil
 	case "skills/get":
 		for _, s := range h.spec.Skills {
 			if s.root()+"/"+skill.Filename == p.URI {
