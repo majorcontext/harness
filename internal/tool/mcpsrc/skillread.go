@@ -21,7 +21,7 @@ const dirMimeType = "inode/directory"
 // handled is false for any other URI, which reads as an ordinary resource. A file of a skill that the session
 // loaded from another server is refused, so a skill never makes a read from a server other than its own.
 func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri string) (res protocol.ToolResult, handled bool, err error) {
-	byServer := s.held.containing(turn.SessionID(ctx), uri)
+	byServer := s.root().held.containing(turn.SessionID(ctx), uri)
 	e, isHeld := byServer[server]
 	if !isHeld {
 		for _, other := range slices.Sorted(maps.Keys(byServer)) {
@@ -47,8 +47,12 @@ func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri strin
 		err = fmt.Errorf("%w: %s is not in the entry of the skill %s that this session loaded", errVerify, uri, e.URI)
 	default:
 		var b []byte
-		if b, err = readBytes(ctx, c, server, uri); err == nil {
+		var rc mcp.ResourceContents
+		if b, rc, err = readContents(ctx, c, server, uri); err == nil {
 			err = verify(e, uri, b)
+		}
+		if err == nil && rc.Blob != nil {
+			return protocol.ToolResult{Text: binary("binary resource: "+uri, *rc.Blob, rc.MimeType)}, true, nil
 		}
 		if err == nil {
 			return protocol.ToolResult{Text: string(b)}, true, nil

@@ -351,8 +351,8 @@ func (h *mcpHandler) readResource(params json.RawMessage, auth, sessionIDHeader 
 		}
 		return mcp.ReadResourceResult{Contents: []mcp.ResourceContents{c}}, nil
 	}
-	if text, ok := h.skillFile(p.URI); ok {
-		return mcp.ReadResourceResult{Contents: []mcp.ResourceContents{{URI: p.URI, Text: text}}}, nil
+	if c, ok := h.skillFile(p.URI); ok {
+		return mcp.ReadResourceResult{Contents: []mcp.ResourceContents{c}}, nil
 	}
 	return nil, &mcp.RPCError{Code: -32002, Message: "resource not found: " + p.URI}
 }

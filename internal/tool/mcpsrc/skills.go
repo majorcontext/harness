@@ -156,6 +156,15 @@ func (v view) skills() bool {
 
 type heldKey struct{ session, server, uri string }
 
+// root is the Source of the runtime. It holds the entries of every session, because the Source of one session
+// ends when the session is released, and the session can open again in the same process.
+func (s *Source) root() *Source {
+	for s.parent != nil {
+		s = s.parent
+	}
+	return s
+}
+
 // held holds the entry of each skill that a session loaded, so that a read of a skill file resolves to the entry
 // that the session acts on.
 type held struct {
@@ -225,11 +234,11 @@ func (l loader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	defer stop()
 	ctx = l.s.sessionHeader(ctx, in.Server)
 	key := heldKey{turn.SessionID(ctx), in.Server, in.URI}
-	entry, body, err := l.s.loadSkill(ctx, c, in.Server, in.URI, l.s.held.has(key))
+	entry, body, err := l.s.loadSkill(ctx, c, in.Server, in.URI, l.s.root().held.has(key))
 	if err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: %w", loadName, err)
 	}
-	l.s.held.put(key, entry)
+	l.s.root().held.put(key, entry)
 	return protocol.ToolResult{Text: skillText(in.Server, entry, body)}, nil
 }
 
@@ -332,26 +341,32 @@ func verify(e mcp.Skill, uri string, b []byte) error {
 }
 
 func readBytes(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, error) {
+	b, _, err := readContents(ctx, c, server, uri)
+	return b, err
+}
+
+// readContents returns the raw bytes of one resource and the item that holds them.
+func readContents(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, mcp.ResourceContents, error) {
 	res, err := c.ReadResource(ctx, uri)
 	if err != nil {
-		return nil, hide(server, err)
+		return nil, mcp.ResourceContents{}, hide(server, err)
 	}
 	i := slices.IndexFunc(res.Contents, func(rc mcp.ResourceContents) bool { return rc.URI == uri })
 	if i < 0 && len(res.Contents) == 1 {
 		i = 0
 	}
 	if i < 0 {
-		return nil, fmt.Errorf("%w: the server returned no content for %s", errVerify, uri)
+		return nil, mcp.ResourceContents{}, fmt.Errorf("%w: the server returned no content for %s", errVerify, uri)
 	}
 	rc := res.Contents[i]
 	if rc.Blob != nil {
 		b, err := base64.StdEncoding.DecodeString(*rc.Blob)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s is not valid base64", errVerify, uri)
+			return nil, rc, fmt.Errorf("%w: %s is not valid base64", errVerify, uri)
 		}
-		return b, nil
+		return b, rc, nil
 	}
-	return []byte(rc.Text), nil
+	return []byte(rc.Text), rc, nil
 }
 
 func skillText(server string, e mcp.Skill, body []byte) string {

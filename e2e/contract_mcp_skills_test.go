@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -49,6 +50,7 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_dynamic_skill_lists_a_subdirectory_with_the_server":                    sameAsServe(),
 	"mcp_skill_with_a_block_scalar_description_loads":                           sameAsServe(),
 	"mcp_skill_loaded_again_refreshes_a_stale_entry_of_a_file":                  sameAsServe(),
+	"mcp_skill_binary_file_is_verified_and_read_as_a_blob":                      sameAsServe(),
 	"mcp_skill_file_is_read_only_from_the_server_of_the_skill":                  sameAsServe(),
 }
 
@@ -103,6 +105,15 @@ func TestContractMCPSkills(t *testing.T) {
 			setup: mcpSetup(nil, skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) { s.Dynamic = true }))),
 			model: toolChain(loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/templates"),
 				readRes("docs", "skill://acme/billing/refunds/templates/email.md")),
+			actions: oneTurn,
+		},
+		{
+			name: "mcp_skill_binary_file_is_verified_and_read_as_a_blob",
+			setup: mcpSetup(nil, skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) {
+				png, _ := base64.StdEncoding.DecodeString(mcpPNG)
+				s.Blobs = map[string][]byte{"assets/logo.png": png}
+			}))),
+			model:   toolChain(loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/assets/logo.png")),
 			actions: oneTurn,
 		},
 		{

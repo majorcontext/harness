@@ -2,6 +2,7 @@ package harnesstest
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"maps"
@@ -19,11 +20,12 @@ import (
 // content, and the entry lists the size and SHA-256 digest of each. Served replaces the content that
 // resources/read returns for a path, and Listed replaces the content that the entry of skills/list describes,
 // so a scenario can script content that does not match its entry. Frontmatter replaces the frontmatter of every
-// entry. An Unlisted skill is absent from skills/list and skills/get still answers it. A Dynamic skill lists no
+// entry. Blobs are binary files, served as blobs. An Unlisted skill is absent from skills/list and skills/get still answers it. A Dynamic skill lists no
 // files.
 type MCPSkill struct {
 	Path        string
 	Files       map[string]string
+	Blobs       map[string][]byte `json:",omitempty"`
 	Served      map[string]string `json:",omitempty"`
 	Listed      map[string]string `json:",omitempty"`
 	Frontmatter map[string]any    `json:",omitempty"`
@@ -44,9 +46,14 @@ func (s MCPSkill) entry(files map[string]string) mcp.Skill {
 	if s.Dynamic {
 		return e
 	}
-	for _, p := range slices.Sorted(maps.Keys(files)) {
-		sum := sha256.Sum256([]byte(files[p]))
-		e.Resources = append(e.Resources, mcp.SkillResource{URI: s.root() + "/" + p, Digest: "sha256:" + hex.EncodeToString(sum[:]), Size: int64(len(files[p]))})
+	all := map[string][]byte{}
+	for p, text := range files {
+		all[p] = []byte(text)
+	}
+	maps.Copy(all, s.Blobs)
+	for _, p := range slices.Sorted(maps.Keys(all)) {
+		sum := sha256.Sum256(all[p])
+		e.Resources = append(e.Resources, mcp.SkillResource{URI: s.root() + "/" + p, Digest: "sha256:" + hex.EncodeToString(sum[:]), Size: int64(len(all[p]))})
 	}
 	return e
 }
@@ -115,18 +122,26 @@ func (h *mcpHandler) skillResources() []mcp.Resource {
 		for _, f := range slices.Sorted(maps.Keys(s.Files)) {
 			out = append(out, mcp.Resource{URI: s.root() + "/" + f, Name: path.Base(f)})
 		}
+		for _, f := range slices.Sorted(maps.Keys(s.Blobs)) {
+			out = append(out, mcp.Resource{URI: s.root() + "/" + f, Name: path.Base(f)})
+		}
 	}
 	return out
 }
 
-func (h *mcpHandler) skillFile(uri string) (string, bool) {
+func (h *mcpHandler) skillFile(uri string) (mcp.ResourceContents, bool) {
 	for _, s := range h.spec.Skills {
-		files := cmpFiles(s.Served, s.Files)
-		for f, text := range files {
+		for f, text := range cmpFiles(s.Served, s.Files) {
 			if s.root()+"/"+f == uri {
-				return text, true
+				return mcp.ResourceContents{URI: uri, Text: text}, true
+			}
+		}
+		for f, b := range s.Blobs {
+			if s.root()+"/"+f == uri {
+				blob := base64.StdEncoding.EncodeToString(b)
+				return mcp.ResourceContents{URI: uri, MimeType: "image/png", Blob: &blob}, true
 			}
 		}
 	}
-	return "", false
+	return mcp.ResourceContents{}, false
 }
