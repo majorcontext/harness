@@ -244,56 +244,10 @@ In the browser, an `mcp_servers` entry with a `url` works when the MCP server al
 
 ## Run in Cloudflare Workers
 
-A Cloudflare Worker cannot start a Worker, so the default `wasm` transport does
-not run there. Pass `worker: false` and the module runs in the isolate of the
-Worker on an in-memory file system. Bundle the module with the Worker: Wrangler
-imports a `.wasm` file as a compiled `WebAssembly.Module`, and
-`wasm_exec.js` of the same Go version (`$(go env GOROOT)/lib/wasm/wasm_exec.js`)
-loads through a function, so that it runs after the file system exists.
-
-```js
-import { createHarness, wasm } from "@majorcontext/harness-embed";
-import harnessModule from "./harness.wasm";
-
-export default {
-  async fetch(request, env) {
-    const h = await createHarness({
-      transport: wasm({
-        module: harnessModule,
-        wasmExec: () => import("./wasm_exec.js"),
-        worker: false,
-      }),
-      config: { model: "my-model/example", providers: { "my-model": { type: "openai-compat", base_url: env.MODEL_URL } } },
-      fetch: (url, init) => {
-        const headers = new Headers(init?.headers);
-        headers.set("authorization", `Bearer ${env.MODEL_KEY}`);
-        return fetch(url, { ...init, headers });
-      },
-    });
-    try {
-      // Speak ACP on h.stream: initialize, session/new with cwd "/work", session/prompt.
-    } finally {
-      await h.close();
-    }
-  },
-};
-```
-
-- Start the module inside the request handler. A Worker forbids `setTimeout` at
-  global scope, and the module starts timers.
-- Pass `fetch`. The module calls it for each model request, so the Worker adds
-  the credential and the module holds none. Do not put a key in `config`.
-- The store is in memory, and the work directory is `/work`. `store.persist` and
-  `store.dir` reject, and `h.fs` is `undefined`. The sessions end with the
-  isolate.
-- The mode replaces `globalThis.fs`, `process`, and `path`, so use it in a
-  Worker or another isolate that has no real process. Under Node,
-  `createHarness` rejects it.
-- Without a file system, `session/new` fails and says so. To load the module
-  your own way, call `installMemoryFs()` from
-  `@majorcontext/harness-embed/memoryfs` before `wasm_exec.js` runs.
-- A deployed Worker reads timers as frozen during CPU work, so a timer in the
-  Worker does not measure CPU time. Measure it with `wrangler tail`.
+A Cloudflare Worker cannot start a Worker. Use `wasm({worker: false})`, which
+runs the module in the isolate of the Worker. The
+[`sdk/embed` README](../sdk/embed/README.md#run-in-cloudflare-workers) has the
+example and the constraints.
 
 ## Examples
 

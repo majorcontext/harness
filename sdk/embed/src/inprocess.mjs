@@ -1,6 +1,6 @@
 // The in-process wasm transport: the module runs in the JavaScript isolate of the caller, on an in-memory file
 // system, for a host that cannot start a Worker, such as a Cloudflare Worker.
-import { toolResult } from "./bridge.mjs";
+import { refuseRedirect, toolResult } from "./bridge.mjs";
 import { installMemoryFs } from "./memoryfs.mjs";
 import { acpStream } from "./stream.mjs";
 
@@ -17,6 +17,14 @@ async function loadWasmExec(wasmExec) {
   if (typeof globalThis.Go === "function") return;
   if (typeof wasmExec === "function") await wasmExec();
   else await import(wasmExec);
+}
+
+export function guardedFetch(pageFetch) {
+  return async (url, init) => {
+    const res = await pageFetch(url, init);
+    refuseRedirect(res, init?.redirect);
+    return res;
+  };
 }
 
 export async function startInProcess(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log }) {
@@ -46,7 +54,7 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
     builtinTools,
     defaultDir: workDir,
     proxy,
-    modelFetch: typeof pageFetch === "function" ? pageFetch : undefined,
+    modelFetch: typeof pageFetch === "function" ? guardedFetch(pageFetch) : undefined,
     tools: tools.map(({ name, description, schema, run }) => ({ name, description, schema, run: async (input, { signal }) => toolResult(await run(input, { signal })) })),
     onFrame: (frame) => stream.emit(JSON.parse(frame)),
     onLog: (line) => log?.(line),
