@@ -126,6 +126,7 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 type claudeDriver struct {
 	laneHost
 	claudeLogs
+	fx map[string]any // fixtures that the actions of the scenario reach, for example the MCP servers of extra
 }
 
 func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {

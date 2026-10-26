@@ -328,8 +328,13 @@ type toolResolver struct {
 
 func (r toolResolver) ResolveTool(ctx context.Context, name string) turn.Tool {
 	server, _, valid := remoteName(name)
-	if !valid || !r.ok(name) || r.s.owner(server) == nil || r.live(name) != nil {
+	if !valid || !r.ok(name) || r.s.owner(server) == nil {
 		return nil
+	}
+	// The tools of a model call can be older than the live list: a backend that owns the loop keeps one
+	// Toolset for its whole run, and a select in the same model call can read a new list.
+	if t := r.live(name); t != nil {
+		return *t
 	}
 	if !r.s.refresh(ctx, server) {
 		return nil
