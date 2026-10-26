@@ -86,8 +86,9 @@ type ToolCall struct {
 	Input    map[string]any
 }
 
-// Usage is the token usage a Reply reports.
-type Usage struct{ Input, Output int }
+// Usage is the token usage a Reply reports. Cached is the part of Input that the
+// provider read from its prompt cache; only the chat wire reports it.
+type Usage struct{ Input, Output, Cached int }
 
 // ToolSpec is the description and the JSON schema of one tool in a request.
 type ToolSpec struct {

@@ -311,6 +311,7 @@ type stream struct {
 
 	usage      provider.Usage
 	haveUsage  bool
+	rawUsage   provider.RawUsage
 	stopReason provider.StopReason
 	haveFinish bool
 
@@ -451,8 +452,11 @@ type wireChunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -485,7 +489,10 @@ func (s *stream) handle(data []byte) error {
 		}
 	}
 	if chunk.Usage != nil {
-		s.usage.InputTokens = chunk.Usage.PromptTokens
+		cached := min(max(chunk.Usage.PromptTokensDetails.CachedTokens, 0), chunk.Usage.PromptTokens)
+		s.usage.InputTokens = chunk.Usage.PromptTokens - cached
+		s.usage.CacheReadTokens = cached
+		s.rawUsage = provider.RawUsage{Input: chunk.Usage.PromptTokens, Output: chunk.Usage.CompletionTokens, Cached: cached}
 		s.usage.OutputTokens = chunk.Usage.CompletionTokens
 		s.haveUsage = true
 	}
@@ -592,7 +599,8 @@ func (s *stream) finish() {
 	}
 	md.ResponseID = s.id
 	if s.haveUsage {
-		md.ProviderUsage = &provider.RawUsage{Input: s.usage.InputTokens, Output: s.usage.OutputTokens}
+		raw := s.rawUsage
+		md.ProviderUsage = &raw
 	}
 	s.queue = append(s.queue, provider.Event{
 		Type:            provider.EventDone,

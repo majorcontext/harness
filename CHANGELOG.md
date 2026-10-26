@@ -105,6 +105,8 @@ First tagged release.
 
 ### Fixed
 
+- **Cached prompt tokens of an OpenAI-compatible model** (`internal/provider/openaicompat`) — the usage chunk of a chat completions stream carries `prompt_tokens_details.cached_tokens`. The adapter now reports it as `cache_read_tokens`, reports `prompt_tokens` minus the cached part as `input_tokens`, and fills `provider_cached_tokens` of `turn_metrics`. A model behind such a gateway (Fireworks, Gemini through Bifrost) reported 0 cache reads before.
+
 - **MCP call after a select in the same run** (`internal/tool/mcpsrc`) — `mcp(action="call")` of a tool that its server lists now runs it when the tools of the model call lack it. Before, a Claude Code session whose `mcp(action="select")` read a new tool list got `no such tool available` from a `call` of that tool later in the same run, and so did a harness-loop model call that made both calls.
 - **Compaction purpose of a Claude Code session** (`internal/session`) — a compaction of a Claude Code session now logs `turn_metrics` with purpose `compaction`, and its `chat` span carries the same purpose. It logged purpose `turn` before.
 - **Cache expiry of an injected-auth ChatGPT entry** (`internal/backend`) — an entry with `auth` `injected` and `models_from` `chatgpt` targets the ChatGPT Codex backend and now reports `cache_expires_at` with the 30-minute lifetime, as an entry with `auth` `chatgpt` does.
