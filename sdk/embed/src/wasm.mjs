@@ -1,5 +1,3 @@
-// The wasm transport: the module runs in a Worker (a browser Worker or a Node
-// worker_threads Worker), and the page speaks ACP to it by messages.
 import { pageBridge } from "./bridge.mjs";
 import { spawnWorker } from "./endpoint.mjs";
 import { startInProcess } from "./inprocess.mjs";
@@ -34,6 +32,14 @@ function providerURLs(name, p) {
   if (p.baseURL !== undefined) out.baseURL = absolute(p.baseURL);
   if (p.loginURL !== undefined) out.loginURL = absolute(p.loginURL);
   return out;
+}
+
+function resolveProxy(proxy) {
+  return {
+    headers: proxy.headers,
+    baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL),
+    providers: proxy.providers && Object.fromEntries(Object.entries(proxy.providers).map(([name, p]) => [name, providerURLs(name, p)])),
+  };
 }
 
 /**
@@ -72,17 +78,13 @@ async function lockStore(store) {
 async function startWasm(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log }) {
   if (transport.worker === false) {
     if (isNode) throw new Error("worker: false replaces the fs and process of Node: use the Worker mode under Node");
-    return startInProcess(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log });
+    return startInProcess(transport, { config, proxy: resolveProxy(proxy), fetch: pageFetch, tools, builtinTools, store, log });
   }
   if (transport.worker !== true) throw new Error("worker must be true or false");
   const options = {
     config,
     builtinTools,
-    proxy: {
-      headers: proxy.headers,
-      baseURL: proxy.baseURL === undefined ? undefined : absolute(proxy.baseURL),
-      providers: proxy.providers && Object.fromEntries(Object.entries(proxy.providers).map(([name, p]) => [name, providerURLs(name, p)])),
-    },
+    proxy: resolveProxy(proxy),
     storeDir: isNode ? store.dir : store.persist ? (store.dir ?? browserStoreDir) : undefined,
     persist: !isNode && Boolean(store.persist),
     tools: tools.map(({ name, description, schema }) => ({ name, description, schema })),

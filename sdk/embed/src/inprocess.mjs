@@ -30,7 +30,8 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
   const instance = source instanceof WebAssembly.Module ? await WebAssembly.instantiate(source, go.importObject) : (await WebAssembly.instantiate(source, go.importObject)).instance;
   // Go reads globalThis.fs once, when it starts, so each module gets a tree of its own.
   installMemoryFs();
-  go.run(instance).catch((err) => log?.(JSON.stringify({ level: "ERROR", msg: "the module ended", error: String(err) })));
+  const exited = go.run(instance);
+  const exit = globalThis.harnessExit;
   let conn;
   let closing;
   const stream = acpStream({
@@ -51,7 +52,11 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
     onLog: (line) => log?.(line),
   });
   function close() {
-    return (closing ??= conn.close().then(() => stream.end()));
+    return (closing ??= conn.close().then(() => {
+      exit();
+      stream.end();
+      return exited;
+    }));
   }
   return { stream: { readable: stream.readable, writable: stream.writable }, close };
 }

@@ -20,9 +20,7 @@ const workerdEnv = "HARNESS_E2E_WORKERD"
 // workerdKey is the credential that the Worker adds to the model request. The module never sees it.
 const workerdKey = "workerd-test-key"
 
-// TestWorkerdRunsATurnInProcess pins the sentence of the WebAssembly section on the in-process mode: the module runs
-// in a Cloudflare Worker with no Worker of its own, and a turn on a stand-in openai-compat model ends with the text of
-// the model, and the model request carries the credential that the Worker added.
+// TestWorkerdRunsATurnInProcess checks an ACP turn in a Cloudflare Worker, after another harness started and closed in the same isolate.
 func TestWorkerdRunsATurnInProcess(t *testing.T) {
 	skipShort(t)
 	if os.Getenv(workerdEnv) != "1" {

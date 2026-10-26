@@ -12,7 +12,7 @@ function client(h) {
   const waiting = new Map();
   const chunks = [];
   let next = 1;
-  const pump = (async () => {
+  void (async () => {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
@@ -27,7 +27,6 @@ function client(h) {
   })();
   return {
     chunks,
-    pump,
     request(method, params) {
       const id = next++;
       return new Promise((resolve, reject) => {
@@ -46,11 +45,15 @@ export default {
       headers.set("authorization", `Bearer ${env.MODEL_KEY}`);
       return fetch(url, { ...init, headers });
     };
-    const h = await createHarness({
-      transport: wasm({ module: harnessModule, wasmExec: () => import("./wasm_exec.js"), worker: false }),
-      config: { model: "mine/m", providers: { mine: { type: "openai-compat", base_url: env.MODEL_URL } } },
-      fetch: modelFetch,
-    });
+    const start = () =>
+      createHarness({
+        transport: wasm({ module: harnessModule, wasmExec: () => import("./wasm_exec.js"), worker: false }),
+        config: { model: "mine/m", providers: { mine: { type: "openai-compat", base_url: env.MODEL_URL } } },
+        fetch: modelFetch,
+      });
+    // close() resolves only when the module has exited, so a module that stays alive hangs this request.
+    await (await start()).close();
+    const h = await start();
     try {
       const c = client(h);
       await c.request("initialize", initialize);
