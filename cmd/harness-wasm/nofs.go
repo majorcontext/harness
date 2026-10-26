@@ -18,7 +18,6 @@ import (
 const errNoFilesystem = "no file system is installed on globalThis.fs: install one before wasm_exec.js loads, " +
 	"for example installMemoryFs() from @majorcontext/harness-embed/memoryfs, or start the module with wasm({ worker: false })"
 
-// checkedRuntimes fails a request with errNoFilesystem when the work directory cannot be read because the file system is a stub.
 type checkedRuntimes struct {
 	acp.Runtimes
 	defaultDir string
