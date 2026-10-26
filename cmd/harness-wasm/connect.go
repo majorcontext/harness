@@ -206,8 +206,8 @@ func (o *options) proxyOrigin() string {
 
 // runtimes builds the Runtimes of the connection: one Runtime for each work
 // directory over one store and one local owner.
-func (o *options) runtimes() *cwdruntimes.Runtimes {
-	return cwdruntimes.New(cwdruntimes.Options{
+func (o *options) runtimes() acp.Runtimes {
+	return checkedRuntimes{defaultDir: o.defaultDir, Runtimes: cwdruntimes.New(cwdruntimes.Options{
 		Logins: o.loginState(),
 		Config: func(cwd string) (*config.Config, error) {
 			if o.err != nil {
@@ -232,7 +232,7 @@ func (o *options) runtimes() *cwdruntimes.Runtimes {
 		ModelTransport: o.modelTransport,
 		Tools:          o.tools,
 		Host:           hostLimits,
-	})
+	})}
 }
 
 // login is the login of the connection: the injected logins of the config, shown to a client that takes an elicitation in URL mode.

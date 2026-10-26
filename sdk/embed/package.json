@@ -9,6 +9,10 @@
       "types": "./src/index.d.ts",
       "default": "./src/index.mjs"
     },
+    "./memoryfs": {
+      "types": "./src/memoryfs.d.ts",
+      "default": "./src/memoryfs.mjs"
+    },
     "./shell": {
       "types": "./src/shell.d.ts",
       "default": "./src/shell.mjs"
@@ -42,6 +46,7 @@
   "devDependencies": {
     "esbuild": "0.25.12",
     "just-bash": "3.6.0",
-    "playwright": "1.64.0"
+    "playwright": "1.64.0",
+    "workerd": "1.20261026.1"
   }
 }

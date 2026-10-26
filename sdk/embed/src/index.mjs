@@ -1,6 +1,3 @@
-// The client API of the embedded harness: createHarness starts a transport and
-// returns an ACP stream to it. wasm runs the WebAssembly module in a Worker;
-// subprocess spawns the native `harness acp` (Node only).
 import { defaultBuiltinTools, wasm } from "./wasm.mjs";
 import { subprocess } from "./subprocess.mjs";
 

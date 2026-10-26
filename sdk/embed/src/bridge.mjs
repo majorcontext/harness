@@ -16,13 +16,21 @@
 // writeFile(path, bytes, append). A byte array moves as a transferred
 // ArrayBuffer in both directions.
 
+// refuseRedirect fails a response to a request that must follow no redirect. A callback may ignore init.redirect.
+export function refuseRedirect(res, redirect) {
+  if ((redirect === "manual" || redirect === "error") && (res.type === "opaqueredirect" || res.redirected || (res.status >= 300 && res.status < 400))) {
+    res.body?.cancel().catch(() => {});
+    throw new Error(`the page fetch answered with a redirect (${res.status}), which is not followed`);
+  }
+}
+
 function describe(err) {
   if (err instanceof Error) return { name: err.name, message: err.message };
   return { name: "Error", message: String(err) };
 }
 
 // toolResult maps what run returned to a string or {text, isError}.
-function toolResult(value) {
+export function toolResult(value) {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "object" && typeof value.text === "string") return { text: value.text, isError: Boolean(value.isError) };
@@ -153,11 +161,7 @@ export function pageBridge({ tools, pageFetch, post, files = false }) {
       if (body) init.body = new Uint8Array(body);
       if (redirect) init.redirect = redirect;
       const res = await pageFetch(url, init);
-      // A callback may ignore init.redirect. A request that must follow no redirect fails on a redirect answer.
-      if ((redirect === "manual" || redirect === "error") && (res.type === "opaqueredirect" || res.redirected || (res.status >= 300 && res.status < 400))) {
-        res.body?.cancel().catch(() => {});
-        throw new Error(`the page fetch answered with a redirect (${res.status}), which is not followed`);
-      }
+      refuseRedirect(res, redirect);
       post({ fetchHead: { fid, status: res.status, statusText: res.statusText, headers: [...res.headers] } });
       if (res.body) {
         const reader = res.body.getReader();

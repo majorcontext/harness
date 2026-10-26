@@ -9,6 +9,7 @@ import { Worker } from "node:worker_threads";
 import assert from "node:assert/strict";
 import { webmcpTools } from "../src/webmcp.mjs";
 import { createHarness, defaultBuiltinTools, wasm } from "../src/index.mjs";
+import { guardedFetch } from "../src/inprocess.mjs";
 import { workerBridge } from "../src/workerbridge.mjs";
 import { clientSuite } from "./suite.mjs";
 import { acpClient, bodyText, fakeModel, fakeServer, moduleFiles, tempDir, userConfig } from "./support.mjs";
@@ -227,8 +228,10 @@ test("a store directory is exclusive to one harness and keeps the session", asyn
   await h2.close();
 });
 
-test("a transport that is not a Worker is refused", async () => {
-  await assert.rejects(createHarness({ transport: wasm({ ...moduleFiles(), worker: false }) }), /Worker/);
+test("the in-process mode is refused under Node and leaves the globals", async () => {
+  const before = { fs: globalThis.fs, process: globalThis.process };
+  await assert.rejects(createHarness({ transport: wasm({ ...moduleFiles(), worker: false }) }), /Worker mode under Node/);
+  assert.deepEqual({ fs: globalThis.fs, process: globalThis.process }, before);
 });
 
 // failWorker ends the Worker that the next createHarness starts, the way a crash does.
@@ -502,4 +505,11 @@ test("an empty builtinTools gives the model no tools", async () => {
 
 test("builtinTools replaces the default set", async () => {
   assert.deepEqual(await firstTools({ builtinTools: ["read_file", "task"] }), ["read_file", "task"]);
+});
+
+test("the in-process fetch refuses a redirected response to a request that follows no redirect", async () => {
+  const followed = Object.defineProperty(new Response("ok"), "redirected", { value: true });
+  const fetch = guardedFetch({}, async () => followed);
+  await assert.rejects(fetch("https://model.example/v1", { redirect: "manual" }), /redirect/);
+  assert.equal((await fetch("https://model.example/v1", {})).status, 200);
 });

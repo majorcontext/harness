@@ -242,6 +242,13 @@ See the `sdk/embed` README for the server contract.
 
 In the browser, an `mcp_servers` entry with a `url` works when the MCP server allows the origin of the page. To keep its credential out of the page, send it through a relay on your server, as [`examples/embed-server`](../examples/embed-server) does with the gatekeeper MCP relay.
 
+## Run in Cloudflare Workers
+
+A Cloudflare Worker cannot start a Worker. Use `wasm({worker: false})`, which
+runs the module in the isolate of the Worker. The
+[`sdk/embed` README](../sdk/embed/README.md#run-in-cloudflare-workers) has the
+example and the constraints.
+
 ## Examples
 
 [examples/](../examples) holds small programs that run. Clone the repository and

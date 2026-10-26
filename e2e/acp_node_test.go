@@ -91,6 +91,7 @@ type nodeHostOptions struct {
 	JSTools      []string          `json:"jsTools,omitempty"`
 	Connect      map[string]any    `json:"connect,omitempty"`
 	CyclicConfig bool              `json:"cyclicConfig,omitempty"`
+	StubFS       bool              `json:"stubFs,omitempty"`
 }
 
 // startACPNode runs the wasm module under Node, with the config, the store
@@ -356,6 +357,24 @@ func TestNodeWasmBadOptionFailsTheFirstSession(t *testing.T) {
 			c.finish(stop)
 		})
 	}
+}
+
+// TestNodeWasmWithoutAFileSystemNamesTheFix pins the sentence of the WebAssembly
+// section on the file system: a host that installs none gets an error that says
+// so and names the helper, not a message about the work directory.
+func TestNodeWasmWithoutAFileSystemNamesTheFix(t *testing.T) {
+	skipShort(t)
+	nodePath(t)
+	t.Parallel()
+	fake := harnesstest.NewAnthropic(t)
+	env := acpEnv{configPath: writeGoalConfigWith(t, fake.URL(), nil), sessDir: t.TempDir()}
+	in, out, stop := startACPNodeOpts(t, nodeHostOptions{ConfigPath: env.configPath, Env: map[string]string{"ANTHROPIC_API_KEY": acpDummyKey}, StubFS: true})
+	c := newACPConn(t, loadACPSchema(t), in, out)
+	c.fake, c.env = fake, env
+	c.dirs["main"] = t.TempDir()
+	acpNew{as: "a", code: acpInvalidParams, reason: "no file system is installed"}.run(t, c)
+	acpNew{as: "b", code: acpInvalidParams, reason: "installMemoryFs"}.run(t, c)
+	c.finish(stop)
 }
 
 // TestNodeWasmJSToolFailuresAreReadable pins the sentence of the WebAssembly

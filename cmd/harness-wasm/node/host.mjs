@@ -6,7 +6,7 @@
 // The options file holds the harnessConnect options that Node supplies
 // (configPath, which the host reads into config, storeDir, env, builtinTools),
 // echoTool and jsTools, which add JavaScript tools, connect, which overrides
-// harnessConnect options, cyclicConfig, and online, which sets navigator.onLine.
+// harnessConnect options, cyclicConfig, stubFs, which leaves globalThis.fs unset so that wasm_exec.js installs its stub, and online, which sets navigator.onLine.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -29,7 +29,7 @@ if (options.storeDir) release = acquireStoreLock(options.storeDir);
 if (options.online !== undefined) {
   Object.defineProperty(globalThis, "navigator", { value: { onLine: options.online }, configurable: true });
 }
-globalThis.fs = fs;
+if (!options.stubFs) globalThis.fs = fs;
 globalThis.path = path;
 globalThis.crypto ??= (await import("node:crypto")).webcrypto;
 createRequire(import.meta.url)(execPath);
