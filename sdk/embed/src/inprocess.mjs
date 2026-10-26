@@ -1,6 +1,7 @@
 // The in-process wasm transport: the module runs in the JavaScript isolate of the caller, on an in-memory file
 // system, for a host that cannot start a Worker, such as a Cloudflare Worker.
 import { toolResult } from "./bridge.mjs";
+import { installMemoryFs } from "./memoryfs.mjs";
 import { acpStream } from "./stream.mjs";
 
 const workDir = "/work";
@@ -12,8 +13,6 @@ async function moduleSource(source) {
   return res.arrayBuffer();
 }
 
-// loadWasmExec runs wasm_exec.js once for the isolate. A function loads it its own way, for a host that bundles the
-// file; a string is a URL for import().
 async function loadWasmExec(wasmExec) {
   if (typeof globalThis.Go === "function") return;
   if (typeof wasmExec === "function") await wasmExec();
@@ -22,7 +21,6 @@ async function loadWasmExec(wasmExec) {
 
 export async function startInProcess(transport, { config, proxy, fetch: pageFetch, tools, builtinTools, store, log }) {
   if (store.persist || store.dir !== undefined) throw new Error("the in-process wasm transport keeps the store in memory: remove store.persist and store.dir");
-  const { installMemoryFs } = await import("./memoryfs.mjs");
   installMemoryFs();
   await loadWasmExec(transport.wasmExec);
   const go = new Go();
@@ -46,7 +44,7 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
     config,
     builtinTools,
     defaultDir: workDir,
-    proxy: { headers: proxy.headers, baseURL: proxy.baseURL, providers: proxy.providers },
+    proxy,
     modelFetch: typeof pageFetch === "function" ? pageFetch : undefined,
     tools: tools.map(({ name, description, schema, run }) => ({ name, description, schema, run: async (input, { signal }) => toolResult(await run(input, { signal })) })),
     onFrame: (frame) => stream.emit(JSON.parse(frame)),
@@ -55,5 +53,5 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
   function close() {
     return (closing ??= conn.close().then(() => stream.end()));
   }
-  return { stream: { readable: stream.readable, writable: stream.writable }, close, fs: undefined };
+  return { stream: { readable: stream.readable, writable: stream.writable }, close };
 }
