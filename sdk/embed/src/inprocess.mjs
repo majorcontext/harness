@@ -19,11 +19,34 @@ async function loadWasmExec(wasmExec) {
   else await import(wasmExec);
 }
 
-export function guardedFetch(pageFetch) {
+// gate returns a promise that stays pending once the module has exited: Go attaches handlers to the promises that it
+// gets from the host, and a handler cannot run in a program that has exited.
+function gate(state, promise) {
+  return new Promise((resolve, reject) => {
+    promise.then(
+      (value) => state.exited || resolve(value),
+      (err) => state.exited || reject(err),
+    );
+  });
+}
+
+function gateBody(state, body) {
+  const reader = body.getReader();
+  return new ReadableStream({
+    async pull(controller) {
+      const { value, done } = await gate(state, reader.read());
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
+
+export function guardedFetch(state, pageFetch) {
   return async (url, init) => {
-    const res = await pageFetch(url, init);
+    const res = await gate(state, pageFetch(url, init));
     refuseRedirect(res, init?.redirect);
-    return res;
+    return res.body ? new Response(gateBody(state, res.body), res) : res;
   };
 }
 
@@ -38,6 +61,7 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
   const instance = source instanceof WebAssembly.Module ? await WebAssembly.instantiate(source, go.importObject) : (await WebAssembly.instantiate(source, go.importObject)).instance;
   // Go reads globalThis.fs once, when it starts, so each module gets a tree of its own.
   installMemoryFs();
+  const state = { exited: false };
   const exited = go.run(instance);
   const exit = globalThis.harnessExit;
   let conn;
@@ -54,13 +78,14 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
     builtinTools,
     defaultDir: workDir,
     proxy,
-    modelFetch: typeof pageFetch === "function" ? guardedFetch(pageFetch) : undefined,
-    tools: tools.map(({ name, description, schema, run }) => ({ name, description, schema, run: async (input, { signal }) => toolResult(await run(input, { signal })) })),
+    modelFetch: typeof pageFetch === "function" ? guardedFetch(state, pageFetch) : undefined,
+    tools: tools.map(({ name, description, schema, run }) => ({ name, description, schema, run: async (input, { signal }) => toolResult(await gate(state, Promise.resolve(run(input, { signal })))) })),
     onFrame: (frame) => stream.emit(JSON.parse(frame)),
     onLog: (line) => log?.(line),
   });
   function close() {
     return (closing ??= conn.close().then(() => {
+      state.exited = true;
       exit();
       stream.end();
       return exited;

@@ -13,8 +13,6 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-// workerdEnv is set by the workerd job of CI. Without it the test skips, because it builds the module and needs the
-// workerd package; with it, a missing node or workerd fails the test.
 const workerdEnv = "HARNESS_E2E_WORKERD"
 
 // workerdKey is the credential that the Worker adds to the model request. The module never sees it.
@@ -50,14 +48,15 @@ func TestWorkerdRunsATurnInProcess(t *testing.T) {
 		t.Fatalf("run.mjs: %v\n%s\n%s", err, stdout.String(), stderr.String())
 	}
 	var got struct {
-		StopReason string `json:"stopReason"`
-		Text       string `json:"text"`
-		Failure    string `json:"failure"`
+		StopReason string   `json:"stopReason"`
+		Text       string   `json:"text"`
+		Failure    string   `json:"failure"`
+		Unhandled  []string `json:"unhandled"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("answer %q: %v", stdout.String(), err)
 	}
-	if got.Failure != "" || got.StopReason != "end_turn" || got.Text != "hello from the worker" {
+	if got.Failure != "" || got.StopReason != "end_turn" || got.Text != "hello from the worker" || len(got.Unhandled) > 0 {
 		t.Errorf("answer = %+v, want stop reason end_turn and the text of the model\n%s", got, stderr.String())
 	}
 	reqs := fake.Requests()

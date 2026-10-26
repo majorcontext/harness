@@ -509,7 +509,7 @@ test("builtinTools replaces the default set", async () => {
 
 test("the in-process fetch refuses a redirected response to a request that follows no redirect", async () => {
   const followed = Object.defineProperty(new Response("ok"), "redirected", { value: true });
-  const fetch = guardedFetch(async () => followed);
+  const fetch = guardedFetch({}, async () => followed);
   await assert.rejects(fetch("https://model.example/v1", { redirect: "manual" }), /redirect/);
   assert.equal((await fetch("https://model.example/v1", {})).status, 200);
 });
