@@ -492,7 +492,7 @@ func (s *stream) handle(data []byte) error {
 		cached := min(max(chunk.Usage.PromptTokensDetails.CachedTokens, 0), chunk.Usage.PromptTokens)
 		s.usage.InputTokens = chunk.Usage.PromptTokens - cached
 		s.usage.CacheReadTokens = cached
-		s.rawUsage = provider.RawUsage{Input: chunk.Usage.PromptTokens, Output: chunk.Usage.CompletionTokens, Cached: cached}
+		s.rawUsage = provider.RawUsage{Input: chunk.Usage.PromptTokens, Output: chunk.Usage.CompletionTokens, Cached: chunk.Usage.PromptTokensDetails.CachedTokens}
 		s.usage.OutputTokens = chunk.Usage.CompletionTokens
 		s.haveUsage = true
 	}
