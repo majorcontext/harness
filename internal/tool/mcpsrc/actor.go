@@ -270,7 +270,7 @@ func (a *actor) freeze(e *entry) {
 	for _, t := range e.sv.tools {
 		m.base[t.Name] = true
 	}
-	m.inst, m.resources = e.sv.client.Instructions(), e.sv.resources()
+	m.inst, m.resources, m.servesSkills, m.skills = e.sv.client.Instructions(), e.sv.resources(), e.sv.servesSkills(), e.sv.skills
 	a.mem[e.name] = &m
 }
 
@@ -459,6 +459,9 @@ func (m dialedMsg) handle(a *actor) {
 		a.s.log.Info("mcp: server connected after a retry", "server", e.name)
 	}
 	e.sv, e.reason, e.parked, e.streak = m.sv, "", false, 0
+	if m.sv.skillsErr != nil {
+		a.s.log.Warn("mcp: skills left out of the list", "server", e.name, "err", hide(e.name, m.sv.skillsErr))
+	}
 	a.remember(e.name, e.sv)
 	for _, w := range waiters {
 		w.reply <- connectResult{dialed: w.dialed}

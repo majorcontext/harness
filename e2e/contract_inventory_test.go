@@ -98,6 +98,7 @@ var boxesFeatures = []struct {
 	{"config goal_evaluator_model", []string{"bifrost_goal_met_first_turn", "bifrost_goal_not_met_then_met"}},
 	{"config mcp_tool_loading", []string{"mcp_lazy_search_select_then_call", "mcp_unset_loading_defers_every_tool_over_the_schema_budget", "mcp_per_server_tool_loading_overrides_global"}},
 	{"config mcp_servers", []string{"mcp_eager_lists_namespaced_tools", "mcp_tool_call_result", "mcp_opted_in_http_tool_call_sends_session_id_header", "mcp_http_sse_reply", "mcp_stdio_server_call", "claudecode_configured_mcp_tool_runs_through_the_harness_endpoint", "claudecode_endpoint_initialize_carries_the_mcp_server_instructions", "claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one", "claudecode_mcp_server_with_no_allowed_tool_keeps_its_instructions"}},
+	{"MCP skills extension", []string{"mcp_skills_are_listed_and_a_skill_loads_and_reads_its_files_on_demand", "claudecode_mcp_skill_loads_through_the_harness_endpoint", "claudecode_mcp_skills_reach_the_cli_in_the_harness_server_instructions"}},
 	{"config append_system_prompt", []string{"system_segments_order_append_layers_then_instructions_then_skills"}},
 	{"config plugins", []string{"plugin_tools_listed_and_run", "plugin_boxes_style_command_and_dir", "plugin_before_hook_rewrites_and_blocks"}},
 

@@ -119,6 +119,9 @@ representation.
   never a raw base64 dump. When any server is resource-capable, the
   `<mcp_instructions>` system segment gains one line pointing the model at
   both tools, frozen at the same point the rest of that segment freezes.
+  `load_mcp_skill` loads a skill that a server serves through the MCP
+  Skills extension; see the Skills bullet of `MCP tools` in
+  `docs/architecture.md`.
 - **OpenTelemetry GenAI semantic conventions** — for span/metric naming when
   observability lands. Configuration via standard `OTEL_*` env vars only.
 - **A2A** — deliberately not implemented. Cross-org agent meshes are a

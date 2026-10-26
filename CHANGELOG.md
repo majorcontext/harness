@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **MCP Skills extension client** (`internal/mcp`, `internal/tool/mcpsrc`, `internal/skill`) — harness declares `io.modelcontextprotocol/skills`, reads `skills/list` of each server that serves skills, and lists its skills in `<mcp_skills>` of the MCP segment (in the `harness` server instructions on the Claude Code backend). `load_mcp_skill {server, uri}` loads a skill, listed or not, and checks the size, SHA-256 digest, and frontmatter of `SKILL.md` against its entry. `read_mcp_resource` checks each file of a loaded skill against the held entry, lists its directories, and refuses a read of its files on another server. Skill content is tagged with its server as untrusted content; `allowed-tools` of an MCP-served skill is never honored.
+
 - **GPT-6.1 Terra on the ChatGPT backend** (`internal/modelmeta`) — the static codex catalog lists `gpt-6.1-terra`, with its models.dev name, efforts, and context window. A `codex/gpt-6.1-terra` session runs on the known window instead of the default one.
 
 - **WebAssembly module in a Cloudflare Worker** (`sdk/embed`, `cmd/harness-wasm`) — `wasm({module, wasmExec, worker: false})` runs the module in the current JavaScript isolate on an in-memory file system, for a host that cannot start a Worker. `module` may be a compiled `WebAssembly.Module`, and `wasmExec` may be a function that loads `wasm_exec.js`. The store stays in memory: `store.persist` and `store.dir` reject. `@majorcontext/harness-embed/memoryfs` exports `installMemoryFs()` for a host that loads the module itself. A host that installs no file system now gets `invalid_request` with a reason that says so and names `installMemoryFs`, not `cwd is not a directory`. A new CI job runs one ACP turn under `workerd`.

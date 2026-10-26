@@ -128,7 +128,7 @@ func (s *Skill) validate() error {
 	if s.Name == "" {
 		return errors.New("missing required field: name")
 	}
-	if err := validateName(s.Name); err != nil {
+	if err := ValidateName(s.Name); err != nil {
 		return err
 	}
 	if want := filepath.Base(s.Dir); s.Name != want {
@@ -150,8 +150,8 @@ func (s *Skill) validate() error {
 	return nil
 }
 
-// validateName enforces the name character and shape rules.
-func validateName(name string) error {
+// ValidateName enforces the name character and shape rules of the Agent Skills specification.
+func ValidateName(name string) error {
 	if n := utf8.RuneCountInString(name); n < 1 || n > maxNameLen {
 		return fmt.Errorf("name %q must be 1-%d characters", name, maxNameLen)
 	}

@@ -49,6 +49,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"an_embedder_tool_may_not_take_the_name_of_the_cli_tool_search", rowAnEmbedderToolMayNotTakeTheNameOfTheCLIToolSearch},
 		{"a_backend_that_owns_the_loop_allows_a_session_tool_by_name", rowABackendThatOwnsTheLoopAllowsASessionToolByName},
 		{"a_session_server_may_not_take_the_name_of_a_runtime_server", rowASessionServerMayNotTakeTheNameOfARuntimeServer},
+		{"a_skill_of_a_session_server_stays_held_after_release_and_open", rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -509,5 +510,33 @@ func rowAnEmbedderToolMayNotTakeTheNameOfTheCLIToolSearch(t *testing.T) {
 	_, err = r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "claude-code/sonnet"})
 	if !errors.Is(err, harness.ErrInvalidRequest) || !strings.Contains(err.Error(), "has the name of a built-in tool") {
 		t.Errorf("Create = %v, want ErrInvalidRequest: has the name of a built-in tool", err)
+	}
+}
+
+func rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen(t *testing.T) {
+	spec := harnesstest.MCPSpec{Name: "docs", Skills: []harnesstest.MCPSkill{refundsSkill()}}
+	servers := map[string]config.MCPServerSpec{"docs": {Command: []string{mcpStubBin(t)}, Env: spec.StdioEnv()}}
+	call := func(id, name string, in map[string]any) harnesstest.Step {
+		return harnesstest.Step{Name: id, Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: id, Name: name, Input: in}}}}
+	}
+	text := func(id string) harnesstest.Step {
+		return harnesstest.Step{Name: id, Reply: harnesstest.Reply{Text: id}}
+	}
+	r, fake := sessionMCPRuntime(t, nil, nil, config.Config{},
+		call("c1", "load_mcp_skill", map[string]any{"server": "docs", "uri": refundsURI}), text("loaded"),
+		call("c2", "read_mcp_resource", map[string]any{"server": "docs", "uri": "skill://acme/billing/refunds/templates/fax.md"}), text("read"))
+	s := sessionMCPCreate(t, r, servers)
+	sessionMCPTurn(t, s, "a", "load it")
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Open(t.Context(), "s1", harness.WithSessionMCP(servers))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "b", "read it")
+	reqs := fake.Requests()
+	if got := requestText(reqs[len(reqs)-1]); !strings.Contains(got, "is not in the entry of the skill "+refundsURI) {
+		t.Errorf("the read of a file that the held entry does not list after Release and Open = %s, want the held-entry refusal", got)
 	}
 }

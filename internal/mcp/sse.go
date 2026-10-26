@@ -14,6 +14,10 @@ type sseEvent struct {
 	data []byte
 }
 
+// maxSSELine bounds one SSE line: one data line holds a whole JSON-RPC response, such as the read of a file of a
+// skill, which the Skills extension allows up to 16 MiB, and JSON escapes one byte in at most 6.
+const maxSSELine = 6*16<<20 + 1<<20
+
 // readSSE reads Server-Sent Events from r, calling onEvent once per
 // complete event (a run of "data:" lines terminated by a blank line).
 // Lines with unrecognized field names (e.g. "event", "retry") are ignored,
@@ -23,7 +27,7 @@ type sseEvent struct {
 // remainder of the stream as an error.
 func readSSE(r io.Reader, onEvent func(sseEvent) (stop bool, err error)) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELine)
 
 	var data [][]byte
 	var id string

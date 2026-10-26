@@ -101,7 +101,7 @@ type Options struct {
 	// Tools are the embedder tools. Each name must be unique. With a
 	// WorkDir, no name may be process, task, model, read_tool_result, or session_info; a
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
-	// may be mcp, list_mcp_resources, read_mcp_resource, or start with mcp__.
+	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
 	// it starts, gets the file, search, and bash tools, the process tool runs Config.Processes in it, and

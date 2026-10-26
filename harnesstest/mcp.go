@@ -35,8 +35,11 @@ type MCPSpec struct {
 	Instructions  string
 	Tools         []MCPTool
 	Resources     []MCPResource
-	PageSize      int  // when positive, tools/list and resources/list answer in pages of this size
+	PageSize      int  // when positive, tools/list, resources/list, and skills/list answer in pages of this size
 	NoListChanged bool `json:",omitempty"` // when true, the fake server omits tools.listChanged
+	// Skills are served through the Skills extension; DirectoryRead declares resources/directory/read.
+	Skills        []MCPSkill `json:",omitempty"`
+	DirectoryRead bool       `json:",omitempty"`
 }
 
 // MCPTool is one scripted tool. A tools/call answers with the first of
@@ -212,6 +215,8 @@ func (h *mcpHandler) dispatch(req mcpRequest, auth, sessionIDHeader string) (any
 		return h.listResources(req.Params), nil
 	case "resources/read":
 		return h.readResource(req.Params, auth, sessionIDHeader)
+	case "skills/list", "skills/get", "resources/directory/read":
+		return h.skillMethod(req.Method, req.Params)
 	}
 	return nil, &mcp.RPCError{Code: -32601, Message: "method not found: " + req.Method}
 }
@@ -221,8 +226,11 @@ func (h *mcpHandler) initialize() any {
 	if h.spec.NoListChanged {
 		caps["tools"] = map[string]any{}
 	}
-	if len(h.spec.Resources) > 0 {
+	if len(h.spec.Resources) > 0 || len(h.spec.Skills) > 0 {
 		caps["resources"] = map[string]any{}
+	}
+	if len(h.spec.Skills) > 0 {
+		caps["extensions"] = map[string]any{mcp.SkillsExtension: map[string]any{"directoryRead": h.spec.DirectoryRead}}
 	}
 	return map[string]any{
 		"protocolVersion": mcp.LatestProtocolVersion,
@@ -319,6 +327,9 @@ func (h *mcpHandler) listResources(params json.RawMessage) any {
 	for _, r := range h.spec.Resources[start:end] {
 		list = append(list, mcp.Resource{URI: r.URI, Name: r.Name, MimeType: r.MimeType})
 	}
+	if next == "" {
+		list = append(list, h.skillResources()...)
+	}
 	return mcp.ListResourcesResult{Resources: list, NextCursor: next}
 }
 
@@ -338,6 +349,9 @@ func (h *mcpHandler) readResource(params json.RawMessage, auth, sessionIDHeader 
 		if r.Blob != "" {
 			c.Text, c.Blob = "", &r.Blob
 		}
+		return mcp.ReadResourceResult{Contents: []mcp.ResourceContents{c}}, nil
+	}
+	if c, ok := h.skillFile(p.URI); ok {
 		return mcp.ReadResourceResult{Contents: []mcp.ResourceContents{c}}, nil
 	}
 	return nil, &mcp.RPCError{Code: -32002, Message: "resource not found: " + p.URI}

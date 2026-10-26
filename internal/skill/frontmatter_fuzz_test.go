@@ -134,7 +134,7 @@ func checkSkillInvariants(t *testing.T, s *Skill) {
 	if s.Name == "" {
 		t.Fatal("validate() accepted an empty Name")
 	}
-	if err := validateName(s.Name); err != nil {
+	if err := ValidateName(s.Name); err != nil {
 		t.Fatalf("validate() accepted Name %q that violates its own character/shape rules: %v", s.Name, err)
 	}
 	if got := filepath.Base(s.Dir); got != s.Name {
