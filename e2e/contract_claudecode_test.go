@@ -299,6 +299,7 @@ func TestContractClaudeCodePlugins(t *testing.T) {
 var claudeMCPRows = map[string]runtimeRow{
 	"claudecode_each_mcp_server_keeps_its_instructions_after_a_long_one": sameAsServe(),
 	"claudecode_mcp_server_with_no_allowed_tool_keeps_its_instructions":  sameAsServe(),
+	"claudecode_mcp_call_runs_a_tool_that_a_select_in_the_same_run_read": sameAsServe(),
 }
 
 func TestContractClaudeCodeMCPServers(t *testing.T) {
@@ -337,6 +338,21 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 			create{as: "a", allowed: []string{"bash", "mcp__alpha__forecast"}}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
 			claudeServerInstructions{as: "a", has: map[string]string{"zeta": "Call forecast before alerts."}},
 		},
+	}, {
+		name: "claudecode_mcp_call_runs_a_tool_that_a_select_in_the_same_run_read",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			fx := map[string]any{}
+			cfg := mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), noListChanged: true})(t, fx)
+			d := claudeLane{mode: "turn_calls", spawnModes: "1=text_only", extra: cfg, turnCalls: [][]turnCall{
+				{{"mcp", map[string]any{"action": "select", "tools": []string{"mcp__weather__snow"}}}},
+				{{"mcp", map[string]any{"action": "call", "tool": "mcp__weather__snow", "arguments": map[string]any{"city": "Oslo"}}}},
+			}}.newDriver(t, h, modelURL).(*claudeDriver)
+			d.fx = fx
+			return d
+		},
+		actions: withActions(claudeOneTurn,
+			setMCPTools{server: "weather", tools: append(mcpWeather("").Tools, harnesstest.MCPTool{Name: "snow", Description: "Report the snowfall", Echo: true})},
+			submit{as: "a", text: "again"}, waitIdle{as: "a"}),
 	}})
 }
 

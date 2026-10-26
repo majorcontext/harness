@@ -472,6 +472,9 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 	var drv driver
 	if sc.driver != nil {
 		drv = sc.driver(t, h, fake.URL())
+		if d, ok := drv.(*claudeDriver); ok {
+			maps.Copy(fx, d.fx)
+		}
 	} else {
 		drv = h.newDriver(t, fake.URL(), config)
 	}
