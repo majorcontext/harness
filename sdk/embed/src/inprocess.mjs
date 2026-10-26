@@ -1,5 +1,3 @@
-// The in-process wasm transport: the module runs in the JavaScript isolate of the caller, on an in-memory file
-// system, for a host that cannot start a Worker, such as a Cloudflare Worker.
 import { refuseRedirect, toolResult } from "./bridge.mjs";
 import { installMemoryFs } from "./memoryfs.mjs";
 import { acpStream } from "./stream.mjs";
@@ -38,7 +36,7 @@ function gateBody(state, body) {
       if (done) controller.close();
       else controller.enqueue(value);
     },
-    cancel: (reason) => reader.cancel(reason),
+    cancel: (reason) => gate(state, reader.cancel(reason)),
   });
 }
 
