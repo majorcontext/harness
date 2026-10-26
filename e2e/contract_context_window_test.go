@@ -55,6 +55,20 @@ func TestContractContextWindowOfAModel(t *testing.T) {
 				t.Errorf("context = %+v, want window %d not estimated", v.Context, want)
 			}
 		})
+		t.Run("a codex model reports its table window, not estimated", func(t *testing.T) {
+			fake := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "hi"}, Repeat: true})
+			cfg := scenarioConfig(map[string]any{
+				"context_window_tokens": 0,
+				"providers": map[string]any{
+					"codex": map[string]any{"type": "openai", "api_key_env": "ANTHROPIC_API_KEY", "base_url": fake.URL() + "/backend-api/codex", "responses_path": "/responses"},
+				},
+			})
+			d := h.openIn(t, writeGoalConfigWith(t, fake.URL(), cfg), t.TempDir(), nil).(*runtimeDriver)
+			v := turnOn(t, d, "codex/gpt-6.1-terra", "hello")
+			if v.Context.Window != 1050000 || v.Context.WindowEstimated {
+				t.Errorf("context = %+v, want window 1050000 not estimated", v.Context)
+			}
+		})
 		t.Run("a model API provider keyed claude-code has no table window and runs on the default, marked estimated", func(t *testing.T) {
 			fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "hi"}, Repeat: true})
 			cfg := scenarioConfig(map[string]any{
