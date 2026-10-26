@@ -87,6 +87,8 @@ export async function startInProcess(transport, { config, proxy, fetch: pageFetc
     return (closing ??= conn.close().then(() => {
       state.exited = true;
       exit();
+      // wasm_exec.js keeps its timers after the program exits, and each one throws when it fires.
+      for (const timer of go._scheduledTimeouts.values()) clearTimeout(timer);
       stream.end();
       return exited;
     }));

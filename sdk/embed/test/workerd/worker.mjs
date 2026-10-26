@@ -38,6 +38,16 @@ function client(h) {
 
 const unhandled = [];
 addEventListener("unhandledrejection", (event) => unhandled.push(String(event.reason?.message ?? event.reason)));
+// workerd reports no exception of a timer callback to the test, so the wrapper records it.
+const nativeSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay, ...args) =>
+  nativeSetTimeout(() => {
+    try {
+      callback(...args);
+    } catch (err) {
+      unhandled.push(String(err.message));
+    }
+  }, delay);
 
 // settleAfterClose closes a harness whose model request is pending, then settles the request.
 async function settleAfterClose(start, viaGlobalFetch) {
@@ -65,7 +75,6 @@ async function settleAfterClose(start, viaGlobalFetch) {
 
 export default {
   async fetch(request, env) {
-    // The Worker adds the credential. The module never holds it.
     const modelFetch = (url, init) => {
       const headers = new Headers(init?.headers);
       headers.set("authorization", `Bearer ${env.MODEL_KEY}`);
@@ -79,6 +88,8 @@ export default {
       });
     // close() resolves only when the module has exited, so a module that stays alive hangs this request.
     await (await start()).close();
+    // The timer of the Go runtime is 5 s; one that survives the exit throws when it fires.
+    await new Promise((resolve) => setTimeout(resolve, 5500));
     await settleAfterClose(start, false);
     await settleAfterClose(start, true);
     const h = await start();
