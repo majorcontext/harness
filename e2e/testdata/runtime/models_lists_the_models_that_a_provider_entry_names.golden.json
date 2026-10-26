@@ -83,6 +83,21 @@
         },
         {
           "context_window": 1000000,
+          "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+          "efforts": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6.1-terra",
+          "name": "GPT-6.1 Terra",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
           "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
           "efforts": [
             "low",

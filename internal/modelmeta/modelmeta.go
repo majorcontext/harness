@@ -116,7 +116,7 @@ func ClaudeCodeContextWindow(alias string) (int, bool) {
 
 // codexModels are the models that the ChatGPT subscription backend accepts.
 // It refuses most other OpenAI models, gpt-5.3-codex included.
-var codexModels = []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
+var codexModels = []string{"gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 
 // claudeCodeModels are the model aliases that the Claude Code CLI resolves,
 // with the name that a client shows for each.

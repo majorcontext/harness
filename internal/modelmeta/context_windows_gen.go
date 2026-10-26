@@ -59,6 +59,7 @@ var openaiContextWindows = map[string]int{
 	"gpt-6-luna":               1050000,
 	"gpt-6-sol":                1050000,
 	"gpt-6.1-sol":              1050000,
+	"gpt-6.1-terra":            1050000,
 	"gpt-daybreak-blue-latest": 1050000,
 	"gpt-daybreak-red-latest":  400000,
 	"o1":                       200000,
