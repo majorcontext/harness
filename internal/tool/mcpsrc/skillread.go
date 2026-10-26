@@ -63,7 +63,10 @@ func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri strin
 			}
 		}
 	}
-	return protocol.ToolResult{}, true, fmt.Errorf("%w. Load the skill again with %s to read its current entry", err, loadName)
+	if errors.Is(err, errVerify) {
+		err = fmt.Errorf("%w. Load the skill again with %s to read its current entry", err, loadName)
+	}
+	return protocol.ToolResult{}, true, err
 }
 
 // ownSkill returns the listed skill of sv that holds uri, the one with the longest root.
