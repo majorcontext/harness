@@ -18,7 +18,7 @@ permissions:
 jobs:
   tck:
     name: TCK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       # Exact commit of github.com/agentclientprotocol/acp-tck (Apache-2.0).
@@ -59,7 +59,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: acp-tck-report
           path: ${{ runner.temp }}/acp-tck-report.json
