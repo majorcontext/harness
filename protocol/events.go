@@ -44,6 +44,7 @@ const (
 	StopInterrupted   StopReason = "interrupted"
 	StopFailed        StopReason = "failed"
 	StopAwaitingInput StopReason = "awaiting_input"
+	StopStepLimit     StopReason = "step_limit"
 )
 
 // Cause says why a turn stopped early.
@@ -251,6 +252,8 @@ type SessionCreated struct {
 	// AllowedTools names the tools of the session: those of the embedder, the
 	// runtime, plugins, and MCP, and its model. nil allows every tool.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
+	// MaxSteps caps the model requests of each turn; zero is no cap.
+	MaxSteps int `json:"max_steps,omitempty"`
 }
 
 // OwnerAcquired fences every earlier owner of the session.

@@ -30,6 +30,8 @@ type CreateSession struct {
 	// loop. nil allows every tool; an empty list allows none. For a backend
 	// that runs its own loop, any other name fails Create.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
+	// MaxSteps caps the model requests of each turn. Zero is no cap; a negative value is invalid.
+	MaxSteps int `json:"max_steps,omitempty"`
 }
 
 // ToolSpec describes a tool to the model.
@@ -131,6 +133,7 @@ type Session struct {
 	WorkDir           string             `json:"work_dir,omitempty"`
 	Model             string             `json:"model"`
 	AllowedTools      []string           `json:"allowed_tools,omitzero"`
+	MaxSteps          int                `json:"max_steps,omitempty"`
 	Title             string             `json:"title,omitempty"`
 	Effort            string             `json:"effort,omitempty"`
 	ServiceTier       string             `json:"service_tier,omitempty"`

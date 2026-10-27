@@ -136,6 +136,10 @@ func (s *State) applyEnded(e protocol.TurnEnded) error {
 		if c := e.Cause; c != protocol.CauseStopped && c != protocol.CauseEnded && c != protocol.CauseGoalCleared && c != protocol.CauseCrashed {
 			return illegal("turn %s has interrupt cause %q", e.TurnID, e.Cause)
 		}
+	case protocol.StopStepLimit:
+		if e.Cause != "" {
+			return illegal("turn %s hits the step limit with cause %q", e.TurnID, e.Cause)
+		}
 	case protocol.StopAwaitingInput:
 		if e.Cause != "" {
 			return illegal("turn %s awaits input with cause %q", e.TurnID, e.Cause)

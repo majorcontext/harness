@@ -98,6 +98,7 @@ type State struct {
 	renamed, modeled, derived string
 	settings                  protocol.Settings
 	allowed                   []string
+	maxSteps                  int
 	createdAt                 time.Time
 	updatedAt                 time.Time
 	inputs                    map[string]input
@@ -269,6 +270,9 @@ func (s *State) Settings() protocol.Settings {
 // AllowedTools returns the tool names of the session: the embedder tools,
 // and the built-in tools of a delegated backend. nil allows every tool.
 func (s *State) AllowedTools() []string { return slices.Clone(s.allowed) }
+
+// MaxSteps returns the cap of model requests for each turn, or 0 for none.
+func (s *State) MaxSteps() int { return s.maxSteps }
 
 // Agent returns the profile of a child session, or "".
 func (s *State) Agent() string { return s.agent }

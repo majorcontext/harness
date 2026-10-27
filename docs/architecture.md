@@ -245,7 +245,7 @@ func (t *Turn) Cancel(ctx context.Context) error
 type TurnResult struct {
 	InputID    string
 	TurnID     string              // empty for a withdrawn input and for a slash command
-	StopReason protocol.StopReason // completed, interrupted, failed, or awaiting_input
+	StopReason protocol.StopReason // completed, interrupted, failed, awaiting_input, or step_limit
 	Cause      protocol.Cause      // why the turn stopped early; empty otherwise
 	Error      string              // masked failure text
 	ErrorClass protocol.ErrorClass
@@ -645,7 +645,7 @@ The actor has one run at a time. A run is a turn, a compaction, or a goal evalua
 Turn:
 
 ```
-running ─► completed | interrupted | failed | awaiting_input
+running ─► completed | interrupted | failed | awaiting_input | step_limit
 running ─► suspended ─► running   (next owner resumes from the last completed item)
 ```
 
@@ -665,6 +665,8 @@ The `cancel` action of the `task` tool stops a turn as `stopped` does, and adds 
 `turn.ended` types the cause in `cause`: `stopped`, `ended`, `goal_cleared`, `crashed`, or `provider_exhausted` (`handoff` is the cause of `turn.suspended`). `error` holds only the masked, capped message of a failure; a turn that ended by its cause alone has no `error`. A `provider_exhausted` turn keeps the provider message in `error`, the provider `RecoverHint` in `recover_hint` (the provider text, or the reset time in UTC when the provider gives no text), and the reset time in `resets_at`, in Unix seconds, when the provider states one: the `resetsAt` of a Claude Code `rate_limit_event`, or the `resets_at` of a Codex usage-limit error body. A Claude Code run whose failed `result` follows a `rate_limit_event` with `status` `rejected` and `isUsingOverage` false ends `provider_exhausted`; the CLI sets that status only from the usage-limit headers of a 429, so a transient throttle keeps its retry rule. Any other failed turn types its error in `error_class`: `permanent`, `timed_out`, `rate_limited` (a rate limit that outlasted the retries), the class name of another retryable error (`overloaded`, `server_error`, `stream_truncated`, `content_filter`, `connection_failed`), `login_required` (the login of the user is missing or rejected, the server of an injected entry answered 401, and only a new login resolves it; a Claude Code turn that fails while `claude auth status --json` reports `loggedIn` false has it on every host, with the error `not logged in to Claude Code; run `harness login claude-code``, and the status is asked after a failure only, with the environment of the turn, so the config directory of a session mirror is the one that is asked), or `unrecovered`. Every reader branches on `stop_reason` and `cause` and never parses the text of `error`.
 
 After any other failed turn, the next queued input runs, as after a completed turn. Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule: it starts the next queued input when no turn is open, except after a turn that ended `provider_exhausted`.
+
+`CreateSession.MaxSteps` (`max_steps` in the body of `POST /sessions`) caps the model requests of each turn of the session. Absent or zero is no cap, and a negative value is `invalid_request`. `session.created` records the value, and the session view shows it as `max_steps`. A child session has no cap. On a backend that does not own the loop, the turn counts each model request of purpose `turn`, also a request that follows a call to an unknown or unavailable tool. A retry of the same call is not a new request, and a compaction summary, a goal evaluation, and a title are not counted. A turn that made `max_steps` requests and would make one more ends at once, makes no further request, keeps every message, and appends `turn.ended` with the stop reason `step_limit`, no cause, and no `error`. The next queued input runs, as after a completed turn. A backend that owns the loop gets `--max-turns <max_steps>` on the Claude Code CLI, and a `result` frame with the subtype `error_max_turns` ends the turn with the stop reason `step_limit` and not as a failure.
 
 No tool call is ever re-run after a stop. The log stays strictly append-only, and a client hides output by cause if it wants to.
 
@@ -1017,7 +1019,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - A prompt for a session that the connection does not hold answers `-32002`.
 - The updates of a turn reach the client before the answer: the answer waits until the event pump has sent every update through the end of the turn. The answer of a prompt that a turn takes follows every update of its turn and precedes every update of a later turn: the pump holds at the end of the turn until the response is queued. The answer of a typed command or of a withdrawn input follows the updates through its final record.
 - A turn that starts with no `session/prompt` open, such as a goal turn, sends its updates as notifications.
-- The stop reasons are: `completed` and `awaiting_input` are `end_turn` (a client with `elicitation.form` also gets an `elicitation/create` for the question, see Questions); `interrupted` is `cancelled`. After `session/cancel`, the prompt that runs answers `cancelled`, after every update that it has pending. A prompt that a cancel withdraws before a turn takes it answers `cancelled`.
+- The stop reasons are: `completed` and `awaiting_input` are `end_turn` (a client with `elicitation.form` also gets an `elicitation/create` for the question, see Questions); `interrupted` is `cancelled`; `step_limit` is `max_turn_requests`. After `session/cancel`, the prompt that runs answers `cancelled`, after every update that it has pending. A prompt that a cancel withdraws before a turn takes it answers `cancelled`.
 - A turn that fails answers `-32603` with `data.code` `internal` and `data.error_class`; the message is the masked error of the turn. A failure that Authentication names answers `-32000`.
 - `$/cancel_request` for a prompt also interrupts its turn.
 - A tool call of the model is a `tool_call` update. The adapter sends it when the assistant message that holds the call completes, after the text of that message. It holds the `toolCallId` (the call ID), the `name` of the tool, a `title`, a `kind`, the status `in_progress`, and the arguments as `rawInput`. No frame streams the arguments, so the status `pending` is not used.

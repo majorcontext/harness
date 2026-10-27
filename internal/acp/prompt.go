@@ -259,6 +259,8 @@ func promptResult(res harness.TurnResult, cancelled bool) (any, error) {
 		return map[string]string{"stopReason": "end_turn"}, nil
 	case protocol.StopInterrupted:
 		return map[string]string{"stopReason": "cancelled"}, nil
+	case protocol.StopStepLimit:
+		return map[string]string{"stopReason": "max_turn_requests"}, nil
 	}
 	msg := res.Error
 	if msg == "" {

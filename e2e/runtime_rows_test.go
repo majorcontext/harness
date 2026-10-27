@@ -185,7 +185,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, mcpSkillRows, claudeChildReportRows, accountRows, midTurnCompactionRows, map[string]runtimeRow{
+var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, mcpSkillRows, claudeChildReportRows, accountRows, midTurnCompactionRows, stepLimitRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),

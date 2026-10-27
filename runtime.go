@@ -305,6 +305,9 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 	if err := checkEffort(req.Effort); err != nil {
 		return nil, err
 	}
+	if req.MaxSteps < 0 {
+		return nil, fmt.Errorf("%w: max_steps must be >= 0", ErrInvalidRequest)
+	}
 	so, err := r.sessionOptions(opts)
 	if err != nil {
 		return nil, err
@@ -320,7 +323,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin,
-		Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
+		Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools, MaxSteps: req.MaxSteps}
 	return r.create(ctx, id, launch{created: &created, mcp: so.mcp})
 }
 

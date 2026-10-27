@@ -243,6 +243,9 @@ func (r *run) outcome(err, exit error) error {
 	case r.asked != "":
 		return nil
 	}
+	if r.result.Subtype == "error_max_turns" {
+		return turn.ErrStepLimit
+	}
 	if res := r.result; res.IsError {
 		failure := res.failure()
 		err = fmt.Errorf("claudecode: the turn failed (%s): %s", res.Subtype, failure)

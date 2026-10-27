@@ -439,6 +439,9 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "max_steps": {
+            "type": "integer"
           }
         },
         "additionalProperties": false,
@@ -901,7 +904,8 @@
               "completed",
               "interrupted",
               "failed",
-              "awaiting_input"
+              "awaiting_input",
+              "step_limit"
             ]
           },
           "cause": {
@@ -1786,6 +1790,9 @@
             },
             "type": "array"
           },
+          "max_steps": {
+            "type": "integer"
+          },
           "title": {
             "type": "string"
           },
@@ -1906,6 +1913,9 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "max_steps": {
+            "type": "integer"
           }
         },
         "type": "object",
@@ -2221,7 +2231,8 @@
               "completed",
               "interrupted",
               "failed",
-              "awaiting_input"
+              "awaiting_input",
+              "step_limit"
             ]
           },
           "cause": {

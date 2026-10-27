@@ -153,8 +153,14 @@ var basicModes = map[string]mode{
 	"cache_1h":               cache1h,
 	"compact_after_cache_1h": cache1h,
 	"one_shot":               func(f *fake) { f.emit(say("MET: ok"), success("MET: ok", 0, 0)) },
-	"parallel_calls":         parallelCalls,
-	"builtin_tool":           builtinTool,
+	"max_turns": func(f *fake) {
+		f.emit(say("Let me check that."),
+			assistant(toolUse("toolu_1", "mcp__harness__bash", obj{"command": "echo hi"})),
+			user(toolResult("toolu_1", "hi\n", false)),
+			result("error_max_turns", true, "", 7, 3))
+	},
+	"parallel_calls": parallelCalls,
+	"builtin_tool":   builtinTool,
 	"builtin_refused": func(f *fake) {
 		f.emit(say("Let me check that."), assistant(toolUse("toolu_b", "Bash", obj{"command": "ls"})),
 			user(toolResult("toolu_b", "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here.</tool_use_error>", true)).set("tool_use_result", "Error: No such tool available: Bash. Bash is disabled for this session, in subagents as well as here."))
