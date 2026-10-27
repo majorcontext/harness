@@ -75,13 +75,13 @@ func TestEmbedderTools(t *testing.T) {
 		ran     []string
 	}{
 		{name: "a tool call runs the tool and the next request carries its result",
-			called: "echo", want: `echo ran {"x": 1}`, tools: []string{"echo", "secret"}, ran: []string{"call_1 echo"}},
+			called: "echo", want: `echo ran {"x": 1}`, tools: []string{"echo", "secret", "session_info"}, ran: []string{"call_1 echo"}},
 		{name: "Restrict hides a tool and refuses a call to it", allowed: []string{"echo"},
 			called: "secret", want: noTool + "secret", failed: true, tools: []string{"echo"}},
 		{name: "an empty allow list hides every tool", allowed: []string{},
 			called: "echo", want: noTool + "echo", failed: true},
 		{name: "a tool error is an error result",
-			called: "fail", want: "boom", failed: true, tools: []string{"echo", "fail", "secret"}, ran: []string{"call_1 fail"}},
+			called: "fail", want: "boom", failed: true, tools: []string{"echo", "fail", "secret", "session_info"}, ran: []string{"call_1 fail"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			echo, secret, fail := newProbe("echo", false), newProbe("secret", false), newProbe("fail", false)
@@ -159,14 +159,11 @@ func TestNewRejectsAToolThatTakesTheHistoryToolName(t *testing.T) {
 	}
 }
 
-func TestNewRejectsAToolThatTakesTheSessionInfoNameOnlyWithAWorkDir(t *testing.T) {
-	for _, tc := range []struct {
-		workDir string
-		reject  bool
-	}{{t.TempDir(), true}, {"", false}} {
-		_, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: tc.workDir, Tools: []harness.Tool{newProbe("session_info", false)}})
-		if (err != nil) != tc.reject || errors.Is(err, harness.ErrInvalidRequest) {
-			t.Errorf("New with WorkDir %q = %v, want rejected = %v with a plain error", tc.workDir, err, tc.reject)
+func TestNewRejectsAToolThatTakesTheSessionInfoNameWithOrWithoutAWorkDir(t *testing.T) {
+	for _, workDir := range []string{t.TempDir(), ""} {
+		_, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: workDir, Tools: []harness.Tool{newProbe("session_info", false)}})
+		if err == nil || errors.Is(err, harness.ErrInvalidRequest) {
+			t.Errorf("New with WorkDir %q = %v, want a plain error", workDir, err)
 		}
 	}
 }

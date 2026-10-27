@@ -28,9 +28,9 @@ func TestOpenReplacesAllowedToolsBeforeTheNextTurn(t *testing.T) {
 		{"widen", []string{"echo"}, []string{"echo", "secret"}, []string{"secret", "echo", "echo"}, []string{"echo", "secret"}, 1},
 		{"narrow", []string{"echo", "secret"}, []string{"secret"}, []string{"secret"}, []string{"secret"}, 1},
 		{"allow none", nil, []string{}, []string{}, nil, 1},
-		{"allow all", []string{}, nil, nil, []string{"echo", "secret"}, 1},
+		{"allow all", []string{}, nil, nil, []string{"echo", "secret", "session_info"}, 1},
 		{"same set", []string{"echo", "secret"}, []string{"secret", "echo", "echo"}, []string{"echo", "secret"}, []string{"echo", "secret"}, 0},
-		{"same nil", nil, nil, nil, []string{"echo", "secret"}, 0},
+		{"same nil", nil, nil, nil, []string{"echo", "secret", "session_info"}, 0},
 		{"same empty", []string{}, []string{}, []string{}, nil, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

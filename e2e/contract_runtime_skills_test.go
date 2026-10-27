@@ -111,6 +111,36 @@ func TestContractRuntimeSkills(t *testing.T) {
 	})
 }
 
+func TestContractRuntimeSessionInfoWithoutWorkDir(t *testing.T) {
+	skipShort(t)
+	t.Run("a_runtime_with_no_work_directory_offers_session_info_and_a_call_returns_a_report", func(t *testing.T) {
+		t.Parallel()
+		call := harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "session_info", Input: map[string]any{}}}}}
+		r, fake := skillsRuntime(t, &fakeSkills{}, call, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+		s := skillsCreate(t, r)
+		sessionMCPTurn(t, s, "a", "go")
+		reqs := fake.Requests()
+		if !requestHas(reqs[0], "session_info") {
+			t.Errorf("first request tools = %v, want session_info", reqs[0].Tools)
+		}
+		if got := requestText(reqs[1]); !strings.Contains(got, `"session_id": "s1"`) {
+			t.Errorf("second request does not hold the report: %s", got)
+		}
+	})
+	t.Run("an_allowed_tools_list_without_session_info_hides_it", func(t *testing.T) {
+		t.Parallel()
+		r, fake := skillsRuntime(t, &fakeSkills{}, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+		s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test", AllowedTools: []string{"load_skill"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionMCPTurn(t, s, "a", "go")
+		if reqs := fake.Requests(); requestHas(reqs[0], "session_info") || !requestHas(reqs[0], "load_skill") {
+			t.Errorf("tools = %v, want load_skill and no session_info", reqs[0].Tools)
+		}
+	})
+}
+
 func skillsCreate(t *testing.T, r *harness.Runtime) *harness.Session {
 	t.Helper()
 	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
