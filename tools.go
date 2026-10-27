@@ -37,7 +37,7 @@ func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name,
 // knownIn is known for a session that has session MCP servers when session is true.
 func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
-	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || name == turn.AskTool || caps.WebSearch && name == turn.WebSearchTool ||
+	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || name == turn.AskTool || r.skills != nil && name == selftool.LoadSkillName || caps.WebSearch && name == turn.WebSearchTool ||
 		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || name == "mcp" && (r.mcp.Populated() || r.plugins.Configured()) || r.owns(name)
 }
 
@@ -93,6 +93,9 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			continue
 		}
 		static = append(static, t)
+	}
+	if r.skills != nil {
+		static = append(static, selftool.NewLoadSkill(r.skills.Read, id, sp.EmbeddedSkills()))
 	}
 	srcs := turn.Sources{boundTools{tools: static, session: id, root: root}}
 	if len(loopOnly) > 0 {

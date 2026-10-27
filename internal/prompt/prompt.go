@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,13 +27,20 @@ const (
 
 const skillsHeader = "Available skills. Each skill below is a capability you can use, " +
 	"but only its name and description are shown here. To activate a skill you " +
-	"MUST first read its SKILL.md file with the read_file tool before relying " +
+	"MUST first read its SKILL.md file with the read_file tool, or with the " +
+	"load_skill tool when its line says to load it with load_skill, before relying " +
 	"on it; do not assume its contents from the description alone."
 
-// Skill is a skill that the prompt lists, with the path of its SKILL.md.
+// Skill is a skill that the prompt lists, with the path of its SKILL.md. An embedded skill has no path.
 type Skill struct {
 	Name string `json:"name"`
-	Path string `json:"path"`
+	Path string `json:"path,omitempty"`
+}
+
+// Embedded is a skill of the embedder that the prompt lists.
+type Embedded struct {
+	Name        string
+	Description string
 }
 
 // Info is the system prompt of a session and what it holds.
@@ -60,15 +68,21 @@ var toolBatching = fmt.Sprintf("If you intend to call multiple tools and there a
 // no workDir it reads no file and returns only append_system_prompt. A file
 // that cannot be used is skipped.
 func Build(cfg config.Config, workDir string, log *slog.Logger) []string {
-	return Describe(cfg, workDir, log).Segments
+	return Describe(cfg, workDir, nil, log).Segments
 }
 
 // Describe returns what Build returns, with the instructions files and the
-// skills that it read. A nil log is slog.Default().
-func Describe(cfg config.Config, workDir string, log *slog.Logger) Info {
+// skills that it read. The embedded skills join the skill list, also with no
+// workDir. A nil log is slog.Default().
+func Describe(cfg config.Config, workDir string, embedded []Embedded, log *slog.Logger) Info {
 	log = cmp.Or(log, slog.Default())
 	if workDir == "" {
-		return Info{Segments: slices.Clone(cfg.AppendSystemPrompt)}
+		segs := slices.Clone(cfg.AppendSystemPrompt)
+		list, skills := skillList(cfg, "", embedded, log)
+		if list != "" {
+			segs = append(segs, list)
+		}
+		return Info{Segments: segs, Skills: skills, SkillList: list}
 	}
 	if abs, err := filepath.Abs(workDir); err == nil {
 		workDir = abs
@@ -76,7 +90,7 @@ func Describe(cfg config.Config, workDir string, log *slog.Logger) Info {
 	segs := append([]string{Base(workDir)}, cfg.AppendSystemPrompt...)
 	segs = append(segs, toolBatching)
 	instr, names := instructions(cfg, workDir, log)
-	list, skills := skillList(cfg, workDir, log)
+	list, skills := skillList(cfg, workDir, embedded, log)
 	for _, s := range []string{instr, list} {
 		if s != "" {
 			segs = append(segs, s)
@@ -227,40 +241,65 @@ func truncated(path string, data []byte, limit, total int, log *slog.Logger) str
 		kept, path, total, len(kept), total-len(kept))
 }
 
-// skillList lists each valid skill of the skills dirs once, sorted by name.
-func skillList(cfg config.Config, workDir string, log *slog.Logger) (string, []Skill) {
-	dirs := cfg.SkillsDirs
-	if dirs == nil {
-		dirs = []string{filepath.Join(".agents", "skills")}
+// skillList lists each valid skill of the skills dirs and each valid embedded
+// skill once, sorted by name. An embedded skill replaces a skill of a dir with
+// its name. With no workDir no dir is read.
+func skillList(cfg config.Config, workDir string, embedded []Embedded, log *slog.Logger) (string, []Skill) {
+	type entry struct {
+		Skill
+		line string
 	}
-	seen := map[string]bool{}
-	var lines []string
-	var found []Skill
-	for _, dir := range dirs {
-		dir = resolve(workDir, dir)
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			s, err := skill.Load(filepath.Join(dir, e.Name()))
-			if err != nil {
-				if e.IsDir() && !errors.Is(err, fs.ErrNotExist) {
-					log.Warn("prompt: skill skipped", "dir", filepath.Join(dir, e.Name()), "err", err)
+	byName := map[string]entry{}
+	if workDir != "" {
+		dirs := cfg.SkillsDirs
+		if dirs == nil {
+			dirs = []string{filepath.Join(".agents", "skills")}
+		}
+		for _, dir := range dirs {
+			dir = resolve(workDir, dir)
+			entries, _ := os.ReadDir(dir)
+			for _, e := range entries {
+				s, err := skill.Load(filepath.Join(dir, e.Name()))
+				if err != nil {
+					if e.IsDir() && !errors.Is(err, fs.ErrNotExist) {
+						log.Warn("prompt: skill skipped", "dir", filepath.Join(dir, e.Name()), "err", err)
+					}
+					continue
 				}
-				continue
+				if _, dup := byName[s.Name]; dup {
+					log.Warn("prompt: skill skipped, duplicate name", "name", s.Name, "path", s.Path)
+					continue
+				}
+				byName[s.Name] = entry{Skill{s.Name, s.Path}, fmt.Sprintf("%s — %s (path: %s)", s.Name, s.Description, s.Path)}
 			}
-			if seen[s.Name] {
-				log.Warn("prompt: skill skipped, duplicate name", "name", s.Name, "path", s.Path)
-				continue
-			}
-			seen[s.Name] = true
-			lines = append(lines, fmt.Sprintf("%s — %s (path: %s)", s.Name, s.Description, s.Path))
-			found = append(found, Skill{s.Name, s.Path})
 		}
 	}
-	if len(lines) == 0 {
+	seen := map[string]bool{}
+	for _, e := range embedded {
+		err := cmp.Or(skill.ValidateName(e.Name), skill.ValidateDescription(e.Description))
+		switch {
+		case err != nil:
+			log.Warn("prompt: embedded skill skipped", "name", e.Name, "err", err)
+			continue
+		case seen[e.Name]:
+			log.Warn("prompt: embedded skill skipped, duplicate name", "name", e.Name)
+			continue
+		}
+		seen[e.Name] = true
+		if old, ok := byName[e.Name]; ok {
+			log.Warn("prompt: skill replaced by an embedded skill", "name", e.Name, "path", old.Path)
+		}
+		byName[e.Name] = entry{Skill{Name: e.Name}, fmt.Sprintf("%s — %s (load with load_skill)", e.Name, e.Description)}
+	}
+	if len(byName) == 0 {
 		return "", nil
 	}
-	slices.Sort(lines)
-	slices.SortFunc(found, func(a, b Skill) int { return strings.Compare(a.Name, b.Name) })
+	var lines []string
+	var found []Skill
+	for _, name := range slices.Sorted(maps.Keys(byName)) {
+		lines = append(lines, byName[name].line)
+		found = append(found, byName[name].Skill)
+	}
 	return skillsHeader + "\n" + strings.Join(lines, "\n"), found
 }
 

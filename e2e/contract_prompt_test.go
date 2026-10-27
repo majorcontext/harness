@@ -15,7 +15,7 @@ import (
 
 const (
 	skillHeader = "Available skills. Each skill below is a capability you can use, but only its name and description are shown here. " +
-		"To activate a skill you MUST first read its SKILL.md file with the read_file tool before relying on it; do not assume its contents from the description alone."
+		"To activate a skill you MUST first read its SKILL.md file with the read_file tool, or with the load_skill tool when its line says to load it with load_skill, before relying on it; do not assume its contents from the description alone."
 	batchingPrefix = "If you intend to call multiple tools"
 	batchingText   = "If you intend to call multiple tools and there are no dependencies between the calls, make all of the independent calls in the same message: " +
 		"harness runs one message's tool calls concurrently, up to 8 at a time. Otherwise you MUST wait for previous calls to finish first to determine the dependent values."

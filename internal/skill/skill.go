@@ -135,17 +135,25 @@ func (s *Skill) validate() error {
 		return fmt.Errorf("name %q must match parent directory name %q", s.Name, want)
 	}
 
-	if s.Description == "" {
-		return errors.New("missing or empty required field: description")
-	}
-	if n := utf8.RuneCountInString(s.Description); n > maxDescriptionLen {
-		return fmt.Errorf("description is %d chars, exceeds maximum of %d", n, maxDescriptionLen)
+	if err := ValidateDescription(s.Description); err != nil {
+		return err
 	}
 
 	if s.Compatibility != "" {
 		if n := utf8.RuneCountInString(s.Compatibility); n > maxCompatibilityLen {
 			return fmt.Errorf("compatibility is %d chars, exceeds maximum of %d", n, maxCompatibilityLen)
 		}
+	}
+	return nil
+}
+
+// ValidateDescription enforces the description rules of the Agent Skills specification.
+func ValidateDescription(description string) error {
+	if description == "" {
+		return errors.New("missing or empty required field: description")
+	}
+	if n := utf8.RuneCountInString(description); n > maxDescriptionLen {
+		return fmt.Errorf("description is %d chars, exceeds maximum of %d", n, maxDescriptionLen)
 	}
 	return nil
 }
