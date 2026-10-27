@@ -103,6 +103,8 @@ type Options struct {
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
+	// Skills supplies embedded skills for each session; see SkillSource.
+	Skills SkillSource
 	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
 	// it starts, gets the file, search, and bash tools, the process tool runs Config.Processes in it, and
 	// the task tool starts child sessions with the agent profiles of its .agents dir. bash and the process
@@ -156,7 +158,8 @@ type Runtime struct {
 	limits    turn.Limits
 	maxTokens int
 	// prompt reads the system prompt of a session with the files that it holds.
-	prompt     func() prompt.Info
+	prompt     func(embedded []prompt.Embedded) prompt.Info
+	skills     SkillSource // nil: no embedded skills
 	evaluator  string
 	titleModel string
 	resolve    func(string) string
@@ -172,8 +175,7 @@ type Runtime struct {
 	workDir string
 	web     *webOptions // nil: no web_fetch
 	health  protocol.Health
-	// version is the build version that the engine banner names; empty: no banner.
-	version string
+	version string // the build version that the engine banner names; empty: no banner
 	// questions lets a backend ask the user a question.
 	questions bool
 	// webSearch is Config.Web.Search: models whose backend has a native web search get it.
@@ -228,7 +230,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
-		sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
+		skills: opts.Skills, sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		titleModel: modelRef(opts.Config, opts.Config.TitleModel),
 		threshold:  positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
@@ -236,7 +238,7 @@ func New(opts Options) (*Runtime, error) {
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
 		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent)}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
-	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, r.log) }
+	r.prompt = func(e []prompt.Embedded) prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, e, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
@@ -394,7 +396,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		return nil, err
 	}
 	plug := r.pluginSession(id)
-	sp := selftool.NewPrompt(r.prompt(), c.Agent, r.profile(c.Agent, l.profile))
+	sp := selftool.NewPrompt(r.prompt(r.listSkills(ctx, id)), c.Agent, r.profile(c.Agent, l.profile))
 	sm := r.sessionSource(l.mcp)
 	var a *session.Actor
 	cfg := session.Config{

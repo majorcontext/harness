@@ -74,6 +74,17 @@ func NewPrompt(read prompt.Info, agent string, p prompt.Profile) *Prompt {
 // SkillList returns the skill segment that the session read, or "".
 func (p *Prompt) SkillList() string { return p.read.SkillList }
 
+// EmbeddedSkills returns the names of the embedded skills that the session lists.
+func (p *Prompt) EmbeddedSkills() []string {
+	var names []string
+	for _, s := range p.read.Skills {
+		if s.Path == "" {
+			names = append(names, s.Name)
+		}
+	}
+	return names
+}
+
 // Sent records system as the system prompt of the newest turn, in place of the
 // segments of the session, for a backend that builds its own prompt.
 func (p *Prompt) Sent(system string) {

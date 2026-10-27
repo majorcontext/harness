@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Embedded skills** (`harness`, `internal/prompt`, `internal/selftool`, `internal/backend/claudecode`) — `Options.Skills` takes a `SkillSource`, so an embedder supplies the skills of each session, for example from a database. The runtime calls `List` once when a session is created or opened and adds the skills to the skill list, also with no `WorkDir`. An embedded skill replaces a skill of `skills_dirs` with the same name. The new runtime tool `load_skill {name, file}` reads one file of a listed skill with `Read`, and `session_info` reports the skill by name with no path. `New` fails when `Options.Tools` also has a `load_skill` tool. The skill list text and the Claude Code tool-name segment now say that a skill is loaded with `load_skill` when its line says so.
+
 - **Step limit of an existing session** (`harness`, `protocol`, `internal/session`) — `Runtime.Open` with `WithMaxSteps(n)` sets or clears the `max_steps` of a session that exists, with one `settings.changed` that carries `max_steps`. It applies from the next turn. `Create` rejects the option, and `PATCH /sessions/{id}` cannot set it.
 
 - **Per-session limit of model requests** (`protocol`, `internal/turn`, `internal/backend/claudecode`) — `max_steps` in `POST /sessions` (`CreateSession.MaxSteps`) caps the model requests of each turn. A turn that made that many requests and would make another ends at once with the new stop reason `step_limit`, keeps its messages, and ACP answers `max_turn_requests`. The Claude Code backend passes `--max-turns` and maps the `error_max_turns` result to `step_limit`. Zero or absent is no cap.

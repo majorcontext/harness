@@ -52,7 +52,7 @@ const toolNames = "Your tools are the Harness tools. Where instructions name Rea
 	"MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, " +
 	"ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. "
 
-const readSkillDoc = " To use a skill, read its SKILL.md file with read_file."
+const readSkillDoc = " To use a skill, read its SKILL.md file with read_file, or with load_skill when its line says so."
 
 // toolNamesOf returns the tool-name segment for the tools that the turn offers:
 // WebFetch maps to web_fetch only when the turn offers that tool, and WebSearch
