@@ -48,5 +48,8 @@
     "just-bash": "3.6.0",
     "playwright": "1.64.0",
     "workerd": "1.20261026.1"
+  },
+  "overrides": {
+    "undici": "7.30.1"
   }
 }
