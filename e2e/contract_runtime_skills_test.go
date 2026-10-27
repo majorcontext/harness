@@ -89,6 +89,19 @@ func TestContractRuntimeSkills(t *testing.T) {
 			t.Errorf("Read calls = %v, want none", got)
 		}
 	})
+	t.Run("load_skill_of_a_file_outside_the_skill_fails_without_a_read", func(t *testing.T) {
+		t.Parallel()
+		src := &fakeSkills{}
+		r, fake := skillsRuntime(t, src, loadSkillStep(map[string]any{"name": "refunds", "file": "../x"}), harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+		s := skillsCreate(t, r)
+		sessionMCPTurn(t, s, "a", "go")
+		if got := requestText(fake.Requests()[1]); !strings.Contains(got, "not a relative path inside the skill") {
+			t.Errorf("second request does not hold the error: %s", got)
+		}
+		if got := src.calls(); len(got) != 0 {
+			t.Errorf("Read calls = %v, want none", got)
+		}
+	})
 	t.Run("an_embedder_tool_may_not_take_the_name_load_skill_with_a_skill_source", func(t *testing.T) {
 		t.Parallel()
 		_, err := harness.New(harness.Options{Store: store.NewMemStore(), Skills: &fakeSkills{}, Tools: []harness.Tool{namedTool("load_skill")}})

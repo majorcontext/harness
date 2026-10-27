@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
+	"io/fs"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/majorcontext/harness/internal/skill"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -51,10 +50,10 @@ func (t loadSkill) Run(ctx context.Context, call protocol.ToolCall) (protocol.To
 	}
 	file := in.File
 	if file == "" {
-		file = skill.Filename
+		file = "SKILL.md"
 	}
-	if path.IsAbs(file) || path.Clean(file) != file || slices.Contains(strings.Split(file, "/"), "..") {
-		return protocol.ToolResult{}, fmt.Errorf("%s: the file %q is not a clean path inside the skill", LoadSkillName, file)
+	if !fs.ValidPath(file) || file == "." || strings.Contains(file, "\\") || (len(file) >= 2 && file[1] == ':') {
+		return protocol.ToolResult{}, fmt.Errorf("%s: the file %q is not a relative path inside the skill", LoadSkillName, file)
 	}
 	b, err := t.read(ctx, t.session, in.Name, file)
 	if err != nil {

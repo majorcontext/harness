@@ -7,6 +7,7 @@ import (
 )
 
 // SkillSource supplies the embedded skills of a session, for example from a database.
+// The runtime calls List and Read concurrently, also for one session.
 type SkillSource interface {
 	// List returns the skills of a session.
 	List(ctx context.Context, session string) ([]SkillInfo, error)
