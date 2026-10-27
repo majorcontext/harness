@@ -18,7 +18,7 @@ permissions:
 jobs:
   tck:
     name: TCK
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       # Exact commit of github.com/agentclientprotocol/acp-tck (Apache-2.0).

@@ -9,7 +9,7 @@ on:
 jobs:
   static:
     name: Static
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -98,7 +98,7 @@ jobs:
 
   gates:
     name: Gates
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
     steps:
@@ -141,7 +141,7 @@ jobs:
 
   wasm:
     name: WebAssembly
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -179,7 +179,7 @@ jobs:
 
   unit:
     name: Unit
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
     steps:
@@ -233,7 +233,7 @@ jobs:
 
   contract:
     name: Contract
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -276,7 +276,7 @@ jobs:
 
   runtime:
     name: Runtime contract
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -319,7 +319,7 @@ jobs:
 
   node-wasm:
     name: Node wasm
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -370,7 +370,7 @@ jobs:
 
   workerd:
     name: Cloudflare Worker
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -421,7 +421,7 @@ jobs:
 
   browser:
     name: Browser
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:

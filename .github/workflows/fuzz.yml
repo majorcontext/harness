@@ -14,7 +14,7 @@ on:
 jobs:
   fuzz:
     name: ${{ matrix.target }} (${{ matrix.package }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     strategy:
       # One slow/panicking target must not cancel exploration of the rest.
