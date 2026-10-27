@@ -273,9 +273,6 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
-		if req.MaxSteps > 0 && !caps.OwnsLoop && steps >= req.MaxSteps {
-			return ErrStepLimit
-		}
 		if !first && !caps.OwnsContext {
 			h, ok, err := to.AutoCompact(step)
 			if err != nil {
@@ -322,6 +319,9 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		if opened, err := openAsk(ctx, step, t, to, asks, record); opened || err != nil {
 			return err
+		}
+		if req.MaxSteps > 0 && steps >= req.MaxSteps {
+			return ErrStepLimit
 		}
 		in, err := to.Steer()
 		if err != nil {

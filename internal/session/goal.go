@@ -202,7 +202,7 @@ func (a *Actor) resumed() []protocol.Payload {
 func (a *Actor) judgeable() bool {
 	g, _ := a.state.Goal()
 	last := a.state.LastEnded()
-	return last.TurnID != g.Evaluated && (last.StopReason == protocol.StopCompleted || last.StopReason == protocol.StopInterrupted)
+	return last.TurnID != g.Evaluated && (last.StopReason == protocol.StopCompleted || last.StopReason == protocol.StopInterrupted || last.StopReason == protocol.StopStepLimit)
 }
 
 // settle judges the last ended turn for an active goal, or starts the next
