@@ -185,7 +185,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		env     []string
 		offered []string
 	}{
-		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden", hist}},
+		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden", "session_info", hist}},
 		{name: "a restricted tool is not offered", allowed: []string{"echo"}, env: []string{toolsInit, `[]`}, offered: []string{"echo", hist}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -99,7 +99,7 @@ type Options struct {
 	// Logger receives every log line of the runtime. nil: slog.Default().
 	Logger *slog.Logger
 	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process, task, model, read_tool_result, or session_info; a
+	// WorkDir, no name may be process, task, model, or read_tool_result; with or without one, no name may be session_info; a
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool

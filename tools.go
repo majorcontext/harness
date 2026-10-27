@@ -47,9 +47,9 @@ func (r *Runtime) owns(name string) bool {
 		r.plugins != nil && r.plugins.Has(name)
 }
 
-// builtin reports whether name is a built-in tool of the WorkDir.
+// builtin reports whether name is session_info or a built-in tool of the WorkDir.
 func (r *Runtime) builtin(name string) bool {
-	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == selftool.SessionInfoName ||
+	return name == selftool.SessionInfoName || r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName ||
 		r.web != nil && name == turn.WebFetchTool)
 }
 
@@ -122,8 +122,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			env = plug.ShellEnv
 		}
 		taken := r.shadowed()
-		files := turn.Fixed(append(slices.DeleteFunc(builtin.Tools(r.workDir, env), func(t turn.Tool) bool { return slices.Contains(taken, t.Spec().Name) }),
-			selftool.NewSessionInfo(toolHost{r}, id, sp)))
+		files := turn.Fixed(slices.DeleteFunc(builtin.Tools(r.workDir, env), func(t turn.Tool) bool { return slices.Contains(taken, t.Spec().Name) }))
 		if r.web != nil {
 			files = append(files, newWebTool(*r.web))
 		}
@@ -135,6 +134,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			return proc.Notices{M: r.procs, WorkDir: r.workDir}
 		}})
 	}
+	srcs = append(srcs, turn.Fixed{selftool.NewSessionInfo(toolHost{r}, id, sp)})
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) {
