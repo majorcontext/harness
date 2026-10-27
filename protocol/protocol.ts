@@ -569,6 +569,7 @@ export interface SettingsChanged {
   service_tier?: string;
   accounts?: Record<string, string>;
   allowed_tools?: string[] | null;
+  max_steps?: number;
 }
 
 export interface SettingsPatch {

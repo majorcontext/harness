@@ -53,6 +53,9 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 	if e.AllowedTools != nil {
 		s.allowed = slices.Clone(*e.AllowedTools)
 	}
+	if e.MaxSteps != nil {
+		s.maxSteps = *e.MaxSteps
+	}
 	return nil
 }
 

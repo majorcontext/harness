@@ -312,8 +312,8 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 	if err != nil {
 		return nil, err
 	}
-	if so.allowedTools != nil {
-		return nil, fmt.Errorf("%w: WithAllowedTools is only valid for Open", ErrInvalidRequest)
+	if so.allowedTools != nil || so.maxSteps != nil {
+		return nil, fmt.Errorf("%w: WithAllowedTools and WithMaxSteps are only valid for Open", ErrInvalidRequest)
 	}
 	if err := r.startPlugins(ctx, false); err != nil {
 		return nil, err
@@ -349,7 +349,10 @@ func (r *Runtime) Open(ctx context.Context, id string, opts ...SessionOption) (*
 	if err != nil {
 		return nil, err
 	}
-	return r.load(ctx, id, launch{mcp: so.mcp, allowedTools: so.allowedTools})
+	if so.maxSteps != nil && *so.maxSteps < 0 {
+		return nil, fmt.Errorf("%w: max_steps must be >= 0", ErrInvalidRequest)
+	}
+	return r.load(ctx, id, launch{mcp: so.mcp, allowedTools: so.allowedTools, maxSteps: so.maxSteps})
 }
 
 // launch is how a load starts a session that this runtime does not run yet.
@@ -366,6 +369,7 @@ type launch struct {
 	// accounts applies session account selections before an opened turn resumes.
 	accounts     *map[string]string
 	allowedTools *[]string
+	maxSteps     *int
 }
 
 func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
@@ -432,7 +436,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
 	} else {
-		a, err = session.OpenWithSettings(ctx, cfg, protocol.SettingsChanged{Accounts: l.accounts, AllowedTools: l.allowedTools})
+		a, err = session.OpenWithSettings(ctx, cfg, protocol.SettingsChanged{Accounts: l.accounts, AllowedTools: l.allowedTools, MaxSteps: l.maxSteps})
 	}
 	if err != nil {
 		sm.Close()

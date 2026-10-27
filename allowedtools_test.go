@@ -283,3 +283,73 @@ func allowlistChanges(t *testing.T, st harness.Store) [][]string {
 	}
 	return out
 }
+
+func TestOpenSetsTheStepLimitBeforeTheNextTurn(t *testing.T) {
+	server := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, harnesstest.Step{
+		Name: "loop", Match: harnesstest.LastUserText("hi"), Repeat: true, Reply: harnesstest.Reply{
+			ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "echo", Input: map[string]any{}}}}})
+	st := store.NewMemStore()
+	r := allowlistRuntime(t, st, server)
+	if _, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "test/gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Create(t.Context(), protocol.CreateSession{ID: "s2", Model: "test/gpt-5"}, harness.WithMaxSteps(1)); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Fatalf("Create with WithMaxSteps = %v", err)
+	}
+	closeRuntime(t, r)
+	r = allowlistRuntime(t, st, server)
+	if _, err := r.Open(t.Context(), "s1", harness.WithMaxSteps(-1)); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Fatalf("Open with a negative limit = %v", err)
+	}
+	s, err := r.Open(t.Context(), "s1", harness.WithMaxSteps(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Snapshot().MaxSteps; got != 1 {
+		t.Fatalf("snapshot max_steps = %d, want 1", got)
+	}
+	turn, err := s.Prompt(t.Context(), protocol.Input{ID: "i1", Parts: []protocol.Part{{Type: protocol.PartText, Text: "hi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := turn.Wait(t.Context()); err != nil || result.StopReason != protocol.StopStepLimit {
+		t.Fatalf("turn = %+v, %v", result, err)
+	}
+	if n := len(server.Requests()); n != 1 {
+		t.Fatalf("model requests = %d, want 1", n)
+	}
+	closeRuntime(t, r)
+	for _, opts := range [][]harness.SessionOption{{harness.WithMaxSteps(1)}, nil} {
+		r = allowlistRuntime(t, st, server)
+		if s, err = r.Open(t.Context(), "s1", opts...); err != nil || s.Snapshot().MaxSteps != 1 {
+			t.Fatalf("reopen = %v, %v", s, err)
+		}
+		closeRuntime(t, r)
+	}
+	if got := maxStepsChanges(t, st); !slices.Equal(got, []int{1}) {
+		t.Fatalf("max_steps changes = %v, want [1]", got)
+	}
+}
+
+func maxStepsChanges(t *testing.T, st harness.Store) []int {
+	t.Helper()
+	var out []int
+	for ev, err := range harness.ReadEvents(context.Background(), st, "s1", 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Kind != protocol.KindSettingsChanged {
+			continue
+		}
+		var data struct {
+			MaxSteps *int `json:"max_steps"`
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.MaxSteps != nil {
+			out = append(out, *data.MaxSteps)
+		}
+	}
+	return out
+}
