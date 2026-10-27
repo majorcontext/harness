@@ -187,3 +187,52 @@ func TestContractRuntimeEmbedderToolWithABuiltinNameFailsOpenOfASessionThatAllow
 		t.Errorf("Open = %v, want ErrInvalidRequest that names bash", err)
 	}
 }
+
+func TestContractRuntimeSessionInfoWithoutWorkDir(t *testing.T) {
+	skipShort(t)
+	t.Run("a_runtime_with_no_work_directory_offers_session_info_and_a_call_returns_a_report", func(t *testing.T) {
+		t.Parallel()
+		call := harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "session_info", Input: map[string]any{}}}}}
+		r, fake := noWorkDirRuntime(t, call, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+		s := sessionInfoCreate(t, r, nil)
+		sessionMCPTurn(t, s, "a", "go")
+		reqs := fake.Requests()
+		if !requestHas(reqs[0], "session_info") {
+			t.Errorf("first request tools = %v, want session_info", reqs[0].Tools)
+		}
+		if got := requestText(reqs[1]); !strings.Contains(got, `"session_id": "s1"`) {
+			t.Errorf("second request does not hold the report: %s", got)
+		}
+	})
+	t.Run("an_allowed_tools_list_without_session_info_hides_it", func(t *testing.T) {
+		t.Parallel()
+		r, fake := noWorkDirRuntime(t, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+		s := sessionInfoCreate(t, r, []string{"read_file"})
+		sessionMCPTurn(t, s, "a", "go")
+		if reqs := fake.Requests(); requestHas(reqs[0], "session_info") {
+			t.Errorf("tools = %v, want no session_info", reqs[0].Tools)
+		}
+	})
+}
+
+func noWorkDirRuntime(t *testing.T, steps ...harnesstest.Step) (*harness.Runtime, *harnesstest.Server) {
+	t.Helper()
+	fake := harnesstest.NewChat(t, steps...)
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: func(string) string { return "k" }, Config: config.Config{
+		ContextWindowTokens: 100000,
+		Providers:           map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "SESSION_INFO_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	return r, fake
+}
+
+func sessionInfoCreate(t *testing.T, r *harness.Runtime, allowed []string) *harness.Session {
+	t.Helper()
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test", AllowedTools: allowed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}

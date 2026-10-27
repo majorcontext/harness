@@ -140,7 +140,7 @@ func check(t *testing.T, dir string, calls []call, got []string) {
 	}
 }
 
-func TestToolsNeedAWorkDir(t *testing.T) {
+func TestFileAndShellToolsNeedAWorkDirAndSessionInfoDoesNot(t *testing.T) {
 	builtins := []string{"bash", "edit_file", "glob", "grep", "ls", "read_file", "read_tool_result", "session_info", "write_file"}
 	for _, workDir := range []bool{true, false} {
 		t.Run(fmt.Sprint("workdir=", workDir), func(t *testing.T) {
