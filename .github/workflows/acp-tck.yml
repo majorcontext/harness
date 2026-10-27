@@ -18,7 +18,7 @@ permissions:
 jobs:
   tck:
     name: TCK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       # Exact commit of github.com/agentclientprotocol/acp-tck (Apache-2.0).
@@ -35,10 +35,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # v6.8.0
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      # v10.3.2
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
         with:
           version: "0.12.13"
+          # The TCK lock file is fetched later, outside the repo, so no glob can key the cache.
+          enable-cache: false
 
       - name: Fetch the TCK
         run: |
@@ -59,7 +61,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: acp-tck-report
           path: ${{ runner.temp }}/acp-tck-report.json

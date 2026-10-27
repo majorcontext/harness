@@ -14,7 +14,7 @@ permissions:
 jobs:
   soak:
     name: Browser soak
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5

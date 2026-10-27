@@ -9,7 +9,7 @@ on:
 jobs:
   static:
     name: Static
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -23,7 +23,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -89,7 +89,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -98,7 +98,7 @@ jobs:
 
   gates:
     name: Gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
     steps:
@@ -112,7 +112,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -132,7 +132,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -141,7 +141,7 @@ jobs:
 
   wasm:
     name: WebAssembly
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -151,7 +151,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -170,7 +170,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -179,7 +179,7 @@ jobs:
 
   unit:
     name: Unit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
     steps:
@@ -195,7 +195,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -224,7 +224,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -233,7 +233,7 @@ jobs:
 
   contract:
     name: Contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -245,7 +245,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -267,7 +267,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -276,7 +276,7 @@ jobs:
 
   runtime:
     name: Runtime contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -288,7 +288,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -310,7 +310,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -319,7 +319,7 @@ jobs:
 
   node-wasm:
     name: Node wasm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -329,7 +329,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -361,7 +361,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -370,7 +370,7 @@ jobs:
 
   workerd:
     name: Cloudflare Worker
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 
@@ -380,7 +380,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -412,7 +412,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -421,7 +421,7 @@ jobs:
 
   browser:
     name: Browser
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -433,7 +433,7 @@ jobs:
           cache: false
 
       - name: Restore the Go caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/go/pkg/mod
@@ -456,7 +456,7 @@ jobs:
 
       - name: Cache the Chromium download
         id: chromium-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: chromium-${{ runner.os }}-${{ hashFiles('sdk/embed/package-lock.json') }}
@@ -489,7 +489,7 @@ jobs:
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /home/runner/go/pkg/mod
