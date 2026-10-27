@@ -213,7 +213,7 @@ func TestContractTurnMetricsLineOfAClaudeCodeCompactionHasPurposeCompaction(t *t
 	id := d.Create(t)
 	d.Submit(t, id, "run it")
 	d.WaitIdle(t, id)
-	before := len(logLines(d.Stderr(), "turn_metrics"))
+	before := len(awaitLogLines(t, d, "turn_metrics", 1))
 	if res := d.Compact(t, id); res.Status != http.StatusOK {
 		t.Fatalf("compact = %d %v", res.Status, res.Body)
 	}
