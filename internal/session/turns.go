@@ -114,7 +114,7 @@ func sameJSON(x, y any) bool {
 // the conversation as the model reads it, with each pinned segment.
 func (a *Actor) modelRequest() turn.Request {
 	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Compacted: a.state.CompactionCount() > 0, Purpose: turn.PurposeTurn, Settings: a.state.Settings(), Instructions: a.cfg.Prompt(), Skills: a.cfg.Skills, Sent: a.cfg.Sent,
-		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params}
+		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxSteps: a.state.MaxSteps(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params}
 }
 
 // banner renders the engine status line from the version and the created time
@@ -270,6 +270,9 @@ func (a *Actor) ended(r *running, runErr error) {
 		next = true
 	case errors.Is(cause, errGoalCleared):
 		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseGoalCleared}, interrupted)
+		next = true
+	case errors.Is(runErr, turn.ErrStepLimit):
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopStepLimit}, cutOff)
 		next = true
 	default:
 		failed := failedEnd(turnID, runErr)

@@ -24,6 +24,9 @@ var ErrContextOverflow = errors.New("turn: context overflow")
 // ErrExhausted marks a usage limit of the provider, such as a spent quota.
 var ErrExhausted = errors.New("turn: provider usage limit reached")
 
+// ErrStepLimit marks a turn that reached Request.MaxSteps.
+var ErrStepLimit = errors.New("turn: model request limit reached")
+
 // errStalled ends a model call that reports nothing for Limits.Idle.
 var errStalled = fmt.Errorf("%w: turn: the model stream stalled", ErrRetryable)
 
@@ -98,6 +101,8 @@ type Request struct {
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
+	// MaxSteps caps the model requests of the turn: the loop of a backend that does not own it ends with ErrStepLimit before one more, and a backend that owns it passes the cap on. Zero: no cap.
+	MaxSteps int
 	// Steered receives a value when a steer input waits for Sink.Steer. nil: no steer input.
 	Steered <-chan struct{}
 	// Ask opens the request of a call to ask_user_question; false: the result is its error.
@@ -264,7 +269,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		req.History = append(req.History, m)
 		return nil
 	}
-	for first := true; ; first = false {
+	for first, steps := true, 0; ; first = false {
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
@@ -302,6 +307,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err != nil {
 			return err
 		}
+		steps++
 		calls := toolCalls(s.items)
 		if caps.OwnsLoop || len(calls) == 0 {
 			return nil
@@ -313,6 +319,9 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		if opened, err := openAsk(ctx, step, t, to, asks, record); opened || err != nil {
 			return err
+		}
+		if req.MaxSteps > 0 && steps >= req.MaxSteps {
+			return ErrStepLimit
 		}
 		in, err := to.Steer()
 		if err != nil {

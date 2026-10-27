@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Per-session limit of model requests** (`protocol`, `internal/turn`, `internal/backend/claudecode`) — `max_steps` in `POST /sessions` (`CreateSession.MaxSteps`) caps the model requests of each turn. A turn that made that many requests and would make another ends at once with the new stop reason `step_limit`, keeps its messages, and ACP answers `max_turn_requests`. The Claude Code backend passes `--max-turns` and maps the `error_max_turns` result to `step_limit`. Zero or absent is no cap.
+
 - **MCP Skills extension client** (`internal/mcp`, `internal/tool/mcpsrc`, `internal/skill`) — harness declares `io.modelcontextprotocol/skills`, reads `skills/list` of each server that serves skills, and lists its skills in `<mcp_skills>` of the MCP segment (in the `harness` server instructions on the Claude Code backend). `load_mcp_skill {server, uri}` loads a skill, listed or not, and checks the size, SHA-256 digest, and frontmatter of `SKILL.md` against its entry. `read_mcp_resource` checks each file of a loaded skill against the held entry, lists its directories, and refuses a read of its files on another server. Skill content is tagged with its server as untrusted content; `allowed-tools` of an MCP-served skill is never honored.
 
 - **GPT-6.1 Terra on the ChatGPT backend** (`internal/modelmeta`) — the static codex catalog lists `gpt-6.1-terra`, with its models.dev name, efforts, and context window. A `codex/gpt-6.1-terra` session runs on the known window instead of the default one.

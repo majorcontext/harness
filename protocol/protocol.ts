@@ -137,6 +137,7 @@ export interface CreateSession {
   service_tier?: string;
   origin?: string;
   allowed_tools?: string[];
+  max_steps?: number;
 }
 
 export interface Error {
@@ -260,7 +261,7 @@ export interface ItemFrame {
 
 export interface LastTurn {
   turn_id: string;
-  stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input";
+  stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input" | "step_limit";
   cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
   error?: string;
 }
@@ -514,6 +515,7 @@ export interface Session {
   work_dir?: string;
   model: string;
   allowed_tools?: string[];
+  max_steps?: number;
   title?: string;
   effort?: string;
   service_tier?: string;
@@ -542,6 +544,7 @@ export interface SessionCreated {
   origin: string;
   work_dir?: string;
   allowed_tools?: string[];
+  max_steps?: number;
 }
 
 export interface SessionPage {
@@ -629,7 +632,7 @@ export interface ToolResultRetained {
 
 export interface TurnEnded {
   turn_id: string;
-  stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input";
+  stop_reason: "completed" | "interrupted" | "failed" | "awaiting_input" | "step_limit";
   cause?: "stopped" | "ended" | "goal_cleared" | "handoff" | "crashed" | "provider_exhausted";
   task_cancel?: boolean;
   error?: string;

@@ -20,3 +20,4 @@ fake claudecode system/status * compaction follows a long conversation, and the 
 fake claudecode user:string * the compaction summary is a user frame with text content; headless runs refuse /compact
 fake claudecode system/hook_started * the recording runs without hooks; a configured hook prints this frame
 fake claudecode system/task_notification * a background task prints this frame, and the recording starts none
+fake claudecode result/error_max_turns * the CLI ends a run with this subtype only when the turn count reaches --max-turns, and the recording sets no limit

@@ -17,6 +17,7 @@ func (s *State) applyCreated(e protocol.SessionCreated, t time.Time) error {
 	}
 	s.created = true
 	s.parentID, s.agent, s.origin, s.model, s.allowed = e.ParentID, e.Agent, e.Origin, e.Model, e.AllowedTools
+	s.maxSteps = e.MaxSteps
 	s.settings = e.Settings
 	s.settings.Accounts = maps.Clone(e.Settings.Accounts)
 	s.workDir = e.WorkDir

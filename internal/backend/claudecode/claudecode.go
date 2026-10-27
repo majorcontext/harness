@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -242,6 +243,9 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	}
 	if e, ok := effortArg(effort); ok {
 		args = append(args, "--effort", e)
+	}
+	if req.MaxSteps > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(req.MaxSteps))
 	}
 	system := b.systemPrompt(req)
 	file, err := r.writeTemp("harness-claude-system-*.txt", []byte(system))

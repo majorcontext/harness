@@ -411,6 +411,11 @@ func (d *runtimeDriver) CreateAllowed(t *testing.T, tools []string) callResult {
 	return d.call(t, http.MethodPost, "/sessions", map[string]any{"allowed_tools": tools})
 }
 
+func (d *runtimeDriver) CreateMaxSteps(t *testing.T, n int) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/sessions", map[string]any{"max_steps": n})
+}
+
 func (d *runtimeDriver) CreateEffort(t *testing.T, effort string) callResult {
 	t.Helper()
 	return d.call(t, http.MethodPost, "/sessions", map[string]any{"effort": effort})

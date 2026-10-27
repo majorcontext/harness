@@ -20,6 +20,8 @@ type driver interface {
 	CreateModel(t *testing.T, model string) callResult
 	// CreateAllowed creates a session with the allowed_tools list and reports the response.
 	CreateAllowed(t *testing.T, tools []string) callResult
+	// CreateMaxSteps creates a session with max_steps and reports the response.
+	CreateMaxSteps(t *testing.T, n int) callResult
 	// CreateEffort creates a session that names effort and reports the response.
 	CreateEffort(t *testing.T, effort string) callResult
 	// PostInput admits an input with a new id and reports the receipt.

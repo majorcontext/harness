@@ -31,7 +31,7 @@ func Describe(id string, s *eventlog.State, caps turn.Capabilities, threshold fl
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, WorkDir: sum.WorkDir, Model: sum.Model, Title: sum.Title,
 		Effort: set.Effort, ServiceTier: set.ServiceTier, Status: p.Status, TurnID: p.TurnID, Queued: p.Queued,
-		Goal: p.Goal, LastTurn: p.LastTurn, Usage: s.Usage(), AllowedTools: s.AllowedTools(),
+		Goal: p.Goal, LastTurn: p.LastTurn, Usage: s.Usage(), AllowedTools: s.AllowedTools(), MaxSteps: s.MaxSteps(),
 		HeadSeq: sum.HeadSeq, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 	c := s.Context()

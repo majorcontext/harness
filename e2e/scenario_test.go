@@ -41,6 +41,7 @@ type create struct {
 	model       string   // empty takes the model of the config
 	staysActive bool     // the session never reads idle, so the final waitIdle skips it
 	allowed     []string // the allowed_tools of the session; nil allows every tool
+	maxSteps    int      // the max_steps of the session; zero is unlimited
 }
 type submit struct{ as, text string }
 type enqueue struct{ as, text string }
@@ -120,7 +121,8 @@ func (a create) run(t *testing.T, r *run) {
 	if _, dup := r.ids[a.as]; dup {
 		t.Fatalf("alias %q created twice", a.as)
 	}
-	if a.allowed != nil {
+	switch {
+	case a.allowed != nil:
 		res := r.drv.CreateAllowed(t, a.allowed)
 		body, _ := res.Body.(map[string]any)
 		id, _ := body["id"].(string)
@@ -128,7 +130,15 @@ func (a create) run(t *testing.T, r *run) {
 			t.Fatalf("create with allowed_tools %v = %d %v", a.allowed, res.Status, res.Body)
 		}
 		r.ids[a.as] = id
-	} else {
+	case a.maxSteps > 0:
+		res := r.drv.CreateMaxSteps(t, a.maxSteps)
+		body, _ := res.Body.(map[string]any)
+		id, _ := body["id"].(string)
+		if res.Status/100 != 2 || id == "" {
+			t.Fatalf("create with max_steps %d = %d %v", a.maxSteps, res.Status, res.Body)
+		}
+		r.ids[a.as] = id
+	default:
 		r.ids[a.as] = createdID(t, r.drv, a.model)
 	}
 	r.aliases = append(r.aliases, a.as)
