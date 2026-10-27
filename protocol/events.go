@@ -270,6 +270,8 @@ type SettingsChanged struct {
 	Accounts    *map[string]string `json:"accounts,omitempty"`
 	// AllowedTools is embedder-only; a nil slice allows all tools, and an empty list allows none.
 	AllowedTools *[]string `json:"allowed_tools,omitempty" jsonschema:"nullable"`
+	// MaxSteps is embedder-only; it replaces the cap of model requests for each turn, and zero clears the cap.
+	MaxSteps *int `json:"max_steps,omitempty"`
 }
 
 // SessionTitled sets the session title. The title is not empty and has no control character, such as a tab or a line break.

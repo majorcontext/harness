@@ -2008,6 +2008,9 @@
                 "type": "null"
               }
             ]
+          },
+          "max_steps": {
+            "type": "integer"
           }
         },
         "type": "object"

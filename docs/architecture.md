@@ -174,6 +174,7 @@ func (r *Runtime) Open(ctx context.Context, id string, opts ...SessionOption) (*
 type SessionOption func(*sessionOptions)
 func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption // MCP servers of one session, beside Config.MCPServers; not persisted
 func WithAllowedTools(names []string) SessionOption // Open only; replace the recorded tool allowlist before resume
+func WithMaxSteps(n int) SessionOption // Open only; replace the recorded cap of model requests for each turn before resume
 func (r *Runtime) SetMCPServers(ctx context.Context, servers map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error) // the live set of runtime MCP servers; not persisted (see MCP tools)
 func (r *Runtime) SetPlugins(ctx context.Context, plugins []config.PluginSpec) ([]protocol.Plugin, error) // the live set of config plugins; not persisted (see plugins)
 func (r *Runtime) End(ctx context.Context, id string) error // end and unload; session_busy while a turn or a control command runs; the log stays
@@ -468,6 +469,8 @@ The runtime reads no other on-disk format.
 `settings.changed.allowed_tools` is an embedder-only replacement of the session tool allowlist. An absent field keeps the list, `null` allows every tool, and `[]` allows none. The session view exposes the current list as `allowed_tools`. Turns and model validation read the same replayed state. New children inherit the replacement allowlist. An existing child keeps its own allowlist. `SettingsPatch` and `PATCH /sessions/{id}` cannot set `allowed_tools`.
 
 `Runtime.Open` with `WithAllowedTools(names)` checks the effective list for shadowed names before fencing. It validates a changed list as `Create` does, against the replayed model. It appends one `settings.changed` before resume or warm-up when the sets differ. An equal set requires no model check. Order and repeated names do not matter, but nil and an empty list differ. The option copies its input. `Create` rejects this option with `invalid_request`; it takes `CreateSession.AllowedTools`. An `Open` of a session that this runtime already runs keeps its tools.
+
+`settings.changed.max_steps` is an embedder-only replacement of the `max_steps` of the session. An absent field keeps the cap, and `0` clears it. The session view shows the current value as `max_steps`. `Runtime.Open` with `WithMaxSteps(n)` appends one `settings.changed` before resume or warm-up when `n` differs from the replayed value. A negative `n` is `invalid_request`. `Create` rejects this option with `invalid_request`; it takes `CreateSession.MaxSteps`. An `Open` of a session that this runtime already runs keeps its cap. The value applies from the next turn, and a turn that runs keeps the value that it started with. `SettingsPatch` and `PATCH /sessions/{id}` cannot set `max_steps`.
 
 ### Event kinds
 
