@@ -198,7 +198,7 @@ func TestCustomToolWithClientAPI(t *testing.T) {
 					return nil, err
 				}
 				_, mcpErr := c.MCPCall(ctx, "gateway", "slack_post_message", json.RawMessage(`{"text":"hi"}`))
-				return []pub.Part{pub.TextPart("uploaded, history said " + res[0].Parts[0].Text + "; mcp: " + fmt.Sprint(mcpErr))}, nil
+				return []pub.Part{pub.TextPart("uploaded, history said " + res[0].Parts[0].Text + "; mcp: " + fmt.Sprint(mcpErr) + "; session: " + pub.SessionID(ctx))}, nil
 			},
 		}},
 	})
@@ -214,7 +214,7 @@ func TestCustomToolWithClientAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Output[0].Text != "uploaded, history said ok; mcp: plugin: rpc error -32603: stub mcp failure" {
+	if resp.Output[0].Text != "uploaded, history said ok; mcp: plugin: rpc error -32603: stub mcp failure; session: s1" {
 		t.Errorf("output = %q", resp.Output[0].Text)
 	}
 }

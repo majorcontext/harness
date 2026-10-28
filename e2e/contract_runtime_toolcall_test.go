@@ -5,13 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -235,4 +240,56 @@ func sessionInfoCreate(t *testing.T, r *harness.Runtime, allowed []string) *harn
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestContractRuntimePluginToolSeesTheCallingSessionID(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	fake := harnesstest.NewChat(t,
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "who", Input: map[string]any{}}, {ID: "call_2", Name: "who_proc", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("who_proc"), Reply: harnesstest.Reply{Text: "ok"}})
+	var got atomic.Value
+	who := &plugin.Plugin{Name: "who", Tools: []plugin.Tool{{
+		Def: plugin.ToolDef{Name: "who", Description: "reports the session", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Execute: func(ctx context.Context, _ *plugin.Client, _ json.RawMessage) ([]plugin.Part, error) {
+			got.Store(plugin.SessionID(ctx))
+			return []plugin.Part{plugin.TextPart("done")}, nil
+		}}}}
+	bin := filepath.Join(t.TempDir(), "pluginsession")
+	if out, err := exec.Command("go", "build", "-o", bin, "../harnesstest/pluginsession").CombinedOutput(); err != nil {
+		t.Fatalf("go build pluginsession: %v\n%s", err, out)
+	}
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Plugins: []*plugin.Plugin{who}, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+		Plugins:   []config.PluginSpec{{Name: "whoproc", Command: []string{bin}}},
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s-42", Model: "bifrost/gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := got.Load().(string); id != "s-42" {
+		t.Errorf("session ID in the in-process plugin tool = %q, want s-42", id)
+	}
+	reqs := fake.Requests()
+	var results []string
+	for _, m := range reqs[len(reqs)-1].Messages {
+		for _, p := range m.Parts {
+			if p.Kind == "tool_result" {
+				results = append(results, p.Text)
+			}
+		}
+	}
+	if !slices.Contains(results, "session=s-42") {
+		t.Errorf("tool results = %q, want the process plugin to report session=s-42", results)
+	}
 }

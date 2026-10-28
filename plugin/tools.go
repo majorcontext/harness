@@ -1,6 +1,9 @@
 package plugin
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // ToolDef declares a tool that a plugin adds to the model's tool list.
 type ToolDef struct {
@@ -8,6 +11,16 @@ type ToolDef struct {
 	Description string          `json:"description"`  // text for the model
 	InputSchema json.RawMessage `json:"input_schema"` // JSON Schema object of the arguments
 }
+
+// SessionID returns the ID of the session that called the tool, from the
+// context that Tool.Execute receives. It returns an empty string for any other
+// context.
+func SessionID(ctx context.Context) string {
+	id, _ := ctx.Value(sessionIDKey{}).(string)
+	return id
+}
+
+type sessionIDKey struct{}
 
 // ToolExecuteRequest is the wire record that asks a plugin to run one of its
 // tools.

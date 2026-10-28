@@ -137,7 +137,7 @@ func (s *server) executeTool(ctx context.Context, params json.RawMessage) (any, 
 	if !ok || t.Execute == nil {
 		return nil, &wire.Error{Code: wire.CodeMethodNotFound, Message: fmt.Sprintf("unknown tool %q", req.Tool)}
 	}
-	out, err := t.Execute(ctx, s.client, req.Args)
+	out, err := t.Execute(context.WithValue(ctx, sessionIDKey{}, req.SessionID), s.client, req.Args)
 	if err != nil {
 		return &ToolExecuteResponse{Output: []Part{TextPart(err.Error())}, IsError: true}, nil
 	}
