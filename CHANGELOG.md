@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Session ID in a plugin tool** (`plugin`) — `plugin.SessionID(ctx)` returns the ID of the session that called a plugin tool. `Tool.Execute` gets the session on its context for a process plugin and for an in-process plugin.
 - **`session_info` with no `WorkDir`** (`harness`) — every session offers `session_info`, on every backend, with or without a `WorkDir`, so a host with no file system (for example one that uses `Options.Skills`) can call it. An `AllowedTools` list that leaves it out hides it. `New` now fails for an embedder tool or a plugin tool named `session_info` also with no `WorkDir`.
 
 - **Embedded skills** (`harness`, `internal/prompt`, `internal/selftool`, `internal/backend/claudecode`) — `Options.Skills` takes a `SkillSource`, so an embedder supplies the skills of each session, for example from a database. The runtime calls `List` once when a session is created or opened and adds the skills to the skill list, also with no `WorkDir`. An embedded skill replaces a skill of `skills_dirs` with the same name. The new runtime tool `load_skill {name, file}` reads one file of a listed skill with `Read`, and `session_info` reports the skill by name with no path. `New` fails when `Options.Tools` also has a `load_skill` tool. The skill list text and the Claude Code tool-name segment now say that a skill is loaded with `load_skill` when its line says so.

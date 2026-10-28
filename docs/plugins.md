@@ -85,6 +85,8 @@ equal `Plugin.Name`, and `command` is found on your `PATH`:
 
 A call to a plugin tool ends after 120 seconds. Set `tool_timeout_s` on the plugin entry to change it.
 
+A plugin tool can read the ID of the session that called it. In `Tool.Execute`, call `plugin.SessionID(ctx)`. It works for a process plugin and for an in-process plugin, and returns an empty string for a context that no tool call made.
+
 Check that Harness finds it. The probe prints each plugin and its hooks:
 
 ```console
