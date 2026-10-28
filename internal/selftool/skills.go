@@ -41,7 +41,7 @@ func NewSkills(start []prompt.Embedded, session string, list SkillLister, read S
 }
 
 // Toolset reads the list and gives load_skill and the update as a notice. A failed read keeps the last list and warns.
-func (s *Skills) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
+func (s *Skills) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
 	infos, err := s.list(ctx, s.session)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,7 +50,7 @@ func (s *Skills) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed [
 	} else {
 		s.now = prompt.ValidEmbedded(infos, nil)
 	}
-	n := turn.Notice{Kind: skillsKind}
+	n := turn.Notice{Kind: skillsKind, At: len(history)}
 	update := prompt.EmbeddedUpdate(s.now, s.removed())
 	if slices.Equal(s.now, s.start) {
 		n.Cleared = update

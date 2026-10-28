@@ -115,6 +115,7 @@ func TestContractRuntimeSkillsRefresh(t *testing.T) {
 	t.Run("an_unchanged_skill_list_adds_no_segment", rowAnUnchangedSkillListAddsNoSegment)
 	t.Run("a_removed_skill_is_named_once_and_load_skill_fails_for_it", rowARemovedSkillIsNamedOnceAndLoadSkillFailsForIt)
 	t.Run("a_failed_list_keeps_the_last_skills_and_adds_no_segment", rowAFailedListKeepsTheLastSkillsAndAddsNoSegment)
+	t.Run("a_skill_added_after_a_reopen_is_pinned_after_the_history", rowASkillAddedAfterAReopenIsPinnedAfterTheHistory)
 	t.Run("a_reopened_session_lists_the_changed_skills_in_its_prompt_and_announces_nothing", rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing)
 }
 
@@ -245,5 +246,29 @@ func rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing(t *t
 	}
 	if !strings.Contains(reqs[2].System, "invoices — Explain an invoice (load with load_skill)") {
 		t.Errorf("the system prompt after the reopen lacks the new skill: %s", reqs[2].System)
+	}
+}
+
+func rowASkillAddedAfterAReopenIsPinnedAfterTheHistory(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, src, okReplies(3)...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	sessionMCPTurn(t, s, "b", "two")
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	stableCache(t, reqs)
+	if updates(reqs[2]) != 1 {
+		t.Errorf("request 3 holds %d skill updates, want 1", updates(reqs[2]))
 	}
 }
