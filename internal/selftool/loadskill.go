@@ -9,14 +9,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
 // LoadSkillName is the name of the load_skill tool.
 const LoadSkillName = "load_skill"
 
-const loadSkillDescription = "Load a file of an embedded skill that the system prompt lists: its SKILL.md by default, " +
+const loadSkillDescription = "Load a file of an embedded skill that the system prompt or a later update lists: its SKILL.md by default, " +
 	"or another file of the skill at a slash-separated path relative to the skill root."
 
 const loadSkillSchema = `{"type":"object","properties":{"name":{"type":"string","description":"The skill name"},` +
@@ -28,12 +27,7 @@ type SkillReader func(ctx context.Context, session, name, file string) ([]byte, 
 type loadSkill struct {
 	read    SkillReader
 	session string
-	names   []string
-}
-
-// NewLoadSkill returns the load_skill tool of a session that lists the skills names.
-func NewLoadSkill(read SkillReader, session string, names []string) turn.Tool {
-	return loadSkill{read, session, slices.Clone(names)}
+	names   func() []string
 }
 
 func (loadSkill) Spec() protocol.ToolSpec {
@@ -45,7 +39,7 @@ func (t loadSkill) Run(ctx context.Context, call protocol.ToolCall) (protocol.To
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: invalid arguments: %w", LoadSkillName, err)
 	}
-	if !slices.Contains(t.names, in.Name) {
+	if !slices.Contains(t.names(), in.Name) {
 		return protocol.ToolResult{}, fmt.Errorf("%s: unknown skill %s", LoadSkillName, in.Name)
 	}
 	file := in.File

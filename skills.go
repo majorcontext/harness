@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/majorcontext/harness/internal/prompt"
+	"github.com/majorcontext/harness/internal/selftool"
+	"github.com/majorcontext/harness/internal/turn"
 )
 
 // SkillSource supplies the embedded skills of a session, for example from a database.
@@ -21,19 +23,35 @@ type SkillInfo struct {
 	Description string
 }
 
-// listSkills returns the embedded skills of session id. A failed List gives none.
-func (r *Runtime) listSkills(ctx context.Context, id string) []prompt.Embedded {
-	if r.skills == nil {
-		return nil
-	}
+// embedded returns the embedded skills of session id.
+func (r *Runtime) embedded(ctx context.Context, id string) ([]prompt.Embedded, error) {
 	infos, err := r.skills.List(ctx, id)
 	if err != nil {
-		r.log.Warn("harness: embedded skills not listed", "session", id, "err", err)
-		return nil
+		return nil, err
 	}
 	out := make([]prompt.Embedded, len(infos))
 	for i, s := range infos {
 		out[i] = prompt.Embedded{Name: s.Name, Description: s.Description}
 	}
+	return out, nil
+}
+
+// listSkills returns the embedded skills of session id for its system prompt. A failed List gives none.
+func (r *Runtime) listSkills(ctx context.Context, id string) []prompt.Embedded {
+	if r.skills == nil {
+		return nil
+	}
+	out, err := r.embedded(ctx, id)
+	if err != nil {
+		r.log.Warn("harness: embedded skills not listed", "session", id, "err", err)
+		return nil
+	}
 	return out
+}
+
+// skillSource returns load_skill of session id, with the notice that follows the skill list of the session.
+func (r *Runtime) skillSource(id string, sp *selftool.Prompt) turn.Source {
+	sk := selftool.NewSkills(sp.Embedded(), id, r.embedded, r.skills.Read, r.log)
+	sp.Track(sk)
+	return sk
 }

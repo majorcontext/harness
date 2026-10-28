@@ -94,10 +94,10 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		}
 		static = append(static, t)
 	}
-	if r.skills != nil {
-		static = append(static, selftool.NewLoadSkill(r.skills.Read, id, sp.EmbeddedSkills()))
-	}
 	srcs := turn.Sources{boundTools{tools: static, session: id, root: root}}
+	if r.skills != nil {
+		srcs = append(srcs, r.skillSource(id, sp))
+	}
 	if len(loopOnly) > 0 {
 		goal := turn.Fixed(loopOnly)
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
