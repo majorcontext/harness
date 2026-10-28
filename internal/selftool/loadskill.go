@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -28,12 +27,7 @@ type SkillReader func(ctx context.Context, session, name, file string) ([]byte, 
 type loadSkill struct {
 	read    SkillReader
 	session string
-	names   []string
-}
-
-// NewLoadSkill returns the load_skill tool of a session that lists the skills names.
-func NewLoadSkill(read SkillReader, session string, names []string) turn.Tool {
-	return loadSkill{read, session, slices.Clone(names)}
+	names   func() []string
 }
 
 func (loadSkill) Spec() protocol.ToolSpec {
@@ -45,7 +39,7 @@ func (t loadSkill) Run(ctx context.Context, call protocol.ToolCall) (protocol.To
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return protocol.ToolResult{}, fmt.Errorf("%s: invalid arguments: %w", LoadSkillName, err)
 	}
-	if !slices.Contains(t.names, in.Name) {
+	if !slices.Contains(t.names(), in.Name) {
 		return protocol.ToolResult{}, fmt.Errorf("%s: unknown skill %s", LoadSkillName, in.Name)
 	}
 	file := in.File

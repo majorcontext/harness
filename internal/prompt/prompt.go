@@ -53,6 +53,8 @@ type Info struct {
 	Skills []Skill
 	// SkillList is the skill segment, or empty when no skill is valid.
 	SkillList string
+	// Embedded are the valid embedded skills in the prompt, sorted by name.
+	Embedded []Embedded
 }
 
 // toolBatching asks the model to put independent tool calls in one message.
@@ -82,7 +84,7 @@ func Describe(cfg config.Config, workDir string, embedded []Embedded, log *slog.
 		if list != "" {
 			segs = append(segs, list)
 		}
-		return Info{Segments: segs, Skills: skills, SkillList: list}
+		return Info{Segments: segs, Skills: skills, SkillList: list, Embedded: ValidEmbedded(embedded, nil)}
 	}
 	if abs, err := filepath.Abs(workDir); err == nil {
 		workDir = abs
@@ -96,7 +98,7 @@ func Describe(cfg config.Config, workDir string, embedded []Embedded, log *slog.
 			segs = append(segs, s)
 		}
 	}
-	return Info{Segments: segs, Instructions: names, Skills: skills, SkillList: list}
+	return Info{Segments: segs, Instructions: names, Skills: skills, SkillList: list, Embedded: ValidEmbedded(embedded, nil)}
 }
 
 type file struct{ name, body string }
@@ -274,22 +276,11 @@ func skillList(cfg config.Config, workDir string, embedded []Embedded, log *slog
 			}
 		}
 	}
-	seen := map[string]bool{}
-	for _, e := range embedded {
-		err := cmp.Or(skill.ValidateName(e.Name), skill.ValidateDescription(e.Description))
-		switch {
-		case err != nil:
-			log.Warn("prompt: embedded skill skipped", "name", e.Name, "err", err)
-			continue
-		case seen[e.Name]:
-			log.Warn("prompt: embedded skill skipped, duplicate name", "name", e.Name)
-			continue
-		}
-		seen[e.Name] = true
+	for _, e := range ValidEmbedded(embedded, log) {
 		if old, ok := byName[e.Name]; ok {
 			log.Warn("prompt: skill replaced by an embedded skill", "name", e.Name, "path", old.Path)
 		}
-		byName[e.Name] = entry{Skill{Name: e.Name}, fmt.Sprintf("%s — %s (load with load_skill)", e.Name, e.Description)}
+		byName[e.Name] = entry{Skill{Name: e.Name}, EmbeddedLine(e)}
 	}
 	if len(byName) == 0 {
 		return "", nil
@@ -301,6 +292,37 @@ func skillList(cfg config.Config, workDir string, embedded []Embedded, log *slog
 		found = append(found, byName[name].Skill)
 	}
 	return skillsHeader + "\n" + strings.Join(lines, "\n"), found
+}
+
+// ValidEmbedded returns the embedded skills that the prompt lists, sorted by name: it skips a skill whose name
+// or description is not valid and a repeated name. A nil log writes nothing.
+func ValidEmbedded(embedded []Embedded, log *slog.Logger) []Embedded {
+	seen := map[string]bool{}
+	var out []Embedded
+	for _, e := range embedded {
+		err := cmp.Or(skill.ValidateName(e.Name), skill.ValidateDescription(e.Description))
+		switch {
+		case err != nil:
+			if log != nil {
+				log.Warn("prompt: embedded skill skipped", "name", e.Name, "err", err)
+			}
+			continue
+		case seen[e.Name]:
+			if log != nil {
+				log.Warn("prompt: embedded skill skipped, duplicate name", "name", e.Name)
+			}
+			continue
+		}
+		seen[e.Name] = true
+		out = append(out, e)
+	}
+	slices.SortFunc(out, func(a, b Embedded) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// EmbeddedLine is the line of an embedded skill in a skill list.
+func EmbeddedLine(e Embedded) string {
+	return fmt.Sprintf("%s — %s (load with load_skill)", e.Name, e.Description)
 }
 
 func resolve(workDir, p string) string {

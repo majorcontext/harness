@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Live embedded skill list** (`Options.Skills`) — a running session calls `SkillSource.List` before each model call. `load_skill` and `session_info` follow the newest list, and a failed `List` keeps the last list. The system prompt does not change.
 - **Session ID in a plugin tool** (`plugin`) — `plugin.SessionID(ctx)` returns the ID of the session that called a plugin tool. `Tool.Execute` gets the session on its context for a process plugin and for an in-process plugin.
 - **`session_info` with no `WorkDir`** (`harness`) — every session offers `session_info`, on every backend, with or without a `WorkDir`, so a host with no file system (for example one that uses `Options.Skills`) can call it. An `AllowedTools` list that leaves it out hides it. `New` now fails for an embedder tool or a plugin tool named `session_info` also with no `WorkDir`.
 

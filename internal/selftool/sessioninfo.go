@@ -46,6 +46,8 @@ type Prompt struct {
 	read     prompt.Info
 	segments []string
 
+	skills *Skills
+
 	mu       sync.Mutex
 	turn     []string
 	reported bool
@@ -74,15 +76,25 @@ func NewPrompt(read prompt.Info, agent string, p prompt.Profile) *Prompt {
 // SkillList returns the skill segment that the session read, or "".
 func (p *Prompt) SkillList() string { return p.read.SkillList }
 
-// EmbeddedSkills returns the names of the embedded skills that the session lists.
-func (p *Prompt) EmbeddedSkills() []string {
-	var names []string
-	for _, s := range p.read.Skills {
-		if s.Path == "" {
-			names = append(names, s.Name)
-		}
+// Embedded returns the embedded skills that the session listed in its system prompt.
+func (p *Prompt) Embedded() []prompt.Embedded { return p.read.Embedded }
+
+// Track makes session_info report the embedded skills of sk, in place of the embedded skills that the session
+// listed in its system prompt.
+func (p *Prompt) Track(sk *Skills) { p.skills = sk }
+
+// skillsNow returns the skills that session_info reports: the skills of the files that the session read and the
+// embedded skills of the newest list.
+func (p *Prompt) skillsNow() []prompt.Skill {
+	if p.skills == nil {
+		return slices.Clone(p.read.Skills)
 	}
-	return names
+	out := slices.DeleteFunc(slices.Clone(p.read.Skills), func(s prompt.Skill) bool { return s.Path == "" })
+	for _, e := range p.skills.Current() {
+		out = append(out, prompt.Skill{Name: e.Name})
+	}
+	slices.SortStableFunc(out, func(a, b prompt.Skill) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 // Sent records system as the system prompt of the newest turn, in place of the
@@ -167,7 +179,7 @@ func (t *SessionInfo) Run(_ context.Context, _ protocol.ToolCall) (protocol.Tool
 	system, tools := t.prompt.sent()
 	out := sessionInfoResult{SessionID: v.ID, Model: v.Model, Effort: v.Effort, ServiceTier: v.ServiceTier, Usage: v.Usage,
 		System: system, Tools: tools, Instructions: "none",
-		Skills: append([]prompt.Skill{}, t.prompt.read.Skills...), Plugins: append([]protocol.Plugin{}, v.Plugins...)}
+		Skills: append([]prompt.Skill{}, t.prompt.skillsNow()...), Plugins: append([]protocol.Plugin{}, v.Plugins...)}
 	if len(t.prompt.read.Instructions) > 0 {
 		out.Instructions = strings.Join(t.prompt.read.Instructions, ", ")
 	}
