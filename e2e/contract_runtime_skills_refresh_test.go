@@ -3,13 +3,21 @@ package e2e
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
+
+const skillUpdateMarker = "The embedded skills changed after the system prompt was written."
 
 // editableSkills is a SkillSource that a test changes between turns.
 type editableSkills struct {
@@ -39,52 +47,269 @@ var (
 	skillInvoice = harness.SkillInfo{Name: "invoices", Description: "Explain an invoice"}
 )
 
-func TestContractRuntimeSkillsRefresh(t *testing.T) {
-	skipShort(t)
-	t.Run("a_skill_added_mid_session_loads", rowASkillAddedMidSessionLoads)
-	t.Run("a_removed_skill_fails_to_load", rowARemovedSkillFailsToLoad)
-	t.Run("a_failed_list_keeps_the_last_skills", rowAFailedListKeepsTheLastSkills)
-}
-
-// loadAfter runs a turn that calls load_skill for name after change, and returns the text of the last request.
-func loadAfter(t *testing.T, src *editableSkills, name string, change func()) string {
+func skillsAnthropicRuntime(t *testing.T, log *slog.Logger, src harness.SkillSource, steps ...harnesstest.Step) (*harness.Runtime, *harnesstest.Server) {
 	t.Helper()
-	r, fake := skillsRuntime(t, src, harnesstest.Step{Name: "one", Reply: harnesstest.Reply{Text: "ok"}}, loadSkillStep(map[string]any{"name": name}),
-		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "done"}})
-	s := skillsCreate(t, r)
-	sessionMCPTurn(t, s, "a", "one")
-	change()
-	sessionMCPTurn(t, s, "b", "load it")
-	reqs := fake.Requests()
-	return requestText(reqs[len(reqs)-1])
+	fake := harnesstest.NewAnthropic(t, steps...)
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Logger: log, Skills: src, Getenv: func(string) string { return "k" }, Config: config.Config{
+		ContextWindowTokens: 100000,
+		Providers:           map[string]config.Provider{"anthropic": {BaseURL: fake.URL(), APIKeyEnv: "SKILLS_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	return r, fake
 }
 
-func rowASkillAddedMidSessionLoads(t *testing.T) {
-	t.Parallel()
-	src := &editableSkills{}
-	src.set(nil, skillRefunds)
-	got := loadAfter(t, src, "invoices", func() { src.set(nil, skillRefunds, skillInvoice) })
-	if !strings.Contains(got, "body of invoices") {
-		t.Errorf("last request does not hold the loaded skill: %s", got)
+func anthropicSkillSession(t *testing.T, r *harness.Runtime) *harness.Session {
+	t.Helper()
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "anthropic/claude-sonnet-5-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func okReplies(n int) []harnesstest.Step {
+	var out []harnesstest.Step
+	for range n {
+		out = append(out, harnesstest.Step{Name: "ok", Reply: harnesstest.Reply{Text: "ok"}})
+	}
+	return out
+}
+
+// updates counts the skill update segments in the messages of r.
+func updates(r harnesstest.Request) int {
+	n := 0
+	for _, m := range r.Messages {
+		for _, p := range m.Parts {
+			n += strings.Count(p.Text, skillUpdateMarker)
+		}
+	}
+	return n
+}
+
+// stableCache fails when request i does not keep the cached prefix of request i-1: the system prompt, the tool
+// specs, every message of the request before, and the cache markers of the system prompt and the newest message.
+func stableCache(t *testing.T, reqs []harnesstest.Request) {
+	t.Helper()
+	for i, req := range reqs {
+		last := len(req.Messages) - 1
+		want := []harnesstest.CacheBreakpoint{{Message: -1}, {Message: last, Block: len(req.Messages[last].Parts) - 1}}
+		if !reflect.DeepEqual(req.CacheBreakpoints, want) {
+			t.Errorf("request %d cache breakpoints = %+v, want %+v", i+1, req.CacheBreakpoints, want)
+		}
+		if i == 0 {
+			continue
+		}
+		prev := reqs[i-1]
+		if req.System != reqs[0].System || !reflect.DeepEqual(req.Tools, reqs[0].Tools) || !reflect.DeepEqual(req.ToolSpecs, reqs[0].ToolSpecs) {
+			t.Errorf("request %d changed the system prompt or the tools of request 1", i+1)
+		}
+		if len(req.Messages) < len(prev.Messages) || !reflect.DeepEqual(req.Messages[:len(prev.Messages)], prev.Messages) {
+			t.Errorf("request %d does not begin with the messages of request %d:\n%+v\n---\n%+v", i+1, i, req.Messages, prev.Messages)
+		}
 	}
 }
 
-func rowARemovedSkillFailsToLoad(t *testing.T) {
+func TestContractRuntimeSkillsRefresh(t *testing.T) {
+	skipShort(t)
+	t.Run("a_skill_added_mid_session_is_announced_once_after_the_history_and_loads", rowASkillAddedMidSessionIsAnnouncedOnceAfterTheHistoryAndLoads)
+	t.Run("an_unchanged_skill_list_adds_no_segment", rowAnUnchangedSkillListAddsNoSegment)
+	t.Run("a_removed_skill_is_named_once_and_load_skill_fails_for_it", rowARemovedSkillIsNamedOnceAndLoadSkillFailsForIt)
+	t.Run("a_failed_list_keeps_the_last_skills_and_adds_no_segment", rowAFailedListKeepsTheLastSkillsAndAddsNoSegment)
+	t.Run("a_skill_added_after_a_reopen_is_pinned_after_the_history", rowASkillAddedAfterAReopenIsPinnedAfterTheHistory)
+	t.Run("a_skill_added_after_a_reopen_keeps_an_mcp_notice_in_place", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
+	t.Run("a_reopened_session_lists_the_changed_skills_in_its_prompt_and_announces_nothing", rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing)
+}
+
+func rowASkillAddedMidSessionIsAnnouncedOnceAfterTheHistoryAndLoads(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	steps := append(okReplies(3), harnesstest.Step{Name: "load", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "load_skill", Input: map[string]any{"name": "invoices"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "done"}})
+	r, fake := skillsAnthropicRuntime(t, nil, src, steps...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "b", "two")
+	sessionMCPTurn(t, s, "c", "three")
+	sessionMCPTurn(t, s, "d", "load it")
+	reqs := fake.Requests()
+	if len(reqs) != 5 {
+		t.Fatalf("model requests = %d, want 5", len(reqs))
+	}
+	stableCache(t, reqs)
+	for i, want := range []int{0, 1, 1, 1, 1} {
+		if got := updates(reqs[i]); got != want {
+			t.Errorf("request %d holds %d skill updates, want %d", i+1, got, want)
+		}
+	}
+	if strings.Contains(reqs[0].System, "invoices") {
+		t.Errorf("the first system prompt lists the new skill: %s", reqs[0].System)
+	}
+	if got := requestText(reqs[1]); !strings.Contains(got, "invoices — Explain an invoice (load with load_skill)") {
+		t.Errorf("request 2 does not list the new skill: %s", got)
+	}
+	if got := requestText(reqs[4]); !strings.Contains(got, "body of invoices") {
+		t.Errorf("request 5 does not hold the loaded skill: %s", got)
+	}
+}
+
+func rowAnUnchangedSkillListAddsNoSegment(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, nil, src, okReplies(3)...)
+	s := anthropicSkillSession(t, r)
+	for _, id := range []string{"a", "b", "c"} {
+		sessionMCPTurn(t, s, id, "go")
+	}
+	reqs := fake.Requests()
+	stableCache(t, reqs)
+	for i, req := range reqs {
+		if updates(req) != 0 || len(req.Messages) != 2*i+1 {
+			t.Errorf("request %d: %d skill updates and %d messages, want none and %d", i+1, updates(req), len(req.Messages), 2*i+1)
+		}
+		for _, m := range req.Messages {
+			if len(m.Parts) != 1 {
+				t.Errorf("request %d: a message has %d parts, want 1", i+1, len(m.Parts))
+			}
+		}
+	}
+}
+
+func rowARemovedSkillIsNamedOnceAndLoadSkillFailsForIt(t *testing.T) {
 	t.Parallel()
 	src := &editableSkills{}
 	src.set(nil, skillRefunds, skillInvoice)
-	got := loadAfter(t, src, "invoices", func() { src.set(nil, skillRefunds) })
-	if !strings.Contains(got, "unknown skill invoices") {
-		t.Errorf("last request does not hold the load error: %s", got)
+	steps := append(okReplies(1), harnesstest.Step{Name: "load", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "load_skill", Input: map[string]any{"name": "invoices"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "done"}})
+	r, fake := skillsAnthropicRuntime(t, nil, src, steps...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(nil, skillRefunds)
+	sessionMCPTurn(t, s, "b", "load it")
+	reqs := fake.Requests()
+	stableCache(t, reqs)
+	if updates(reqs[1]) != 1 || updates(reqs[2]) != 1 {
+		t.Errorf("skill updates = %d and %d, want 1 and 1", updates(reqs[1]), updates(reqs[2]))
+	}
+	if got := requestText(reqs[1]); !strings.Contains(got, "Removed, so load_skill fails for them: invoices.") {
+		t.Errorf("request 2 does not name the removed skill: %s", got)
+	}
+	if got := requestText(reqs[2]); !strings.Contains(got, "unknown skill invoices") {
+		t.Errorf("request 3 does not hold the load error: %s", got)
 	}
 }
 
-func rowAFailedListKeepsTheLastSkills(t *testing.T) {
+func rowAFailedListKeepsTheLastSkillsAndAddsNoSegment(t *testing.T) {
 	t.Parallel()
 	src := &editableSkills{}
 	src.set(nil, skillRefunds)
-	got := loadAfter(t, src, "refunds", func() { src.set(errors.New("database down")) })
-	if !strings.Contains(got, "body of refunds") {
-		t.Errorf("last request does not hold the loaded skill: %s", got)
+	steps := append(okReplies(1), harnesstest.Step{Name: "load", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "load_skill", Input: map[string]any{"name": "refunds"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "done"}})
+	r, fake := skillsAnthropicRuntime(t, nil, src, steps...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(errors.New("database down"))
+	sessionMCPTurn(t, s, "b", "load it")
+	reqs := fake.Requests()
+	stableCache(t, reqs)
+	for i, req := range reqs {
+		if updates(req) != 0 {
+			t.Errorf("request %d holds a skill update", i+1)
+		}
 	}
+	if got := requestText(reqs[2]); !strings.Contains(got, "body of refunds") {
+		t.Errorf("request 3 does not hold the loaded skill: %s", got)
+	}
+}
+
+func rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, nil, src, okReplies(3)...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "b", "two")
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	if updates(reqs[1]) != 1 || updates(reqs[2]) != 0 {
+		t.Errorf("skill updates = %d, then %d after the reopen, want 1, then 0", updates(reqs[1]), updates(reqs[2]))
+	}
+	if !strings.Contains(reqs[2].System, "invoices — Explain an invoice (load with load_skill)") {
+		t.Errorf("the system prompt after the reopen lacks the new skill: %s", reqs[2].System)
+	}
+}
+
+func rowASkillAddedAfterAReopenIsPinnedAfterTheHistory(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, nil, src, okReplies(3)...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	sessionMCPTurn(t, s, "b", "two")
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	stableCache(t, reqs)
+	if updates(reqs[2]) != 1 {
+		t.Errorf("request 3 holds %d skill updates, want 1", updates(reqs[2]))
+	}
+}
+
+func rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace(t *testing.T) {
+	t.Parallel()
+	log := newSyncLog()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, slog.New(log), src, okReplies(3)...)
+	down := harness.WithSessionMCP(map[string]config.MCPServerSpec{"weather": {Command: []string{filepath.Join(t.TempDir(), "no-such-server")}}})
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "anthropic/claude-sonnet-5-5"}, down)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "a", "one")
+	<-log.parked
+	sessionMCPTurn(t, s, "b", "two")
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = r.Open(t.Context(), "s1", down); err != nil {
+		t.Fatal(err)
+	}
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	msgs := reqs[2].Messages
+	first, last := msgs[0], msgs[len(msgs)-1]
+	if !strings.Contains(first.Parts[len(first.Parts)-1].Text, "[mcp: unavailable") || strings.Contains(requestTextOf(first), skillUpdateMarker) || updates(reqs[2]) != 1 || !strings.Contains(requestTextOf(last), skillUpdateMarker) {
+		t.Errorf("want the MCP notice in the first message and the one skill update in the last, got %+v", msgs)
+	}
+}
+
+func requestTextOf(m harnesstest.Message) string {
+	var b strings.Builder
+	for _, p := range m.Parts {
+		b.WriteString(p.Text)
+	}
+	return b.String()
 }

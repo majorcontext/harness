@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
@@ -99,16 +100,23 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 // first call of a process pins a status that has no place after the banner, as
 // the log alone fixes that place, so a new process pins the status of a server
 // that is down where the process before it did. A later change follows the
-// history of its call.
+// history of its call. A pin never falls before an older one, so the notices
+// are set in the order of their places, and a notice of the same place keeps
+// its order.
 func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 	pins, _ := call(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
 		first := !t.a.pinned
 		t.a.pinned = true
-		for _, n := range ns {
-			if first && n.At == 0 {
-				n.At = t.a.state.BannerAt()
+		placed := slices.Clone(ns)
+		for i := range placed {
+			if first && placed[i].At == 0 {
+				placed[i].At = t.a.state.BannerAt()
 			}
-			t.a.pins.Set(n.Kind, n.Text, n.Cleared, cmp.Or(n.At, at))
+			placed[i].At = cmp.Or(placed[i].At, at)
+		}
+		slices.SortStableFunc(placed, func(x, y turn.Notice) int { return cmp.Compare(x.At, y.At) })
+		for _, n := range placed {
+			t.a.pins.Set(n.Kind, n.Text, n.Cleared, n.At)
 		}
 		reply(t.a.pins.Pinned(), nil)
 	})

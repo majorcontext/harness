@@ -325,6 +325,22 @@ func EmbeddedLine(e Embedded) string {
 	return fmt.Sprintf("%s — %s (load with load_skill)", e.Name, e.Description)
 }
 
+// EmbeddedUpdate is the segment that tells the model the embedded skills now, after the system prompt listed
+// others. removed names the skills of the system prompt that are gone.
+func EmbeddedUpdate(now []Embedded, removed []string) string {
+	segs := []string{"The embedded skills changed after the system prompt was written. This list of embedded skills replaces the one in the system prompt."}
+	if len(now) == 0 {
+		segs = append(segs, "No embedded skill is available.")
+	}
+	for _, e := range now {
+		segs = append(segs, EmbeddedLine(e))
+	}
+	if len(removed) > 0 {
+		segs = append(segs, "Removed, so load_skill fails for them: "+strings.Join(removed, ", ")+".")
+	}
+	return strings.Join(segs, "\n")
+}
+
 func resolve(workDir, p string) string {
 	if filepath.IsAbs(p) {
 		return p
