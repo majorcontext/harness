@@ -7,11 +7,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -235,4 +237,39 @@ func sessionInfoCreate(t *testing.T, r *harness.Runtime, allowed []string) *harn
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestContractRuntimePluginToolSeesTheCallingSessionID(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	fake := harnesstest.NewChat(t,
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "who", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("who"), Reply: harnesstest.Reply{Text: "ok"}})
+	var got atomic.Value
+	who := &plugin.Plugin{Name: "who", Tools: []plugin.Tool{{
+		Def: plugin.ToolDef{Name: "who", Description: "reports the session", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Execute: func(ctx context.Context, _ *plugin.Client, _ json.RawMessage) ([]plugin.Part, error) {
+			got.Store(plugin.SessionID(ctx))
+			return []plugin.Part{plugin.TextPart("done")}, nil
+		}}}}
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Plugins: []*plugin.Plugin{who}, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s-42", Model: "bifrost/gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := got.Load().(string); id != "s-42" {
+		t.Errorf("session ID in the plugin tool = %q, want s-42", id)
+	}
 }
