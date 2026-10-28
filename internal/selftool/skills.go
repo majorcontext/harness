@@ -3,7 +3,6 @@ package selftool
 import (
 	"context"
 	"log/slog"
-	"maps"
 	"slices"
 	"sync"
 
@@ -55,9 +54,9 @@ func (s *Skills) Current() []prompt.Embedded {
 }
 
 func (s *Skills) names() []string {
-	names := map[string]bool{}
+	var names []string
 	for _, e := range s.Current() {
-		names[e.Name] = true
+		names = append(names, e.Name)
 	}
-	return slices.Sorted(maps.Keys(names))
+	return names
 }

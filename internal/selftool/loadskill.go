@@ -15,7 +15,7 @@ import (
 // LoadSkillName is the name of the load_skill tool.
 const LoadSkillName = "load_skill"
 
-const loadSkillDescription = "Load a file of an embedded skill that the system prompt or a later update lists: its SKILL.md by default, " +
+const loadSkillDescription = "Load a file of an embedded skill that the system prompt lists: its SKILL.md by default, " +
 	"or another file of the skill at a slash-separated path relative to the skill root."
 
 const loadSkillSchema = `{"type":"object","properties":{"name":{"type":"string","description":"The skill name"},` +
