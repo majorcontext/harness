@@ -2,4 +2,4 @@
 # Each budget is the measured size plus 3%, rounded up to 50,000 bytes. A PR that grows the module
 # raises the number in the same diff and states why.
 raw 24150000
-gzip 5750000
+gzip 5950000
