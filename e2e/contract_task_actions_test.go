@@ -330,16 +330,17 @@ func taskAccountSettledSendRow() scenario {
 		name: "task_send_changes_the_child_account", concurrent: true, entry: map[string]any{"vendor": "codex"}, driver: newAccountProxyDriver,
 		model: []harnesstest.Step{
 			taskStep("spawn", userStarts("delegate"), fixed(spawnChild)),
-			{Name: "child_done", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "child done"}},
+			{Name: "child_done", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "child done", Block: true}},
 			{Name: "parent_ack", Match: matchAll(rootStarts("delegate"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
 			taskStep("send", userStarts("update"), onKid(func(kid string) []map[string]any {
 				return []map[string]any{onSession("send", kid, "prompt", "child resume", "accounts", map[string]string{"codex": "acct_resumed"})}
 			})),
+			{Name: "child_resumed", Match: userStarts("child resume"), Reply: harnesstest.Reply{Text: "ok", Block: true}},
 			{Name: "parent_done", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
 		},
-		actions: []action{hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 4},
+		actions: []action{hiddenCreate{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 3}, release{step: "child_done"}, awaitRequests{n: 4},
 			bindChild{as: "kid", parent: "a"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
-			submit{as: "a", text: "update"}, awaitRequests{n: 7}, waitIdle{as: "kid"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
+			submit{as: "a", text: "update"}, awaitRequests{n: 7}, release{step: "child_resumed"}, waitIdle{as: "kid"}, awaitSettled{as: "kid", parent: "a"}, waitIdle{as: "a"},
 			recordAccountSettings{as: "kid"}, recordProxyAccounts{expected: []string{"acct_parent", "acct_resumed"}, unqualified: true}},
 	}
 }
