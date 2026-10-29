@@ -311,7 +311,7 @@ func (a *actor) retryLater(e *entry) {
 	}
 	e.retrying = true
 	wait := retryWait(e.streak - 1)
-	if retriesHeld.Load() {
+	if a.s.holdRetries {
 		wait = time.Duration(math.MaxInt64)
 	}
 	s := a.s
