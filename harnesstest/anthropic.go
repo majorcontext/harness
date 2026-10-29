@@ -259,12 +259,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": textBlockStart(rep.WebSearch)})
 		citeSources(e, idx, rep.WebSearch)
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Text}})
-		if rep.Block && !s.block(r, name) {
+		if rep.Block && !s.block(r.Context(), name) {
 			return
 		}
 		if rep.Tail != "" {
 			e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Tail}})
-			if rep.TailBlock && !s.block(r, name+":tail") {
+			if rep.TailBlock && !s.block(r.Context(), name+":tail") {
 				return
 			}
 		}
@@ -281,7 +281,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "input_json_delta", "partial_json": string(args)}})
 		if gate {
 			gate = false
-			if !s.block(r, name) {
+			if !s.block(r.Context(), name) {
 				return
 			}
 		}

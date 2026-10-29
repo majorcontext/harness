@@ -78,17 +78,17 @@ func TestContractCodexSessionAccounts(t *testing.T) {
 			config:     map[string]any{"web": map[string]any{"search": true}},
 			model: []harnesstest.Step{
 				{Name: "spawn", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_spawn", Name: "task", Input: spawnChild}}}},
-				{Name: "child", Match: harnesstest.LastUserText("codex child work"), Reply: harnesstest.Reply{Text: "codex child done"}},
+				{Name: "child", Match: harnesstest.LastUserText("codex child work"), Reply: harnesstest.Reply{Text: "codex child done", Block: true}},
 				taskStep("send", harnesstest.LastUserText("resume"), onKid(func(kid string) []map[string]any {
 					return []map[string]any{onSession("send", kid, "prompt", "codex child resume", "accounts", map[string]string{"codex": "acct_resumed"})}
 				})),
-				{Name: "child_resumed", Match: harnesstest.LastUserText("codex child resume"), Reply: harnesstest.Reply{Text: "codex child resumed"}},
+				{Name: "child_resumed", Match: harnesstest.LastUserText("codex child resume"), Reply: harnesstest.Reply{Text: "codex child resumed", Block: true}},
 				{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
 			},
 			actions: []action{
 				create{as: "a"}, models{}, submit{as: "a", text: "delegate"}, waitIdle{as: "a"},
-				bindChild{as: "kid", parent: "a"}, waitIdle{as: "kid"}, waitIdle{as: "a"}, getSessionUsage{as: "kid", account: "acct_child"},
-				restart{kill: true}, models{}, submit{as: "a", text: "resume"}, waitIdle{as: "a"}, waitIdle{as: "kid"}, waitIdle{as: "a"},
+				bindChild{as: "kid", parent: "a"}, release{step: "child"}, waitIdle{as: "kid"}, waitIdle{as: "a"}, getSessionUsage{as: "kid", account: "acct_child"},
+				restart{kill: true}, models{}, submit{as: "a", text: "resume"}, waitIdle{as: "a"}, release{step: "child_resumed"}, waitIdle{as: "kid"}, waitIdle{as: "a"},
 				getSessionUsage{as: "kid", account: "acct_resumed"}, requireCodexPrewarms{minimum: 4}, requireCodexEffort{want: "low", not: "medium"},
 				requireCodexWebSearch{},
 			},

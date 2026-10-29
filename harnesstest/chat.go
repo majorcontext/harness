@@ -248,12 +248,12 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, n int, name 
 	gate := rep.Block && rep.Text == ""
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
 		chunk(obj{"content": rep.Text}, nil)
-		if rep.Block && !s.block(r, name) {
+		if rep.Block && !s.block(r.Context(), name) {
 			return
 		}
 		if rep.Tail != "" {
 			chunk(obj{"content": rep.Tail}, nil)
-			if rep.TailBlock && !s.block(r, name+":tail") {
+			if rep.TailBlock && !s.block(r.Context(), name+":tail") {
 				return
 			}
 		}
@@ -268,7 +268,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, n int, name 
 		chunk(obj{"tool_calls": []obj{{"index": i, "function": obj{"arguments": string(args)}}}}, nil)
 		if gate {
 			gate = false
-			if !s.block(r, name) {
+			if !s.block(r.Context(), name) {
 				return
 			}
 		}
