@@ -142,6 +142,8 @@ var boxesFeatures = []struct {
 		"git_changes_uncommitted_scope_reports_modified_deleted_and_untracked_files",
 		"git_changes_branch_scope_diffs_the_work_tree_against_the_default_branch",
 		"jj_changes_reports_the_head_commit_and_an_edit",
+		"jj_changes_command_of_the_repository_config_answers_the_request",
+		"jj_changes_command_that_fails_is_internal",
 	}},
 	{"GET /processes, POST /processes/{name}/{action}", []string{"process_http_lifecycle", "process_tool_from_the_model"}},
 	{"GET /sessions/{id}/events stream", []string{"sse_resume_cursor", "sse_resume_after_kill"}},

@@ -38,8 +38,19 @@ type runGit struct {
 
 // runJJ runs jj in the work dir with a fixed time, seed, and user, so a commit
 // has the same id in every run. The row skips when jj is not on PATH, and
-// fails there under CI.
-type runJJ struct{ args []string }
+// fails there under CI. A row that sets a repository config gives its own
+// seed to the first command, because jj keeps that config under the user
+// config directory, keyed by the repository id that the seed fixes.
+type runJJ struct {
+	args []string
+	seed string
+}
+
+// jjChangesCommand sets harness.changes-command of the repository config of
+// the work dir to argv, and removes that config at the end of the test. jj
+// makes the id of that config from the seed of the first command that sets
+// it, so the seed is the one of the row.
+type jjChangesCommand struct{ argv, seed string }
 
 // removeFile removes a file of the work dir.
 type removeFile struct{ path string }
@@ -72,20 +83,37 @@ func (a runGit) run(t *testing.T, r *run) {
 	gitIn(t, dir, a.args...)
 }
 func (a runJJ) run(t *testing.T, r *run) {
+	jjIn(t, r.drv.Workdir(), a.seed, a.args...)
+}
+func (a jjChangesCommand) run(t *testing.T, r *run) {
+	dir := r.drv.Workdir()
+	jjIn(t, dir, a.seed, "config", "set", "--repo", "harness.changes-command", a.argv)
+	path := jjIn(t, dir, a.seed, "config", "path", "--repo")
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(path)) })
+}
+
+// jjIn runs jj in dir and returns its output.
+func jjIn(t *testing.T, dir, seed string, args ...string) string {
+	t.Helper()
+	if seed == "" {
+		seed = "1"
+	}
 	if _, err := exec.LookPath("jj"); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal("jj is not on PATH, and CI needs it")
 		}
 		t.Skip("jj is not on PATH")
 	}
-	full := append([]string{"--no-pager", "--color=never", "--quiet", "--config=user.name=contract", "--config=user.email=contract@example.com"}, a.args...)
+	full := append([]string{"--no-pager", "--color=never", "--quiet", "--config=user.name=contract", "--config=user.email=contract@example.com"}, args...)
 	cmd := exec.CommandContext(t.Context(), "jj", full...)
-	cmd.Dir = r.drv.Workdir()
-	cmd.Env = append(os.Environ(), "JJ_TIMESTAMP="+gitDate, "JJ_OP_TIMESTAMP="+gitDate, "JJ_RANDOMNESS_SEED=1",
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "JJ_TIMESTAMP="+gitDate, "JJ_OP_TIMESTAMP="+gitDate, "JJ_RANDOMNESS_SEED="+seed,
 		"JJ_OP_HOSTNAME=contract", "JJ_OP_USERNAME=contract")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("jj %s: %v\n%s", strings.Join(a.args, " "), err, out)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("jj %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 func (a removeFile) run(t *testing.T, r *run) {
 	if err := os.Remove(filepath.Join(r.drv.Workdir(), a.path)); err != nil {
@@ -208,16 +236,6 @@ func TestContractWorkspace(t *testing.T) {
 			},
 		},
 		{
-			name: "jj_changes_reports_the_head_commit_and_an_edit",
-			actions: []action{
-				runJJ{args: []string{"git", "init"}},
-				writeFile{path: "a.txt", body: "one\ntwo\n"},
-				runJJ{args: []string{"commit", "-m", "base"}},
-				writeFile{path: "a.txt", body: "one\nTWO!\n"},
-				workspaceChanges{scope: "uncommitted"},
-			},
-		},
-		{
 			name: "git_changes_refusals",
 			actions: []action{
 				writeFile{path: "plain/x.txt", body: "x\n"},
@@ -233,6 +251,42 @@ func TestContractWorkspace(t *testing.T) {
 				workspaceChanges{scope: "uncommitted", dir: "plain"},
 				workspaceChanges{dir: "unborn"},
 				workspaceChanges{dir: "nobase"},
+			},
+		},
+	})
+}
+
+func TestContractWorkspaceJJ(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "jj_changes_reports_the_head_commit_and_an_edit",
+			actions: []action{
+				runJJ{args: []string{"git", "init"}},
+				writeFile{path: "a.txt", body: "one\ntwo\n"},
+				runJJ{args: []string{"commit", "-m", "base"}},
+				writeFile{path: "a.txt", body: "one\nTWO!\n"},
+				workspaceChanges{scope: "uncommitted"},
+			},
+		},
+		{
+			name: "jj_changes_command_of_the_repository_config_answers_the_request",
+			actions: []action{
+				runJJ{args: []string{"git", "init"}, seed: "2"},
+				writeFile{path: "a.txt", body: "one\n"},
+				runJJ{args: []string{"commit", "-m", "base"}},
+				writeFile{path: "answer.json", body: `{"files":[{"path":"from-command.txt","status":"added","additions":1,"deletions":0,"binary":false,"large":false}],"patch":"diff --git a/from-command.txt b/from-command.txt\n","truncated":false}`},
+				jjChangesCommand{argv: `["cat","answer.json"]`, seed: "2"},
+				workspaceChanges{scope: "uncommitted"},
+			},
+		},
+		{
+			name: "jj_changes_command_that_fails_is_internal",
+			actions: []action{
+				runJJ{args: []string{"git", "init"}, seed: "3"},
+				writeFile{path: "a.txt", body: "one\n"},
+				runJJ{args: []string{"commit", "-m", "base"}},
+				jjChangesCommand{argv: `["false"]`, seed: "3"},
+				workspaceChanges{scope: "uncommitted"},
 			},
 		},
 	})

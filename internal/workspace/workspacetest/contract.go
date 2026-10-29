@@ -27,6 +27,13 @@ type Fixture struct {
 	// Merge returns a work tree whose head has several parents, with a base.
 	// It may be nil for an engine that has no such state.
 	Merge func(t *testing.T) string
+	// Octopus returns a work tree whose head has three parents, with a base.
+	// It may be nil for an engine that has no such state.
+	Octopus func(t *testing.T) string
+	// ConflictedHead returns a work tree whose head commit records a
+	// conflict, with an unedited working copy. It may be nil for an engine
+	// that has no such state.
+	ConflictedHead func(t *testing.T) string
 	// NoBase returns a work tree with a head and no base.
 	NoBase func(t *testing.T) string
 	// Outside returns a directory that is in no work tree.
@@ -37,7 +44,8 @@ type Fixture struct {
 	// Footprint returns a text that changes when a user could see a write
 	// to the repository of dir: its index, references, objects, and
 	// configuration. The state that an engine keeps for its own snapshots of
-	// the work tree is not a footprint.
+	// the work tree, and the caches that it writes when it loads the
+	// repository, are not a footprint.
 	Footprint func(t *testing.T, dir string) string
 	// Guard arms a trap in the repository of dir that fails any write to its
 	// shared storage, and Footprint covers it. It may be nil.
@@ -64,6 +72,8 @@ var rows = []struct {
 	{"an unborn head gives no head_rev and no error", unbornHead},
 	{"a head of several parents gives no head_rev and the edit alone", mergeHead},
 	{"the patch is a git-format diff of the reported files", patchFormat},
+	{"a head of three parents answers the branch scope and fails the uncommitted scope", octopusHead},
+	{"a conflicted head and an unedited working copy report no change", conflictedHeadUnedited},
 	{"a missing base gives no_base", missingBase},
 	{"head_commit is set exactly when head_rev is", headCommit},
 	{"a file that the head records as a conflict is conflicted", conflictedReported},
@@ -282,4 +292,27 @@ func conflictedReported(t *testing.T, fx Fixture) {
 		}
 	}
 	t.Errorf("files do not list %s", path)
+}
+
+func octopusHead(t *testing.T, fx Fixture) {
+	if fx.Octopus == nil {
+		t.Skip("engine has no head of three parents")
+	}
+	dir := fx.Octopus(t)
+	write(t, dir, "seed.txt", "changed\n")
+	wantFiles(t, mustRead(t, fx, dir, protocol.ScopeBranch), "seed.txt modified")
+	_, err := read(t, fx, dir, protocol.ScopeUncommitted)
+	if err == nil || errors.Is(err, workspace.ErrNotRepo) || errors.Is(err, workspace.ErrNoBase) || errors.Is(err, workspace.ErrInvalid) {
+		t.Errorf("uncommitted scope error = %v, want an internal failure", err)
+	}
+}
+
+func conflictedHeadUnedited(t *testing.T, fx Fixture) {
+	if fx.ConflictedHead == nil {
+		t.Skip("engine has no conflict state")
+	}
+	dir := fx.ConflictedHead(t)
+	wantFiles(t, mustRead(t, fx, dir, protocol.ScopeUncommitted))
+	write(t, dir, "new.txt", "new\n")
+	wantFiles(t, mustRead(t, fx, dir, protocol.ScopeUncommitted), "new.txt added")
 }

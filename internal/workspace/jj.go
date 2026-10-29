@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -50,37 +52,44 @@ func openJJ(ctx context.Context, root string) (jjRepo, error) {
 		}
 	}
 	r := jjRepo{root: root, repo: filepath.Clean(repo)}
-	// Any jj command moves a legacy repository config, which is a write.
-	if _, err := os.Stat(filepath.Join(r.repo, "config.toml")); err == nil {
-		if _, err := os.Stat(filepath.Join(r.repo, "config-id")); os.IsNotExist(err) {
-			slog.Warn("workspace changes: the jj repository config is in its legacy file; run any jj command in the work tree once to move it", "root", root)
-			return r, fmt.Errorf("the jj repository config of %s is in its legacy file; run any jj command in the work tree once to move it", root)
-		}
-	}
 	op, err := r.newestOp(ctx)
 	r.op = op
 	return r, err
 }
 
+// headReads bounds the reads of the op_heads directory. A jj command that
+// merges operation heads removes one and adds one, so a read can see none.
+const headReads = 3
+
 // newestOp returns the operation of the one operation head, or the head that
-// ended last when concurrent commands left several.
+// ended last when concurrent commands left several. The ID breaks a tie of
+// end times.
 func (r jjRepo) newestOp(ctx context.Context) (string, error) {
-	heads, err := os.ReadDir(filepath.Join(r.repo, "op_heads", "heads"))
-	if err != nil {
-		return "", err
-	}
 	var ids []string
-	for _, h := range heads {
-		if isOpID(h.Name()) {
-			ids = append(ids, h.Name())
+	for range headReads {
+		heads, err := os.ReadDir(filepath.Join(r.repo, "op_heads", "heads"))
+		if err != nil {
+			return "", err
 		}
+		for _, h := range heads {
+			if isOpID(h.Name()) {
+				ids = append(ids, h.Name())
+			}
+		}
+		if len(ids) > 0 {
+			break
+		}
+		runtime.Gosched()
+	}
+	if len(ids) == 0 {
+		return "", fmt.Errorf("jj repository %s has no operation head", r.repo)
 	}
 	if len(ids) == 1 {
 		return ids[0], nil
 	}
 	best, bestEnd := "", int64(-1)
 	for _, id := range ids {
-		out, err := r.run(ctx, id, "op", "log", "--limit", "1", "--no-graph", "-T", `time.end().format("%s")`)
+		out, err := r.run(ctx, id, "op", "log", "--limit", "1", "--no-graph", "-T", `time.end().format("%s%9f")`)
 		if err != nil {
 			return "", err
 		}
@@ -91,9 +100,6 @@ func (r jjRepo) newestOp(ctx context.Context) (string, error) {
 		if end > bestEnd || end == bestEnd && id > best {
 			best, bestEnd = id, end
 		}
-	}
-	if best == "" {
-		return "", fmt.Errorf("jj repository %s has no operation head", r.repo)
 	}
 	return best, nil
 }
@@ -175,11 +181,13 @@ func (r jjRepo) gitDir() (string, error) {
 
 // seedTree returns the tree-ish that the diff runs against: base, or the
 // tree of the one parent of @, the empty tree for the root commit, or the
-// automatic merge of the trees of two parents. A merge writes its trees
-// into the private object directory of env.
-func (r jjRepo) seedTree(ctx context.Context, env []string, base string) (string, error) {
+// automatic merge of the trees of two parents. Each commit that jj records
+// as conflicted gives its materialized tree. A tree or a merge goes into the
+// private object directory of env. Only a request without base needs the
+// parents of @ as one tree, so more than two parents fail only then.
+func (r jjRepo) seedTree(ctx context.Context, env []string, tmp, base string) (string, error) {
 	if base != "" {
-		return base, nil
+		return r.materialized(ctx, env, tmp, base)
 	}
 	parents, err := r.parents(ctx)
 	if err != nil {
@@ -188,25 +196,100 @@ func (r jjRepo) seedTree(ctx context.Context, env []string, base string) (string
 	if len(parents) == 0 || len(parents) == 1 && parents[0].root {
 		return emptyTree(ctx, r.root, env)
 	}
-	if len(parents) == 1 {
-		return parents[0].commit, nil
-	}
 	if len(parents) > 2 {
 		slog.Warn("workspace changes: @ has more than two parents", "parents", len(parents))
 		return "", fmt.Errorf("@ has %d parents, and the automatic merge of more than two is not supported", len(parents))
 	}
-	return r.mergeTrees(ctx, env, parents[0].commit, parents[1].commit)
+	trees := make([]string, len(parents))
+	for i, p := range parents {
+		if trees[i], err = r.materialized(ctx, env, tmp, p.commit); err != nil {
+			return "", err
+		}
+	}
+	if len(trees) == 1 {
+		return trees[0], nil
+	}
+	return r.mergeTrees(ctx, env, trees[0], trees[1])
 }
 
-// mergeTrees merges two commits as jj does: git computes the merge bases,
-// there is no rename detection, and no attribute source can select a merge
-// driver. A conflict exits 1 and still prints the tree, with the markers.
+// conflictStorage reports a top-level name that jj adds to the git tree of a
+// conflicted commit to store its conflicts.
+func conflictStorage(name string) bool {
+	return name == "JJ-CONFLICT-README" || strings.HasPrefix(name, ".jjconflict-base-") || strings.HasPrefix(name, ".jjconflict-side-")
+}
+
+// filesetPath quotes path as a fileset string that names exactly that file
+// of the root.
+func filesetPath(path string) string {
+	q := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "\x00", `\0`).Replace(path)
+	return `root-file:"` + q + `"`
+}
+
+// materialized returns the tree of commit. The git tree of a commit that jj
+// records as conflicted holds the storage form of each conflict, so its tree
+// is rebuilt in a temporary index: each conflicted file gets the content
+// that jj materializes with its markers, and the storage entries go.
+func (r jjRepo) materialized(ctx context.Context, env []string, tmp, commit string) (string, error) {
+	has, err := r.lines(ctx, "log", "-r", commit, "--no-graph", "-T", `if(conflict, "conflict\n")`)
+	if err != nil || len(has) == 0 {
+		return commit, err
+	}
+	paths, err := r.lines(ctx, "file", "list", "-r", commit, "-T", `if(conflict, path.display() ++ "\n")`)
+	if err != nil {
+		return "", err
+	}
+	idxEnv := append(slices.Clone(env), "GIT_INDEX_FILE="+filepath.Join(tmp, "index-"+commit))
+	if _, err := gitOut(ctx, r.root, idxEnv, "-c", "core.splitIndex=false", "read-tree", commit); err != nil {
+		return "", err
+	}
+	top, err := gitOut(ctx, r.root, idxEnv, "ls-tree", "--name-only", "-z", commit)
+	if err != nil {
+		return "", err
+	}
+	var info bytes.Buffer
+	for _, name := range splitNulZ(top) {
+		if conflictStorage(name) {
+			rm := gitCmd(ctx, r.root, idxEnv, "rm", "-r", "-f", "-q", "--cached", "--", name)
+			if out, err := rm.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git rm --cached %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+			}
+		}
+	}
+	for _, path := range paths {
+		content, err := r.run(ctx, r.op, "file", "show", "-r", commit, filesetPath(path))
+		if err != nil {
+			return "", err
+		}
+		hash := gitCmd(ctx, r.root, idxEnv, "hash-object", "-w", "--stdin")
+		hash.Stdin = strings.NewReader(content)
+		var out, stderr bytes.Buffer
+		hash.Stdout, hash.Stderr = &out, &stderr
+		if err := hash.Run(); err != nil {
+			return "", fmt.Errorf("git hash-object: %w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		fmt.Fprintf(&info, "100644 %s\t%s\x00", strings.TrimSpace(out.String()), path)
+	}
+	if info.Len() > 0 {
+		upd := gitCmd(ctx, r.root, idxEnv, "-c", "core.splitIndex=false", "update-index", "-z", "--add", "--index-info")
+		upd.Stdin = &info
+		if out, err := upd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git update-index: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	tree, err := gitOut(ctx, r.root, idxEnv, "write-tree")
+	return strings.TrimSpace(tree), err
+}
+
+// mergeTrees merges two trees as jj does: git computes the merge bases,
+// there is no rename detection. The private git directory holds no config,
+// and the empty attribute source selects no merge driver, so none runs. A
+// conflict exits 1 and still prints the tree, with the markers.
 func (r jjRepo) mergeTrees(ctx context.Context, env []string, a, b string) (string, error) {
 	empty, err := emptyTree(ctx, r.root, env)
 	if err != nil {
 		return "", err
 	}
-	cmd := gitCmd(ctx, r.root, env, "--attr-source="+empty, "-c", "core.attributesFile="+os.DevNull,
+	cmd := gitCmd(ctx, r.root, env, "--attr-source="+empty,
 		"merge-tree", "--write-tree", "--allow-unrelated-histories", "-X", "no-renames", a, b)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -268,6 +351,7 @@ func (r jjRepo) runChangesCommand(ctx context.Context, argv []string, head Head,
 	cmd.Env = append(os.Environ(), "HARNESS_CHANGES_SCOPE="+scope, "HARNESS_CHANGES_BASE="+commit,
 		"HARNESS_CHANGES_PATCH_BYTES="+strconv.Itoa(patchCap))
 	cmd.WaitDelay = waitDelay
+	ownProcessGroup(cmd)
 	data, err := runCapped(cmd, cancel, metadataCap+patchCap)
 	if errors.Is(err, errMetadataTooLarge) {
 		return nil, "", false, err
@@ -322,7 +406,8 @@ func (w *capWriter) Write(p []byte) (int, error) {
 // runCapped runs cmd and returns its stdout. More than maxBytes of stdout
 // kills it and returns errMetadataTooLarge. The copy of stdout runs in exec,
 // so WaitDelay frees a stdout that a grandchild holds open; the output of the
-// command is then complete, and the command has succeeded.
+// command is then complete, and the command has succeeded, and its process
+// group dies with the grandchild.
 func runCapped(cmd *exec.Cmd, kill func(), maxBytes int) ([]byte, error) {
 	w := &capWriter{max: maxBytes, kill: kill}
 	cmd.Stdout = w
@@ -331,6 +416,7 @@ func runCapped(cmd *exec.Cmd, kill func(), maxBytes int) ([]byte, error) {
 		return nil, errMetadataTooLarge
 	}
 	if errors.Is(err, exec.ErrWaitDelay) {
+		_ = killProcessGroup(cmd)
 		err = nil
 	}
 	return w.buf.Bytes(), err

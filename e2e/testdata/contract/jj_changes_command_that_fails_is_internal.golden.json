@@ -1,0 +1,16 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes.uncommitted": {
+      "status": 500,
+      "body": {
+        "error": {
+          "code": "internal",
+          "details": {},
+          "message": "internal error"
+        }
+      }
+    }
+  }
+}
