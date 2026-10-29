@@ -241,6 +241,7 @@ var runtimeRows = withRows(deferredModelRows, mcpLiveRows, pluginLiveRows, codex
 	"claudecode_web_search_call_without_the_option_fails_the_turn":                                             sameAsServe(),
 	"claudecode_tool_search_call_and_its_result_do_not_fail_the_turn":                                          sameAsServe(),
 	"claudecode_mcp_tool_loading_eager_turns_the_cli_tool_search_off":                                          sameAsServe(),
+	"claudecode_cli_runs_without_the_anthropic_credential_variables":                                           sameAsServe(),
 	"claudecode_mcp_tool_loading_lazy_turns_the_cli_tool_search_on":                                            sameAsServe(),
 	"claudecode_mcp_tool_loading_auto_leaves_the_cli_tool_search_to_the_cli":                                   sameAsServe(),
 	"claudecode_mcp_tool_loading_unset_leaves_the_cli_tool_search_to_the_cli":                                  sameAsServe(),

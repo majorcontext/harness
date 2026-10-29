@@ -267,7 +267,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if req.Sent != nil {
 		req.Sent(system)
 	}
-	env := append(os.Environ(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading), "ENABLE_PROMPT_CACHING_1H=1")
+	env := append(cliEnviron(), "ENABLE_TOOL_SEARCH="+toolSearchEnv(b.toolLoading), "ENABLE_PROMPT_CACHING_1H=1")
 	if account := req.Settings.Accounts[b.p.Vendor]; b.p.Vendor != "" && account != "" {
 		if env, err = b.accountEnv(env, account); err != nil {
 			return nil, err
@@ -286,6 +286,14 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	cmd.Env = env
 	cmd.Dir = b.workDir
 	return cmd, nil
+}
+
+// cliEnviron is the environment of the process without the Anthropic credential
+// variables, so the CLI always bills its own login.
+func cliEnviron() []string {
+	return slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") || strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=")
+	})
 }
 
 // systemPrompt returns the --append-system-prompt value of a run: the tool

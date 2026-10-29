@@ -61,6 +61,8 @@ type claudeLane struct {
 	spawnModes string
 	// env adds FAKE_CLAUDE_* and FAKECLAUDE_* variables to the environment of the CLI.
 	env map[string]string
+	// procEnv adds variables to the environment of the host process.
+	procEnv map[string]string
 }
 
 // turnCall is one call of a "turn_calls" batch.
@@ -154,7 +156,7 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 		args = append(args, "--ask-user-question")
 	}
 	cfg["providers"].(map[string]any)["claude-code"].(map[string]any)["extra_args"] = fakeEnvArgs(logs.env(l))
-	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), nil, args...), claudeLogs: logs}
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), l.procEnv, args...), claudeLogs: logs}
 }
 
 func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
