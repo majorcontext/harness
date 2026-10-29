@@ -94,10 +94,7 @@ func Run(t *testing.T, newStore func(t *testing.T) harness.Store) {
 		{"BlobRoundTrip", testBlobRoundTrip},
 		{"StoredRecordsAreCopies", testStoredRecordsAreCopies},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			c.fn(t, newStore(t))
-		})
+		t.Run(c.name, func(t *testing.T) { c.fn(t, newStore(t)) })
 	}
 }
 
@@ -114,10 +111,7 @@ func RunInstances(t *testing.T, newStorage func(t *testing.T) func() harness.Sto
 		{"ConcurrentInstancesOneWins", testConcurrentInstancesOneWins},
 		{"ReadSeesRecordsOfOtherInstance", testReadSeesRecordsOfOtherInstance},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			c.fn(t, newStorage(t))
-		})
+		t.Run(c.name, func(t *testing.T) { c.fn(t, newStorage(t)) })
 	}
 }
 
@@ -274,7 +268,7 @@ func manyRecord(seq int) string {
 func appendMany(t *testing.T, st store, id string, from, to int) {
 	t.Helper()
 	for at := from; at < to; {
-		n := min(256, to-at)
+		n := min(250, to-at)
 		batch := make([]string, n)
 		for i := range batch {
 			batch[i] = manyRecord(at + i + 1)
@@ -284,15 +278,12 @@ func appendMany(t *testing.T, st store, id string, from, to int) {
 	}
 }
 
-// checkManyReads checks reads at sampled offsets around sparse-index boundaries
-// and the ends of the log.
+// checkManyReads checks reads at power-of-two offsets and the ends of the log.
 func checkManyReads(t *testing.T, st store, id string, count int) {
 	t.Helper()
-	afters := []int{0, 1, count/2 - 1, count / 2, count/2 + 1, count - 2, count - 1, count, count + 1}
-	for _, boundary := range []int{64, 512} {
-		if boundary <= count {
-			afters = append(afters, boundary-1, boundary, boundary+1)
-		}
+	afters := []int{0, 1, count - 1, count, count + 1}
+	for boundary := 1; boundary <= count; boundary *= 2 {
+		afters = append(afters, boundary-1, boundary, boundary+1)
 	}
 	for _, after := range afters {
 		if after < 0 {
