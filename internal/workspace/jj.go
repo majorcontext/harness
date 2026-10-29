@@ -321,8 +321,8 @@ func (w *capWriter) Write(p []byte) (int, error) {
 
 // runCapped runs cmd and returns its stdout. More than maxBytes of stdout
 // kills it and returns errMetadataTooLarge. The copy of stdout runs in exec,
-// so WaitDelay frees a stdout that a grandchild holds open; the output is
-// then complete, and the command has succeeded.
+// so WaitDelay frees a stdout that a grandchild holds open; the output of the
+// command is then complete, and the command has succeeded.
 func runCapped(cmd *exec.Cmd, kill func(), maxBytes int) ([]byte, error) {
 	w := &capWriter{max: maxBytes, kill: kill}
 	cmd.Stdout = w
