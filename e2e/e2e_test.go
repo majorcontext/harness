@@ -169,8 +169,7 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// cleanEnv builds a child environment without inherited HARNESS_ and OTEL_
-// settings, credentials, or proxy values, then applies per-test overrides.
+// cleanEnv prevents parent settings from leaking into child test processes.
 func cleanEnv(overrides map[string]string) []string {
 	strip := map[string]bool{
 		"ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true,
