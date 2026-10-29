@@ -8,7 +8,7 @@
 # or package slower raises its number in the same diff and states why.
 #
 # Package        slowest CI run  budget
-# e2e (Contract)         51 s      77 s
+# e2e (Contract)         77 s     116 s (the jj rows run jj for each fixture)
 # e2e@runtime            27 s      41 s (its slowest row took 27 s)
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
@@ -16,10 +16,11 @@
 # server                7.5 s      12 s
 # plugin                1.4 s      75 s (two sequential node probes with a 30 s deadline each)
 # . (root)             10.1 s      16 s (usually 3.5 s; 7-10 s on a slow runner)
+# workspace              12 s      18 s (each jj contract row builds its repository with jj)
 # any other              <6 s      10 s
 leaf 10
 package default 10
-package e2e 77
+package e2e 116
 package e2e@runtime 41
 package internal/backend/claudecode 21
 package internal/imageclamp 13
@@ -27,6 +28,7 @@ package internal/gates 36
 package internal/server 12
 package internal/plugin 75
 package . 16
+package internal/workspace 18
 
 # The node probes of the TypeScript SDK tests have a 30 s deadline, as a configured plugin
 # has; a cold node start on a loaded runner can use most of it.
