@@ -23,6 +23,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/httpapi"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/testhook"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -139,10 +140,11 @@ func (d *runtimeDriver) start(t *testing.T) {
 		d.startProc(t)
 		return
 	}
-	opts := harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, ModelTransport: d.modelTransport, AskUserQuestion: d.ask, WebTest: d.webSeam, MCPHoldRetries: true}
+	opts := harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, ModelTransport: d.modelTransport, AskUserQuestion: d.ask, WebTest: d.webSeam}
 	if w := d.traced; w != nil {
 		opts.TracerProvider, opts.CaptureMessageContent, opts.Logger = w.provider, w.content, slog.New(slog.NewJSONHandler(w.logs, nil))
 	}
+	testhook.Hooks.HoldMCPRetries(&opts)
 	rt, err := newWired(t, opts)
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
