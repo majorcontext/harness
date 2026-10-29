@@ -2,7 +2,6 @@ package mcpsrc
 
 import (
 	"math/rand/v2"
-	"sync/atomic"
 	"time"
 )
 
@@ -11,12 +10,12 @@ const (
 	maxRetries = 3
 )
 
-var retriesHeld atomic.Bool
+// Option changes how New builds a Source.
+type Option func(*Source)
 
-// HoldRetries stops every background retry of this process from firing before its Source closes. A test
-// host calls it before it builds a runtime, so a test controls when a down server connects. Production code
-// never calls it.
-func HoldRetries() { retriesHeld.Store(true) }
+// HoldRetries with hold true stops every background retry of the Source and of its session Sources.
+// Only a test host passes true.
+func HoldRetries(hold bool) Option { return func(s *Source) { s.holdRetries = hold } }
 
 // health is what the attempts to connect one server left behind. reason is
 // empty while the server is connected.

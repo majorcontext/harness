@@ -98,8 +98,7 @@ type Options struct {
 	Host HostLimits
 	// Logger receives every log line of the runtime. nil: slog.Default().
 	Logger *slog.Logger
-	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process, task, model, or read_tool_result; with or without one, no name may be session_info; a
+	// Tools are the embedder tools. Each name must be unique. With a WorkDir, no name may be process, task, model, or read_tool_result; with or without one, no name may be session_info; a
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
@@ -112,15 +111,15 @@ type Options struct {
 	// Config.AppendSystemPrompt alone, no file is read, no process runs, no built-in tool exists, and no
 	// session has the task tool. New makes a relative path absolute, and fails when it cannot.
 	WorkDir string
-	// AskUserQuestion lets a session ask the user a question: the tool
-	// ask_user_question of a model API session, and AskUserQuestion of Claude
-	// Code. The embedder renders the question and answers it with
-	// Session.Resolve. A question that nothing answers parks the session, so
-	// without it no turn may ask. A child session and a session with an
-	// active goal never ask.
+	// AskUserQuestion lets a session ask the user a question: the tool ask_user_question of a model API
+	// session, and AskUserQuestion of Claude Code. The embedder renders the question and answers it with
+	// Session.Resolve. A question that nothing answers parks the session, so without it no turn may ask. A
+	// child session and a session with an active goal never ask.
 	AskUserQuestion bool
 	// WebTest is a test seam of web_fetch: loopback, resolver, proxy, and root CAs. Production code leaves it zero.
 	WebTest WebTestSeam
+	// MCPHoldRetries is a test seam: no MCP retry of this runtime fires. Production code leaves it false.
+	MCPHoldRetries bool
 	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
 	// sends the banner as engine context, after the newest message of the session when its first request left. Empty: no banner.
 	Version string
@@ -271,7 +270,7 @@ func New(opts Options) (*Runtime, error) {
 			tools = append(tools, selftool.NewModel(toolHost{r}, catalog))
 		}
 	}
-	r.mcp = mcpsrc.New(opts.Config, opts.WorkDir, r.log)
+	r.mcp = mcpsrc.New(opts.Config, opts.WorkDir, r.log, mcpsrc.HoldRetries(opts.MCPHoldRetries))
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})

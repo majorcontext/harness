@@ -98,6 +98,8 @@ type Source struct {
 	parent  *Source
 	mode    string
 	budget  int
+	// holdRetries stops the background retries; a session Source takes its parent's value.
+	holdRetries bool
 	// httpClient is the client of the HTTP servers; nil is the default client. A test sets it.
 	httpClient *http.Client
 
@@ -174,21 +176,27 @@ func servesSkills(c *mcp.Client) bool {
 
 // New returns the Source of cfg.MCPServers. It dials nothing. A nil log is slog.Default(). Every client offers
 // workDir as its root; an empty workDir offers none. Close ends its goroutine.
-func New(cfg config.Config, workDir string, log *slog.Logger) *Source {
-	return build(cfg, nil, cfg.MCPServers, workDir, log)
+func New(cfg config.Config, workDir string, log *slog.Logger, opts ...Option) *Source {
+	return build(cfg, nil, cfg.MCPServers, workDir, log, opts)
 }
 
 // NewSession returns the Source of one session: the servers in specs beside the servers of parent, which
 // may be nil. It connects only the servers in specs, and Close stops only them. It dials nothing. A name
 // in specs must not be a name of parent.
 func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger) *Source {
-	return build(cfg, parent, specs, workDir, log)
+	return build(cfg, parent, specs, workDir, log, nil)
 }
 
-func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger) *Source {
+func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, opts []Option) *Source {
 	s := &Source{workDir: workDir, log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
 		budget: schemaBudget(cfg.MCPSchemaBytes),
 		inbox:  make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
+	if parent != nil {
+		s.holdRetries = parent.holdRetries
+	}
+	for _, o := range opts {
+		o(s)
+	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	a := newActor(s)
 	for name, spec := range specs {
