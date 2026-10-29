@@ -142,18 +142,35 @@ type diffSource struct {
 }
 
 // privateGitDir makes a git directory in dir that reads the objects of
-// realObjects through an alternate and writes its own. No config of the
-// user, the system, or the repository applies to it.
-func privateGitDir(dir, realObjects string) (env []string, err error) {
-	for _, d := range []string{"objects/info", "refs"} {
+// gitDir through an alternate and writes its own. Only the ignore rules of
+// the user and of the repository reach it: the info/exclude files of gitDir
+// and of a colocated .git, and the core.excludesFile of the global config.
+// No other config, hook, driver, or attribute applies to it.
+func privateGitDir(ctx context.Context, dir, root, gitDir string) (env []string, err error) {
+	for _, d := range []string{"objects/info", "refs", "info"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			return nil, err
 		}
 	}
+	var exclude []byte
+	for _, p := range []string{filepath.Join(gitDir, "info", "exclude"), filepath.Join(root, ".git", "info", "exclude")} {
+		if data, err := os.ReadFile(p); err == nil {
+			exclude = append(append(exclude, data...), '\n')
+		}
+	}
+	config := "[core]\n\trepositoryformatversion = 0\n\tattributesFile = " + os.DevNull + "\n"
+	if out, err := gitOut(ctx, root, nil, "config", "--global", "--type=path", "--get", "core.excludesFile"); err == nil {
+		if file := strings.TrimSuffix(out, "\n"); file != "" {
+			config += "\texcludesFile = " + strconv.Quote(file) + "\n"
+		}
+	} else if !isGitWorkTreeErr(err) {
+		return nil, err
+	}
 	files := map[string]string{
 		"HEAD":                    "ref: refs/heads/main\n",
-		"config":                  "[core]\n\trepositoryformatversion = 0\n\tattributesFile = " + os.DevNull + "\n",
-		"objects/info/alternates": realObjects + "\n",
+		"config":                  config,
+		"info/exclude":            string(exclude),
+		"objects/info/alternates": filepath.Join(gitDir, "objects") + "\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
@@ -222,7 +239,7 @@ func privateIndex(ctx context.Context, src diffSource, head, dir string) (env, d
 	}
 	missing := false
 	if src.gitDir != "" {
-		gitEnv, err := privateGitDir(filepath.Join(dir, "git"), filepath.Join(src.gitDir, "objects"))
+		gitEnv, err := privateGitDir(ctx, filepath.Join(dir, "git"), repoRoot, src.gitDir)
 		if err != nil {
 			return nil, nil, "", err
 		}

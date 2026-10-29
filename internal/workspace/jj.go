@@ -187,7 +187,8 @@ func (r jjRepo) gitDir() (string, error) {
 // parents of @ as one tree, so more than two parents fail only then.
 func (r jjRepo) seedTree(ctx context.Context, env []string, tmp, base string) (string, error) {
 	if base != "" {
-		return r.materialized(ctx, env, tmp, base)
+		tree, _, err := r.materialized(ctx, env, tmp, base)
+		return tree, err
 	}
 	parents, err := r.parents(ctx)
 	if err != nil {
@@ -200,16 +201,49 @@ func (r jjRepo) seedTree(ctx context.Context, env []string, tmp, base string) (s
 		slog.Warn("workspace changes: @ has more than two parents", "parents", len(parents))
 		return "", fmt.Errorf("@ has %d parents, and the automatic merge of more than two is not supported", len(parents))
 	}
-	trees := make([]string, len(parents))
-	for i, p := range parents {
-		if trees[i], err = r.materialized(ctx, env, tmp, p.commit); err != nil {
-			return "", err
-		}
+	if len(parents) == 1 {
+		tree, _, err := r.materialized(ctx, env, tmp, parents[0].commit)
+		return tree, err
 	}
-	if len(trees) == 1 {
-		return trees[0], nil
+	return r.mergeParents(ctx, env, tmp, parents[0].commit, parents[1].commit)
+}
+
+// mergeParents merges two commits as jj does. When neither is conflicted,
+// git finds the merge bases of the commits. Otherwise each of the commits
+// and their one merge base gives its materialized tree, and git merges the
+// trees; two or more merge bases fail, because git merges trees against one
+// base only.
+func (r jjRepo) mergeParents(ctx context.Context, env []string, tmp, a, b string) (string, error) {
+	ta, rebuiltA, err := r.materialized(ctx, env, tmp, a)
+	if err != nil {
+		return "", err
 	}
-	return r.mergeTrees(ctx, env, trees[0], trees[1])
+	tb, rebuiltB, err := r.materialized(ctx, env, tmp, b)
+	if err != nil {
+		return "", err
+	}
+	if !rebuiltA && !rebuiltB {
+		return r.mergeTrees(ctx, env, nil, a, b)
+	}
+	out, err := gitOut(ctx, r.root, env, "merge-base", "--all", a, b)
+	var exitErr *exec.ExitError
+	if err != nil && !errors.As(err, &exitErr) {
+		return "", err
+	}
+	bases := strings.Fields(out)
+	if len(bases) > 1 {
+		return "", fmt.Errorf("the parents of @ have %d merge bases, and one of them is conflicted", len(bases))
+	}
+	var tbase string
+	if len(bases) == 0 {
+		tbase, err = emptyTree(ctx, r.root, env)
+	} else {
+		tbase, _, err = r.materialized(ctx, env, tmp, bases[0])
+	}
+	if err != nil {
+		return "", err
+	}
+	return r.mergeTrees(ctx, env, []string{"--merge-base=" + tbase}, ta, tb)
 }
 
 // conflictStorage reports a top-level name that jj adds to the git tree of a
@@ -225,72 +259,101 @@ func filesetPath(path string) string {
 	return `root-file:"` + q + `"`
 }
 
-// materialized returns the tree of commit. The git tree of a commit that jj
-// records as conflicted holds the storage form of each conflict, so its tree
-// is rebuilt in a temporary index: each conflicted file gets the content
-// that jj materializes with its markers, and the storage entries go.
-func (r jjRepo) materialized(ctx context.Context, env []string, tmp, commit string) (string, error) {
+// materialized returns the tree-ish of commit, and whether it rebuilt a tree.
+// The git tree of a commit that jj records as conflicted holds the storage
+// form of each conflict, so its tree is rebuilt in a temporary index: each
+// conflicted file gets the content that jj materializes with its markers,
+// with the mode of its entry in the tree, and the storage entries go.
+func (r jjRepo) materialized(ctx context.Context, env []string, tmp, commit string) (string, bool, error) {
 	has, err := r.lines(ctx, "log", "-r", commit, "--no-graph", "-T", `if(conflict, "conflict\n")`)
 	if err != nil || len(has) == 0 {
-		return commit, err
+		return commit, false, err
 	}
 	paths, err := r.lines(ctx, "file", "list", "-r", commit, "-T", `if(conflict, path.display() ++ "\n")`)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	idxEnv := append(slices.Clone(env), "GIT_INDEX_FILE="+filepath.Join(tmp, "index-"+commit))
 	if _, err := gitOut(ctx, r.root, idxEnv, "-c", "core.splitIndex=false", "read-tree", commit); err != nil {
-		return "", err
+		return "", false, err
 	}
 	top, err := gitOut(ctx, r.root, idxEnv, "ls-tree", "--name-only", "-z", commit)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	var info bytes.Buffer
 	for _, name := range splitNulZ(top) {
 		if conflictStorage(name) {
 			rm := gitCmd(ctx, r.root, idxEnv, "rm", "-r", "-f", "-q", "--cached", "--", name)
 			if out, err := rm.CombinedOutput(); err != nil {
-				return "", fmt.Errorf("git rm --cached %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+				return "", false, fmt.Errorf("git rm --cached %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 			}
 		}
 	}
+	modes, err := r.entryModes(ctx, idxEnv, commit, paths)
+	if err != nil {
+		return "", false, err
+	}
+	var info bytes.Buffer
 	for _, path := range paths {
 		content, err := r.run(ctx, r.op, "file", "show", "-r", commit, filesetPath(path))
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		hash := gitCmd(ctx, r.root, idxEnv, "hash-object", "-w", "--stdin")
 		hash.Stdin = strings.NewReader(content)
 		var out, stderr bytes.Buffer
 		hash.Stdout, hash.Stderr = &out, &stderr
 		if err := hash.Run(); err != nil {
-			return "", fmt.Errorf("git hash-object: %w: %s", err, strings.TrimSpace(stderr.String()))
+			return "", false, fmt.Errorf("git hash-object: %w: %s", err, strings.TrimSpace(stderr.String()))
 		}
-		fmt.Fprintf(&info, "100644 %s\t%s\x00", strings.TrimSpace(out.String()), path)
+		fmt.Fprintf(&info, "%s %s\t%s\x00", modes[path], strings.TrimSpace(out.String()), path)
 	}
 	if info.Len() > 0 {
 		upd := gitCmd(ctx, r.root, idxEnv, "-c", "core.splitIndex=false", "update-index", "-z", "--add", "--index-info")
 		upd.Stdin = &info
 		if out, err := upd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git update-index: %w: %s", err, strings.TrimSpace(string(out)))
+			return "", false, fmt.Errorf("git update-index: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 	tree, err := gitOut(ctx, r.root, idxEnv, "write-tree")
-	return strings.TrimSpace(tree), err
+	return strings.TrimSpace(tree), true, err
+}
+
+// entryModes returns the index mode of each path in the tree of commit: 100755
+// for an executable file, else 100644, which also covers a path that the tree
+// does not hold.
+func (r jjRepo) entryModes(ctx context.Context, env []string, commit string, paths []string) (map[string]string, error) {
+	modes := make(map[string]string, len(paths))
+	for _, p := range paths {
+		modes[p] = "100644"
+	}
+	if len(paths) == 0 {
+		return modes, nil
+	}
+	out, err := gitOut(ctx, r.root, env, append([]string{"ls-tree", "-z", commit, "--"}, paths...)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range splitNulZ(out) {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(meta, "100755 ") {
+			modes[path] = "100755"
+		}
+	}
+	return modes, nil
 }
 
 // mergeTrees merges two trees as jj does: git computes the merge bases,
 // there is no rename detection. The private git directory holds no config,
 // and the empty attribute source selects no merge driver, so none runs. A
 // conflict exits 1 and still prints the tree, with the markers.
-func (r jjRepo) mergeTrees(ctx context.Context, env []string, a, b string) (string, error) {
+func (r jjRepo) mergeTrees(ctx context.Context, env, extra []string, a, b string) (string, error) {
 	empty, err := emptyTree(ctx, r.root, env)
 	if err != nil {
 		return "", err
 	}
-	cmd := gitCmd(ctx, r.root, env, "--attr-source="+empty,
-		"merge-tree", "--write-tree", "--allow-unrelated-histories", "-X", "no-renames", a, b)
+	args := append([]string{"--attr-source=" + empty, "merge-tree", "--write-tree", "--allow-unrelated-histories", "-X", "no-renames"}, extra...)
+	cmd := gitCmd(ctx, r.root, env, append(args, a, b)...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	err = cmd.Run()
@@ -409,7 +472,10 @@ func (w *capWriter) Write(p []byte) (int, error) {
 // command is then complete, and the command has succeeded, and its process
 // group dies with the grandchild.
 func runCapped(cmd *exec.Cmd, kill func(), maxBytes int) ([]byte, error) {
-	w := &capWriter{max: maxBytes, kill: kill}
+	w := &capWriter{max: maxBytes, kill: func() {
+		kill()
+		_ = killProcessGroup(cmd)
+	}}
 	cmd.Stdout = w
 	err := cmd.Run()
 	if w.over {

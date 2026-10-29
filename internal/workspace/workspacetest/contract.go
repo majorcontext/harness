@@ -4,7 +4,10 @@ package workspacetest
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,6 +37,13 @@ type Fixture struct {
 	// conflict, with an unedited working copy. It may be nil for an engine
 	// that has no such state.
 	ConflictedHead func(t *testing.T) string
+	// ConflictedMerge returns a work tree whose head has two parents, one of
+	// them conflicted, with an unedited working copy. It may be nil for an
+	// engine that has no such state.
+	ConflictedMerge func(t *testing.T) string
+	// Ignored returns a work tree whose repository ignores the returned path
+	// through a rule that is not in the work tree. It may be nil.
+	Ignored func(t *testing.T) (dir, path string)
 	// NoBase returns a work tree with a head and no base.
 	NoBase func(t *testing.T) string
 	// Outside returns a directory that is in no work tree.
@@ -42,8 +52,8 @@ type Fixture struct {
 	// has recorded.
 	Operations func(t *testing.T, dir string) int
 	// Footprint returns a text that changes when a user could see a write
-	// to the repository of dir: its index, references, objects, and
-	// configuration. The state that an engine keeps for its own snapshots of
+	// to the repository of dir or to the files of its work tree (see
+	// TreeFootprint): its index, references, objects, and configuration. The state that an engine keeps for its own snapshots of
 	// the work tree, and the caches that it writes when it loads the
 	// repository, are not a footprint.
 	Footprint func(t *testing.T, dir string) string
@@ -74,6 +84,8 @@ var rows = []struct {
 	{"the patch is a git-format diff of the reported files", patchFormat},
 	{"a head of three parents answers the branch scope and fails the uncommitted scope", octopusHead},
 	{"a conflicted head and an unedited working copy report no change", conflictedHeadUnedited},
+	{"a head of two parents with one conflicted parent and no edit reports only conflicted files", conflictedMergeUnedited},
+	{"a file that the repository ignores is not reported", ignoredNotReported},
 	{"a missing base gives no_base", missingBase},
 	{"head_commit is set exactly when head_rev is", headCommit},
 	{"a file that the head records as a conflict is conflicted", conflictedReported},
@@ -315,4 +327,73 @@ func conflictedHeadUnedited(t *testing.T, fx Fixture) {
 	wantFiles(t, mustRead(t, fx, dir, protocol.ScopeUncommitted))
 	write(t, dir, "new.txt", "new\n")
 	wantFiles(t, mustRead(t, fx, dir, protocol.ScopeUncommitted), "new.txt added")
+}
+
+// conflictedMergeUnedited allows a conflicted file: the working copy of a
+// merge may word the markers of a conflict of a parent a little differently.
+// A file that is added or deleted is a storage entry of the parent that leaked.
+func conflictedMergeUnedited(t *testing.T, fx Fixture) {
+	if fx.ConflictedMerge == nil {
+		t.Skip("engine has no conflict state")
+	}
+	dir := fx.ConflictedMerge(t)
+	for _, f := range mustRead(t, fx, dir, protocol.ScopeUncommitted).Files {
+		if f.Status != "conflicted" {
+			t.Errorf("file %s is %s, want only conflicted files", f.Path, f.Status)
+		}
+	}
+	write(t, dir, "new.txt", "new\n")
+	var added []string
+	for _, f := range mustRead(t, fx, dir, protocol.ScopeUncommitted).Files {
+		if f.Status == "added" {
+			added = append(added, f.Path)
+		}
+	}
+	if !slices.Equal(added, []string{"new.txt"}) {
+		t.Errorf("added files = %q, want new.txt", added)
+	}
+}
+
+func ignoredNotReported(t *testing.T, fx Fixture) {
+	if fx.Ignored == nil {
+		t.Skip("engine has no ignore rule outside the work tree")
+	}
+	dir, path := fx.Ignored(t)
+	write(t, dir, path, "ignored\n")
+	write(t, dir, "new.txt", "new\n")
+	wantFiles(t, mustRead(t, fx, dir, protocol.ScopeUncommitted), "new.txt added")
+}
+
+// TreeFootprint returns a text that changes when a file of the work tree at
+// dir changes, is added, or is removed. It leaves out each top-level name of
+// skip, such as the directory of a repository.
+func TreeFootprint(t *testing.T, dir string, skip ...string) string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if slices.Contains(skip, rel) {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		var data []byte
+		if d.Type().IsRegular() {
+			data, _ = os.ReadFile(p)
+		}
+		out = append(out, fmt.Sprintf("%s %v %x", rel, info.Mode(), sha256.Sum256(data)))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(out, "\n")
 }

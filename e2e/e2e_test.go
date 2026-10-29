@@ -38,6 +38,11 @@ var harnessBin string
 // flag.Parse here makes testing.Short() meaningful before m.Run.
 func TestMain(m *testing.M) {
 	flag.Parse()
+	home, err := isolateJJConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "e2e:", err)
+		os.Exit(1)
+	}
 	if err := os.Setenv("OPENAI_API_KEY", ""); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e:", err)
 		os.Exit(1)
@@ -72,9 +77,12 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "e2e: coverage report:", err)
 			code = 1
 		}
+		_ = os.RemoveAll(home)
 		os.Exit(code)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
 }
 
 // buildHarness compiles ./cmd/harness and ./harnesstest/fakeclaude into a temp

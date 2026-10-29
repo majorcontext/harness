@@ -47,4 +47,4 @@ internal/backend/accounts_test.go internal LRU eviction, in-flight lease protect
 internal/backend/claudecode/accounts_test.go a fake CLI process inspects the exact proxy variables of a routed child process; a contract model server cannot observe the spawned process environment
 harnesstest/openai_test.go OpenAI is the Responses fixture; a pure step-selection test pins applying request-dependent Calls for Codex tool fixtures
 internal/backend/modelapi/telemetry_test.go the no-usage message of an incomplete response needs a response.incomplete with no usage, which no contract-server reply produces
-internal/workspace/jj_test.go the changes command rows need the test binary as a child process that checks the environment and holds stdout through a grandchild; no e2e row can run a Go helper or read the environment of a command
+internal/workspace/jj_test.go the changes command rows need the test binary as a child process that checks the environment and holds stdout through a grandchild; no e2e row can run a Go helper or read the environment of a command; TestMain keeps the home and config of the user out of every test of the package

@@ -18,11 +18,21 @@
             "status": "added"
           }
         ],
-        "head_commit": "d35fdcf3058fd1bf97231aacdb98b580e4790121",
-        "head_rev": "change:rlvkpnrzqnoowoytxnquwvuryrwnrmlp",
+        "head_commit": "746d90efa14329b0cf02f94c71cb101bc2882b30",
+        "head_rev": "change:qpvuntsmwlqtpsluzzsnyyzlmlwvmlnu",
         "patch": "diff --git a/from-command.txt b/from-command.txt\n",
         "scope": "uncommitted",
         "truncated": false
+      }
+    },
+    "workspace_changes.uncommitted#2": {
+      "status": 500,
+      "body": {
+        "error": {
+          "code": "internal",
+          "details": {},
+          "message": "internal error"
+        }
       }
     },
     "workspace_changes_wire.uncommitted": {
