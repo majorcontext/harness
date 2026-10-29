@@ -42,6 +42,23 @@ type catalogBackend struct {
 	refused     bool
 	refusedWith string
 	flight      chan struct{}
+	closed      bool
+	// base ends the background fetch, and fetches counts the fetches that run.
+	base    context.Context
+	cancel  context.CancelFunc
+	fetches sync.WaitGroup
+}
+
+// Close ends the background fetch, waits for it, and closes the connections of the backend.
+func (b *catalogBackend) Close() {
+	b.mu.Lock()
+	b.closed = true
+	if b.cancel != nil {
+		b.cancel()
+	}
+	b.mu.Unlock()
+	b.fetches.Wait()
+	b.Backend.Close()
 }
 
 // Models returns the models of the backend. It waits at most catalogTimeout for the endpoint, and returns the static list when ctx ends first.
@@ -55,11 +72,19 @@ func (b *catalogBackend) Models(ctx context.Context) []modelmeta.Model {
 		b.mu.Unlock()
 		return b.static
 	}
+	if b.closed {
+		defer b.mu.Unlock()
+		return b.static
+	}
 	done := b.flight
 	if done == nil {
 		done = make(chan struct{})
 		b.flight = done
-		go b.run(done)
+		b.fetches.Add(1)
+		go func() {
+			defer b.fetches.Done()
+			b.run(done)
+		}()
 	}
 	b.mu.Unlock()
 	select {
@@ -77,7 +102,11 @@ func (b *catalogBackend) Models(ctx context.Context) []modelmeta.Model {
 
 // run fetches the list once and records the outcome, then wakes the callers that wait on done.
 func (b *catalogBackend) run(done chan struct{}) {
-	ctx, cancel := context.WithTimeout(context.Background(), catalogTimeout)
+	base := b.base
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, catalogTimeout)
 	defer cancel()
 	got, err := b.fetch(ctx)
 	credential := b.credential()
@@ -91,6 +120,8 @@ func (b *catalogBackend) run(done chan struct{}) {
 		if b.refusedRetry > 0 {
 			b.retryAt = time.Now().Add(b.refusedRetry)
 		}
+	case base.Err() != nil:
+		b.refused = false
 	case err != nil:
 		b.refused = false
 		b.retryAt = time.Now().Add(catalogRetry)

@@ -2,9 +2,11 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -21,10 +23,14 @@ func (r *Runtime) SetProviders(ctx context.Context, providers map[string]config.
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
-	if err := r.models.Set(providers); err != nil {
+	status, err := r.models.Set(providers)
+	switch {
+	case errors.Is(err, backend.ErrClosed):
+		return nil, ErrDraining
+	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return r.models.Status(), nil
+	return status, nil
 }
 
 // ReconnectProvider moves the credential revision of the provider name: the idle pooled websockets of the entry close at once,
@@ -38,7 +44,10 @@ func (r *Runtime) ReconnectProvider(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
-	if err := r.models.Reconnect(name); err != nil {
+	switch err := r.models.Reconnect(name); {
+	case errors.Is(err, backend.ErrClosed):
+		return ErrDraining
+	case err != nil:
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return nil

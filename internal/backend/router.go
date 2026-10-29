@@ -79,6 +79,7 @@ func New(cfg config.Config, workDir string, transport func(provider string) http
 	if env.Logins == nil {
 		env.Logins = injectedauth.New(injectedauth.Options{Transport: transport, Probe: ProbeOf})
 	}
+	cfg.Providers = cloneProviders(cfg.Providers)
 	b := &builder{cfg: cfg, workDir: workDir, transport: transport, env: env,
 		codex: sync.OnceValue(func() *codexauth.Source {
 			return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
@@ -96,6 +97,7 @@ func modelBackend(name string, p config.Provider, c provider.Provider, contextWi
 		return be
 	}
 	cb := &catalogBackend{Backend: be, name: name, fetch: rc.ListModels, static: modelmeta.CodexModels(), log: env.Log, credential: func() string { return "" }}
+	cb.base, cb.cancel = context.WithCancel(context.Background())
 	switch e := env.Logins.Of(name, p); {
 	case p.Auth == config.AuthChatGPT:
 		cb.credential = func() string { return codex().AccessToken() }
@@ -200,12 +202,15 @@ func (m *Router) Check(ref modelref.ModelRef) (turn.Backend, error) {
 }
 
 // lease returns the entry of the provider of model, held until its release.
-func (m *Router) lease(model string) (*live, error) {
+func (m *Router) lease(ctx context.Context, model string) (*live, error) {
 	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, context.Cause(ctx)
+		}
 		e, err := m.snap.Load().find(ref)
 		if err != nil {
 			return nil, err
@@ -253,7 +258,7 @@ func (m *Router) Capabilities(model string) turn.Capabilities {
 
 // Run runs the turn on the backend of req.Model.
 func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
-	e, err := m.lease(req.Model)
+	e, err := m.lease(ctx, req.Model)
 	if err != nil {
 		return err
 	}
@@ -269,7 +274,7 @@ func (m *Router) CanWarm(model string) bool {
 
 // Warm warms the backend of req.Model, when that backend can warm.
 func (m *Router) Warm(ctx context.Context, req turn.Request) error {
-	e, err := m.lease(req.Model)
+	e, err := m.lease(ctx, req.Model)
 	if err != nil {
 		return err
 	}
@@ -289,7 +294,7 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 	out := []protocol.Model{}
 	for _, name := range slices.Sorted(maps.Keys(s.entries)) {
 		e := s.entries[name]
-		if e.hidden {
+		if e.hidden || !e.acquire() {
 			continue
 		}
 		models := e.listed
@@ -305,6 +310,7 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 			ref := name + "/" + mm.ID
 			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: e.be.Capabilities(ref).ContextWindow})
 		}
+		e.release()
 	}
 	return out
 }

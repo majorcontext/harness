@@ -104,7 +104,7 @@ var nodeRules = []nodeRule{
 		name:   "provider_live_set_writer",
 		detail: "only the router replaces the live set of provider entries (spec: Backend, Live set)",
 		match:  callsMethod("setProviderSet", 1),
-		allow:  []string{"internal/backend/router.go#New", "internal/backend/router.go#NewRouter", "internal/backend/liveset.go#Set"},
+		allow:  []string{"internal/backend/router.go#New", "internal/backend/router.go#NewRouter", "internal/backend/liveset.go#Set", "internal/backend/liveset.go#Close"},
 	},
 	{
 		name:   "single_appender",

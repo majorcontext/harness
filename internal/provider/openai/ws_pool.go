@@ -93,11 +93,12 @@ func (p *wsPool) closeStale() {
 	p.mu.Unlock()
 	for _, e := range entries {
 		e.mu.Lock()
-		stale := !e.busy && e.warming == nil && e.conn != nil && e.connRev != cur
-		e.mu.Unlock()
-		if stale {
-			p.invalidate(e)
+		var conn *websocket.Conn
+		if !e.busy && e.warming == nil && e.conn != nil && e.connRev != cur {
+			conn = e.detachLocked()
 		}
+		e.mu.Unlock()
+		closeConn(conn)
 	}
 }
 
@@ -165,6 +166,11 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	entry.lastUsedAt = now
 	conn := entry.conn
 	entry.mu.Unlock()
+	if p.revision() != req.Revision {
+		// The credentials moved after the request resolved them, so it must not use or replace a pooled socket.
+		p.release(entry)
+		return nil, false
+	}
 
 	// A dropped connection takes its lineage with it, so the reason the
 	// pool refused to reuse this socket IS the reason the next request
@@ -190,6 +196,11 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 			}
 			cmp.Or(req.Log, slog.Default()).Debug("openai: websocket dial failed; using HTTP", "error", err)
 			p.recordFailure(entry)
+			p.release(entry)
+			return nil, false
+		}
+		if p.revision() != req.Revision {
+			closeConn(newConn)
 			p.release(entry)
 			return nil, false
 		}
@@ -300,11 +311,12 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 				entry.busy = false
 				entry.lastUsedAt = time.Now()
 				entry.streamFailures = 0
-				keep := isWSCleanTerminalEvent(name) && entry.connRev == p.revision()
-				entry.mu.Unlock()
-				if !keep {
-					p.invalidate(entry)
+				var stale *websocket.Conn
+				if !isWSCleanTerminalEvent(name) || entry.connRev != p.revision() {
+					stale = entry.detachLocked()
 				}
+				entry.mu.Unlock()
+				closeConn(stale)
 			},
 			onBroken: func(err error) {
 				p.release(entry)
@@ -400,6 +412,11 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 				p.recordFailure(entry)
 				p.release(entry)
 				return nil, nil, provider.MarkStreamTruncated(dialErr)
+			}
+			if p.revision() != req.Revision {
+				closeConn(newConn)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(errors.New("openai: credentials changed during the dial"))
 			}
 			entry.mu.Lock()
 			entry.conn = newConn
@@ -567,12 +584,22 @@ func (p *wsPool) clearLineage(entry *wsPoolEntry, generation uint64) {
 // either way.
 func (p *wsPool) invalidate(entry *wsPoolEntry) {
 	entry.mu.Lock()
-	conn := entry.conn
-	entry.conn = nil
-	entry.connectedAt = time.Time{}
-	entry.lineage = nil
-	entry.generation++
+	conn := entry.detachLocked()
 	entry.mu.Unlock()
+	closeConn(conn)
+}
+
+// detachLocked clears the connection of the entry and returns it, so the caller closes exactly that socket after it unlocks.
+func (e *wsPoolEntry) detachLocked() *websocket.Conn {
+	conn := e.conn
+	e.conn = nil
+	e.connectedAt = time.Time{}
+	e.lineage = nil
+	e.generation++
+	return conn
+}
+
+func closeConn(conn *websocket.Conn) {
 	if conn != nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}

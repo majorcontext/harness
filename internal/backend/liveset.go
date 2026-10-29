@@ -3,7 +3,6 @@ package backend
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"reflect"
 	"slices"
@@ -27,7 +26,8 @@ type snapshot struct {
 	vendors     map[string]string
 	traceNames  map[string]string
 	// names holds every configured name, available or not, sorted.
-	names []string
+	names  []string
+	closed bool
 }
 
 func newSnapshot() *snapshot {
@@ -36,6 +36,9 @@ func newSnapshot() *snapshot {
 
 // find returns the entry that serves ref, or the model_unavailable error.
 func (s *snapshot) find(ref modelref.ModelRef) (*live, error) {
+	if s.closed {
+		return nil, ErrClosed
+	}
 	if e, ok := s.entries[ref.Provider]; ok {
 		return e, nil
 	}
@@ -134,14 +137,14 @@ func (b *builder) credential(name string, p config.Provider) string {
 	return b.env.Getenv(key)
 }
 
-// entry builds the backend of the entry name. It makes no network call and starts no process. It returns nil for an entry with no backend.
-func (b *builder) entry(name string, p config.Provider, cred string) *live {
+// entry builds the backend of the entry name. It makes no network call and starts no process. For an entry with no backend it returns nil and the reason.
+func (b *builder) entry(name string, p config.Provider, cred string) (*live, string) {
 	e := newLive(name, p, cred, nil)
 	rev := e.rev.Load
 	var be turn.Backend
 	if p.Type == config.TypeClaudeCodeCLI {
 		if b.env.NoProcess {
-			return nil
+			return nil, "this host starts no process, so a claude-code-cli entry has no backend"
 		}
 		cb := claudecode.New(p, b.cfg.AppendSystemPrompt, b.workDir, b.cfg.MCPToolLoading)
 		cb.RouteAccounts(b.cfg.AccountRouting, b.env.Getenv)
@@ -150,7 +153,7 @@ func (b *builder) entry(name string, p config.Provider, cred string) *live {
 		retries := b.cfg.RequestMaxRetriesValue()
 		c := client(name, p, b.transport, b.env, b.codex, retries, rev)
 		if c == nil {
-			return nil
+			return nil, "the entry names no model API"
 		}
 		be = modelBackend(name, p, c, b.cfg.ContextWindowTokens, b.env, b.codex)
 		if p.Vendor != "" {
@@ -181,7 +184,7 @@ func (b *builder) entry(name string, p config.Provider, cred string) *live {
 	if len(p.Models) > 0 {
 		e.listed, e.hasListed = modelmeta.Named(p.Models, modelmeta.Models(name)), true
 	}
-	return e
+	return e, ""
 }
 
 // snapshot reads the candidate entries of cfg. An entry that old holds with the same config and credential keeps its backend.
@@ -201,32 +204,35 @@ func (b *builder) snapshot(cfg *config.Config, s *snapshot, old *snapshot) *snap
 				continue
 			}
 		}
-		if e := b.entry(name, p, cred); e != nil {
+		if e, reason := b.entry(name, p, cred); e != nil {
 			s.entries[name] = e
+		} else {
+			s.unavailable[name] = reason
 		}
 	}
 	slices.Sort(s.names)
 	return s
 }
 
-var errClosed = errors.New("backend: the router is closed")
+// ErrClosed reports a call on a router that Close has closed.
+var ErrClosed = errors.New("backend: the router is closed")
 
-// Set makes providers the live set of configured entries. It validates cfg with providers, then builds a backend for each new or
-// changed entry. An entry whose config and credential are the same keeps its backend. Every other old entry retires: it takes no
-// new call, and it closes when its last call ends. A Validate error changes nothing.
-func (m *Router) Set(providers map[string]config.Provider) error {
+// Set makes providers the live set of configured entries. It validates cfg with a copy of providers, then builds a backend for each
+// new or changed entry. An entry whose config and credential are the same keeps its backend. Every other old entry retires: it takes
+// no new call, and it closes when its last call ends. A Validate error changes nothing. It returns the status of the new set.
+func (m *Router) Set(providers map[string]config.Provider) ([]protocol.ProviderStatus, error) {
 	m.setMu.Lock()
 	defer m.setMu.Unlock()
 	if m.closed {
-		return errClosed
+		return nil, ErrClosed
 	}
 	if m.build == nil {
-		return errors.New("backend: the router has no entry config")
+		return nil, errors.New("backend: the router has no entry config")
 	}
 	cfg := m.build.cfg
-	cfg.Providers = maps.Clone(providers)
+	cfg.Providers = cloneProviders(providers)
 	if err := cfg.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	old := m.snap.Load()
 	next := m.build.snapshot(&cfg, newSnapshot(), old)
@@ -236,7 +242,19 @@ func (m *Router) Set(providers map[string]config.Provider) error {
 			m.retire(e)
 		}
 	}
-	return nil
+	return next.status(), nil
+}
+
+// cloneProviders returns a copy of providers that shares no map or slice with it. nil stays nil.
+func cloneProviders(providers map[string]config.Provider) map[string]config.Provider {
+	if providers == nil {
+		return nil
+	}
+	out := make(map[string]config.Provider, len(providers))
+	for name, p := range providers {
+		out[name] = p.Clone()
+	}
+	return out
 }
 
 // setProviderSet publishes next as the live set of provider entries.
@@ -247,7 +265,7 @@ func (m *Router) Reconnect(name string) error {
 	m.setMu.Lock()
 	defer m.setMu.Unlock()
 	if m.closed {
-		return errClosed
+		return ErrClosed
 	}
 	e := m.snap.Load().entries[name]
 	if e == nil {
@@ -257,9 +275,8 @@ func (m *Router) Reconnect(name string) error {
 	return nil
 }
 
-// Status returns the configured names in name order with whether each has a backend.
-func (m *Router) Status() []protocol.ProviderStatus {
-	s := m.snap.Load()
+// status returns the configured names in name order with whether each has a backend.
+func (s *snapshot) status() []protocol.ProviderStatus {
 	out := make([]protocol.ProviderStatus, 0, len(s.names))
 	for _, name := range s.names {
 		_, ok := s.entries[name]
@@ -291,7 +308,9 @@ func (m *Router) Close() {
 	m.setMu.Lock()
 	if !m.closed {
 		m.closed = true
-		for _, e := range m.snap.Load().entries {
+		old := m.snap.Load()
+		m.setProviderSet(&snapshot{closed: true, entries: map[string]*live{}, unavailable: map[string]string{}, vendors: map[string]string{}, traceNames: map[string]string{}})
+		for _, e := range old.entries {
 			m.retire(e)
 		}
 	}
