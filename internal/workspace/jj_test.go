@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/internal/workspace/workspacetest"
@@ -36,8 +37,16 @@ func TestChangesCommandHelper(t *testing.T) {
 	if len(args) < 2 || args[len(args)-2] != "--" {
 		return
 	}
-	if args[len(args)-1] == "fail" {
+	switch args[len(args)-1] {
+	case "fail":
 		os.Exit(3)
+	case "hold":
+		// A grandchild keeps stdout open after this command exits.
+		hold := exec.Command("sleep", "30")
+		hold.Stdout = os.Stdout
+		if err := hold.Start(); err != nil {
+			os.Exit(4)
+		}
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(protocol.WorkspaceChanges{
 		Files: []protocol.ChangedFile{{Path: "from-command.txt", Status: "added", Additions: 1}},
@@ -80,6 +89,26 @@ func TestJJChangesCommand(t *testing.T) {
 			if len(c.Files) != 1 || c.Files[0].Path != "from-command.txt" || c.Patch != want {
 				t.Errorf("%s: files = %+v, patch = %q, want one file from the command and patch %q", scope, c.Files, c.Patch, want)
 			}
+		}
+	})
+	t.Run("a grandchild that holds stdout does not hold the request", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		c, err := workspace.ChangesWith(ctx, engines, jjChangesCommandRepo(t, "hold"), "", protocol.ScopeUncommitted)
+		if err != nil || len(c.Files) != 1 {
+			t.Errorf("files = %+v, error = %v, want the answer of the command", c.Files, err)
+		}
+		if ctx.Err() != nil {
+			t.Error("the request waited for the grandchild")
+		}
+	})
+	t.Run("a legacy repository config fails the request before any jj command", func(t *testing.T) {
+		t.Parallel()
+		dir := jjRepo(t, true)
+		write(t, dir, ".jj/repo/config.toml", "")
+		if _, err := workspace.ChangesWith(context.Background(), engines, dir, "", protocol.ScopeUncommitted); err == nil || errors.Is(err, workspace.ErrNotRepo) {
+			t.Errorf("error = %v, want an internal failure", err)
 		}
 	})
 	t.Run("a failing command fails the request", func(t *testing.T) {

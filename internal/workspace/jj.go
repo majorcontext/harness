@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -51,6 +50,13 @@ func openJJ(ctx context.Context, root string) (jjRepo, error) {
 		}
 	}
 	r := jjRepo{root: root, repo: filepath.Clean(repo)}
+	// Any jj command moves a legacy repository config, which is a write.
+	if _, err := os.Stat(filepath.Join(r.repo, "config.toml")); err == nil {
+		if _, err := os.Stat(filepath.Join(r.repo, "config-id")); os.IsNotExist(err) {
+			slog.Warn("workspace changes: the jj repository config is in its legacy file; run any jj command in the work tree once to move it", "root", root)
+			return r, fmt.Errorf("the jj repository config of %s is in its legacy file; run any jj command in the work tree once to move it", root)
+		}
+	}
 	op, err := r.newestOp(ctx)
 	r.op = op
 	return r, err
@@ -232,13 +238,6 @@ const changesCommandTimeout = 10 * time.Second
 // or nil when it is unset. Any value but an array of strings is an error.
 func (r jjRepo) changesCommand(ctx context.Context) ([]string, error) {
 	const key = "harness.changes-command"
-	// jj moves a legacy repository config when it reads it, which is a write.
-	if _, err := os.Stat(filepath.Join(r.repo, "config-id")); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
 	lines, err := r.lines(ctx, "config", "list", "--repo", key, "-T", `name ++ " " ++ json(value) ++ "\n"`)
 	if err != nil || len(lines) == 0 {
 		return nil, err
@@ -269,12 +268,17 @@ func (r jjRepo) runChangesCommand(ctx context.Context, argv []string, head Head,
 	cmd.Env = append(os.Environ(), "HARNESS_CHANGES_SCOPE="+scope, "HARNESS_CHANGES_BASE="+commit,
 		"HARNESS_CHANGES_PATCH_BYTES="+strconv.Itoa(patchCap))
 	cmd.WaitDelay = waitDelay
-	data, err := runCapped(cmd, metadataCap+patchCap)
+	data, err := runCapped(cmd, cancel, metadataCap+patchCap)
 	if errors.Is(err, errMetadataTooLarge) {
 		return nil, "", false, err
 	}
 	var out protocol.WorkspaceChanges
 	reason := ""
+	if err == nil && json.Unmarshal(data, &out) == nil {
+		if files, _ := json.Marshal(out.Files); len(files) > metadataCap {
+			return nil, "", false, errMetadataTooLarge
+		}
+	}
 	switch {
 	case err != nil && ctx.Err() != nil:
 		reason = "request ended"
@@ -297,24 +301,37 @@ func (r jjRepo) runChangesCommand(ctx context.Context, argv []string, head Head,
 	return out.Files, out.Patch, out.Truncated, nil
 }
 
+// capWriter keeps at most max bytes. A byte past it sets over, calls kill,
+// and fails the write, which ends the copy of the output of the command.
+type capWriter struct {
+	buf  bytes.Buffer
+	max  int
+	over bool
+	kill func()
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	if w.buf.Len()+len(p) > w.max {
+		w.over = true
+		w.kill()
+		return 0, errMetadataTooLarge
+	}
+	return w.buf.Write(p)
+}
+
 // runCapped runs cmd and returns its stdout. More than maxBytes of stdout
-// kills it and returns errMetadataTooLarge.
-func runCapped(cmd *exec.Cmd, maxBytes int) ([]byte, error) {
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(stdout, int64(maxBytes)+1))
-	if readErr != nil || len(data) > maxBytes {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		if readErr != nil {
-			return nil, readErr
-		}
+// kills it and returns errMetadataTooLarge. The copy of stdout runs in exec,
+// so WaitDelay frees a stdout that a grandchild holds open; the output is
+// then complete, and the command has succeeded.
+func runCapped(cmd *exec.Cmd, kill func(), maxBytes int) ([]byte, error) {
+	w := &capWriter{max: maxBytes, kill: kill}
+	cmd.Stdout = w
+	err := cmd.Run()
+	if w.over {
 		return nil, errMetadataTooLarge
 	}
-	return data, cmd.Wait()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
+	return w.buf.Bytes(), err
 }
