@@ -51,6 +51,9 @@ test e2e TestContractServeStopReportsCrashed 15
 test e2e TestContractRuntimeSessionMCP 15
 # Rows that run git on a fixture repository (9 s under load locally).
 test e2e TestContractWorkspace 15
+# A row that pages the skill list of a server past 100 pages and reads each file it checks (10.4 s on CI).
+test e2e TestContractMCPSkillVerification/runtime/mcp_skill_listed_beyond_page_100 16
+test e2e TestContractMCPSkillVerification/serve/mcp_skill_listed_beyond_page_100 16
 
 # Builds the fake CLI; a cold build cache makes it 7 s to 21 s on CI (24 s for the package).
 test internal/gates TestWireDoublesMatchTheRealWire 32
