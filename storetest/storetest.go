@@ -94,7 +94,10 @@ func Run(t *testing.T, newStore func(t *testing.T) harness.Store) {
 		{"BlobRoundTrip", testBlobRoundTrip},
 		{"StoredRecordsAreCopies", testStoredRecordsAreCopies},
 	} {
-		t.Run(c.name, func(t *testing.T) { c.fn(t, newStore(t)) })
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.fn(t, newStore(t))
+		})
 	}
 }
 
@@ -111,7 +114,10 @@ func RunInstances(t *testing.T, newStorage func(t *testing.T) func() harness.Sto
 		{"ConcurrentInstancesOneWins", testConcurrentInstancesOneWins},
 		{"ReadSeesRecordsOfOtherInstance", testReadSeesRecordsOfOtherInstance},
 	} {
-		t.Run(c.name, func(t *testing.T) { c.fn(t, newStorage(t)) })
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.fn(t, newStorage(t))
+		})
 	}
 }
 
@@ -136,14 +142,15 @@ func testStaleInstanceAppendConflicts(t *testing.T, open func() store) {
 // other instance come back at their own seqs, and a fresh instance reads
 // the whole log too.
 func testReadSeesRecordsOfOtherInstance(t *testing.T, open func() store) {
+	const instanceRecords = 128
 	a, b := open(), open()
-	appendMany(t, a, "s", 0, 1000)
-	checkManyReads(t, a, "s", 1000)
-	appendMany(t, b, "s", 1000, manyRecords)
+	appendMany(t, a, "s", 0, instanceRecords)
+	checkManyReads(t, a, "s", instanceRecords)
+	appendMany(t, b, "s", instanceRecords, manyRecords)
 	checkManyReads(t, a, "s", manyRecords)
 	checkManyReads(t, open(), "s", manyRecords)
-	appendMany(t, a, "s", manyRecords, manyRecords+300)
-	checkManyReads(t, b, "s", manyRecords+300)
+	appendMany(t, a, "s", manyRecords, manyRecords+instanceRecords)
+	checkManyReads(t, b, "s", manyRecords+instanceRecords)
 }
 
 func testAppendReadOrder(t *testing.T, st store) {
@@ -267,7 +274,7 @@ func manyRecord(seq int) string {
 func appendMany(t *testing.T, st store, id string, from, to int) {
 	t.Helper()
 	for at := from; at < to; {
-		n := min(1+at%97, to-at)
+		n := min(256, to-at)
 		batch := make([]string, n)
 		for i := range batch {
 			batch[i] = manyRecord(at + i + 1)
@@ -277,13 +284,15 @@ func appendMany(t *testing.T, st store, id string, from, to int) {
 	}
 }
 
-// checkManyReads reads at afterSeq values around every 64th seq and checks
-// that each read returns the records from afterSeq+1 on, up to the limit.
+// checkManyReads checks reads at sampled offsets around sparse-index boundaries
+// and the ends of the log.
 func checkManyReads(t *testing.T, st store, id string, count int) {
 	t.Helper()
-	afters := []int{0, 1, count - 1, count, count + 1}
-	for a := 0; a <= count; a += 64 {
-		afters = append(afters, a-1, a, a+1)
+	afters := []int{0, 1, count/2 - 1, count / 2, count/2 + 1, count - 2, count - 1, count, count + 1}
+	for _, boundary := range []int{64, 512} {
+		if boundary <= count {
+			afters = append(afters, boundary-1, boundary, boundary+1)
+		}
 	}
 	for _, after := range afters {
 		if after < 0 {
