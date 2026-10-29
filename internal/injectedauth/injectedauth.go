@@ -96,10 +96,19 @@ func (l *Logins) Of(name string, p config.Provider) *Entry {
 	e := l.entries[key]
 	if e == nil {
 		e = &Entry{logins: l, provider: name, probe: probe}
+		e.loginURL.Store(&p.LoginURL)
 		l.entries[key] = e
 	}
-	e.loginURL.Store(&p.LoginURL)
 	return e
+}
+
+// Publish makes the login_url of p the sign-in page of the login state of the entry name. Only the serialized update of the
+// live set calls it, so a lookup with an older config never replaces the page.
+func (l *Logins) Publish(name string, p config.Provider) {
+	if e := l.Of(name, p); e != nil {
+		u := p.LoginURL
+		e.loginURL.Store(&u)
+	}
 }
 
 // Entry is the login state of one provider entry.

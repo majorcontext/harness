@@ -290,11 +290,16 @@ func (m *Router) Warm(ctx context.Context, req turn.Request) error {
 func (m *Router) List(ctx context.Context) []protocol.Model {
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
-	s := m.snap.Load()
+	s, held := m.holdAll()
+	defer func() {
+		for _, e := range held {
+			e.release()
+		}
+	}()
 	out := []protocol.Model{}
 	for _, name := range slices.Sorted(maps.Keys(s.entries)) {
 		e := s.entries[name]
-		if e.hidden || !e.acquire() {
+		if e.hidden {
 			continue
 		}
 		models := e.listed
@@ -310,7 +315,29 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 			ref := name + "/" + mm.ID
 			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: e.be.Capabilities(ref).ContextWindow})
 		}
-		e.release()
 	}
 	return out
+}
+
+// holdAll takes one snapshot and holds every entry of it, and takes a newer snapshot when a retirement came between the load and
+// a hold, so a list never mixes two sets.
+func (m *Router) holdAll() (*snapshot, []*live) {
+	for {
+		s := m.snap.Load()
+		held := make([]*live, 0, len(s.entries))
+		ok := true
+		for _, e := range s.entries {
+			if !e.acquire() {
+				ok = false
+				break
+			}
+			held = append(held, e)
+		}
+		if ok {
+			return s, held
+		}
+		for _, e := range held {
+			e.release()
+		}
+	}
 }

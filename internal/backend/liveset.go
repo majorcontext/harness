@@ -197,6 +197,7 @@ func (b *builder) snapshot(cfg *config.Config, s *snapshot, old *snapshot) *snap
 			_, s.unavailable[name] = b.env.key(p.KeyEnv(name))
 			continue
 		}
+		b.env.Logins.Publish(name, p)
 		cred := b.credential(name, p)
 		if old != nil {
 			if o := old.entries[name]; o != nil && o.cred == cred && reflect.DeepEqual(o.cfg, p) {

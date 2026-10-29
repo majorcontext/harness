@@ -87,14 +87,13 @@ func newWSPool() *wsPool {
 // closeStale closes the connection of each idle entry that was dialed under an older revision. A busy entry keeps its
 // connection until its call ends and settles.
 func (p *wsPool) closeStale() {
-	cur := p.revision()
 	p.mu.Lock()
 	entries := slices.Collect(maps.Values(p.entries))
 	p.mu.Unlock()
 	for _, e := range entries {
 		e.mu.Lock()
 		var conn *websocket.Conn
-		if !e.busy && e.warming == nil && e.conn != nil && e.connRev != cur {
+		if !e.busy && e.warming == nil && e.conn != nil && e.connRev != p.revision() {
 			conn = e.detachLocked()
 		}
 		e.mu.Unlock()
@@ -567,7 +566,12 @@ func (p *wsPool) release(entry *wsPoolEntry) {
 	entry.mu.Lock()
 	entry.busy = false
 	entry.lastUsedAt = time.Now()
+	var stale *websocket.Conn
+	if entry.conn != nil && entry.connRev != p.revision() {
+		stale = entry.detachLocked()
+	}
 	entry.mu.Unlock()
+	closeConn(stale)
 }
 
 func (p *wsPool) clearLineage(entry *wsPoolEntry, generation uint64) {
