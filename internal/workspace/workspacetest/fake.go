@@ -2,7 +2,6 @@ package workspacetest
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -18,16 +17,12 @@ import (
 const stateFile = ".fake-workspace.json"
 
 // Fake is an engine over a plain directory. Its revisions are
-// "change:<n>", never a hash. It models an engine that snapshots the work
-// tree on read: the first read after an edit records an operation in the
-// state file of the engine, which is its own state and no write that a user
-// can see. A read of unchanged files records nothing. The state file in the
-// root is its only storage.
+// "change:<n>", never a hash. A read records no operation. The state file in
+// the root is its only storage.
 type Fake struct{}
 
 type state struct {
 	Ops      int
-	Digest   string
 	Unborn   bool
 	NoBase   bool
 	Merge    bool
@@ -50,7 +45,7 @@ func Init(dir string, o FakeOptions) error {
 	if err != nil {
 		return err
 	}
-	st := state{Ops: 1, Digest: digest(files), Unborn: o.Unborn, NoBase: o.NoBase, Merge: o.Merge, Baseline: files}
+	st := state{Ops: 1, Unborn: o.Unborn, NoBase: o.NoBase, Merge: o.Merge, Baseline: files}
 	if o.Unborn {
 		st.Baseline = map[string]string{}
 	}
@@ -89,21 +84,10 @@ func (r repo) Head(context.Context) (workspace.Head, error) {
 	if err != nil {
 		return workspace.Head{}, err
 	}
-	files, err := readFiles(r.root)
-	if err != nil {
-		return workspace.Head{}, err
-	}
-	if d := digest(files); d != st.Digest {
-		st.Ops++
-		st.Digest = d
-		if err := save(r.root, st); err != nil {
-			return workspace.Head{}, err
-		}
-	}
 	if st.Unborn || st.Merge {
 		return workspace.Head{}, nil
 	}
-	return workspace.Head{Rev: change(st.Ops)}, nil
+	return workspace.Head{Rev: change(st.Ops), Commit: fmt.Sprintf("%040x", st.Ops)}, nil
 }
 
 func (r repo) Base(context.Context, workspace.Head) (workspace.Base, error) {
@@ -175,14 +159,6 @@ func sortedKeys(a, b map[string]string) []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-func digest(files map[string]string) string {
-	h := sha256.New()
-	for _, p := range sortedKeys(files, nil) {
-		_, _ = fmt.Fprintf(h, "%s\x00%s\x00", p, files[p])
-	}
-	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func readFiles(root string) (map[string]string, error) {

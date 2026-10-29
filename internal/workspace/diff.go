@@ -66,8 +66,8 @@ func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string,
 // the repository. It returns GIT_CONFIG_COUNT/KEY/VALUE pairs, not -c
 // arguments: git splits -c k=v at the first "=", so a driver named "x=y"
 // would keep running.
-func diffFilterDriverEnv(ctx context.Context, dir string) ([]string, error) {
-	out, err := gitOutCapped(ctx, dir, nil, filterDiscoveryCap, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
+func diffFilterDriverEnv(ctx context.Context, dir string, env []string) ([]string, error) {
+	out, err := gitOutCapped(ctx, dir, env, filterDiscoveryCap, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
 	if err != nil {
 		if isGitWorkTreeErr(err) {
 			return nil, nil
@@ -89,10 +89,10 @@ func diffFilterDriverEnv(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	sort.Strings(names)
-	var env []string
+	var driverEnv []string
 	n := 0
 	set := func(key, value string) {
-		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", n, key), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", n, value))
+		driverEnv = append(driverEnv, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", n, key), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", n, value))
 		n++
 	}
 	for _, name := range names {
@@ -103,7 +103,7 @@ func diffFilterDriverEnv(ctx context.Context, dir string) ([]string, error) {
 	if n == 0 {
 		return nil, nil
 	}
-	return append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(n)), nil
+	return append(driverEnv, "GIT_CONFIG_COUNT="+strconv.Itoa(n)), nil
 }
 
 // gitRealPath resolves gitPath, such as "index", with rev-parse --git-path,
@@ -127,25 +127,56 @@ func gitQuotePathListEntry(path string) string {
 	return `"` + escaped + `"`
 }
 
+// diffSource says where changeSet reads the repository. The zero gitDir
+// means the repository that holds root. Otherwise gitDir is a bare git
+// directory that root is the work tree of, and seed returns the tree-ish
+// that the private index starts from and the diff runs against.
+type diffSource struct {
+	root   string
+	gitDir string
+	// skip is a top-level name that never counts as untracked.
+	skip string
+	seed func(ctx context.Context, env []string) (string, error)
+}
+
+// gitEnv selects the repository of src for every git command.
+func (s diffSource) gitEnv() []string {
+	if s.gitDir == "" {
+		return nil
+	}
+	return []string{"GIT_DIR=" + s.gitDir, "GIT_WORK_TREE=" + s.root}
+}
+
 // changeSet computes files and patch against base in a fixed number of
 // subprocesses. Untracked files join as added through a private copy of the
 // index, so the real index and object store are never written. files is
 // always complete; patch stops at the last whole file within limit.
-func changeSet(ctx context.Context, repoRoot, head, base string, limit int) (files []protocol.ChangedFile, patch string, truncated bool, err error) {
+func changeSet(ctx context.Context, src diffSource, head, base string, limit int) (files []protocol.ChangedFile, patch string, truncated bool, err error) {
 	tmp, err := os.MkdirTemp("", "harness-git-changes-")
 	if err != nil {
 		return nil, "", false, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	env, diffEnv, err := privateIndex(ctx, repoRoot, head, tmp)
+	env, diffEnv, treeish, err := privateIndex(ctx, src, head, tmp)
 	if err != nil {
 		return nil, "", false, err
 	}
-	lsFilesOut, err := gitOutCapped(ctx, repoRoot, env, metadataCap, "ls-files", "--others", "--exclude-standard", "-z")
+	if src.seed != nil {
+		base = treeish
+	}
+	repoRoot := src.root
+	lsArgs := []string{"ls-files", "--others", "--exclude-standard", "-z"}
+	if src.skip != "" {
+		lsArgs = append(lsArgs, "--exclude=/"+src.skip)
+	}
+	lsFilesOut, err := gitOutCapped(ctx, repoRoot, env, metadataCap, lsArgs...)
 	if err != nil {
 		return nil, "", false, err
 	}
 	excludeArgs, bigPaths := untrackedEntries(repoRoot, lsFilesOut)
+	if src.skip != "" {
+		excludeArgs = append(excludeArgs, ":(exclude,literal)"+src.skip)
+	}
 	if err := addUntrackedIntentToAdd(ctx, repoRoot, env, excludeArgs); err != nil {
 		return nil, "", false, err
 	}
@@ -159,50 +190,65 @@ func changeSet(ctx context.Context, repoRoot, head, base string, limit int) (fil
 	return files, patch, truncated, nil
 }
 
-// privateIndex copies the index into dir and returns the environment that
+// privateIndex builds the index in dir and returns the environment that
 // points git at it: env for staging, and diffEnv, which also neutralizes
 // every filter driver, for each command that hashes or diffs content.
 // GIT_OBJECT_DIRECTORY keeps each object that add -N writes in dir, and
-// GIT_ALTERNATE_OBJECT_DIRECTORIES still reads every real object.
-func privateIndex(ctx context.Context, repoRoot, head, dir string) (env, diffEnv []string, err error) {
+// GIT_ALTERNATE_OBJECT_DIRECTORIES still reads every real object. A git
+// work tree copies its real index. A source with a seed starts from an
+// empty index that holds the seed tree, and returns that tree.
+func privateIndex(ctx context.Context, src diffSource, head, dir string) (env, diffEnv []string, treeish string, err error) {
+	repoRoot := src.root
 	index, objects := filepath.Join(dir, "index"), filepath.Join(dir, "objects")
 	if err := os.MkdirAll(objects, 0o700); err != nil {
-		return nil, nil, err
-	}
-	realIndex, err := gitRealPath(ctx, repoRoot, "index")
-	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	missing := false
-	if data, err := os.ReadFile(realIndex); err == nil {
-		if err := os.WriteFile(index, data, 0o600); err != nil {
-			return nil, nil, err
-		}
-	} else if os.IsNotExist(err) {
-		missing = true
+	realObjects := ""
+	if src.gitDir != "" {
+		realObjects = filepath.Join(src.gitDir, "objects")
 	} else {
-		return nil, nil, err
+		realIndex, err := gitRealPath(ctx, repoRoot, "index")
+		if err != nil {
+			return nil, nil, "", err
+		}
+		if data, err := os.ReadFile(realIndex); err == nil {
+			if err := os.WriteFile(index, data, 0o600); err != nil {
+				return nil, nil, "", err
+			}
+		} else if os.IsNotExist(err) {
+			missing = true
+		} else {
+			return nil, nil, "", err
+		}
+		if realObjects, err = gitRealPath(ctx, repoRoot, "objects"); err != nil {
+			return nil, nil, "", err
+		}
 	}
-	realObjects, err := gitRealPath(ctx, repoRoot, "objects")
+	env = append([]string{"GIT_INDEX_FILE=" + index, "GIT_OBJECT_DIRECTORY=" + objects,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects)}, src.gitEnv()...)
+	filterEnv, err := diffFilterDriverEnv(ctx, repoRoot, src.gitEnv())
 	if err != nil {
-		return nil, nil, err
-	}
-	env = []string{"GIT_INDEX_FILE=" + index, "GIT_OBJECT_DIRECTORY=" + objects,
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects)}
-	filterEnv, err := diffFilterDriverEnv(ctx, repoRoot)
-	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	diffEnv = append(slices.Clone(env), filterEnv...)
-	// An empty index makes every tracked file of a commit look deleted, so
-	// a missing index is seeded from HEAD, as git reset --mixed does.
-	if missing && head != "" {
+	switch {
+	case src.seed != nil:
+		if treeish, err = src.seed(ctx, diffEnv); err != nil {
+			return nil, nil, "", err
+		}
+		if _, err := gitOut(ctx, repoRoot, env, "-c", "core.splitIndex=false", "read-tree", treeish); err != nil {
+			return nil, nil, "", err
+		}
+	case missing && head != "":
+		// An empty index makes every tracked file of a commit look deleted, so
+		// a missing index is seeded from HEAD, as git reset --mixed does.
 		if _, err := gitOut(ctx, repoRoot, env, "-c", "core.splitIndex=false", "read-tree", "HEAD"); err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 	}
 	_, err = gitOut(ctx, repoRoot, diffEnv, "-c", "core.splitIndex=false", "update-index", "-q", "--unmerged", "--refresh")
-	return env, diffEnv, err
+	return env, diffEnv, treeish, err
 }
 
 // diffArgs puts the global -c override before the diff subcommand and

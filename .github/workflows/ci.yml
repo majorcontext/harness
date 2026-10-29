@@ -187,6 +187,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: ./.github/actions/install-jj
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -237,6 +239,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: ./.github/actions/install-jj
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -279,6 +283,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/install-jj
 
       - uses: actions/setup-go@v6
         with:

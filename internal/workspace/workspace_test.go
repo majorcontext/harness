@@ -496,14 +496,13 @@ func fakeFixture(t *testing.T) workspacetest.Fixture {
 		return n
 	}
 	return workspacetest.Fixture{
-		Engine:         workspacetest.Fake{},
-		New:            tree(workspacetest.FakeOptions{}),
-		Unborn:         tree(workspacetest.FakeOptions{Unborn: true}),
-		Merge:          tree(workspacetest.FakeOptions{Merge: true}),
-		NoBase:         tree(workspacetest.FakeOptions{NoBase: true}),
-		Outside:        func(t *testing.T) string { return t.TempDir() },
-		Operations:     ops,
-		Footprint:      func(t *testing.T, dir string) string { return fmt.Sprint(ops(t, dir)) },
-		SnapshotsEdits: true,
+		Engine:     workspacetest.Fake{},
+		New:        tree(workspacetest.FakeOptions{}),
+		Unborn:     tree(workspacetest.FakeOptions{Unborn: true}),
+		Merge:      tree(workspacetest.FakeOptions{Merge: true}),
+		NoBase:     tree(workspacetest.FakeOptions{NoBase: true}),
+		Outside:    func(t *testing.T) string { return t.TempDir() },
+		Operations: ops,
+		Footprint:  func(t *testing.T, dir string) string { return fmt.Sprint(ops(t, dir)) },
 	}
 }

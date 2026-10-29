@@ -38,6 +38,7 @@ func (g gitRepo) Head(ctx context.Context) (Head, error) {
 	var h Head
 	if out, err := gitOut(ctx, g.root, nil, "rev-parse", "HEAD"); err == nil {
 		h.Rev = protocol.Rev{Kind: protocol.RevCommit, ID: strings.TrimSpace(out)}
+		h.Commit = h.Rev.ID
 	} else if ctx.Err() != nil {
 		return Head{}, err
 	}
@@ -78,11 +79,11 @@ func (g gitRepo) Diff(ctx context.Context, head Head, base Base, patchCap int) (
 	case treeish != "":
 	case head.Rev.ID == "":
 		var err error
-		if treeish, err = emptyTree(ctx, g.root); err != nil {
+		if treeish, err = emptyTree(ctx, g.root, nil); err != nil {
 			return nil, "", false, err
 		}
 	default:
 		treeish = "HEAD"
 	}
-	return changeSet(ctx, g.root, head.Rev.ID, treeish, patchCap)
+	return changeSet(ctx, diffSource{root: g.root}, head.Rev.ID, treeish, patchCap)
 }

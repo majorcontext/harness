@@ -42,10 +42,10 @@ type Fixture struct {
 	// Guard arms a trap in the repository of dir that fails any write to its
 	// shared storage, and Footprint covers it. It may be nil.
 	Guard func(t *testing.T, dir string)
-	// SnapshotsEdits is true when the first read after an edit may record an
-	// operation, because the engine snapshots the work tree on read. A read
-	// that finds nothing changed records none.
-	SnapshotsEdits bool
+	// Conflict returns a work tree whose head records a conflict in the file
+	// at the returned path. It may be nil for an engine that has no such
+	// state.
+	Conflict func(t *testing.T) (dir, path string)
 }
 
 // Factory returns the Fixture of one row. Each row calls it once.
@@ -56,7 +56,7 @@ var rows = []struct {
 	run  func(t *testing.T, fx Fixture)
 }{
 	{"a read after an edit reports the edit", readAfterEdit},
-	{"two reads with no edit between them add no operation", readsAddNoOperation},
+	{"a read after an edit adds no operation", readsAddNoOperation},
 	{"an untracked new file is reported", untrackedReported},
 	{"a deleted file is reported", deletedReported},
 	{"a rename is reported as a rename or as a delete and an add", renameReported},
@@ -65,6 +65,8 @@ var rows = []struct {
 	{"a head of several parents gives no head_rev and the edit alone", mergeHead},
 	{"the patch is a git-format diff of the reported files", patchFormat},
 	{"a missing base gives no_base", missingBase},
+	{"head_commit is set exactly when head_rev is", headCommit},
+	{"a file that the head records as a conflict is conflicted", conflictedReported},
 	{"reads never write", readsNeverWrite},
 }
 
@@ -126,15 +128,10 @@ func readsAddNoOperation(t *testing.T, fx Fixture) {
 	dir := fx.New(t)
 	before := fx.Operations(t, dir)
 	write(t, dir, "seed.txt", "changed\n")
-	mustRead(t, fx, dir, protocol.ScopeUncommitted)
-	afterEdit := fx.Operations(t, dir)
-	if fx.SnapshotsEdits && afterEdit <= before {
-		t.Errorf("operations after the first read of an edit = %d, want more than %d", afterEdit, before)
-	}
-	for _, scope := range []string{protocol.ScopeUncommitted, protocol.ScopeBranch} {
+	for _, scope := range []string{protocol.ScopeUncommitted, protocol.ScopeBranch, protocol.ScopeUncommitted} {
 		mustRead(t, fx, dir, scope)
-		if got := fx.Operations(t, dir); got != afterEdit {
-			t.Errorf("operations after another %s read = %d, want %d", scope, got, afterEdit)
+		if got := fx.Operations(t, dir); got != before {
+			t.Errorf("operations after a %s read = %d, want %d", scope, got, before)
 		}
 	}
 }
@@ -242,9 +239,6 @@ func readsNeverWriteWith(t *testing.T, fx Fixture, guard bool) {
 	}
 	write(t, dir, "seed.txt", "changed\n")
 	write(t, dir, "new.txt", "new\n")
-	if fx.SnapshotsEdits {
-		mustRead(t, fx, dir, protocol.ScopeUncommitted)
-	}
 	before := fx.Footprint(t, dir)
 	for _, scope := range []string{protocol.ScopeUncommitted, protocol.ScopeBranch} {
 		wantFiles(t, mustRead(t, fx, dir, scope), "new.txt added", "seed.txt modified")
@@ -252,4 +246,40 @@ func readsNeverWriteWith(t *testing.T, fx Fixture, guard bool) {
 			t.Errorf("the %s read wrote to the repository:\n%s\nwant\n%s", scope, after, before)
 		}
 	}
+}
+
+func headCommit(t *testing.T, fx Fixture) {
+	check := func(name string, dir string) {
+		c := mustRead(t, fx, dir, protocol.ScopeUncommitted)
+		if has := c.HeadRev != (protocol.Rev{}); has != (c.HeadCommit != "") {
+			t.Errorf("%s: head_rev = %q, head_commit = %q; want both set or both empty", name, c.HeadRev, c.HeadCommit)
+		}
+	}
+	dir := fx.New(t)
+	check("head", dir)
+	if fx.Unborn != nil {
+		check("unborn head", fx.Unborn(t))
+	}
+	if fx.Merge != nil {
+		check("head of several parents", fx.Merge(t))
+	}
+	if c := mustRead(t, fx, dir, protocol.ScopeUncommitted); c.HeadCommit == "" {
+		t.Error("head_commit is empty for a head with a commit")
+	}
+}
+
+func conflictedReported(t *testing.T, fx Fixture) {
+	if fx.Conflict == nil {
+		t.Skip("engine has no conflict state")
+	}
+	dir, path := fx.Conflict(t)
+	for _, f := range mustRead(t, fx, dir, protocol.ScopeUncommitted).Files {
+		if f.Path == path {
+			if f.Status != "conflicted" {
+				t.Errorf("status of %s = %q, want conflicted", path, f.Status)
+			}
+			return
+		}
+	}
+	t.Errorf("files do not list %s", path)
 }

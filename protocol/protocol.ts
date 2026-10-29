@@ -672,6 +672,7 @@ export interface WorkspaceChanges {
   engine: string;
   branch: string;
   head_rev?: string;
+  head_commit?: string;
   base?: BaseRef;
   files: ChangedFile[];
   patch: string;

@@ -157,8 +157,8 @@ func repoRootAt(ctx context.Context, dir, ceiling string) (root string, ok bool,
 }
 
 // emptyTree returns the empty tree of the hash algorithm of the repository.
-func emptyTree(ctx context.Context, dir string) (string, error) {
-	out, err := gitOut(ctx, dir, nil, "hash-object", "-t", "tree", os.DevNull)
+func emptyTree(ctx context.Context, dir string, env []string) (string, error) {
+	out, err := gitOut(ctx, dir, env, "hash-object", "-t", "tree", os.DevNull)
 	if err != nil {
 		return "", err
 	}
