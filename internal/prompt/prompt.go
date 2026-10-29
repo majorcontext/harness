@@ -27,6 +27,11 @@ const (
 
 const skillsHeader = "Available skills. Each skill below is a capability you can use, " +
 	"but only its name and description are shown here. To activate a skill you " +
+	"MUST first read its SKILL.md file with the read_file tool before relying " +
+	"on it; do not assume its contents from the description alone."
+
+const skillsHeaderEmbedded = "Available skills. Each skill below is a capability you can use, " +
+	"but only its name and description are shown here. To activate a skill you " +
 	"MUST first read its SKILL.md file with the read_file tool, or with the " +
 	"load_skill tool when its line says to load it with load_skill, before relying " +
 	"on it; do not assume its contents from the description alone."
@@ -291,7 +296,11 @@ func skillList(cfg config.Config, workDir string, embedded []Embedded, log *slog
 		lines = append(lines, byName[name].line)
 		found = append(found, byName[name].Skill)
 	}
-	return skillsHeader + "\n" + strings.Join(lines, "\n"), found
+	header := skillsHeader
+	if slices.ContainsFunc(found, func(s Skill) bool { return s.Path == "" }) {
+		header = skillsHeaderEmbedded
+	}
+	return header + "\n" + strings.Join(lines, "\n"), found
 }
 
 // ValidEmbedded returns the embedded skills that the prompt lists, sorted by name: it skips a skill whose name

@@ -75,7 +75,7 @@
     "claude_system_value.a": {
       "status": 200,
       "body": [
-        "Your tools are the Harness tools. Where instructions name Read, Write, Edit, MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. There is no TodoWrite, WebFetch, WebSearch, or Skill tool. To use a skill, read its SKILL.md file with read_file, or with load_skill when its line says so.\n\none\n\nAvailable skills. Each skill below is a capability you can use, but only its name and description are shown here. To activate a skill you MUST first read its SKILL.md file with the read_file tool, or with the load_skill tool when its line says to load it with load_skill, before relying on it; do not assume its contents from the description alone.\ndemo — Demonstrates discovery. (path: \u003cworkdir\u003e/.agents/skills/demo/SKILL.md)"
+        "Your tools are the Harness tools. Where instructions name Read, Write, Edit, MultiEdit, Bash, Glob, Grep, LS, or Task, use read_file, write_file, edit_file, bash, glob, grep, ls, or task. Where they name BashOutput, KillShell, or Bash with run_in_background, use process. There is no TodoWrite, WebFetch, WebSearch, or Skill tool. To use a skill, read its SKILL.md file with read_file.\n\none\n\nAvailable skills. Each skill below is a capability you can use, but only its name and description are shown here. To activate a skill you MUST first read its SKILL.md file with the read_file tool before relying on it; do not assume its contents from the description alone.\ndemo — Demonstrates discovery. (path: \u003cworkdir\u003e/.agents/skills/demo/SKILL.md)"
       ]
     }
   }
