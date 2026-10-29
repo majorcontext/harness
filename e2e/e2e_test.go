@@ -174,23 +174,14 @@ func freeAddr(t *testing.T) string {
 // config, or proxy into the subprocess, then applying overrides.
 func cleanEnv(overrides map[string]string) []string {
 	strip := map[string]bool{
-		"HARNESS_RUN_TOKEN": true, "HARNESS_SESSION_DIR": true,
-		"HARNESS_CONFIG": true, "HARNESS_MODEL": true, "ANTHROPIC_API_KEY": true,
-		"HARNESS_PLUGIN_CACHE": true, "HARNESS_INSTRUCTIONS_MODE": true,
-		"OPENAI_API_KEY": true, "HTTP_PROXY": true, "HTTPS_PROXY": true,
+		"ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true,
+		"HTTP_PROXY": true, "HTTPS_PROXY": true,
 		"http_proxy": true, "https_proxy": true,
-		// HARNESS_UNAUTHENTICATED: stripped so a host that happens to
-		// export it can't leak an accidental opt-in into a test that
-		// never intends one (TestServeNonLoopbackNoTokenFailsClosed in
-		// particular, which asserts the fail-closed path). The two
-		// unauthenticated_test.go opt-in tests are the only place that
-		// sets it, via their own overrides below.
-		"HARNESS_UNAUTHENTICATED": true,
 	}
 	var env []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if strip[k] || strings.HasPrefix(k, "OTEL_") {
+		if strip[k] || strings.HasPrefix(k, "HARNESS_") || strings.HasPrefix(k, "OTEL_") {
 			continue
 		}
 		env = append(env, kv)
