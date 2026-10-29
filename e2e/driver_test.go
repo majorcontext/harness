@@ -92,6 +92,10 @@ type driver interface {
 	PutMCPServers(t *testing.T, body any) callResult
 	// PutPlugins sends the body of PUT /plugins.
 	PutPlugins(t *testing.T, body any) callResult
+	// PutProviders sends the body of PUT /providers.
+	PutProviders(t *testing.T, body any) callResult
+	// ReconnectProvider sends POST /providers/{name}/reconnect.
+	ReconnectProvider(t *testing.T, name string) callResult
 }
 
 // attachment is a file of a prompt.

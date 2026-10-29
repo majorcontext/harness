@@ -93,6 +93,7 @@ func TestContractRuntimeClose(t *testing.T) {
 		{"a_later_close_returns_at_the_end_of_its_own_context", rowALaterCloseReturnsAtTheEndOfItsOwnContext},
 		{"a_close_that_passes_its_deadline_stops_the_session_with_cause_released", rowACloseThatPassesItsDeadlineStopsTheSessionWithCauseReleased},
 		{"a_close_stops_the_session_with_cause_released", rowACloseStopsTheSessionWithCauseReleased},
+		{"provider_set_and_reconnect_after_close_are_draining", rowProviderCallsAfterCloseAreDraining},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -188,4 +189,20 @@ func rowACloseStopsTheSessionWithCauseReleased(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkCause(t, s, harness.ErrSessionReleased)
+}
+
+func rowProviderCallsAfterCloseAreDraining(t *testing.T) {
+	r, err := harness.New(harness.Options{Getenv: os.Getenv, Store: store.NewMemStore(), Config: config.Config{ContextWindowTokens: 100000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.SetProviders(t.Context(), map[string]config.Provider{}); !errors.Is(err, harness.ErrDraining) {
+		t.Errorf("SetProviders after Close = %v, want ErrDraining", err)
+	}
+	if err := r.ReconnectProvider(t.Context(), "codex"); !errors.Is(err, harness.ErrDraining) {
+		t.Errorf("ReconnectProvider after Close = %v, want ErrDraining", err)
+	}
 }

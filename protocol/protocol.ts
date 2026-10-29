@@ -462,6 +462,43 @@ export interface Progress {
   last_turn?: LastTurn;
 }
 
+export interface Provider {
+  vendor?: string;
+  type?: string;
+  api_key_env?: string;
+  auth?: string;
+  login_url?: string;
+  models_from?: string;
+  base_url?: string;
+  family?: string;
+  extra_headers?: Record<string, string>;
+  no_prompt_cache_key?: boolean;
+  responses_path?: string;
+  omit_response_params?: string[];
+  sanitize_tool_schemas?: boolean;
+  use_websocket_transport?: boolean;
+  cache_ttl?: string;
+  models?: string[];
+  binary_path?: string;
+  extra_args?: string[];
+  permission_mode?: string;
+  session_mirror?: boolean;
+}
+
+export interface ProviderSet {
+  providers: Record<string, Provider> | null;
+}
+
+export interface ProviderStatus {
+  name: string;
+  available: boolean;
+  reason?: string;
+}
+
+export interface Providers {
+  providers: ProviderStatus[];
+}
+
 export interface QueuedInput {
   id: string;
   parts: MessagePart[];
@@ -708,6 +745,8 @@ export interface Operations {
   workspaceChanges: { query: { scope?: string; dir?: string }; request: void; response: WorkspaceChanges };
   setMCPServers: { query: Record<string, never>; request: MCPServerSet; response: MCPServers };
   setPlugins: { query: Record<string, never>; request: PluginSet; response: Plugins };
+  setProviders: { query: Record<string, never>; request: ProviderSet; response: Providers };
+  reconnectProvider: { query: Record<string, never>; request: void; response: void };
   health: { query: Record<string, never>; request: void; response: Health };
 }
 
@@ -741,5 +780,7 @@ export const routes = [
   { name: "workspaceChanges", method: "GET", path: "/workspace/changes", status: 200, stream: false },
   { name: "setMCPServers", method: "PUT", path: "/mcp/servers", status: 200, stream: false },
   { name: "setPlugins", method: "PUT", path: "/plugins", status: 200, stream: false },
+  { name: "setProviders", method: "PUT", path: "/providers", status: 200, stream: false },
+  { name: "reconnectProvider", method: "POST", path: "/providers/{name}/reconnect", status: 204, stream: false },
   { name: "health", method: "GET", path: "/health", status: 200, stream: false },
 ] as const;

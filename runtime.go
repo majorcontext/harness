@@ -251,7 +251,7 @@ func New(opts Options) (*Runtime, error) {
 		Resolve: opts.Config.ResolveModel, CheckModel: catalog.CheckChild,
 		Vendor: func(model string) string {
 			provider, _, _ := strings.Cut(model, "/")
-			return opts.Config.ProviderEntries()[provider].Vendor
+			return r.models.Vendor(provider)
 		}, Suffix: newSuffix, Log: r.log})
 	tools := make([]turn.Tool, len(opts.Tools))
 	for i, t := range opts.Tools {

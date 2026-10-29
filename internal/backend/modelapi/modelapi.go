@@ -247,6 +247,13 @@ func (b *Backend) Close() {
 	}
 }
 
+// CloseStale closes the idle pooled connections that were dialed under an older revision of the credentials.
+func (b *Backend) CloseStale() {
+	if c, ok := b.client.(interface{ CloseStale() }); ok {
+		c.CloseStale()
+	}
+}
+
 func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 	ref, err := modelref.ParseModelRef(req.Model)
 	if err != nil {

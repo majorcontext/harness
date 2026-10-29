@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/config"
@@ -94,17 +95,28 @@ func (l *Logins) Of(name string, p config.Provider) *Entry {
 	key := name + "\x00" + probe.URL
 	e := l.entries[key]
 	if e == nil {
-		e = &Entry{logins: l, provider: name, loginURL: p.LoginURL, probe: probe}
+		e = &Entry{logins: l, provider: name, probe: probe}
+		e.loginURL.Store(&p.LoginURL)
 		l.entries[key] = e
 	}
 	return e
+}
+
+// Publish makes the login_url of p the sign-in page of the login state of the entry name. Only the serialized update of the
+// live set calls it, so a lookup with an older config never replaces the page.
+func (l *Logins) Publish(name string, p config.Provider) {
+	if e := l.Of(name, p); e != nil {
+		u := p.LoginURL
+		e.loginURL.Store(&u)
+	}
 }
 
 // Entry is the login state of one provider entry.
 type Entry struct {
 	logins   *Logins
 	provider string
-	loginURL string
+	// loginURL is the sign-in page of the newest entry config that names this login state.
+	loginURL atomic.Pointer[string]
 	probe    Probe
 
 	mu            sync.Mutex
@@ -118,13 +130,18 @@ type Entry struct {
 }
 
 // LoginURL is the sign-in page of the entry, or empty.
-func (e *Entry) LoginURL() string { return e.loginURL }
+func (e *Entry) LoginURL() string {
+	if u := e.loginURL.Load(); u != nil {
+		return *u
+	}
+	return ""
+}
 
 // Message is the text of a login-required error. It holds the sign-in URL and no header value.
 func (e *Entry) Message() string {
 	msg := "not logged in to " + e.provider
-	if e.loginURL != "" {
-		msg += "; sign in at " + e.loginURL
+	if u := e.LoginURL(); u != "" {
+		msg += "; sign in at " + e.LoginURL()
 	}
 	return msg
 }
@@ -294,8 +311,8 @@ func (e *Entry) rejection() error {
 	if !e.okAt.IsZero() && now.Sub(e.okAt) < recentOK {
 		e.modelRejected = true
 		msg := "the server accepted the sign-in check but rejected the model call; "
-		if e.loginURL != "" {
-			msg += "sign in again at " + e.loginURL + ", or "
+		if u := e.LoginURL(); u != "" {
+			msg += "sign in again at " + e.LoginURL() + ", or "
 		}
 		return &ServerError{msg + "check how the server authorizes model calls"}
 	}

@@ -196,6 +196,15 @@ func (p *Provider) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Clone returns a copy of p that shares no map or slice with it.
+func (p Provider) Clone() Provider {
+	p.ExtraHeaders = maps.Clone(p.ExtraHeaders)
+	p.OmitResponseParams = slices.Clone(p.OmitResponseParams)
+	p.Models = slices.Clone(p.Models)
+	p.ExtraArgs = slices.Clone(p.ExtraArgs)
+	return p
+}
+
 // Keyless reports that only the project file defines the entry, so it reads no API key. Only MergeProject sets it.
 func (p Provider) Keyless() bool { return p.keyless }
 

@@ -77,6 +77,8 @@ type Client struct {
 	// CacheTTL is how long the endpoint keeps an idle prompt prefix. 0: unknown.
 	CacheTTL       time.Duration
 	RequestRetries int // see provider.Do
+	// Revision returns the revision of the credentials of the entry. The websocket pool reuses only a socket that was dialed under the current revision. nil: revision 0.
+	Revision func() uint64
 
 	wsPoolOnce sync.Once
 	wsPoolVal  *wsPool
@@ -84,9 +86,22 @@ type Client struct {
 
 // wsPoolFor lazily builds this client's websocket pool, one per Client.
 func (c *Client) wsPoolFor() *wsPool {
-	c.wsPoolOnce.Do(func() { c.wsPoolVal = newWSPool() })
+	c.wsPoolOnce.Do(func() {
+		c.wsPoolVal = newWSPool()
+		c.wsPoolVal.revision = c.revision
+	})
 	return c.wsPoolVal
 }
+
+func (c *Client) revision() uint64 {
+	if c.Revision == nil {
+		return 0
+	}
+	return c.Revision()
+}
+
+// CloseStale closes the idle pooled websockets that were dialed under an older revision. A busy one closes when its call ends.
+func (c *Client) CloseStale() { c.wsPoolFor().closeStale() }
 
 // familyOrDefault resolves a family override to the key used on the wire and
 // in ProviderData. Stream also calls it without a Client.
@@ -220,6 +235,7 @@ func (c *Client) withCacheKey(req *provider.Request) *provider.Request {
 // Stream sends req and returns the response stream, over a websocket when
 // configured and over HTTP + SSE otherwise.
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	rev := c.revision()
 	prepared, err := c.prepareRequest(req, false)
 	if err != nil {
 		return nil, err
@@ -237,6 +253,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
 			Permanent:  &permanent,
 			SessionKey: req.SessionKey,
+			Revision:   rev,
 			URL:        url,
 			Headers:    headers,
 			Body:       body,
@@ -294,6 +311,7 @@ func (c *Client) Warm(ctx context.Context, req *provider.Request) error {
 	if c.family() != CodexFamily || !c.UseWebSocketTransport || req.SessionKey == "" {
 		return nil
 	}
+	rev := c.revision()
 	prepared, err := c.prepareRequest(req, true)
 	if err != nil {
 		return err
@@ -302,6 +320,7 @@ func (c *Client) Warm(ctx context.Context, req *provider.Request) error {
 	return c.wsPoolFor().warm(ctx, wsStreamRequest{
 		Permanent:  &permanent,
 		SessionKey: req.SessionKey,
+		Revision:   rev,
 		URL:        prepared.url,
 		Headers:    prepared.headers,
 		Body:       prepared.body,

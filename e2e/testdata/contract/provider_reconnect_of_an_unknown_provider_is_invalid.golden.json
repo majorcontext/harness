@@ -1,0 +1,16 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "reconnect_provider.nope": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "provider \"nope\" has no backend"
+        }
+      }
+    }
+  }
+}
