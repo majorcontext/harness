@@ -3,6 +3,7 @@
 package harnesstest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,7 +47,9 @@ type Reply struct {
 	Tail string
 	// TailBlock makes the reply wait after Tail for Release of the step name plus ":tail".
 	TailBlock bool
-	Block     bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
+	// Block waits for Release or client cancel: after the first content delta on the Anthropic and chat servers, after
+	// response.created on the Responses server. A Repeat step blocks only until its first Release.
+	Block bool
 	// Reasoning is streamed before Text: as reasoning_content deltas by the
 	// chat-completions server (NewChat), and as a signed thinking block by the
 	// Anthropic server.
@@ -391,7 +394,7 @@ func (s *Server) chanFor(m map[string]chan struct{}, name string) chan struct{} 
 	return ch
 }
 
-func (s *Server) block(r *http.Request, name string) bool {
+func (s *Server) block(ctx context.Context, name string) bool {
 	s.mu.Lock()
 	release := s.chanFor(s.releases, name)
 	closeOnce(s.chanFor(s.blocked, name))
@@ -399,7 +402,7 @@ func (s *Server) block(r *http.Request, name string) bool {
 	select {
 	case <-release:
 		return true
-	case <-r.Context().Done():
+	case <-ctx.Done():
 		s.mu.Lock()
 		closeOnce(s.chanFor(s.canceled, name))
 		s.mu.Unlock()

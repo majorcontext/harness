@@ -191,7 +191,7 @@ func newWireEvent(transport, event string, conn int, b openAIBody) WireEvent {
 
 // OpenAI is a scripted OpenAI Responses server for the ChatGPT Codex wire,
 // over SSE and websocket. HoldPrewarm holds the first websocket prewarm, and
-// AwaitPrewarmHeld and AwaitPrewarmAbandoned observe it: NewOpenAI rejects Block.
+// AwaitPrewarmHeld and AwaitPrewarmAbandoned observe it.
 type OpenAI struct {
 	*Server
 	opts OpenAIOptions
@@ -221,6 +221,9 @@ type OpenAI struct {
 const heldPrewarm = "prewarm"
 
 // NewOpenAI starts an OpenAI Responses server that matches Steps as NewAnthropic does.
+// A Block step sends response.created, then waits for Release of the step. Over SSE it also ends when the client
+// drops the request, as on NewAnthropic; over websocket the handler reads no frame while it waits, so only Release
+// or the end of the server ends it. StopReason and TailBlock are not supported.
 // A websocket prewarm consumes no Step, and a chain to an unknown response
 // gets the chain-miss error. Cleanup fails t for a wire-contract violation.
 func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
@@ -228,8 +231,8 @@ func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
 	steps = append([]Step(nil), steps...)
 	for i := range steps {
 		st := &steps[i]
-		if r := st.Reply; r.Block || r.StopReason != "" {
-			t.Fatalf("harnesstest: step %q: the OpenAI server does not support Block or StopReason", st.Name)
+		if st.Reply.StopReason != "" || st.Reply.TailBlock {
+			t.Fatalf("harnesstest: step %q: the OpenAI server does not support StopReason or TailBlock", st.Name)
 		}
 		if opts.Replies[st.Name].Drop && st.Reply.Text == "" {
 			t.Fatalf("harnesstest: step %q: Drop needs Reply.Text", st.Name)
@@ -555,7 +558,10 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	e := sseWriter{w, f}
 	_, frames := o.replyFrames(step, false)
-	for _, fr := range frames {
+	for i, fr := range frames {
+		if i == 1 && step.Reply.Block && !o.block(r.Context(), step.Name) {
+			return
+		}
 		e.event(fr.name, fr.data)
 		if extra.Drop && fr.name == frameTextDelta {
 			panic(http.ErrAbortHandler)
@@ -649,7 +655,10 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 	}
 	extra := o.opts.Replies[step.Name]
 	id, frames := o.replyFrames(step, true)
-	for _, fr := range frames {
+	for i, fr := range frames {
+		if i == 1 && step.Reply.Block && !o.block(ctx, step.Name) {
+			return false
+		}
 		if !writeFrames(ctx, conn, fr) {
 			return false
 		}
