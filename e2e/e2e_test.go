@@ -175,7 +175,7 @@ func freeAddr(t *testing.T) string {
 func cleanEnv(overrides map[string]string) []string {
 	strip := map[string]bool{
 		"HARNESS_RUN_TOKEN": true, "HARNESS_SESSION_DIR": true,
-		"HARNESS_CONFIG": true, "ANTHROPIC_API_KEY": true,
+		"HARNESS_CONFIG": true, "HARNESS_MODEL": true, "ANTHROPIC_API_KEY": true,
 		"HARNESS_PLUGIN_CACHE": true, "HARNESS_INSTRUCTIONS_MODE": true,
 		"OPENAI_API_KEY": true, "HTTP_PROXY": true, "HTTPS_PROXY": true,
 		"http_proxy": true, "https_proxy": true,
@@ -190,7 +190,7 @@ func cleanEnv(overrides map[string]string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if strip[k] {
+		if strip[k] || strings.HasPrefix(k, "OTEL_") {
 			continue
 		}
 		env = append(env, kv)
