@@ -87,9 +87,18 @@ func (r jjRepo) Base(ctx context.Context, _ Head) (Base, error) {
 	return Base{Rev: protocol.Rev{Kind: protocol.RevCommit, ID: fork[0].commit}, Ref: ref}, nil
 }
 
-// Diff diffs the files on disk against base, or against the head for a zero
-// base. A file that @ records as a conflict is conflicted.
-func (r jjRepo) Diff(ctx context.Context, _ Head, base Base, patchCap int) ([]protocol.ChangedFile, string, bool, error) {
+// Diff asks the changes command of the repository config when it sets one.
+// Otherwise it diffs the files on disk against base, or against the head for
+// a zero base, in the git store. A file that @ records as a conflict is
+// conflicted.
+func (r jjRepo) Diff(ctx context.Context, head Head, base Base, patchCap int) ([]protocol.ChangedFile, string, bool, error) {
+	argv, err := r.changesCommand(ctx)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if argv != nil {
+		return r.runChangesCommand(ctx, argv, head, base, patchCap)
+	}
 	gitDir, err := r.gitDir()
 	if err != nil {
 		return nil, "", false, err

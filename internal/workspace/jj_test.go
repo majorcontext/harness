@@ -1,7 +1,10 @@
 package workspace_test
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/internal/workspace/workspacetest"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestJJEngineContract(t *testing.T) {
@@ -22,6 +26,69 @@ func TestJJEngineContract(t *testing.T) {
 		t.Skip("jj is not on PATH")
 	}
 	workspacetest.Run(t, jjFixture)
+}
+
+// TestChangesCommandHelper is the changes command of the tests below, which
+// run the test binary with "-- ok" or "-- fail". Without the arguments it
+// does nothing.
+func TestChangesCommandHelper(t *testing.T) {
+	args := os.Args
+	if len(args) < 2 || args[len(args)-2] != "--" {
+		return
+	}
+	if args[len(args)-1] == "fail" {
+		os.Exit(3)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(protocol.WorkspaceChanges{
+		Files: []protocol.ChangedFile{{Path: "from-command.txt", Status: "added", Additions: 1}},
+		Patch: strings.Join([]string{os.Getenv("HARNESS_CHANGES_SCOPE"), os.Getenv("HARNESS_CHANGES_BASE"), os.Getenv("HARNESS_CHANGES_PATCH_BYTES")}, " "),
+	})
+	os.Exit(0)
+}
+
+func jjChangesCommandRepo(t *testing.T, mode string) string {
+	dir := jjRepo(t, true)
+	argv, err := json.Marshal([]string{os.Args[0], "-test.run=^TestChangesCommandHelper$", "--", mode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jj(t, dir, "config", "set", "--repo", "harness.changes-command", string(argv))
+	return dir
+}
+
+func TestJJChangesCommand(t *testing.T) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("jj is not on PATH, and CI needs it")
+		}
+		t.Skip("jj is not on PATH")
+	}
+	engines := []workspace.Engine{workspace.JJEngine{}}
+	t.Run("the answer is the output of the command", func(t *testing.T) {
+		t.Parallel()
+		dir := jjChangesCommandRepo(t, "ok")
+		write(t, dir, "seed.txt", "changed\n")
+		parent := jj(t, dir, "log", "-r", "@-", "--no-graph", "-T", "commit_id")
+		for scope, want := range map[string]string{
+			protocol.ScopeUncommitted: "uncommitted " + parent + " 1048576",
+			protocol.ScopeBranch:      "branch " + parent + " 1048576",
+		} {
+			c, err := workspace.ChangesWith(context.Background(), engines, dir, "", scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(c.Files) != 1 || c.Files[0].Path != "from-command.txt" || c.Patch != want {
+				t.Errorf("%s: files = %+v, patch = %q, want one file from the command and patch %q", scope, c.Files, c.Patch, want)
+			}
+		}
+	})
+	t.Run("a failing command fails the request", func(t *testing.T) {
+		t.Parallel()
+		_, err := workspace.ChangesWith(context.Background(), engines, jjChangesCommandRepo(t, "fail"), "", protocol.ScopeUncommitted)
+		if err == nil || errors.Is(err, workspace.ErrNotRepo) || errors.Is(err, workspace.ErrNoBase) || errors.Is(err, workspace.ErrInvalid) {
+			t.Errorf("error = %v, want an internal failure", err)
+		}
+	})
 }
 
 func jj(t *testing.T, dir string, args ...string) string {

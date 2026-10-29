@@ -3,13 +3,18 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 // Templates for jj log. A commitRow has fields split by a tab. A trunkNames
@@ -209,4 +214,63 @@ func (r jjRepo) conflicts(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return r.lines(ctx, "file", "list", "-r", "@", "-T", `if(conflict, path.display() ++ "\n")`)
+}
+
+// changesCommandTimeout bounds one run of a changes command.
+const changesCommandTimeout = 10 * time.Second
+
+// changesCommand returns harness.changes-command of the repository config,
+// or nil when it is unset. Any value but an array of strings is an error.
+func (r jjRepo) changesCommand(ctx context.Context) ([]string, error) {
+	const key = "harness.changes-command"
+	lines, err := r.lines(ctx, "config", "list", "--repo", key, "-T", `name ++ " " ++ json(value) ++ "\n"`)
+	if err != nil || len(lines) == 0 {
+		return nil, err
+	}
+	for _, l := range lines {
+		if raw, ok := strings.CutPrefix(l, key+" "); ok {
+			var argv []string
+			if err := json.Unmarshal([]byte(raw), &argv); err != nil || len(argv) == 0 {
+				break
+			}
+			return argv, nil
+		}
+	}
+	return nil, fmt.Errorf("%s in the jj repository config must be an array of strings", key)
+}
+
+// runChangesCommand runs argv in the root and decodes its stdout as the
+// answer. The scope is branch exactly when base is set.
+func (r jjRepo) runChangesCommand(ctx context.Context, argv []string, head Head, base Base, patchCap int) ([]protocol.ChangedFile, string, bool, error) {
+	scope, commit := protocol.ScopeBranch, base.Rev.ID
+	if commit == "" {
+		scope, commit = protocol.ScopeUncommitted, head.Commit
+	}
+	ctx, cancel := context.WithTimeout(ctx, changesCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = r.root
+	cmd.Env = append(os.Environ(), "HARNESS_CHANGES_SCOPE="+scope, "HARNESS_CHANGES_BASE="+commit,
+		"HARNESS_CHANGES_PATCH_BYTES="+strconv.Itoa(patchCap))
+	cmd.WaitDelay = waitDelay
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	reason := ""
+	var out protocol.WorkspaceChanges
+	if err := cmd.Run(); err != nil {
+		reason = "exit or start failure: " + err.Error()
+		if ctx.Err() != nil {
+			reason = "run over " + changesCommandTimeout.String()
+		}
+	} else if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		reason = "stdout is not a WorkspaceChanges document"
+	}
+	if reason != "" {
+		slog.Warn("workspace changes command failed", "command", argv[0], "reason", reason)
+		return nil, "", false, fmt.Errorf("changes command %q failed: %s", argv[0], reason)
+	}
+	if out.Files == nil {
+		out.Files = []protocol.ChangedFile{}
+	}
+	return out.Files, out.Patch, out.Truncated, nil
 }
