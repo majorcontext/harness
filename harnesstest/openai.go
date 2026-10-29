@@ -221,8 +221,9 @@ type OpenAI struct {
 const heldPrewarm = "prewarm"
 
 // NewOpenAI starts an OpenAI Responses server that matches Steps as NewAnthropic does.
-// A Block step sends response.created, then waits for Release of the step or for the client to drop the request,
-// as on NewAnthropic. StopReason and TailBlock are not supported.
+// A Block step sends response.created, then waits for Release of the step. Over SSE it also ends when the client
+// drops the request, as on NewAnthropic; over websocket the handler reads no frame while it waits, so only Release
+// or the end of the server ends it. StopReason and TailBlock are not supported.
 // A websocket prewarm consumes no Step, and a chain to an unknown response
 // gets the chain-miss error. Cleanup fails t for a wire-contract violation.
 func NewOpenAI(t testing.TB, opts OpenAIOptions, steps ...Step) *OpenAI {
