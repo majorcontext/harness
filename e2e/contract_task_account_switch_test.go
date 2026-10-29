@@ -36,13 +36,14 @@ func withAccounts(args map[string]any) map[string]any {
 }
 
 // A spawn with accounts and no model checks the vendor of the model that the child gets: the current model of
-// the parent, not the model that created it.
+// the parent, not the model that created it. The child waits for the acknowledgement request of the parent, so its
+// report never reaches the parent before that request.
 func TestContractTaskAccountsFollowTheParentModel(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name: "task_spawn_accounts_check_the_current_model_of_the_parent", concurrent: true, driver: newAccountSwitchDriver,
 		model: []harnesstest.Step{
 			taskStep("spawn_on_vendor", userStarts("delegate on vendor"), fixed(withAccounts(spawn("general-purpose", "child of the vendor parent")))),
-			{Name: "child", Match: userStarts("child of the vendor parent"), Reply: harnesstest.Reply{Text: "child done"}},
+			{Name: "child", Match: userStarts("child of the vendor parent"), Reply: harnesstest.Reply{Text: "child done", Block: true}},
 			{Name: "parent_ack", Match: matchAll(rootStarts("delegate on vendor"), harnesstest.LastToolResult("task")), Reply: harnesstest.Reply{Text: "waiting"}},
 			{Name: "parent_report", Match: rootStarts("delegate on vendor"), Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
 		},
@@ -55,6 +56,7 @@ func TestContractTaskAccountsFollowTheParentModel(t *testing.T) {
 			setModel{as: "b", model: "anthropic/claude-fable-5"},
 			submit{as: "b", text: "delegate on vendor"},
 			awaitRequests{n: 3},
+			release{step: "child"},
 			bindChild{as: "kid", parent: "b"},
 			awaitSettled{as: "kid", parent: "b"},
 			waitIdle{as: "b"},
