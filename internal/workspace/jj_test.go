@@ -290,6 +290,17 @@ func jjFixture(t *testing.T) workspacetest.Fixture {
 			jj(t, dir, "new", `description(exact:"y\n")`, `description(exact:"z\n")`)
 			return dir
 		},
+		ConflictedBase: func(t *testing.T) string {
+			dir := conflictedHead(t)
+			for _, side := range []string{"p1", "p2"} {
+				jj(t, dir, "new", `description(exact:"y\n")`, "-m", side)
+				content := map[string]string{"p1": "r", "p2": "x"}[side]
+				write(t, dir, "seed.txt", content+"\n")
+				write(t, dir, "run.sh", content+"\n")
+			}
+			jj(t, dir, "new", `description(exact:"p1\n")`, `description(exact:"p2\n")`)
+			return dir
+		},
 		Ignored: func(t *testing.T) (string, string) {
 			dir := jjRepo(t, true, "--no-colocate")
 			write(t, dir, ".jj/repo/store/git/info/exclude", "*.log\n")

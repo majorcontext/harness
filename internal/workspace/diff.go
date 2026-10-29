@@ -159,10 +159,9 @@ func privateGitDir(ctx context.Context, dir, root, gitDir string) (env []string,
 		}
 	}
 	config := "[core]\n\trepositoryformatversion = 0\n\tattributesFile = " + os.DevNull + "\n"
+	excludesFile := ""
 	if out, err := gitOut(ctx, root, nil, "config", "--global", "--type=path", "--get", "core.excludesFile"); err == nil {
-		if file := strings.TrimSuffix(out, "\n"); file != "" {
-			config += "\texcludesFile = " + strconv.Quote(file) + "\n"
-		}
+		excludesFile = strings.TrimSuffix(out, "\n")
 	} else if !isGitWorkTreeErr(err) {
 		return nil, err
 	}
@@ -174,6 +173,11 @@ func privateGitDir(ctx context.Context, dir, root, gitDir string) (env []string,
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			return nil, err
+		}
+	}
+	if excludesFile != "" {
+		if _, err := gitOut(ctx, root, nil, "config", "--file", filepath.Join(dir, "config"), "core.excludesFile", excludesFile); err != nil {
 			return nil, err
 		}
 	}

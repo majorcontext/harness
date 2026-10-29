@@ -208,42 +208,43 @@ func (r jjRepo) seedTree(ctx context.Context, env []string, tmp, base string) (s
 	return r.mergeParents(ctx, env, tmp, parents[0].commit, parents[1].commit)
 }
 
-// mergeParents merges two commits as jj does. When neither is conflicted,
-// git finds the merge bases of the commits. Otherwise each of the commits
-// and their one merge base gives its materialized tree, and git merges the
-// trees; two or more merge bases fail, because git merges trees against one
-// base only.
+// mergeParents merges two commits as jj does. When neither the commits nor
+// their merge bases are conflicted, git merges the commits. Otherwise each
+// of them and the one merge base gives its materialized tree, and git merges
+// the trees; two or more merge bases fail, because git merges trees against
+// one base only.
 func (r jjRepo) mergeParents(ctx context.Context, env []string, tmp, a, b string) (string, error) {
-	ta, rebuiltA, err := r.materialized(ctx, env, tmp, a)
-	if err != nil {
-		return "", err
-	}
-	tb, rebuiltB, err := r.materialized(ctx, env, tmp, b)
-	if err != nil {
-		return "", err
-	}
-	if !rebuiltA && !rebuiltB {
-		return r.mergeTrees(ctx, env, nil, a, b)
-	}
 	out, err := gitOut(ctx, r.root, env, "merge-base", "--all", a, b)
 	var exitErr *exec.ExitError
 	if err != nil && !errors.As(err, &exitErr) {
 		return "", err
 	}
 	bases := strings.Fields(out)
-	if len(bases) > 1 {
-		return "", fmt.Errorf("the parents of @ have %d merge bases, and one of them is conflicted", len(bases))
+	trees := make([]string, 0, 2+len(bases))
+	rebuilt := false
+	for _, c := range append([]string{a, b}, bases...) {
+		tree, did, err := r.materialized(ctx, env, tmp, c)
+		if err != nil {
+			return "", err
+		}
+		trees, rebuilt = append(trees, tree), rebuilt || did
 	}
-	var tbase string
+	if !rebuilt {
+		return r.mergeTrees(ctx, env, nil, a, b)
+	}
+	if len(bases) > 1 {
+		return "", fmt.Errorf("the parents of @ have %d merge bases, and one of the commits is conflicted", len(bases))
+	}
+	tbase := ""
 	if len(bases) == 0 {
 		tbase, err = emptyTree(ctx, r.root, env)
 	} else {
-		tbase, _, err = r.materialized(ctx, env, tmp, bases[0])
+		tbase = trees[2]
 	}
 	if err != nil {
 		return "", err
 	}
-	return r.mergeTrees(ctx, env, []string{"--merge-base=" + tbase}, ta, tb)
+	return r.mergeTrees(ctx, env, []string{"--merge-base=" + tbase}, trees[0], trees[1])
 }
 
 // conflictStorage reports a top-level name that jj adds to the git tree of a

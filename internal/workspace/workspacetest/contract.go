@@ -41,6 +41,10 @@ type Fixture struct {
 	// them conflicted, with an unedited working copy. It may be nil for an
 	// engine that has no such state.
 	ConflictedMerge func(t *testing.T) string
+	// ConflictedBase returns a work tree whose head has two clean parents
+	// with a conflicted merge base, with an unedited working copy. It may be
+	// nil for an engine that has no such state.
+	ConflictedBase func(t *testing.T) string
 	// Ignored returns a work tree whose repository ignores the returned path
 	// through a rule that is not in the work tree. It may be nil.
 	Ignored func(t *testing.T) (dir, path string)
@@ -85,6 +89,7 @@ var rows = []struct {
 	{"a head of three parents answers the branch scope and fails the uncommitted scope", octopusHead},
 	{"a conflicted head and an unedited working copy report no change", conflictedHeadUnedited},
 	{"a head of two parents with one conflicted parent and no edit reports only conflicted files", conflictedMergeUnedited},
+	{"a head of two parents with a conflicted merge base and no edit reports only conflicted files", func(t *testing.T, fx Fixture) { onlyConflicted(t, fx, fx.ConflictedBase) }},
 	{"a file that the repository ignores is not reported", ignoredNotReported},
 	{"a missing base gives no_base", missingBase},
 	{"head_commit is set exactly when head_rev is", headCommit},
@@ -332,11 +337,13 @@ func conflictedHeadUnedited(t *testing.T, fx Fixture) {
 // conflictedMergeUnedited allows a conflicted file: the working copy of a
 // merge may word the markers of a conflict of a parent a little differently.
 // A file that is added or deleted is a storage entry of the parent that leaked.
-func conflictedMergeUnedited(t *testing.T, fx Fixture) {
-	if fx.ConflictedMerge == nil {
+func conflictedMergeUnedited(t *testing.T, fx Fixture) { onlyConflicted(t, fx, fx.ConflictedMerge) }
+
+func onlyConflicted(t *testing.T, fx Fixture, build func(t *testing.T) string) {
+	if build == nil {
 		t.Skip("engine has no conflict state")
 	}
-	dir := fx.ConflictedMerge(t)
+	dir := build(t)
 	for _, f := range mustRead(t, fx, dir, protocol.ScopeUncommitted).Files {
 		if f.Status != "conflicted" {
 			t.Errorf("file %s is %s, want only conflicted files", f.Path, f.Status)
