@@ -69,6 +69,9 @@ func TestContractRuntimeSkills(t *testing.T) {
 		if !strings.Contains(reqs[0].System, "refunds — Process refund requests (load with load_skill)") || !requestHas(reqs[0], "load_skill") {
 			t.Errorf("first request: system %q, tools %v, want the embedded skill line and load_skill", reqs[0].System, reqs[0].Tools)
 		}
+		if !strings.Contains(reqs[0].System, "or with the load_skill tool when its line says to load it with load_skill") {
+			t.Errorf("first request: system %q, want the load_skill clause in the skill header", reqs[0].System)
+		}
 		if got := requestText(reqs[1]); !strings.Contains(got, "Refund within 30 days.") {
 			t.Errorf("second request does not hold the SKILL.md text: %s", got)
 		}
