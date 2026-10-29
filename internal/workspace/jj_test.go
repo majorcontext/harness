@@ -9,15 +9,45 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/internal/workspace/workspacetest"
 	"github.com/majorcontext/harness/protocol"
 )
+
+// TestMain keeps every test off the home directory and the config of the
+// user: jj keeps the config of a repository under the user config directory.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "harness-workspace-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	jjConfig := filepath.Join(home, "jj.toml")
+	if err := os.WriteFile(jjConfig, nil, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for k, v := range map[string]string{"HOME": home, "XDG_CONFIG_HOME": home, "JJ_CONFIG": jjConfig,
+		"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1"} {
+		if err := os.Setenv(k, v); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
 
 func TestJJEngineContract(t *testing.T) {
 	if _, err := exec.LookPath("jj"); err != nil {
@@ -30,18 +60,39 @@ func TestJJEngineContract(t *testing.T) {
 }
 
 // TestChangesCommandHelper is the changes command of the tests below, which
-// run the test binary with "-- ok" or "-- fail". Without the arguments it
+// run the test binary with "-- ok" or "-- hold". Without the arguments it
 // does nothing.
 func TestChangesCommandHelper(t *testing.T) {
 	args := os.Args
 	if len(args) < 2 || args[len(args)-2] != "--" {
 		return
 	}
-	switch args[len(args)-1] {
-	case "fail":
-		os.Exit(3)
-	case "hold":
-		// A grandchild keeps stdout open after this command exits.
+	mode, pidFile, _ := strings.Cut(args[len(args)-1], ":")
+	switch mode {
+	case "flood":
+		// Write until the reader is gone, then wait to be killed.
+		signal.Ignore(syscall.SIGPIPE)
+		chunk := make([]byte, 1<<20)
+		for {
+			if _, err := os.Stdout.Write(chunk); err != nil {
+				<-make(chan os.Signal)
+			}
+		}
+	case "overflow":
+		// A child floods stdout after this command has exited.
+		flood := exec.Command(os.Args[0], "-test.run=^TestChangesCommandHelper$", "--", "flood")
+		flood.Stdout = os.Stdout
+		if err := flood.Start(); err != nil {
+			os.Exit(4)
+		}
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(flood.Process.Pid)), 0o600); err != nil {
+			os.Exit(5)
+		}
+		os.Exit(0)
+	}
+	if mode == "hold" {
+		// A grandchild keeps stdout open after this command exits. The engine
+		// kills its process group.
 		hold := exec.Command("sleep", "30")
 		hold.Stdout = os.Stdout
 		if err := hold.Start(); err != nil {
@@ -91,6 +142,30 @@ func TestJJChangesCommand(t *testing.T) {
 			}
 		}
 	})
+	t.Run("an overflow of stdout kills a child that outlives the command", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" {
+			t.Skip("the engine kills the process group on unix only")
+		}
+		pidFile := filepath.Join(t.TempDir(), "pid")
+		_, err := workspace.ChangesWith(context.Background(), engines, jjChangesCommandRepo(t, "overflow:"+pidFile), "", protocol.ScopeUncommitted)
+		if !errors.Is(err, workspace.ErrTooManyChanges) {
+			t.Fatalf("error = %v, want too_many_changes", err)
+		}
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(string(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := os.FindProcess(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testpoll.Until(t, 10*time.Second, "the child of the command to die", func() bool { return child.Signal(syscall.Signal(0)) != nil })
+	})
 	t.Run("a grandchild that holds stdout does not hold the request", func(t *testing.T) {
 		t.Parallel()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -101,21 +176,6 @@ func TestJJChangesCommand(t *testing.T) {
 		}
 		if ctx.Err() != nil {
 			t.Error("the request waited for the grandchild")
-		}
-	})
-	t.Run("a legacy repository config fails the request before any jj command", func(t *testing.T) {
-		t.Parallel()
-		dir := jjRepo(t, true)
-		write(t, dir, ".jj/repo/config.toml", "")
-		if _, err := workspace.ChangesWith(context.Background(), engines, dir, "", protocol.ScopeUncommitted); err == nil || errors.Is(err, workspace.ErrNotRepo) {
-			t.Errorf("error = %v, want an internal failure", err)
-		}
-	})
-	t.Run("a failing command fails the request", func(t *testing.T) {
-		t.Parallel()
-		_, err := workspace.ChangesWith(context.Background(), engines, jjChangesCommandRepo(t, "fail"), "", protocol.ScopeUncommitted)
-		if err == nil || errors.Is(err, workspace.ErrNotRepo) || errors.Is(err, workspace.ErrNoBase) || errors.Is(err, workspace.ErrInvalid) {
-			t.Errorf("error = %v, want an internal failure", err)
 		}
 	})
 }
@@ -150,12 +210,14 @@ func jjRepo(t *testing.T, origin bool, initArgs ...string) string {
 	return dir
 }
 
-// jjFootprint hashes every file of the jj and git storage of dir.
+// jjFootprint hashes every file of the jj and git storage of dir, but the
+// caches that any jj command writes while it loads the repository: its commit
+// index and the refs/jj/keep refs of its git store.
 func jjFootprint(t *testing.T, dir string) string {
 	var out []string
 	for _, sub := range []string{".jj", ".git"} {
 		err := filepath.WalkDir(filepath.Join(dir, sub), func(p string, d fs.DirEntry, err error) error {
-			if err == nil && d.Type().IsRegular() {
+			if err == nil && d.Type().IsRegular() && !jjCache(filepath.ToSlash(p)) {
 				data, rerr := os.ReadFile(p)
 				out = append(out, fmt.Sprintf("%s %x %v", p, sha256.Sum256(data), rerr))
 			}
@@ -168,7 +230,28 @@ func jjFootprint(t *testing.T, dir string) string {
 			t.Fatal(err)
 		}
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n") + "\n" + workspacetest.TreeFootprint(t, dir, ".jj", ".git")
+}
+
+func jjCache(path string) bool {
+	return strings.Contains(path, "/.jj/repo/index/") || strings.Contains(path, "/refs/jj/keep/")
+}
+
+// conflictedHead makes a work tree whose working copy commit y is
+// conflicted, with a conflicted executable file and a clean one.
+func conflictedHead(t *testing.T) string {
+	dir := jjRepo(t, true)
+	for _, side := range []string{"x", "y"} {
+		jj(t, dir, "new", "main", "-m", side)
+		write(t, dir, "seed.txt", side+"\n")
+		write(t, dir, "run.sh", side+"\n")
+		if err := os.Chmod(filepath.Join(dir, "run.sh"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, "other.txt", "other\n")
+	}
+	jj(t, dir, "rebase", "-r", "@", "-d", `description(exact:"x\n")`)
+	return dir
 }
 
 func jjFixture(t *testing.T) workspacetest.Fixture {
@@ -186,6 +269,42 @@ func jjFixture(t *testing.T) workspacetest.Fixture {
 			jj(t, dir, "new", "main", "-m", "b")
 			jj(t, dir, "new", `description(exact:"a\n")`, `description(exact:"b\n")`)
 			return dir
+		},
+		Octopus: func(t *testing.T) string {
+			dir := jjRepo(t, true, "--no-colocate")
+			for _, d := range []string{"a", "b", "c"} {
+				jj(t, dir, "new", "main", "-m", d)
+			}
+			jj(t, dir, "new", `description(exact:"a\n")`, `description(exact:"b\n")`, `description(exact:"c\n")`)
+			return dir
+		},
+		ConflictedHead: func(t *testing.T) string {
+			dir := conflictedHead(t)
+			jj(t, dir, "new")
+			return dir
+		},
+		ConflictedMerge: func(t *testing.T) string {
+			dir := conflictedHead(t)
+			jj(t, dir, "new", "main", "-m", "z")
+			write(t, dir, "z.txt", "z\n")
+			jj(t, dir, "new", `description(exact:"y\n")`, `description(exact:"z\n")`)
+			return dir
+		},
+		ConflictedBase: func(t *testing.T) string {
+			dir := conflictedHead(t)
+			for _, side := range []string{"p1", "p2"} {
+				jj(t, dir, "new", `description(exact:"y\n")`, "-m", side)
+				content := map[string]string{"p1": "r", "p2": "x"}[side]
+				write(t, dir, "seed.txt", content+"\n")
+				write(t, dir, "run.sh", content+"\n")
+			}
+			jj(t, dir, "new", `description(exact:"p1\n")`, `description(exact:"p2\n")`)
+			return dir
+		},
+		Ignored: func(t *testing.T) (string, string) {
+			dir := jjRepo(t, true, "--no-colocate")
+			write(t, dir, ".jj/repo/store/git/info/exclude", "*.log\n")
+			return dir, "debug.log"
 		},
 		NoBase:  func(t *testing.T) string { return jjRepo(t, false) },
 		Outside: func(t *testing.T) string { return t.TempDir() },

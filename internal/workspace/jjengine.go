@@ -109,8 +109,8 @@ func (r jjRepo) Diff(ctx context.Context, head Head, base Base, patchCap int) ([
 	if err != nil {
 		return nil, "", false, err
 	}
-	src := diffSource{root: r.root, gitDir: gitDir, skip: ".jj", seed: func(ctx context.Context, env []string) (string, error) {
-		return r.seedTree(ctx, env, base.Rev.ID)
+	src := diffSource{root: r.root, gitDir: gitDir, skip: ".jj", seed: func(ctx context.Context, env []string, tmp string) (string, error) {
+		return r.seedTree(ctx, env, tmp, base.Rev.ID)
 	}}
 	files, patch, truncated, err := changeSet(ctx, src, "", "", patchCap)
 	if err != nil {

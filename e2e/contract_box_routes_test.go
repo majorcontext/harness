@@ -41,6 +41,10 @@ type runGit struct {
 // fails there under CI.
 type runJJ struct{ args []string }
 
+// jjChangesCommand sets harness.changes-command of the repository config of
+// the work dir to argv.
+type jjChangesCommand struct{ argv string }
+
 // removeFile removes a file of the work dir.
 type removeFile struct{ path string }
 
@@ -71,21 +75,50 @@ func (a runGit) run(t *testing.T, r *run) {
 	}
 	gitIn(t, dir, a.args...)
 }
-func (a runJJ) run(t *testing.T, r *run) {
+func (a runJJ) run(t *testing.T, r *run) { jjIn(t, r.drv.Workdir(), a.args...) }
+func (a jjChangesCommand) run(t *testing.T, r *run) {
+	jjIn(t, r.drv.Workdir(), "config", "set", "--repo", "harness.changes-command", a.argv)
+}
+
+// isolateJJConfig points the user config directory of jj, which also holds
+// the config of each repository, at a new directory for the whole test
+// process and every host that it starts. It returns that directory.
+func isolateJJConfig() (string, error) {
+	dir, err := os.MkdirTemp("", "harness-e2e-jj-")
+	if err != nil {
+		return "", err
+	}
+	user := filepath.Join(dir, "jj.toml")
+	if err := os.WriteFile(user, nil, 0o600); err != nil {
+		return "", err
+	}
+	for k, v := range map[string]string{"XDG_CONFIG_HOME": dir, "JJ_CONFIG": user} {
+		if err := os.Setenv(k, v); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+// jjIn runs jj in dir and returns its output.
+func jjIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
 	if _, err := exec.LookPath("jj"); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal("jj is not on PATH, and CI needs it")
 		}
 		t.Skip("jj is not on PATH")
 	}
-	full := append([]string{"--no-pager", "--color=never", "--quiet", "--config=user.name=contract", "--config=user.email=contract@example.com"}, a.args...)
+	full := append([]string{"--no-pager", "--color=never", "--quiet", "--config=user.name=contract", "--config=user.email=contract@example.com"}, args...)
 	cmd := exec.CommandContext(t.Context(), "jj", full...)
-	cmd.Dir = r.drv.Workdir()
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "JJ_TIMESTAMP="+gitDate, "JJ_OP_TIMESTAMP="+gitDate, "JJ_RANDOMNESS_SEED=1",
 		"JJ_OP_HOSTNAME=contract", "JJ_OP_USERNAME=contract")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("jj %s: %v\n%s", strings.Join(a.args, " "), err, out)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("jj %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 func (a removeFile) run(t *testing.T, r *run) {
 	if err := os.Remove(filepath.Join(r.drv.Workdir(), a.path)); err != nil {
@@ -208,16 +241,6 @@ func TestContractWorkspace(t *testing.T) {
 			},
 		},
 		{
-			name: "jj_changes_reports_the_head_commit_and_an_edit",
-			actions: []action{
-				runJJ{args: []string{"git", "init"}},
-				writeFile{path: "a.txt", body: "one\ntwo\n"},
-				runJJ{args: []string{"commit", "-m", "base"}},
-				writeFile{path: "a.txt", body: "one\nTWO!\n"},
-				workspaceChanges{scope: "uncommitted"},
-			},
-		},
-		{
 			name: "git_changes_refusals",
 			actions: []action{
 				writeFile{path: "plain/x.txt", body: "x\n"},
@@ -233,6 +256,34 @@ func TestContractWorkspace(t *testing.T) {
 				workspaceChanges{scope: "uncommitted", dir: "plain"},
 				workspaceChanges{dir: "unborn"},
 				workspaceChanges{dir: "nobase"},
+			},
+		},
+	})
+}
+
+func TestContractWorkspaceJJ(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "jj_changes_reports_the_head_commit_and_an_edit",
+			actions: []action{
+				runJJ{args: []string{"git", "init"}},
+				writeFile{path: "a.txt", body: "one\ntwo\n"},
+				runJJ{args: []string{"commit", "-m", "base"}},
+				writeFile{path: "a.txt", body: "one\nTWO!\n"},
+				workspaceChanges{scope: "uncommitted"},
+			},
+		},
+		{
+			name: "jj_changes_command_of_the_repository_config_answers_and_fails",
+			actions: []action{
+				runJJ{args: []string{"git", "init"}},
+				writeFile{path: "a.txt", body: "one\n"},
+				runJJ{args: []string{"commit", "-m", "base"}},
+				writeFile{path: "answer.json", body: `{"files":[{"path":"from-command.txt","status":"added","additions":1,"deletions":0,"binary":false,"large":false}],"patch":"diff --git a/from-command.txt b/from-command.txt\n","truncated":false}`},
+				jjChangesCommand{argv: `["cat","answer.json"]`},
+				workspaceChanges{scope: "uncommitted"},
+				removeFile{path: "answer.json"},
+				workspaceChanges{scope: "uncommitted"},
 			},
 		},
 	})

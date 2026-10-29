@@ -455,7 +455,7 @@ func gitFootprint(t *testing.T, dir string) string {
 			t.Fatal(err)
 		}
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n") + "\n" + workspacetest.TreeFootprint(t, dir, ".git")
 }
 
 func gitFixture(t *testing.T) workspacetest.Fixture {
@@ -471,6 +471,11 @@ func gitFixture(t *testing.T) workspacetest.Fixture {
 		Outside: func(t *testing.T) string { return t.TempDir() },
 		Operations: func(t *testing.T, dir string) int {
 			return len(strings.Fields(git(t, dir, "reflog", "--all", "--format=%H")))
+		},
+		Ignored: func(t *testing.T) (string, string) {
+			dir := contractRepo(t, true)
+			write(t, dir, ".git/info/exclude", "*.log\n")
+			return dir, "debug.log"
 		},
 		Guard:     func(t *testing.T, dir string) { write(t, dir, ".git/index.lock", "held\n") },
 		Footprint: gitFootprint,

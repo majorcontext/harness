@@ -129,22 +129,59 @@ func gitQuotePathListEntry(path string) string {
 
 // diffSource says where changeSet reads the repository. The zero gitDir
 // means the repository that holds root. Otherwise gitDir is a bare git
-// directory that root is the work tree of, and seed returns the tree-ish
-// that the private index starts from and the diff runs against.
+// directory that root is the work tree of: git runs in a private git
+// directory that reads the objects of gitDir and nothing else of it, and
+// seed returns the tree-ish that the private index starts from and the diff
+// runs against. tmp is the private directory.
 type diffSource struct {
 	root   string
 	gitDir string
 	// skip is a top-level name that never counts as untracked.
 	skip string
-	seed func(ctx context.Context, env []string) (string, error)
+	seed func(ctx context.Context, env []string, tmp string) (string, error)
 }
 
-// gitEnv selects the repository of src for every git command.
-func (s diffSource) gitEnv() []string {
-	if s.gitDir == "" {
-		return nil
+// privateGitDir makes a git directory in dir that reads the objects of
+// gitDir through an alternate and writes its own. Only the ignore rules of
+// the user and of the repository reach it: the info/exclude files of gitDir
+// and of a colocated .git, and the core.excludesFile of the global config.
+// No other config, hook, driver, or attribute applies to it.
+func privateGitDir(ctx context.Context, dir, root, gitDir string) (env []string, err error) {
+	for _, d := range []string{"objects/info", "refs", "info"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+			return nil, err
+		}
 	}
-	return []string{"GIT_DIR=" + s.gitDir, "GIT_WORK_TREE=" + s.root}
+	var exclude []byte
+	for _, p := range []string{filepath.Join(gitDir, "info", "exclude"), filepath.Join(root, ".git", "info", "exclude")} {
+		if data, err := os.ReadFile(p); err == nil {
+			exclude = append(append(exclude, data...), '\n')
+		}
+	}
+	config := "[core]\n\trepositoryformatversion = 0\n\tattributesFile = " + os.DevNull + "\n"
+	excludesFile := ""
+	if out, err := gitOut(ctx, root, nil, "config", "--global", "--type=path", "--get", "core.excludesFile"); err == nil {
+		excludesFile = strings.TrimSuffix(out, "\n")
+	} else if !isGitWorkTreeErr(err) {
+		return nil, err
+	}
+	files := map[string]string{
+		"HEAD":                    "ref: refs/heads/main\n",
+		"config":                  config,
+		"info/exclude":            string(exclude),
+		"objects/info/alternates": filepath.Join(gitDir, "objects") + "\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			return nil, err
+		}
+	}
+	if excludesFile != "" {
+		if _, err := gitOut(ctx, root, nil, "config", "--file", filepath.Join(dir, "config"), "core.excludesFile", excludesFile); err != nil {
+			return nil, err
+		}
+	}
+	return []string{"GIT_DIR=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}, nil
 }
 
 // changeSet computes files and patch against base in a fixed number of
@@ -195,8 +232,9 @@ func changeSet(ctx context.Context, src diffSource, head, base string, limit int
 // every filter driver, for each command that hashes or diffs content.
 // GIT_OBJECT_DIRECTORY keeps each object that add -N writes in dir, and
 // GIT_ALTERNATE_OBJECT_DIRECTORIES still reads every real object. A git
-// work tree copies its real index. A source with a seed starts from an
-// empty index that holds the seed tree, and returns that tree.
+// work tree copies its real index. A source with a seed runs in a private
+// git directory (see privateGitDir), starts from an empty index that holds
+// the seed tree, and returns that tree.
 func privateIndex(ctx context.Context, src diffSource, head, dir string) (env, diffEnv []string, treeish string, err error) {
 	repoRoot := src.root
 	index, objects := filepath.Join(dir, "index"), filepath.Join(dir, "objects")
@@ -204,9 +242,13 @@ func privateIndex(ctx context.Context, src diffSource, head, dir string) (env, d
 		return nil, nil, "", err
 	}
 	missing := false
-	realObjects := ""
 	if src.gitDir != "" {
-		realObjects = filepath.Join(src.gitDir, "objects")
+		gitEnv, err := privateGitDir(ctx, filepath.Join(dir, "git"), repoRoot, src.gitDir)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		env = append([]string{"GIT_INDEX_FILE=" + index, "GIT_WORK_TREE=" + repoRoot}, gitEnv...)
+		diffEnv = env
 	} else {
 		realIndex, err := gitRealPath(ctx, repoRoot, "index")
 		if err != nil {
@@ -221,20 +263,21 @@ func privateIndex(ctx context.Context, src diffSource, head, dir string) (env, d
 		} else {
 			return nil, nil, "", err
 		}
-		if realObjects, err = gitRealPath(ctx, repoRoot, "objects"); err != nil {
+		realObjects, err := gitRealPath(ctx, repoRoot, "objects")
+		if err != nil {
 			return nil, nil, "", err
 		}
+		env = []string{"GIT_INDEX_FILE=" + index, "GIT_OBJECT_DIRECTORY=" + objects,
+			"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects)}
+		filterEnv, err := diffFilterDriverEnv(ctx, repoRoot, nil)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		diffEnv = append(slices.Clone(env), filterEnv...)
 	}
-	env = append([]string{"GIT_INDEX_FILE=" + index, "GIT_OBJECT_DIRECTORY=" + objects,
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects)}, src.gitEnv()...)
-	filterEnv, err := diffFilterDriverEnv(ctx, repoRoot, src.gitEnv())
-	if err != nil {
-		return nil, nil, "", err
-	}
-	diffEnv = append(slices.Clone(env), filterEnv...)
 	switch {
 	case src.seed != nil:
-		if treeish, err = src.seed(ctx, diffEnv); err != nil {
+		if treeish, err = src.seed(ctx, diffEnv, dir); err != nil {
 			return nil, nil, "", err
 		}
 		if _, err := gitOut(ctx, repoRoot, env, "-c", "core.splitIndex=false", "read-tree", treeish); err != nil {

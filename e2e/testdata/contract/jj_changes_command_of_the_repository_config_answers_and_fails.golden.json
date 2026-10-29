@@ -1,0 +1,45 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes.uncommitted": {
+      "status": 200,
+      "body": {
+        "branch": "",
+        "dir": "\u003cworkdir\u003e",
+        "engine": "jj",
+        "files": [
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 0,
+            "large": false,
+            "path": "from-command.txt",
+            "status": "added"
+          }
+        ],
+        "head_commit": "746d90efa14329b0cf02f94c71cb101bc2882b30",
+        "head_rev": "change:qpvuntsmwlqtpsluzzsnyyzlmlwvmlnu",
+        "patch": "diff --git a/from-command.txt b/from-command.txt\n",
+        "scope": "uncommitted",
+        "truncated": false
+      }
+    },
+    "workspace_changes.uncommitted#2": {
+      "status": 500,
+      "body": {
+        "error": {
+          "code": "internal",
+          "details": {},
+          "message": "internal error"
+        }
+      }
+    },
+    "workspace_changes_wire.uncommitted": {
+      "status": 200,
+      "body": {
+        "patch_is_html_escaped": false
+      }
+    }
+  }
+}
