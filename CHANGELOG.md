@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **`jj` engine for `/workspace/changes`** (`internal/workspace`, `protocol`, `docs/architecture.md`) — a directory in a Jujutsu work tree now answers with `engine` `jj`, also when it is a git work tree too, and it needs `jj` on `PATH`. The head is `@-` as a `change` revision, the label is the nearest local bookmark, and the base is the fork point of `@-` and `trunk()`. The diff is the files on disk against the base or `@-` (the automatic merge for several parents), read from the git store without a snapshot or an operation, and a file that `@` records as a conflict has the status `conflicted`. The response has a new field `head_commit`, the git commit ID of the head, present exactly when `head_rev` is. The contract table no longer allows an engine to snapshot on read.
+
 - **Embedded skill updates** (`Options.Skills`) — a running session calls `SkillSource.List` before each model call. A changed list reaches the model as one pinned segment after the history, so the system prompt, the tools, and the cached prefix stay as they are. `load_skill` and `session_info` follow the newest list.
 - **Session ID in a plugin tool** (`plugin`) — `plugin.SessionID(ctx)` returns the ID of the session that called a plugin tool. `Tool.Execute` gets the session on its context for a process plugin and for an in-process plugin.
 - **`session_info` with no `WorkDir`** (`harness`) — every session offers `session_info`, on every backend, with or without a `WorkDir`, so a host with no file system (for example one that uses `Options.Skills`) can call it. An `AllowedTools` list that leaves it out hides it. `New` now fails for an embedder tool or a plugin tool named `session_info` also with no `WorkDir`.

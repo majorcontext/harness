@@ -2371,6 +2371,9 @@
           "head_rev": {
             "type": "string"
           },
+          "head_commit": {
+            "type": "string"
+          },
           "base": {
             "$ref": "#/components/schemas/BaseRef"
           },

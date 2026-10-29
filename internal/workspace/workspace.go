@@ -34,7 +34,7 @@ const maxPatch = 1 << 20
 
 // engineList is the ordered list of engines. The first engine that opens a
 // directory answers. Only Changes names it.
-var engineList = []Engine{GitEngine{}}
+var engineList = []Engine{JJEngine{}, GitEngine{}}
 
 // Engine reads one kind of work tree.
 type Engine interface {
@@ -65,10 +65,12 @@ type Repo interface {
 	Diff(ctx context.Context, head Head, base Base, patchCap int) (files []protocol.ChangedFile, patch string, truncated bool, err error)
 }
 
-// Head is the head of a work tree. Label is an optional name, such as a branch.
+// Head is the head of a work tree. Label is an optional name, such as a
+// branch. Commit is the git commit ID of the head, empty when Rev is zero.
 type Head struct {
-	Rev   protocol.Rev
-	Label string
+	Rev    protocol.Rev
+	Label  string
+	Commit string
 }
 
 // Base is the base of the branch scope. Ref is its display name.
@@ -181,7 +183,7 @@ func changes(ctx context.Context, engines []Engine, root, dir, real, ceiling, sc
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err
 	}
-	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: eng.Name(), Branch: head.Label, HeadRev: head.Rev}
+	c := protocol.WorkspaceChanges{Dir: dir, Scope: scope, Engine: eng.Name(), Branch: head.Label, HeadRev: head.Rev, HeadCommit: head.Commit}
 	var base Base
 	if scope == protocol.ScopeBranch {
 		if base, err = repo.Base(ctx, head); err != nil {
