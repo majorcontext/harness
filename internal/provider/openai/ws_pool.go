@@ -41,8 +41,10 @@ type wsPoolEntry struct {
 	mu          sync.Mutex
 	conn        *websocket.Conn
 	connectedAt time.Time
-	lastUsedAt  time.Time
-	busy        bool
+	// connRev is the revision of the credentials that conn was dialed under.
+	connRev    uint64
+	lastUsedAt time.Time
+	busy       bool
 	// warming is open while a warm-up runs on the entry. A request waits
 	// for it to close.
 	warming        chan struct{}
@@ -63,6 +65,9 @@ type wsPool struct {
 	// dial is replaced in tests.
 	dial func(ctx context.Context, url string, headers http.Header, httpClient *http.Client, timeout time.Duration) (*websocket.Conn, *http.Response, error)
 
+	// revision returns the current revision of the credentials. It is never nil.
+	revision func() uint64
+
 	mu      sync.Mutex
 	entries map[string]*wsPoolEntry
 }
@@ -75,6 +80,24 @@ func newWSPool() *wsPool {
 		streamRetries:    wsDefaultStreamRetries,
 		dial:             dialResponsesWebSocket,
 		entries:          make(map[string]*wsPoolEntry),
+		revision:         func() uint64 { return 0 },
+	}
+}
+
+// closeStale closes the connection of each idle entry that was dialed under an older revision. A busy entry keeps its
+// connection until its call ends and settles.
+func (p *wsPool) closeStale() {
+	cur := p.revision()
+	p.mu.Lock()
+	entries := slices.Collect(maps.Values(p.entries))
+	p.mu.Unlock()
+	for _, e := range entries {
+		e.mu.Lock()
+		stale := !e.busy && e.warming == nil && e.conn != nil && e.connRev != cur
+		e.mu.Unlock()
+		if stale {
+			p.invalidate(e)
+		}
 	}
 }
 
@@ -114,7 +137,9 @@ type wsStreamRequest struct {
 	Family     string
 	HTTPClient *http.Client
 	Prewarm    bool
-	Log        *slog.Logger
+	// Revision is the revision of the credentials, read before the request resolved them.
+	Revision uint64
+	Log      *slog.Logger
 	// Permanent, when set, receives a dial error that no HTTP fallback can resolve, such as a missing login.
 	Permanent *error
 }
@@ -136,7 +161,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	live := entry.conn != nil && !entry.connectedAt.IsZero()
 	aged := live && now.Sub(entry.connectedAt) >= p.maxConnectionAge
 	idled := live && now.Sub(entry.lastUsedAt) >= p.idleTimeout
-	reuse := live && !aged && !idled
+	reuse := live && !aged && !idled && entry.connRev == req.Revision
 	entry.lastUsedAt = now
 	conn := entry.conn
 	entry.mu.Unlock()
@@ -171,6 +196,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 		entry.mu.Lock()
 		entry.conn = newConn
 		entry.connectedAt = time.Now()
+		entry.connRev = req.Revision
 		entry.lineage = nil
 		entry.generation++
 		entry.mu.Unlock()
@@ -274,7 +300,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 				entry.busy = false
 				entry.lastUsedAt = time.Now()
 				entry.streamFailures = 0
-				keep := isWSCleanTerminalEvent(name)
+				keep := isWSCleanTerminalEvent(name) && entry.connRev == p.revision()
 				entry.mu.Unlock()
 				if !keep {
 					p.invalidate(entry)
@@ -378,6 +404,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 			entry.mu.Lock()
 			entry.conn = newConn
 			entry.connectedAt = time.Now()
+			entry.connRev = req.Revision
 			entry.lineage = nil
 			entry.generation++
 			generation = entry.generation

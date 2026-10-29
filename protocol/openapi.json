@@ -1625,6 +1625,138 @@
           "seq"
         ]
       },
+      "Provider": {
+        "properties": {
+          "vendor": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "api_key_env": {
+            "type": "string"
+          },
+          "auth": {
+            "type": "string"
+          },
+          "login_url": {
+            "type": "string"
+          },
+          "models_from": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "extra_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "no_prompt_cache_key": {
+            "type": "boolean"
+          },
+          "responses_path": {
+            "type": "string"
+          },
+          "omit_response_params": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sanitize_tool_schemas": {
+            "type": "boolean"
+          },
+          "use_websocket_transport": {
+            "type": "boolean"
+          },
+          "cache_ttl": {
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "binary_path": {
+            "type": "string"
+          },
+          "extra_args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "permission_mode": {
+            "type": "string"
+          },
+          "session_mirror": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "ProviderSet": {
+        "properties": {
+          "providers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/Provider"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "providers"
+        ]
+      },
+      "ProviderStatus": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "available"
+        ]
+      },
+      "Providers": {
+        "properties": {
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderStatus"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "providers"
+        ]
+      },
       "QueuedInput": {
         "properties": {
           "id": {
@@ -2738,6 +2870,73 @@
                 }
               }
             },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/providers": {
+      "put": {
+        "operationId": "setProviders",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSet"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Providers"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/providers/{name}/reconnect": {
+      "post": {
+        "operationId": "reconnectProvider",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
             "description": "Success"
           },
           "default": {

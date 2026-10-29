@@ -11,10 +11,10 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/codexauth"
 	"github.com/majorcontext/harness/internal/injectedauth"
@@ -33,29 +33,26 @@ import (
 var ErrUnavailable = &protocol.Error{Code: protocol.CodeModelUnavailable, Message: "harness: model unavailable"}
 
 // Router is the turn.Backend of a runtime. It routes each turn to the backend
-// of its model's provider.
+// of its model's provider, and owns the live set of provider entries.
 type Router struct {
-	backends    map[string]turn.Backend
-	unavailable map[string]string
-	// listed holds the models of each provider whose entry sets models.
-	listed map[string][]modelmeta.Model
-	// hidden holds the providers that the host cannot serve, which List leaves out.
-	hidden map[string]bool
-	// traceNames holds the gen_ai.provider.name of each provider.
-	traceNames map[string]string
+	build *builder
+	snap  atomic.Pointer[snapshot]
+	// setMu serializes Set, Reconnect, and Close.
+	setMu   sync.Mutex
+	closed  bool
+	retired sync.WaitGroup
 }
 
-// NewRouter returns a Router over backends, by provider name.
+// NewRouter returns a Router over backends, by provider name. It has no entry config, so Set fails.
 func NewRouter(backends map[string]turn.Backend) *Router {
-	return &Router{backends: backends}
-}
-
-// listModels sets the model list of a provider to models, in place of its catalog.
-func (m *Router) listModels(provider string, models []modelmeta.Model) {
-	if m.listed == nil {
-		m.listed = map[string][]modelmeta.Model{}
+	s := newSnapshot()
+	for name, be := range backends {
+		s.entries[name] = newLive(name, config.Provider{}, "", be)
+		s.names = append(s.names, name)
 	}
-	m.listed[provider] = models
+	r := &Router{}
+	r.setProviderSet(s)
+	return r
 }
 
 // Env is what the backends read from their process: the variables that hold API keys, and the log.
@@ -79,61 +76,15 @@ type Env struct {
 // The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper, env Env) *Router {
 	env.Log = cmp.Or(env.Log, slog.Default())
-	backends := map[string]turn.Backend{}
-	cfg.Providers = cfg.ProviderEntries()
 	if env.Logins == nil {
 		env.Logins = injectedauth.New(injectedauth.Options{Transport: transport, Probe: ProbeOf})
 	}
-	codex := sync.OnceValue(func() *codexauth.Source {
-		return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
-	})
-	hidden, traceNames := map[string]bool{}, map[string]string{}
-	unavailable := map[string]string{}
-	for name, p := range cfg.Providers {
-		traceNames[name] = config.TraceName(name, p)
-		if config.NativeKeyEnv(name) != "" && !p.HasCredentials(name, env.Getenv) {
-			_, unavailable[name] = env.key(p.KeyEnv(name))
-			continue
-		}
-		if p.Type == config.TypeClaudeCodeCLI {
-			if env.NoProcess {
-				continue
-			}
-			cb := claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPToolLoading)
-			cb.RouteAccounts(cfg.AccountRouting, env.Getenv)
-			backends[name] = cb
-		} else if c := client(name, p, transport, env, codex, cfg.RequestMaxRetriesValue()); c != nil {
-			backends[name] = modelBackend(name, p, c, cfg.ContextWindowTokens, env, codex)
-			if p.Vendor != "" {
-				backends[name] = &accountBackend{base: backends[name], name: name, vendor: p.Vendor, routing: cfg.AccountRouting, getenv: env.Getenv,
-					transport: func() http.RoundTripper {
-						if transport == nil {
-							return nil
-						}
-						return transport(name)
-					},
-					build: func(tr func(string) http.RoundTripper) turn.Backend {
-						accountClient := client(name, p, tr, env, codex, cfg.RequestMaxRetriesValue())
-						if base, ok := c.(*responses.Client); ok {
-							if account, ok := accountClient.(*responses.Client); ok {
-								account.ShareLiveCatalog(base)
-							}
-						}
-						return modelBackend(name, p, accountClient, cfg.ContextWindowTokens, env, codex)
-					}}
-			}
-			if env.NoLogin && p.Auth == config.AuthChatGPT {
-				hidden[name] = true
-			}
-		}
-	}
-	r := NewRouter(backends)
-	r.hidden, r.unavailable, r.traceNames = hidden, unavailable, traceNames
-	for name, p := range cfg.Providers {
-		if _, ok := backends[name]; ok && len(p.Models) > 0 {
-			r.listModels(name, modelmeta.Named(p.Models, modelmeta.Models(name)))
-		}
-	}
+	b := &builder{cfg: cfg, workDir: workDir, transport: transport, env: env,
+		codex: sync.OnceValue(func() *codexauth.Source {
+			return codexauth.NewSource(codexauth.SourceOptions{Path: cfg.CodexAuthFile, Issuer: cfg.CodexIssuer, Log: env.Log})
+		})}
+	r := &Router{build: b}
+	r.setProviderSet(b.snapshot(&cfg, newSnapshot(), nil))
 	return r
 }
 
@@ -157,7 +108,7 @@ func modelBackend(name string, p config.Provider, c provider.Provider, contextWi
 // client returns the model API client of entry name, or nil for an entry
 // that names no model API. An entry keyed by a native family may leave Type
 // empty. A transport that supplies native API credentials declares auth injected.
-func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, codex func() *codexauth.Source, retries int) provider.Provider {
+func client(name string, p config.Provider, transport func(provider string) http.RoundTripper, env Env, codex func() *codexauth.Source, retries int, rev func() uint64) provider.Provider {
 	var hc *http.Client
 	if transport != nil {
 		if rt := transport(name); rt != nil {
@@ -189,7 +140,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 		}
 		return &responses.Client{Family: name, APIKey: key, NoKeyReason: reason, NoKey: p.Keyless() || p.HasCredentialHeader(), BaseURL: p.BaseURL, Log: env.Log,
 			HTTPClient: traced(key != "" || p.Keyless() || p.HasCredentialHeader()), ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
-			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin() || p.UsesInjectedAuth() && p.ModelsFrom == config.ModelsFromChatGPT, CacheTTL: cacheTTL, LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries}
+			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport, HashCacheKey: p.UsesInjectedAuth(), SessionHeaders: p.UsesChatGPTLogin() || p.UsesInjectedAuth() && p.ModelsFrom == config.ModelsFromChatGPT, CacheTTL: cacheTTL, LiteUntilListed: p.ModelsFrom == config.ModelsFromChatGPT, RequestRetries: retries, Revision: rev}
 	case p.Type == config.TypeOpenAICompat:
 		key, reason := env.key(p.APIKeyEnv)
 		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: key, NoKeyReason: reason, NoKey: p.Keyless() || p.HasCredentialHeader(), BaseURL: p.BaseURL,
@@ -241,14 +192,29 @@ func (e Env) key(name string) (key, reason string) {
 // Check returns the backend of the provider of ref, or reports that no
 // configured provider serves it.
 func (m *Router) Check(ref modelref.ModelRef) (turn.Backend, error) {
-	be, ok := m.backends[ref.Provider]
-	if !ok {
-		if reason := m.unavailable[ref.Provider]; reason != "" {
-			return nil, fmt.Errorf("%w: provider %q is unavailable for %s: %s", ErrUnavailable, ref.Provider, ref, reason)
-		}
-		return nil, fmt.Errorf("%w: no provider %q is configured for %s", ErrUnavailable, ref.Provider, ref)
+	e, err := m.snap.Load().find(ref)
+	if err != nil {
+		return nil, err
 	}
-	return be, nil
+	return e.be, nil
+}
+
+// lease returns the entry of the provider of model, held until its release.
+func (m *Router) lease(model string) (*live, error) {
+	ref, err := modelref.ParseModelRef(model)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	for {
+		e, err := m.snap.Load().find(ref)
+		if err != nil {
+			return nil, err
+		}
+		if e.acquire() {
+			e.checkGeneration()
+			return e, nil
+		}
+	}
 }
 
 // lookup returns the backend of the provider of model.
@@ -260,32 +226,39 @@ func (m *Router) lookup(model string) (turn.Backend, error) {
 	return m.Check(ref)
 }
 
-// Providers returns the names of the configured providers, sorted.
-func (m *Router) Providers() []string { return slices.Sorted(maps.Keys(m.backends)) }
+// Providers returns the names of the configured providers that have a backend, sorted.
+func (m *Router) Providers() []string { return slices.Sorted(maps.Keys(m.snap.Load().entries)) }
 
 // Unavailable returns why the configured provider name has no backend, or "".
-func (m *Router) Unavailable(name string) string { return m.unavailable[name] }
+func (m *Router) Unavailable(name string) string { return m.snap.Load().unavailable[name] }
+
+// Vendor returns the vendor of the entry name, or "".
+func (m *Router) Vendor(name string) string { return m.snap.Load().vendors[name] }
 
 // Capabilities returns the capabilities of the backend of model, or none for a model with no backend.
 func (m *Router) Capabilities(model string) turn.Capabilities {
-	be, err := m.lookup(model)
+	s := m.snap.Load()
+	ref, err := modelref.ParseModelRef(model)
 	if err != nil {
 		return turn.Capabilities{}
 	}
-	caps := be.Capabilities(model)
-	if ref, err := modelref.ParseModelRef(model); err == nil {
-		caps.Provider = m.traceNames[ref.Provider]
+	e, err := s.find(ref)
+	if err != nil {
+		return turn.Capabilities{}
 	}
+	caps := e.be.Capabilities(model)
+	caps.Provider = s.traceNames[ref.Provider]
 	return caps
 }
 
 // Run runs the turn on the backend of req.Model.
 func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
-	be, err := m.lookup(req.Model)
+	e, err := m.lease(req.Model)
 	if err != nil {
 		return err
 	}
-	return be.Run(ctx, req, out)
+	defer e.release()
+	return e.be.Run(ctx, req, out)
 }
 
 // CanWarm reports whether the backend of model has a warm-up to run.
@@ -296,11 +269,12 @@ func (m *Router) CanWarm(model string) bool {
 
 // Warm warms the backend of req.Model, when that backend can warm.
 func (m *Router) Warm(ctx context.Context, req turn.Request) error {
-	be, err := m.lookup(req.Model)
+	e, err := m.lease(req.Model)
 	if err != nil {
 		return err
 	}
-	if w, ok := be.(turn.Warmer); ok {
+	defer e.release()
+	if w, ok := e.be.(turn.Warmer); ok {
 		return w.Warm(ctx, req)
 	}
 	return nil
@@ -311,21 +285,17 @@ func (m *Router) Warm(ctx context.Context, req turn.Request) error {
 func (m *Router) List(ctx context.Context) []protocol.Model {
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
-	names := make([]string, 0, len(m.backends))
-	for name := range m.backends {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	s := m.snap.Load()
 	out := []protocol.Model{}
-	for _, name := range names {
-		if m.hidden[name] {
+	for _, name := range slices.Sorted(maps.Keys(s.entries)) {
+		e := s.entries[name]
+		if e.hidden {
 			continue
 		}
-		be := m.backends[name]
-		models, set := m.listed[name]
-		if !set {
+		models := e.listed
+		if !e.hasListed {
 			models = modelmeta.Models(name)
-			if lister, ok := be.(interface {
+			if lister, ok := e.be.(interface {
 				Models(ctx context.Context) []modelmeta.Model
 			}); ok {
 				models = lister.Models(ctx)
@@ -333,17 +303,8 @@ func (m *Router) List(ctx context.Context) []protocol.Model {
 		}
 		for _, mm := range models {
 			ref := name + "/" + mm.ID
-			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: be.Capabilities(ref).ContextWindow})
+			out = append(out, protocol.Model{ID: ref, Provider: name, ProviderName: modelmeta.ProviderName(name), Name: mm.Name, Description: mm.Description, Efforts: mm.Efforts, ContextWindow: e.be.Capabilities(ref).ContextWindow})
 		}
 	}
 	return out
-}
-
-// Close closes the connections of every backend. Call it when no turn runs.
-func (m *Router) Close() {
-	for _, be := range m.backends {
-		if c, ok := be.(interface{ Close() }); ok {
-			c.Close()
-		}
-	}
 }

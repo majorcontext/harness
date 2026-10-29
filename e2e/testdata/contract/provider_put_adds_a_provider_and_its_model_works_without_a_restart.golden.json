@@ -1,0 +1,92 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "fireworks/accounts/fireworks/routers/firerouter",
+      "user": "ses:a",
+      "prompt_cache_key": "ses:a",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "re one"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "create.gw/fireworks/accounts/fireworks/routers/firerouter": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: no provider \"gw\" is configured for gw/fireworks/accounts/fireworks/routers/firerouter"
+        }
+      }
+    },
+    "put_providers": {
+      "status": 200,
+      "body": [
+        "anthropic true",
+        "bifrost true",
+        "claude-code true",
+        "codex true",
+        "gw true",
+        "openai false"
+      ]
+    }
+  }
+}

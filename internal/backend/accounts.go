@@ -219,6 +219,21 @@ func (a *accountBackend) Models(ctx context.Context) []modelmeta.Model {
 	return modelmeta.Models(a.name)
 }
 
+// CloseStale closes the idle stale sockets of the base backend and of every cached account.
+func (a *accountBackend) CloseStale() {
+	a.mu.Lock()
+	backends := []turn.Backend{a.base}
+	for _, client := range a.accounts {
+		backends = append(backends, client.backend)
+	}
+	a.mu.Unlock()
+	for _, be := range backends {
+		if c, ok := be.(interface{ CloseStale() }); ok {
+			c.CloseStale()
+		}
+	}
+}
+
 // Close closes the connections of the base backend and every cached account.
 func (a *accountBackend) Close() {
 	a.mu.Lock()

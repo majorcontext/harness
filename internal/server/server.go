@@ -63,6 +63,8 @@ type Runtime[S Session] interface {
 	Commands(ctx context.Context) (protocol.Commands, error)
 	SetMCPServers(ctx context.Context, servers map[string]config.MCPServerSpec) ([]protocol.MCPServerStatus, error)
 	SetPlugins(ctx context.Context, plugins []config.PluginSpec) ([]protocol.Plugin, error)
+	SetProviders(ctx context.Context, providers map[string]config.Provider) ([]protocol.ProviderStatus, error)
+	ReconnectProvider(ctx context.Context, name string) error
 }
 
 // Processes runs the processes of the box.
@@ -133,6 +135,14 @@ func (h *handler[S]) handlers() map[string]http.HandlerFunc {
 		"listCommands":  h.serve(h.commands),
 		"setMCPServers": h.serve(h.setMCPServers),
 		"setPlugins":    h.serve(h.setPlugins),
+		"setProviders":  h.serve(h.setProviders),
+		"reconnectProvider": h.serve(func(w http.ResponseWriter, r *http.Request) error {
+			if err := h.rt.ReconnectProvider(r.Context(), r.PathValue("name")); err != nil {
+				return err
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return nil
+		}),
 		"health": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 			reply(w, http.StatusOK, h.health)
 			return nil
@@ -183,6 +193,22 @@ func (h *handler[S]) setPlugins(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	reply(w, http.StatusOK, protocol.Plugins{Plugins: plugins})
+	return nil
+}
+
+func (h *handler[S]) setProviders(w http.ResponseWriter, r *http.Request) error {
+	var req protocol.ProviderSet
+	if err := decode(w, r, &req, maxBody); err != nil {
+		return err
+	}
+	if req.Providers == nil {
+		return fmt.Errorf("%w: providers is required", errInvalid)
+	}
+	providers, err := h.rt.SetProviders(r.Context(), req.Providers)
+	if err != nil {
+		return err
+	}
+	reply(w, http.StatusOK, protocol.Providers{Providers: providers})
 	return nil
 }
 

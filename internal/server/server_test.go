@@ -232,6 +232,10 @@ func (stub) SetMCPServers(context.Context, map[string]config.MCPServerSpec) ([]p
 func (stub) SetPlugins(context.Context, []config.PluginSpec) ([]protocol.Plugin, error) {
 	return nil, nil
 }
+func (stub) SetProviders(context.Context, map[string]config.Provider) ([]protocol.ProviderStatus, error) {
+	return nil, nil
+}
+func (stub) ReconnectProvider(context.Context, string) error     { return nil }
 func (s stub) Withdraw(context.Context, string) error            { return nil }
 func (stub) Snapshot() protocol.Session                          { return protocol.Session{} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
