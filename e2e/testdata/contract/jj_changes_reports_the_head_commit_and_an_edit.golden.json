@@ -1,0 +1,35 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes.uncommitted": {
+      "status": 200,
+      "body": {
+        "branch": "",
+        "dir": "\u003cworkdir\u003e",
+        "engine": "jj",
+        "files": [
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 1,
+            "large": false,
+            "path": "a.txt",
+            "status": "modified"
+          }
+        ],
+        "head_commit": "af1f81c2a6357588efb7f6c69e30307dd1e7b758",
+        "head_rev": "change:qpvuntsmwlqtpsluzzsnyyzlmlwvmlnu",
+        "patch": "diff --git a/a.txt b/a.txt\nindex 814f4a4..293712b 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO!\n",
+        "scope": "uncommitted",
+        "truncated": false
+      }
+    },
+    "workspace_changes_wire.uncommitted": {
+      "status": 200,
+      "body": {
+        "patch_is_html_escaped": false
+      }
+    }
+  }
+}

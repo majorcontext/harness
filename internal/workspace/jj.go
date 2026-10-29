@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -62,12 +63,17 @@ func (r jjRepo) newestOp(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	best, bestEnd := "", int64(-1)
+	var ids []string
 	for _, h := range heads {
-		id := h.Name()
-		if len(heads) == 1 {
-			return id, nil
+		if isOpID(h.Name()) {
+			ids = append(ids, h.Name())
 		}
+	}
+	if len(ids) == 1 {
+		return ids[0], nil
+	}
+	best, bestEnd := "", int64(-1)
+	for _, id := range ids {
 		out, err := r.run(ctx, id, "op", "log", "--limit", "1", "--no-graph", "-T", `time.end().format("%s")`)
 		if err != nil {
 			return "", err
@@ -84,6 +90,17 @@ func (r jjRepo) newestOp(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("jj repository %s has no operation head", r.repo)
 	}
 	return best, nil
+}
+
+// isOpID reports whether name is an operation ID, a hexadecimal text. Other
+// entries of the heads directory, such as .DS_Store, are not operation heads.
+func isOpID(name string) bool {
+	for _, c := range name {
+		if c < '0' || c > '9' && c < 'a' || c > 'f' {
+			return false
+		}
+	}
+	return name != ""
 }
 
 // run runs jj at operation op. --ignore-working-copy never snapshots, and
@@ -152,7 +169,7 @@ func (r jjRepo) gitDir() (string, error) {
 
 // seedTree returns the tree-ish that the diff runs against: base, or the
 // tree of the one parent of @, the empty tree for the root commit, or the
-// automatic merge of the trees of several parents. A merge writes its trees
+// automatic merge of the trees of two parents. A merge writes its trees
 // into the private object directory of env.
 func (r jjRepo) seedTree(ctx context.Context, env []string, base string) (string, error) {
 	if base != "" {
@@ -168,42 +185,34 @@ func (r jjRepo) seedTree(ctx context.Context, env []string, base string) (string
 	if len(parents) == 1 {
 		return parents[0].commit, nil
 	}
-	ids := make([]string, len(parents))
-	for i, p := range parents {
-		ids[i] = p.commit
+	if len(parents) > 2 {
+		slog.Warn("workspace changes: @ has more than two parents", "parents", len(parents))
+		return "", fmt.Errorf("@ has %d parents, and the automatic merge of more than two is not supported", len(parents))
 	}
-	return r.mergeTrees(ctx, env, ids)
+	return r.mergeTrees(ctx, env, parents[0].commit, parents[1].commit)
 }
 
-// mergeTrees folds the commits pairwise into one tree. The merge base is the
-// common ancestor of all of them, or the empty tree when they share none.
-func (r jjRepo) mergeTrees(ctx context.Context, env, ids []string) (string, error) {
-	mb, err := emptyTree(ctx, r.root, env)
+// mergeTrees merges two commits as jj does: git computes the merge bases,
+// there is no rename detection, and no attribute source can select a merge
+// driver. A conflict exits 1 and still prints the tree, with the markers.
+func (r jjRepo) mergeTrees(ctx context.Context, env []string, a, b string) (string, error) {
+	empty, err := emptyTree(ctx, r.root, env)
 	if err != nil {
 		return "", err
 	}
-	if out, err := gitOut(ctx, r.root, env, append([]string{"merge-base", "--octopus"}, ids...)...); err == nil {
-		mb = strings.TrimSpace(out)
-	} else if !isGitWorkTreeErr(err) {
-		return "", err
+	cmd := gitCmd(ctx, r.root, env, "--attr-source="+empty, "-c", "core.attributesFile="+os.DevNull,
+		"merge-tree", "--write-tree", "--allow-unrelated-histories", "-X", "no-renames", a, b)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err = cmd.Run()
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); err != nil && (!ok || exitErr.ExitCode() != 1) {
+		return "", fmt.Errorf("git merge-tree: %w", err)
 	}
-	acc := ids[0]
-	for _, id := range ids[1:] {
-		// A conflict exits 1 and still prints the tree, with the markers.
-		cmd := gitCmd(ctx, r.root, env, "merge-tree", "--write-tree", "--merge-base="+mb, acc, id)
-		var stdout bytes.Buffer
-		cmd.Stdout = &stdout
-		err := cmd.Run()
-		if exitErr, ok := errors.AsType[*exec.ExitError](err); err != nil && (!ok || exitErr.ExitCode() != 1) {
-			return "", fmt.Errorf("git merge-tree: %w", err)
-		}
-		tree, _, _ := strings.Cut(stdout.String(), "\n")
-		if len(tree) < 40 {
-			return "", fmt.Errorf("git merge-tree: no tree for the parents of @: %v", err)
-		}
-		acc = tree
+	tree, _, _ := strings.Cut(stdout.String(), "\n")
+	if len(tree) < 40 {
+		return "", fmt.Errorf("git merge-tree: no tree for the parents of @: %v", err)
 	}
-	return acc, nil
+	return tree, nil
 }
 
 // conflicts lists the files that @ records as conflicts. It lists the files
@@ -223,6 +232,13 @@ const changesCommandTimeout = 10 * time.Second
 // or nil when it is unset. Any value but an array of strings is an error.
 func (r jjRepo) changesCommand(ctx context.Context) ([]string, error) {
 	const key = "harness.changes-command"
+	// jj moves a legacy repository config when it reads it, which is a write.
+	if _, err := os.Stat(filepath.Join(r.repo, "config-id")); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	lines, err := r.lines(ctx, "config", "list", "--repo", key, "-T", `name ++ " " ++ json(value) ++ "\n"`)
 	if err != nil || len(lines) == 0 {
 		return nil, err
@@ -246,24 +262,30 @@ func (r jjRepo) runChangesCommand(ctx context.Context, argv []string, head Head,
 	if commit == "" {
 		scope, commit = protocol.ScopeUncommitted, head.Commit
 	}
-	ctx, cancel := context.WithTimeout(ctx, changesCommandTimeout)
+	runCtx, cancel := context.WithTimeout(ctx, changesCommandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = r.root
 	cmd.Env = append(os.Environ(), "HARNESS_CHANGES_SCOPE="+scope, "HARNESS_CHANGES_BASE="+commit,
 		"HARNESS_CHANGES_PATCH_BYTES="+strconv.Itoa(patchCap))
 	cmd.WaitDelay = waitDelay
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	reason := ""
+	data, err := runCapped(cmd, metadataCap+patchCap)
+	if errors.Is(err, errMetadataTooLarge) {
+		return nil, "", false, err
+	}
 	var out protocol.WorkspaceChanges
-	if err := cmd.Run(); err != nil {
+	reason := ""
+	switch {
+	case err != nil && ctx.Err() != nil:
+		reason = "request ended"
+	case err != nil && runCtx.Err() != nil:
+		reason = "run over " + changesCommandTimeout.String()
+	case err != nil:
 		reason = "exit or start failure: " + err.Error()
-		if ctx.Err() != nil {
-			reason = "run over " + changesCommandTimeout.String()
-		}
-	} else if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+	case json.Unmarshal(data, &out) != nil:
 		reason = "stdout is not a WorkspaceChanges document"
+	case len(out.Patch) > patchCap:
+		reason = "patch over the cap"
 	}
 	if reason != "" {
 		slog.Warn("workspace changes command failed", "command", argv[0], "reason", reason)
@@ -273,4 +295,26 @@ func (r jjRepo) runChangesCommand(ctx context.Context, argv []string, head Head,
 		out.Files = []protocol.ChangedFile{}
 	}
 	return out.Files, out.Patch, out.Truncated, nil
+}
+
+// runCapped runs cmd and returns its stdout. More than maxBytes of stdout
+// kills it and returns errMetadataTooLarge.
+func runCapped(cmd *exec.Cmd, maxBytes int) ([]byte, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, int64(maxBytes)+1))
+	if readErr != nil || len(data) > maxBytes {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if readErr != nil {
+			return nil, readErr
+		}
+		return nil, errMetadataTooLarge
+	}
+	return data, cmd.Wait()
 }

@@ -36,6 +36,11 @@ type runGit struct {
 	args []string
 }
 
+// runJJ runs jj in the work dir with a fixed time, seed, and user, so a commit
+// has the same id in every run. The row skips when jj is not on PATH, and
+// fails there under CI.
+type runJJ struct{ args []string }
+
 // removeFile removes a file of the work dir.
 type removeFile struct{ path string }
 
@@ -65,6 +70,22 @@ func (a runGit) run(t *testing.T, r *run) {
 		t.Fatal(err)
 	}
 	gitIn(t, dir, a.args...)
+}
+func (a runJJ) run(t *testing.T, r *run) {
+	if _, err := exec.LookPath("jj"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("jj is not on PATH, and CI needs it")
+		}
+		t.Skip("jj is not on PATH")
+	}
+	full := append([]string{"--no-pager", "--color=never", "--quiet", "--config=user.name=contract", "--config=user.email=contract@example.com"}, a.args...)
+	cmd := exec.CommandContext(t.Context(), "jj", full...)
+	cmd.Dir = r.drv.Workdir()
+	cmd.Env = append(os.Environ(), "JJ_TIMESTAMP="+gitDate, "JJ_OP_TIMESTAMP="+gitDate, "JJ_RANDOMNESS_SEED=1",
+		"JJ_OP_HOSTNAME=contract", "JJ_OP_USERNAME=contract")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("jj %s: %v\n%s", strings.Join(a.args, " "), err, out)
+	}
 }
 func (a removeFile) run(t *testing.T, r *run) {
 	if err := os.Remove(filepath.Join(r.drv.Workdir(), a.path)); err != nil {
@@ -183,6 +204,16 @@ func TestContractWorkspace(t *testing.T) {
 			actions: []action{
 				writeFile{path: "first.txt", body: "1\n"},
 				runGit{args: git("init", "-q", "-b", "main")},
+				workspaceChanges{scope: "uncommitted"},
+			},
+		},
+		{
+			name: "jj_changes_reports_the_head_commit_and_an_edit",
+			actions: []action{
+				runJJ{args: []string{"git", "init"}},
+				writeFile{path: "a.txt", body: "one\ntwo\n"},
+				runJJ{args: []string{"commit", "-m", "base"}},
+				writeFile{path: "a.txt", body: "one\nTWO!\n"},
 				workspaceChanges{scope: "uncommitted"},
 			},
 		},

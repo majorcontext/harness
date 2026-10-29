@@ -255,14 +255,15 @@ func headCommit(t *testing.T, fx Fixture) {
 			t.Errorf("%s: head_rev = %q, head_commit = %q; want both set or both empty", name, c.HeadRev, c.HeadCommit)
 		}
 	}
-	check("head", fx.New(t))
+	dir := fx.New(t)
+	check("head", dir)
 	if fx.Unborn != nil {
 		check("unborn head", fx.Unborn(t))
 	}
 	if fx.Merge != nil {
 		check("head of several parents", fx.Merge(t))
 	}
-	if c := mustRead(t, fx, fx.New(t), protocol.ScopeUncommitted); c.HeadCommit == "" {
+	if c := mustRead(t, fx, dir, protocol.ScopeUncommitted); c.HeadCommit == "" {
 		t.Error("head_commit is empty for a head with a commit")
 	}
 }

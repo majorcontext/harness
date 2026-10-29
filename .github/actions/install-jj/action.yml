@@ -1,0 +1,19 @@
+name: Install jj
+description: Installs the pinned jj release for linux x86_64 and checks its SHA-256.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # The one place for the jj version and the SHA-256 of its archive,
+        # from the release page.
+        JJ_VERSION: 0.45.1
+        JJ_SHA256: f35438350b5d61963aac5dd74ede510b31d6b9690769d1a6268cf058cc825f72
+      run: |
+        set -euo pipefail
+        archive="jj-v${JJ_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+        curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/$archive"
+        echo "${JJ_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+        mkdir -p "$RUNNER_TEMP/jj-bin"
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/jj-bin" ./jj
+        echo "$RUNNER_TEMP/jj-bin" >> "$GITHUB_PATH"

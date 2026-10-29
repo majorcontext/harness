@@ -234,7 +234,7 @@ func privateIndex(ctx context.Context, src diffSource, head, dir string) (env, d
 	diffEnv = append(slices.Clone(env), filterEnv...)
 	switch {
 	case src.seed != nil:
-		if treeish, err = src.seed(ctx, env); err != nil {
+		if treeish, err = src.seed(ctx, diffEnv); err != nil {
 			return nil, nil, "", err
 		}
 		if _, err := gitOut(ctx, repoRoot, env, "-c", "core.splitIndex=false", "read-tree", treeish); err != nil {

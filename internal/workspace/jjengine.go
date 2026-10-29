@@ -20,7 +20,8 @@ type JJEngine struct{}
 func (JJEngine) Name() string { return engineJJ }
 
 // Open finds the nearest directory from dir up to, and not including,
-// ceiling that holds a .jj directory. Without jj on PATH it finds none.
+// ceiling that holds a .jj directory, and stops at a git work tree with no
+// .jj. Without jj on PATH it finds none.
 func (JJEngine) Open(ctx context.Context, dir, ceiling string) (Repo, bool, error) {
 	for cur := dir; cur != ceiling; cur = filepath.Dir(cur) {
 		if info, err := os.Stat(filepath.Join(cur, ".jj")); err == nil && info.IsDir() {
@@ -29,6 +30,11 @@ func (JJEngine) Open(ctx context.Context, dir, ceiling string) (Repo, bool, erro
 			}
 			r, err := openJJ(ctx, cur)
 			return r, err == nil, err
+		}
+		// A .git beside a .jj is colocated; one with no .jj is a nested
+		// repository that the git engine answers.
+		if _, err := os.Lstat(filepath.Join(cur, ".git")); err == nil {
+			return nil, false, nil
 		}
 		if filepath.Dir(cur) == cur {
 			break
