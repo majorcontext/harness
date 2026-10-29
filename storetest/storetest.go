@@ -281,9 +281,17 @@ func appendMany(t *testing.T, st store, id string, from, to int) {
 // checkManyReads checks reads at power-of-two offsets and the ends of the log.
 func checkManyReads(t *testing.T, st store, id string, count int) {
 	t.Helper()
-	afters := []int{0, 1, count - 1, count, count + 1}
-	for boundary := 1; boundary <= count; boundary *= 2 {
-		afters = append(afters, boundary-1, boundary, boundary+1)
+	afters := []int{0, 1, 2, 3, count - 1, count, count + 1}
+	for boundary := 4; boundary <= count; {
+		for _, after := range []int{boundary - 1, boundary, boundary + 1} {
+			if !slices.Contains(afters, after) {
+				afters = append(afters, after)
+			}
+		}
+		if boundary > count/2 {
+			break
+		}
+		boundary *= 2
 	}
 	for _, after := range afters {
 		if after < 0 {
