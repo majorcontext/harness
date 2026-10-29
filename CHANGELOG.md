@@ -119,6 +119,8 @@ First tagged release.
 
 ### Fixed
 
+- **Claude Code CLI login** (`internal/backend/claudecode`, `docs/architecture.md`) — the CLI now runs with the harness environment minus `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, in every run, the login probe, and `turn.Ask`. Before, a key in the harness environment made the CLI bill that key instead of its own login.
+
 - **Cached prompt tokens of an OpenAI-compatible model** (`internal/provider/openaicompat`) — the usage chunk of a chat completions stream carries `prompt_tokens_details.cached_tokens`. The adapter now reports it as `cache_read_tokens`, reports `prompt_tokens` minus the cached part as `input_tokens`, and fills `provider_cached_tokens` of `turn_metrics`. A model behind such a gateway (Fireworks, Gemini through Bifrost) reported 0 cache reads before.
 
 - **MCP call after a select in the same run** (`internal/tool/mcpsrc`) — `mcp(action="call")` of a tool that its server lists now runs it when the tools of the model call lack it. Before, a Claude Code session whose `mcp(action="select")` read a new tool list got `no such tool available` from a `call` of that tool later in the same run, and so did a harness-loop model call that made both calls.

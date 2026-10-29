@@ -46,6 +46,25 @@ func (a claudeToolSearch) run(t *testing.T, r *run) {
 		"tool_search_offered": slices.Contains(strings.Split(tools, ","), "ToolSearch"), "enable_tool_search": enable}})
 }
 
+// claudeNoAPIKeyEnv records whether the last CLI spawn saw ANTHROPIC_API_KEY or
+// ANTHROPIC_AUTH_TOKEN.
+type claudeNoAPIKeyEnv struct{ as string }
+
+func (a claudeNoAPIKeyEnv) run(t *testing.T, r *run) {
+	raw, err := os.ReadFile(claudeDriverOf(t, r).envLog)
+	if err != nil {
+		t.Fatalf("read env log: %v", err)
+	}
+	var env []string
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode env log: %v", err)
+	}
+	seen := slices.ContainsFunc(env, func(e string) bool {
+		return strings.HasPrefix(e, "ANTHROPIC_API_KEY=") || strings.HasPrefix(e, "ANTHROPIC_AUTH_TOKEN=")
+	})
+	r.record(t, "cli_env_credentials", a.as, callResult{Status: http.StatusOK, Body: map[string]any{"cli_saw_anthropic_credentials": seen}})
+}
+
 func TestContractClaudeCodeToolSearch(t *testing.T) {
 	loading := func(mode string) func(*testing.T, host, string) driver {
 		var extra map[string]any
@@ -55,7 +74,9 @@ func TestContractClaudeCodeToolSearch(t *testing.T) {
 		return claudeLane{mode: "normal", extra: extra}.newDriver
 	}
 	turn := withActions(claudeOneTurn, claudeToolSearch{as: "a"})
+	withCredentials := claudeLane{mode: "normal", procEnv: map[string]string{"ANTHROPIC_API_KEY": "e2e-key", "ANTHROPIC_AUTH_TOKEN": "e2e-token"}}.newDriver
 	runScenarios(t, []scenario{
+		{name: "claudecode_cli_runs_without_the_anthropic_credential_variables", driver: withCredentials, actions: withActions(claudeOneTurn, claudeNoAPIKeyEnv{as: "a"})},
 		{
 			name:    "claudecode_tool_search_call_and_its_result_do_not_fail_the_turn",
 			driver:  claudeLane{mode: "tool_search"}.newDriver,
