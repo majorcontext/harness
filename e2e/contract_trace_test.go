@@ -130,9 +130,10 @@ func TestContractTraceRows(t *testing.T) {
 		run  func(t *testing.T, h host)
 	}{
 		{"a_turn_with_a_tool_call_records_agent_model_and_tool_spans_that_the_request_and_the_log_name", traceRowSpans},
-		{"an_input_with_a_traceparent_links_its_turn_and_a_malformed_one_is_refused", traceRowLink},
-		{"a_parent_turn_that_a_child_report_starts_links_to_the_turn_of_the_child", traceRowChildReport},
-		{"a_goal_continuation_turn_links_to_the_turn_that_the_judge_evaluated", traceRowGoalContinuation},
+		{"an_input_with_a_traceparent_makes_its_turn_a_child_of_that_span_and_a_malformed_one_is_refused", traceRowLink},
+		{"a_steer_input_with_a_traceparent_adds_a_link_to_the_turn_that_continues_another_trace", traceRowSteerLink},
+		{"a_parent_turn_that_a_child_report_starts_is_a_child_of_the_turn_of_the_child", traceRowChildReport},
+		{"a_goal_continuation_turn_is_a_child_of_the_turn_that_the_judge_evaluated", traceRowGoalContinuation},
 		{"request_headers_supply_the_trace_context_of_an_input_unless_the_body_has_one_and_an_invalid_header_is_ignored", traceRowInputHeaders},
 		{"request_headers_link_the_summary_call_of_a_compaction", traceRowCompactHeaders},
 		{"message_content_is_off_by_default_and_recorded_as_the_details_event_when_on", traceRowContent},
@@ -204,8 +205,36 @@ func traceRowLink(t *testing.T, h host) {
 	d.expect(t, http.StatusOK, http.MethodPost, path, traceInput("in1", "hi", map[string]any{"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b8-01", "tracestate": "vendor=1"}), nil)
 	d.WaitIdle(t, id)
 	turn := spansNamed(spans(2), "invoke_agent")
-	if len(turn) != 1 || !slices.Equal(turn[0].Links, []string{"4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"}) || turn[0].TraceID == "4bf92f3577b34da6a3ce929d0e0e4736" {
-		t.Errorf("turn spans = %+v, want one new trace linked to the traceparent of the input", turn)
+	if len(turn) != 1 || spanParent(turn[0]) != bodyLink || len(turn[0].Links) != 0 {
+		t.Errorf("turn spans = %+v, want one child of the span of the traceparent of the input, with no link", turn)
+	}
+}
+
+// spanParent is the "traceID-spanID" of the parent of s, or "" for a root.
+func spanParent(s harnesstest.Span) string {
+	if s.ParentSpanID == "" {
+		return ""
+	}
+	return s.TraceID + "-" + s.ParentSpanID
+}
+
+func traceRowSteerLink(t *testing.T, h host) {
+	d, fake, spans := startTraced(t, h, false,
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("start"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+			{ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "echo hi"}}}}},
+		replyText("done"))
+	id := d.Create(t)
+	path := "/sessions/" + id + "/inputs"
+	d.expect(t, http.StatusCreated, http.MethodPost, path, traceInput("in1", "start", map[string]any{"traceparent": rowTraceparent}), nil)
+	if !fake.AwaitRequests(1, waitBound) {
+		t.Fatal("the turn sent no model request")
+	}
+	d.expect(t, http.StatusCreated, http.MethodPost, path, traceInput("in2", "more", map[string]any{"traceparent": headerTraceparent}), nil)
+	fake.Release("call")
+	d.WaitIdle(t, id)
+	turn := spansNamed(spans(4), "invoke_agent")
+	if len(turn) != 1 || spanParent(turn[0]) != bodyLink || !slices.Equal(turn[0].Links, []string{headerLink}) {
+		t.Errorf("turn spans = %+v, want one child of the first input that links to the steer input", turn)
 	}
 }
 
@@ -271,8 +300,21 @@ func traceRowChildReport(t *testing.T, h host) {
 	if len(child) != 1 || len(parents) != 2 {
 		t.Fatalf("turn spans = %d child, %d parent, want 1, 2", len(child), len(parents))
 	}
-	if want := []string{child[0].TraceID + "-" + child[0].SpanID}; !slices.Equal(parents[1].Links, want) && !slices.Equal(parents[0].Links, want) {
-		t.Errorf("parent turn links = %v, %v, want one turn linked to the turn of the child %v", parents[0].Links, parents[1].Links, want)
+	want := child[0].TraceID + "-" + child[0].SpanID
+	var reported []harnesstest.Span
+	for _, p := range parents {
+		if spanParent(p) == want {
+			reported = append(reported, p)
+		}
+		if len(p.Links) != 0 {
+			t.Errorf("parent turn links = %v, want none", p.Links)
+		}
+	}
+	if len(reported) != 1 {
+		t.Errorf("parent turns = %+v, want one that is a child of the turn of the child %s", parents, want)
+	}
+	if tool := spansNamed(spans(8), "execute_tool task"); len(tool) != 1 || spanParent(child[0]) != tool[0].TraceID+"-"+tool[0].SpanID {
+		t.Errorf("child turn parent = %q, want the task call span %+v", spanParent(child[0]), tool)
 	}
 }
 
@@ -287,11 +329,11 @@ func traceRowGoalContinuation(t *testing.T, h host) {
 		t.Fatalf("turn spans = %d, want 2", len(turns))
 	}
 	first, second := turns[0], turns[1]
-	if len(first.Links) != 0 {
+	if spanParent(first) != "" {
 		first, second = second, first
 	}
-	if want := []string{first.TraceID + "-" + first.SpanID}; len(first.Links) != 0 || !slices.Equal(second.Links, want) {
-		t.Errorf("links = %v, %v, want the first turn unlinked and the second linked to %v", first.Links, second.Links, want)
+	if want := first.TraceID + "-" + first.SpanID; spanParent(first) != "" || spanParent(second) != want || len(first.Links)+len(second.Links) != 0 {
+		t.Errorf("parents = %q, %q, links = %v, %v, want the first turn a root and the second a child of %s, with no link", spanParent(first), spanParent(second), first.Links, second.Links, want)
 	}
 }
 
@@ -314,13 +356,13 @@ func traceRowInputHeaders(t *testing.T, h host) {
 		name   string
 		body   map[string]any
 		header http.Header
-		links  []string
+		parent string
 	}{
-		{"header_only", nil, http.Header{"Traceparent": {headerTraceparent}, "Tracestate": {"vendor=1"}}, []string{headerLink}},
-		{"body_wins", map[string]any{"traceparent": rowTraceparent}, http.Header{"Traceparent": {headerTraceparent}}, []string{bodyLink}},
-		{"long_tracestate", nil, http.Header{"Traceparent": {headerTraceparent}, "Tracestate": {"v=" + strings.Repeat("a", 511)}}, []string{headerLink}},
-		{"invalid_header", nil, http.Header{"Traceparent": {"00-nothex-b7ad6b7169203331-01"}}, nil},
-		{"state_without_head", nil, http.Header{"Tracestate": {"vendor=1"}}, nil},
+		{"header_only", nil, http.Header{"Traceparent": {headerTraceparent}, "Tracestate": {"vendor=1"}}, headerLink},
+		{"body_wins", map[string]any{"traceparent": rowTraceparent}, http.Header{"Traceparent": {headerTraceparent}}, bodyLink},
+		{"long_tracestate", nil, http.Header{"Traceparent": {headerTraceparent}, "Tracestate": {"v=" + strings.Repeat("a", 511)}}, headerLink},
+		{"invalid_header", nil, http.Header{"Traceparent": {"00-nothex-b7ad6b7169203331-01"}}, ""},
+		{"state_without_head", nil, http.Header{"Tracestate": {"vendor=1"}}, ""},
 	} {
 		d, _, spans := startTraced(t, h, false, replyText("ok"))
 		id := d.Create(t)
@@ -329,8 +371,8 @@ func traceRowInputHeaders(t *testing.T, h host) {
 		}
 		d.WaitIdle(t, id)
 		turn := spansNamed(spans(2), "invoke_agent")
-		if len(turn) != 1 || !slices.Equal(turn[0].Links, c.links) {
-			t.Errorf("%s: turn spans = %+v, want links %v", c.name, turn, c.links)
+		if len(turn) != 1 || spanParent(turn[0]) != c.parent || len(turn[0].Links) != 0 {
+			t.Errorf("%s: turn spans = %+v, want parent %q and no link", c.name, turn, c.parent)
 		}
 	}
 }
@@ -390,8 +432,8 @@ func TestContractTraceClaudeCodeCompactLinks(t *testing.T) {
 		turn = append(turn, spanOfSDK(sp))
 	}
 	turn = spansNamed(turn, "invoke_agent")
-	if len(turn) != 1 || !slices.Equal(turn[0].Links, []string{headerLink}) {
-		t.Errorf("turn spans = %+v, want one linked to the span context of the compaction", turn)
+	if len(turn) != 1 || spanParent(turn[0]) != headerLink || len(turn[0].Links) != 0 {
+		t.Errorf("turn spans = %+v, want one that is a child of the span context of the compaction", turn)
 	}
 }
 

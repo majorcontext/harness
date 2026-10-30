@@ -87,7 +87,7 @@ func reportInput(rep *Report, text string) protocol.InputAdmitted {
 }
 
 // Caused sets the span context of the child turn that produced the report,
-// so the turn of the parent that reads it links to that turn.
+// so the turn of the parent that reads it follows that turn.
 func (r *Report) Caused(sc trace.SpanContext) { r.cause = sc }
 
 // Report is the outcome of a child as its parent reads it.
