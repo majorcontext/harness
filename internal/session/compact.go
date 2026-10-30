@@ -24,9 +24,9 @@ const compactCommand = "/compact"
 
 // Compact folds the turns before the newest keep, or Config.KeepTurns when
 // keep is 0, into a summary, or runs compactCommand as a turn of a backend
-// that owns its context. The compaction links to the valid span context in
-// ctx: the input of the command holds it, and the summary call of a
-// compaction that the actor runs links to it. It returns when the compaction
+// that owns its context. The compaction uses the valid span context in ctx:
+// the input of the command holds it, so its turn follows it, and the summary
+// call of a compaction that the actor runs links to it. It returns when the compaction
 // ends, with the compaction that it appended, or one with only ByBackend for
 // a backend that owns its context. It fails with ErrTurnMismatch when
 // expectTurn is not empty and is not the newest ended turn. When too few

@@ -11,9 +11,11 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// startSpan starts the span of turn id. It links to the trace of each input
-// that started the turn, so a turn that runs after a handoff still joins the
-// request that sent its input.
+// startSpan starts the span of turn id. A turn that starts from one input
+// with a trace context continues that trace as a child of it. A turn that
+// starts from none or from several is a root that links to the trace of each
+// such input, so a turn that runs after a handoff still joins the request that
+// sent its input.
 func (a *Actor) startSpan(id string, inputIDs []string) (context.Context, trace.Span) {
 	var links []trace.Link
 	for _, in := range inputIDs {
@@ -23,8 +25,13 @@ func (a *Actor) startSpan(id string, inputIDs []string) (context.Context, trace.
 			}
 		}
 	}
+	base := a.cfg.Base
+	if len(links) == 1 {
+		base = trace.ContextWithRemoteSpanContext(base, links[0].SpanContext)
+		links = nil
+	}
 	agent := cmp.Or(a.state.Agent(), "harness")
-	return a.cfg.Limits.Trace.Start(a.cfg.Base, "invoke_agent "+agent, trace.WithSpanKind(trace.SpanKindInternal), trace.WithLinks(links...),
+	return a.cfg.Limits.Trace.Start(base, "invoke_agent "+agent, trace.WithSpanKind(trace.SpanKindInternal), trace.WithLinks(links...),
 		trace.WithAttributes(attribute.String("gen_ai.operation.name", "invoke_agent"), attribute.String("gen_ai.agent.name", agent),
 			attribute.String("gen_ai.conversation.id", a.cfg.ID), attribute.String("gen_ai.request.model", tracing.ModelID(a.state.Model())),
 			attribute.String("harness.turn_id", id), attribute.StringSlice("harness.input_ids", inputIDs)))
@@ -44,7 +51,7 @@ func (a *Actor) endedSpan() trace.SpanContext {
 	return trace.SpanContext{}
 }
 
-// causedBy sets the trace context of in to sc, which links the turn of in to its cause.
+// causedBy sets the trace context of in to sc, which ties the turn of in to its cause.
 func causedBy(in protocol.InputAdmitted, sc trace.SpanContext) protocol.InputAdmitted {
 	in.Traceparent, in.Tracestate = tracing.Format(sc)
 	return in
