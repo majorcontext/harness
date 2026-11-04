@@ -13,6 +13,20 @@ import (
 
 const maxCheckpointBytes = 128 << 20
 
+type checkpointWriter struct {
+	writer io.Writer
+	count  int
+}
+
+func (w *checkpointWriter) Write(p []byte) (int, error) {
+	if len(p) > maxCheckpointBytes-w.count {
+		return 0, errors.New("checkpoint too large")
+	}
+	n, err := w.writer.Write(p)
+	w.count += n
+	return n, err
+}
+
 type checkpointEnvelope struct {
 	Version  string            `json:"version"`
 	Data     []byte            `json:"data"`
@@ -51,7 +65,7 @@ func (l *LightState) Checkpoint() ([]byte, error) {
 	}
 	var packed bytes.Buffer
 	z := zlib.NewWriter(&packed)
-	if err := gob.NewEncoder(z).Encode(l.snapshot()); err != nil {
+	if err := gob.NewEncoder(&checkpointWriter{writer: z}).Encode(l.snapshot()); err != nil {
 		return nil, err
 	}
 	if err := z.Close(); err != nil {

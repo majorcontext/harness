@@ -64,7 +64,7 @@ func (a checkpointPageFallback) run(t *testing.T, r *run) {
 	if _, err := harness.OpenView(ctx, initial, id); err != nil {
 		t.Fatal(err)
 	}
-	if !testHasVCS() {
+	if !testCleanVCS() {
 		return
 	}
 	seq, data, err := initial.LoadCheckpoint(ctx, id)

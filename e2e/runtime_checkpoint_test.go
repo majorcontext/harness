@@ -19,6 +19,7 @@ import (
 
 var checkpointRows = map[string]runtimeRow{
 	"checkpoint_uncacheable_build_replays_without_cache_calls":         sameAsServe(),
+	"oversized_uncompressed_checkpoint_is_not_saved":                   sameAsServe(),
 	"oversized_encoded_checkpoint_falls_back_to_replay":                sameAsServe(),
 	"checkpoint_page_corrupt_source_replays_and_read_errors_propagate": sameAsServe(),
 	"stopped_view_checkpoint_preserves_reads":                          sameAsServe(),
@@ -131,6 +132,7 @@ type checkpointUncacheable struct{ as string }
 
 func (a checkpointUncacheable) run(t *testing.T, r *run) {
 	t.Helper()
+	checkCheckpointMode(t)
 	base := plainStore{store.NewDiskStore(r.drv.storeDir())}
 	checkCheckpointBypass(t, base, r.id(t, a.as))
 }
@@ -155,6 +157,7 @@ func TestContractStoppedViewCheckpoint(t *testing.T) {
 
 func (a checkpointView) run(t *testing.T, r *run) {
 	t.Helper()
+	checkCheckpointMode(t)
 	ctx := t.Context()
 	checkMemCheckpointOrder(t)
 	base := plainStore{store.NewDiskStore(r.drv.(*runtimeDriver).store)}
@@ -168,7 +171,7 @@ func (a checkpointView) run(t *testing.T, r *run) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !testHasVCS() {
+	if !testCleanVCS() {
 		checkViewParity(t, gotInitial, want)
 		checkCheckpointEmptyValues(t, base, id)
 		return
@@ -183,7 +186,7 @@ func (a checkpointView) run(t *testing.T, r *run) {
 	}
 	checkCheckpointBuildIdentity(t, base, id, seq, data)
 	checkCheckpointEmptyValues(t, base, id)
-	if !testHasVCS() {
+	if !testCleanVCS() {
 		return
 	}
 	got, err := harness.OpenView(ctx, st, id)
@@ -404,7 +407,7 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		}
 		prefixPages := cacheViewReads(t, wantPrefix, captures[seq])
 		checkCachedViewParity(t, first, wantPrefix, prefixPages, firstClock, prefixClock)
-		if !testHasVCS() {
+		if !testCleanVCS() {
 			if prefix.loads != 0 || prefix.saves != 0 {
 				t.Fatalf("prefix %d: loads=%d saves=%d", seq, prefix.loads, prefix.saves)
 			}
@@ -425,7 +428,7 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		if err != nil {
 			t.Fatalf("OpenView checkpoint %d: %v", seq, err)
 		}
-		if testHasVCS() && tracking.fromStart {
+		if testCleanVCS() && tracking.fromStart {
 			t.Fatalf("checkpoint %d replayed the prefix", seq)
 		}
 		checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)

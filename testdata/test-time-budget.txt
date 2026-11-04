@@ -44,6 +44,8 @@ test internal/backend/claudecode TestClaudeCodeRoutesTheSelectedAccountThroughTh
 test e2e TestContractRuntimeClaudeCodeStateChunks 60
 # The search edge row checks each log prefix (20.90 s on CI).
 test e2e TestContractFileToolsEdges/runtime/file_tools_search_edges 32
+# The race detector processes a compressible state over the 128 MiB checkpoint limit (15.9 s locally).
+test e2e TestContractOversizedCheckpoint/runtime/oversized_uncompressed_checkpoint_is_not_saved 24
 # Rows that build a large transcript for a goal evaluator (7-12 s on CI).
 test e2e TestContractGoalEvaluatorTranscript 18
 # Rows that wait for a real hook timeout (6 s on CI).

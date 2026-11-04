@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"os"
 	"runtime/debug"
 	"testing"
 
@@ -25,6 +26,24 @@ func testCleanVCS() bool {
 	return revision != "" && modified == "false"
 }
 
+func checkCheckpointMode(t *testing.T) {
+	t.Helper()
+	mode := os.Getenv("HARNESS_E2E_CHECKPOINT")
+	switch mode {
+	case "":
+	case "restore":
+		if !testCleanVCS() {
+			t.Fatal("checkpoint restore expected a clean VCS build")
+		}
+	case "bypass":
+		if testCleanVCS() {
+			t.Fatal("checkpoint bypass expected a dirty or unstamped build")
+		}
+	default:
+		t.Fatalf("invalid HARNESS_E2E_CHECKPOINT mode %q", mode)
+	}
+}
+
 func checkCheckpointBypass(t *testing.T, base harness.Store, id string) {
 	t.Helper()
 	if testCleanVCS() {
@@ -38,10 +57,6 @@ func checkCheckpointBypass(t *testing.T, base harness.Store, id string) {
 	if st.loads != 0 || st.saves != 0 || !tracking.fromStart {
 		t.Fatalf("uncacheable build: loads=%d saves=%d replay from start=%v", st.loads, st.saves, tracking.fromStart)
 	}
-}
-
-func testHasVCS() bool {
-	return testCleanVCS()
 }
 
 func checkCheckpointRepair(t *testing.T, st *checkpointStore, id string, seq uint64, invalid []byte) {
@@ -62,7 +77,7 @@ func checkCheckpointRepair(t *testing.T, st *checkpointStore, id string, seq uin
 
 func checkCheckpointBuildIdentity(t *testing.T, base harness.Store, id string, seq uint64, data []byte) {
 	t.Helper()
-	hasVCS := testHasVCS()
+	hasVCS := testCleanVCS()
 	tracking := &replayTrackingStore{Store: base}
 	st := &checkpointStore{Store: tracking, seq: seq, data: data}
 	if _, err := harness.OpenView(t.Context(), st, id); err != nil {

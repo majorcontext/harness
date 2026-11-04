@@ -49,8 +49,8 @@ func checkCheckpointEmptyValues(t *testing.T, base harness.Store, id string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tracking.fromStart == testHasVCS() {
-		t.Fatalf("empty-value checkpoint replay from start = %v, VCS identity = %v", tracking.fromStart, testHasVCS())
+	if tracking.fromStart == testCleanVCS() {
+		t.Fatalf("empty-value checkpoint replay from start = %v, VCS identity = %v", tracking.fromStart, testCleanVCS())
 	}
 	if !reflect.DeepEqual(got.Snapshot(), want.Snapshot()) {
 		t.Fatalf("empty-value checkpoint = %+v subscription=%+v; replay = %+v subscription=%+v", got.Snapshot(), got.Snapshot().SubscriptionUsage, want.Snapshot(), want.Snapshot().SubscriptionUsage)
