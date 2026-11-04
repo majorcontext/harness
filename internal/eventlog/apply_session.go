@@ -64,7 +64,11 @@ func (s *State) applyCompaction(e protocol.CompactionApplied, seq uint64, at tim
 		return illegal("compaction from_seq %d to_seq %d at seq %d", e.FromSeq, e.ToSeq, seq)
 	}
 	if s.compactedAt != 0 {
-		s.folded = append(s.folded, s.summaryMessage())
+		if s.light != nil {
+			s.light.folded = append(s.light.folded, lightEntry{Summary: s.compactedAt, At: s.compactedTime})
+		} else {
+			s.folded = append(s.folded, s.summaryMessage())
+		}
 	}
 	s.compaction, s.compactedAt, s.compactedTime = e, seq, at
 	s.readAt = time.Time{}

@@ -12,7 +12,8 @@ import (
 type provenance struct{ source, id, label string }
 
 type entry struct {
-	seq uint64
+	seq     uint64
+	sources []uint64
 	// at is the time of the record that completed the message: the newest
 	// input of a message of promoted inputs.
 	at time.Time
@@ -238,7 +239,11 @@ func (s *State) remember(env Envelope) {
 				continue
 			}
 			if !h.carried {
-				s.folded = append(s.folded, readerMessage(h))
+				if s.light != nil {
+					s.light.folded = append(s.light.folded, lightEntry{Entry: h})
+				} else {
+					s.folded = append(s.folded, readerMessage(h))
+				}
 			}
 			if !e.ByBackend && s.turn.ID != "" && h.turn == s.turnN && h.msg.Role == protocol.RoleUser && !h.readerOnly {
 				h.carried = true

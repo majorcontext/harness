@@ -22,10 +22,24 @@ func contextWindow(model int, c protocol.ContextMeasured, ownsContext bool) int6
 	return cmp.Or(int64(model), c.Window)
 }
 
+type descriptionState interface {
+	Summary() eventlog.Summary
+	Settings() protocol.Settings
+	Progress() protocol.Progress
+	Agent() string
+	Usage() protocol.Usage
+	AllowedTools() []string
+	MaxSteps() int
+	Context() protocol.ContextMeasured
+	CacheExpiry() time.Time
+	CompactionCount() int
+	SubscriptionUsage() *protocol.SubscriptionUsage
+}
+
 // Describe returns the protocol view of state. An owned-context backend uses
 // its measured window when it has one. The session compacts at threshold of
 // the window.
-func Describe(id string, s *eventlog.State, caps turn.Capabilities, threshold float64) protocol.Session {
+func Describe(id string, s descriptionState, caps turn.Capabilities, threshold float64) protocol.Session {
 	window, estimated, ownsContext := caps.ContextWindow, caps.WindowEstimated, caps.OwnsContext
 	sum, set, p := s.Summary(), s.Settings(), s.Progress()
 	v := protocol.Session{

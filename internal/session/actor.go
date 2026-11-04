@@ -383,7 +383,12 @@ func fence(ctx context.Context, cfg Config) (uint64, error) {
 
 const page = 512
 
-func replay(ctx context.Context, log Log, s *eventlog.State, through uint64) error {
+type replayState interface {
+	Head() uint64
+	Apply(eventlog.Record) error
+}
+
+func replay(ctx context.Context, log Log, s replayState, through uint64) error {
 	for s.Head() < through {
 		recs, err := log.Read(ctx, s.Head(), int(min(through-s.Head(), page)))
 		if err != nil {
@@ -399,6 +404,11 @@ func replay(ctx context.Context, log Log, s *eventlog.State, through uint64) err
 		}
 	}
 	return nil
+}
+
+// ReplayLight replays a log through head into a light state without owning it.
+func ReplayLight(ctx context.Context, log Log, s *eventlog.LightState, head uint64) error {
+	return replay(ctx, log, s, head)
 }
 
 // Load replays a whole log without owning it.
