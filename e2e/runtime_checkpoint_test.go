@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
@@ -146,7 +147,7 @@ func (a checkpointView) run(t *testing.T, r *run) {
 	checkMemCheckpointOrder(t)
 	base := plainStore{store.NewDiskStore(r.drv.(*runtimeDriver).store)}
 	id := r.id(t, a.as)
-	want, err := harness.OpenView(ctx, base, id)
+	want, wantClock, err := openParityView(ctx, base, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +192,7 @@ func (a checkpointView) run(t *testing.T, r *run) {
 		t.Fatalf("first checkpoint: %d bytes, %v", len(firstData), err)
 	}
 	checkCorruptCheckpointState(t, base, id, firstData, want)
-	checkCheckpointPrefixes(t, base, id, want)
+	checkCheckpointPrefixes(t, base, id, want, wantClock)
 }
 
 func checkMemCheckpointOrder(t *testing.T) {
@@ -308,51 +309,51 @@ func checkScenarioSessionParity(t *testing.T, base harness.Store, id string) {
 		t.Fatal(err)
 	}
 	fixed := prefixStore{Store: base, head: head}
-	want, err := harness.OpenView(t.Context(), fixed, id)
+	want, wantClock, err := openParityView(t.Context(), fixed, id)
 	if err != nil {
 		t.Fatalf("full replay of %s: %v", id, err)
 	}
-	checkCheckpointPrefixes(t, fixed, id, want)
+	checkCheckpointPrefixes(t, fixed, id, want, wantClock)
 }
 
-func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *harness.View) {
+func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *harness.View, wantClock viewClock) {
 	t.Helper()
 	ctx := t.Context()
 	head := want.Snapshot().HeadSeq
 	headPages := cacheViewReads(t, want)
 	for seq := uint64(1); seq <= head; seq++ {
 		prefixBase := prefixStore{Store: base, head: seq}
-		wantPrefix, err := harness.OpenView(ctx, prefixBase, id)
+		wantPrefix, prefixClock, err := openParityView(ctx, prefixBase, id)
 		if err != nil {
 			t.Fatalf("full replay of prefix %d: %v", seq, err)
 		}
 		prefix := &checkpointStore{Store: prefixBase}
-		first, err := harness.OpenView(ctx, prefix, id)
+		first, firstClock, err := openParityView(ctx, prefix, id)
 		if err != nil {
 			t.Fatalf("OpenView prefix %d: %v", seq, err)
 		}
 		prefixPages := cacheViewReads(t, wantPrefix)
-		checkCachedViewParity(t, first, wantPrefix, prefixPages)
+		checkCachedViewParity(t, first, wantPrefix, prefixPages, firstClock, prefixClock)
 		saved, data, err := prefix.LoadCheckpoint(ctx, id)
 		if err != nil || saved != seq || len(data) == 0 {
 			t.Fatalf("prefix %d checkpoint = %d, %d bytes, %v", seq, saved, len(data), err)
 		}
-		restored, err := harness.OpenView(ctx, prefix, id)
+		restored, restoredClock, err := openParityView(ctx, prefix, id)
 		if err != nil {
 			t.Fatalf("restore prefix %d: %v", seq, err)
 		}
-		checkCachedViewParity(t, restored, wantPrefix, prefixPages)
+		checkCachedViewParity(t, restored, wantPrefix, prefixPages, restoredClock, prefixClock)
 		for _, fetch := range []bool{false, true} {
 			cp := &checkpointStore{Store: base, seq: saved, data: data}
 			var st harness.Store = cp
 			if !fetch {
 				st = checkpointsWithoutSeqs{Store: base, checkpoint: cp}
 			}
-			v, err := harness.OpenView(ctx, st, id)
+			v, gotClock, err := openParityView(ctx, st, id)
 			if err != nil {
 				t.Fatalf("OpenView checkpoint %d, ReadSeqs=%v: %v", seq, fetch, err)
 			}
-			checkCachedViewParity(t, v, want, headPages)
+			checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)
 			if fetch && want.Snapshot().HeadSeq > 0 {
 				page, err := want.Messages(ctx, 0, 1)
 				if err != nil {
@@ -376,13 +377,17 @@ type expectedPage struct {
 }
 
 type expectedViewReads struct {
-	pages []expectedPage
+	pages            []expectedPage
+	syntheticCapture int64
 }
 
 func cacheViewReads(t *testing.T, view *harness.View) expectedViewReads {
 	t.Helper()
 	ctx := t.Context()
 	var out expectedViewReads
+	if view.Snapshot().SubscriptionUsage != nil {
+		out.syntheticCapture = syntheticCaptureTime(t, view)
+	}
 	for _, limit := range []int{1, 2, protocol.MaxMessageLimit} {
 		for before := uint64(0); ; {
 			page, err := view.Messages(ctx, before, limit)
@@ -402,16 +407,69 @@ func cacheViewReads(t *testing.T, view *harness.View) expectedViewReads {
 	return out
 }
 
+type viewClock struct{ before, after int64 }
+
+func openParityView(ctx context.Context, st harness.Store, id string) (*harness.View, viewClock, error) {
+	before := time.Now().Unix()
+	view, err := harness.OpenView(ctx, st, id)
+	return view, viewClock{before: before, after: time.Now().Unix()}, err
+}
+
+func syntheticCaptureTime(t *testing.T, view *harness.View) int64 {
+	t.Helper()
+	var costAt int64
+	for event, err := range view.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Kind != "context.measured" {
+			continue
+		}
+		var measured protocol.ContextMeasured
+		if err := json.Unmarshal(event.Data, &measured); err != nil {
+			t.Fatal(err)
+		}
+		if measured.SubscriptionUsage != nil {
+			return 0
+		}
+		if measured.CostUSD != nil {
+			costAt = event.Time.Unix()
+		}
+	}
+	return costAt
+}
+
+func normalizeSyntheticCapture(t *testing.T, got, want *protocol.Session, costAt int64, clocks []viewClock) {
+	t.Helper()
+	if costAt == 0 || got.SubscriptionUsage == nil || want.SubscriptionUsage == nil {
+		return
+	}
+	if len(clocks) != 2 {
+		clocks = []viewClock{{before: costAt, after: time.Now().Unix()}, {before: costAt, after: time.Now().Unix()}}
+	}
+	for i, captured := range []int64{got.SubscriptionUsage.CapturedAt, want.SubscriptionUsage.CapturedAt} {
+		if captured < clocks[i].before || captured > clocks[i].after {
+			t.Fatalf("synthetic captured_at %d is outside view creation bounds [%d, %d]", captured, clocks[i].before, clocks[i].after)
+		}
+	}
+	got.SubscriptionUsage.CapturedAt = 0
+	want.SubscriptionUsage.CapturedAt = 0
+}
+
 func checkViewParity(t *testing.T, got, want *harness.View) {
 	t.Helper()
 	checkCachedViewParity(t, got, want, cacheViewReads(t, want))
 }
 
-func checkCachedViewParity(t *testing.T, got, want *harness.View, expected expectedViewReads) {
+func checkCachedViewParity(t *testing.T, got, want *harness.View, expected expectedViewReads, clocks ...viewClock) {
 	t.Helper()
 	ctx := t.Context()
-	if !reflect.DeepEqual(got.Snapshot(), want.Snapshot()) || got.Resumable() != want.Resumable() {
-		t.Fatalf("checkpoint view snapshot or resumability differs from full replay")
+	gotSnapshot, wantSnapshot := got.Snapshot(), want.Snapshot()
+	normalizeSyntheticCapture(t, &gotSnapshot, &wantSnapshot, expected.syntheticCapture, clocks)
+	if !reflect.DeepEqual(gotSnapshot, wantSnapshot) || got.Resumable() != want.Resumable() {
+		gotJSON, _ := json.Marshal(got.Snapshot())
+		wantJSON, _ := json.Marshal(want.Snapshot())
+		t.Fatalf("checkpoint snapshot = %s, resumable=%v; replay = %s, resumable=%v", gotJSON, got.Resumable(), wantJSON, want.Resumable())
 	}
 	gotInputs, gotErr := got.Inputs(ctx)
 	wantInputs, wantErr := want.Inputs(ctx)

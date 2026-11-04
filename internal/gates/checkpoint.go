@@ -15,16 +15,18 @@ import (
 )
 
 type checkpointSchema struct {
-	fset      *token.FileSet
-	types     map[string]*ast.TypeSpec
-	funcs     []*ast.FuncDecl
-	foldFuncs []*ast.FuncDecl
-	parts     []string
-	version   string
+	fset          *token.FileSet
+	types         map[string]*ast.TypeSpec
+	funcs         []*ast.FuncDecl
+	foldFuncs     []*ast.FuncDecl
+	protocolFuncs []*ast.FuncDecl
+	foldValues    map[string]*ast.GenDecl
+	parts         []string
+	version       string
 }
 
 func checkCheckpointCodec(fsys fs.FS) error {
-	s := &checkpointSchema{fset: token.NewFileSet(), types: map[string]*ast.TypeSpec{}}
+	s := &checkpointSchema{fset: token.NewFileSet(), types: map[string]*ast.TypeSpec{}, foldValues: map[string]*ast.GenDecl{}}
 	for _, dir := range []string{"internal/eventlog", "protocol"} {
 		entries, err := fs.ReadDir(fsys, dir)
 		if err != nil {
@@ -52,7 +54,7 @@ func checkCheckpointCodec(fsys fs.FS) error {
 	}
 	slices.Sort(s.parts)
 	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(s.parts, "\n"))))
-	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf", "4": "9858daaade7ceaa905474cffc7cf10416f75f3b4487bb82287a5d3cb67f3516c"}
+	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf", "4": "941fb30233d6e462461ab6a59de63e28eb89f8a1f098f85a04e2eca6a755998a"}
 	if versions[s.version] != sum {
 		return fmt.Errorf("checkpoint schema or codec changed: version %s has fingerprint %s; increment checkpointVersion and record the new fingerprint", s.version, sum)
 	}
@@ -72,12 +74,18 @@ func (s *checkpointSchema) collect(f *ast.File, dir, file string) {
 				case *ast.TypeSpec:
 					s.types[prefix+v.Name.Name] = v
 				case *ast.ValueSpec:
+					for _, name := range v.Names {
+						s.foldValues[prefix+name.Name] = d
+					}
 					if file == "light_codec.go" && len(v.Names) == 1 && v.Names[0].Name == "checkpointVersion" && len(v.Values) == 1 {
 						s.version = s.node(v.Values[0])
 					}
 				}
 			}
 		case *ast.FuncDecl:
+			if dir == "protocol" {
+				s.protocolFuncs = append(s.protocolFuncs, d)
+			}
 			if dir == "internal/eventlog" && !strings.HasPrefix(file, "light_codec") {
 				s.foldFuncs = append(s.foldFuncs, d)
 			}
@@ -94,34 +102,69 @@ func (s *checkpointSchema) collect(f *ast.File, dir, file string) {
 
 func (s *checkpointSchema) foldFingerprint() {
 	pending := map[string]bool{"Apply": true, "remember": true, "trim": true}
+	values := map[string]bool{}
 	seen := map[*ast.FuncDecl]bool{}
-	for len(pending) > 0 {
+	seenValues := map[*ast.GenDecl]bool{}
+	for len(pending) > 0 || len(values) > 0 {
+		for name := range values {
+			delete(values, name)
+			decl := s.foldValues[name]
+			if decl == nil || seenValues[decl] {
+				continue
+			}
+			seenValues[decl] = true
+			s.parts = append(s.parts, s.node(decl))
+			prefix := ""
+			if strings.HasPrefix(name, "protocol.") {
+				prefix = "protocol."
+			}
+			checkpointReferences(decl, prefix, pending, values)
+		}
 		var name string
 		for name = range pending {
 			break
 		}
 		delete(pending, name)
-		for _, fn := range s.foldFuncs {
+		funcs, prefix := s.foldFuncs, ""
+		if strings.HasPrefix(name, "protocol.") {
+			funcs, prefix = s.protocolFuncs, "protocol."
+			name = strings.TrimPrefix(name, prefix)
+		}
+		for _, fn := range funcs {
 			if fn.Name.Name != name || seen[fn] {
 				continue
 			}
 			seen[fn] = true
 			s.parts = append(s.parts, s.node(fn))
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				switch f := call.Fun.(type) {
-				case *ast.Ident:
-					pending[f.Name] = true
-				case *ast.SelectorExpr:
-					pending[f.Sel.Name] = true
-				}
-				return true
-			})
+			checkpointReferences(fn.Body, prefix, pending, values)
 		}
 	}
+}
+
+func checkpointReferences(node ast.Node, prefix string, funcs, values map[string]bool) {
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.Ident:
+			values[prefix+n.Name] = true
+		case *ast.SelectorExpr:
+			if id, ok := n.X.(*ast.Ident); ok && id.Name == "protocol" {
+				values["protocol."+n.Sel.Name] = true
+			}
+		case *ast.CallExpr:
+			switch f := n.Fun.(type) {
+			case *ast.Ident:
+				funcs[prefix+f.Name] = true
+			case *ast.SelectorExpr:
+				if prefix == "" {
+					funcs[f.Sel.Name] = true
+				}
+				if id, ok := f.X.(*ast.Ident); ok && id.Name == "protocol" {
+					funcs["protocol."+f.Sel.Name] = true
+				}
+			}
+		}
+		return true
+	})
 }
 
 func (s *checkpointSchema) checkFields() error {
