@@ -20,8 +20,11 @@ type MemStore struct {
 }
 
 type memSession struct {
-	records [][]byte
-	blobs   map[string][]byte
+	records        [][]byte
+	blobs          map[string][]byte
+	checkpointSeq  uint64
+	checkpointData []byte
+	checkpointSet  bool
 }
 
 // NewMemStore returns an empty MemStore.
@@ -82,6 +85,65 @@ func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, li
 		}
 	}
 	return out, nil
+}
+
+// ReadSeqs returns the existing records for the requested sequences in ascending order.
+func (m *MemStore) ReadSeqs(ctx context.Context, session string, seqs []uint64) ([]harness.Record, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := CheckName(session); err != nil {
+		return nil, err
+	}
+	seqs = slices.Clone(seqs)
+	slices.Sort(seqs)
+	seqs = slices.Compact(seqs)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []harness.Record
+	if s := m.sessions[session]; s != nil {
+		for _, seq := range seqs {
+			if seq > 0 && seq <= uint64(len(s.records)) {
+				out = append(out, harness.Record{Seq: seq, Data: slices.Clone(s.records[seq-1])})
+			}
+		}
+	}
+	return out, nil
+}
+
+// LoadCheckpoint returns the latest checkpoint, or zero and nil when absent.
+func (m *MemStore) LoadCheckpoint(ctx context.Context, session string) (seq uint64, data []byte, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	if err := CheckName(session); err != nil {
+		return 0, nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.sessions[session]; s != nil && s.checkpointSet {
+		return s.checkpointSeq, slices.Clone(s.checkpointData), nil
+	}
+	return 0, nil, nil
+}
+
+// SaveCheckpoint stores a checkpoint if its sequence is at least the saved sequence.
+func (m *MemStore) SaveCheckpoint(ctx context.Context, session string, seq uint64, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := CheckName(session); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.session(session)
+	if !s.checkpointSet || seq >= s.checkpointSeq {
+		s.checkpointSeq = seq
+		s.checkpointData = slices.Clone(data)
+		s.checkpointSet = true
+	}
+	return nil
 }
 
 // Head implements Store.

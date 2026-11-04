@@ -88,6 +88,7 @@ const (
 
 // State is the durable session state. Apply is its only mutator.
 type State struct {
+	light    *LightState
 	created  bool
 	parentID string
 	agent    string

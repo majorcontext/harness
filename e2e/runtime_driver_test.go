@@ -219,6 +219,8 @@ func (d *runtimeDriver) Stderr() string {
 
 func (d *runtimeDriver) Workdir() string { return d.workDir }
 
+func (d *runtimeDriver) storeDir() string { return d.store }
+
 func (d *runtimeDriver) DropToolBlobs(t *testing.T) {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(d.store, "*", "blobs", "toolblob-*"))

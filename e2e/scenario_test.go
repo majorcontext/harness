@@ -504,6 +504,9 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 			r.drv.WaitIdle(t, r.ids[alias])
 		}
 	}
+	if h.runtime {
+		checkScenarioCheckpointParity(t, drv.storeDir())
+	}
 	sessions := map[string][]transcriptMessage{}
 	for _, alias := range r.aliases {
 		msgs := r.drv.Messages(t, r.ids[alias])

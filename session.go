@@ -343,10 +343,12 @@ func attachment(ctx context.Context, st Store, id, key, mediaType string, size i
 
 // View is a session read from a Store with no owner. It is immutable.
 type View struct {
-	st    Store
-	id    string
-	state protocol.Session
-	log   *eventlog.State
+	st       Store
+	id       string
+	state    protocol.Session
+	log      *eventlog.State
+	light    *eventlog.LightState
+	restored bool
 	// plugins are those of the runtime that read the view; the log holds none.
 	plugins []protocol.Plugin
 }
@@ -366,6 +368,9 @@ func openView(ctx context.Context, st Store, id string, windows func(model strin
 	if err := storecheck.Name(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
+	if checkpoints, ok := st.(checkpointStore); ok {
+		return openCheckpointView(ctx, st, checkpoints, id, windows, threshold)
+	}
 	s, err := session.Load(ctx, id, storeLog{st, id})
 	if err != nil {
 		return nil, err
@@ -378,13 +383,21 @@ func openView(ctx context.Context, st Store, id string, windows func(model strin
 }
 
 // Resumable reports whether Open of the session has work to resume.
-func (v *View) Resumable() bool { return v.log.Resumable() }
+func (v *View) Resumable() bool {
+	if v.light != nil {
+		return v.light.Resumable()
+	}
+	return v.log.Resumable()
+}
 
 // Messages returns the page of the conversation before seq before; 0 is the
 // newest page. A limit above protocol.MaxMessageLimit fails with ErrInvalidRequest.
-func (v *View) Messages(_ context.Context, before uint64, limit int) (protocol.MessagePage, error) {
+func (v *View) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) {
 	if err := checkMessageLimit(limit); err != nil {
 		return protocol.MessagePage{}, err
+	}
+	if v.light != nil {
+		return v.lightMessages(ctx, before, limit)
 	}
 	return v.log.MessagePage(before, limit), nil
 }
@@ -405,12 +418,19 @@ func (v *View) Snapshot() protocol.Session {
 
 // Inputs returns the inputs that no turn has taken, oldest first, as of OpenView.
 func (v *View) Inputs(context.Context) ([]protocol.QueuedInput, error) {
+	if v.light != nil {
+		return v.light.QueuedInputs(), nil
+	}
 	return v.log.QueuedInputs(), nil
 }
 
 // Blob returns the attachment that a blob part of an input of the session
 // names by key. Any other key fails with ErrBlobNotFound.
 func (v *View) Blob(ctx context.Context, key string) (Blob, error) {
+	if v.light != nil {
+		mediaType, size, ok := v.light.Attachment(key)
+		return attachment(ctx, v.st, v.id, key, mediaType, size, ok)
+	}
 	mediaType, size, ok := v.log.Attachment(key)
 	return attachment(ctx, v.st, v.id, key, mediaType, size, ok)
 }

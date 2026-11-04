@@ -12,7 +12,8 @@ import (
 type provenance struct{ source, id, label string }
 
 type entry struct {
-	seq uint64
+	seq     uint64
+	sources []uint64
 	// at is the time of the record that completed the message: the newest
 	// input of a message of promoted inputs.
 	at time.Time
@@ -141,6 +142,10 @@ func withoutTaskReports(parts []protocol.LogPart) []protocol.LogPart {
 	return slices.DeleteFunc(slices.Clone(parts), func(p protocol.LogPart) bool { return p.Type == protocol.LogPartTaskReport })
 }
 
+func inputMessage(in protocol.InputAdmitted) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)}
+}
+
 // History returns the summary of the newest compaction as a user message, then
 // each later message in log order, with no pinned segment. Readers see more:
 // see Transcript.
@@ -202,7 +207,7 @@ func (s *State) remember(env Envelope) {
 			if IsReport(in.Parts) && !sayReport {
 				continue
 			}
-			s.say(env.Seq, env.Time, "msg_"+id, protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)})
+			s.say(env.Seq, env.Time, "msg_"+id, inputMessage(in))
 			s.history[len(s.history)-1].from = provenance{in.Source, in.SourceID, in.SourceLabel}
 			sayReport = false
 		}
@@ -238,7 +243,11 @@ func (s *State) remember(env Envelope) {
 				continue
 			}
 			if !h.carried {
-				s.folded = append(s.folded, readerMessage(h))
+				if s.light != nil {
+					s.light.folded = append(s.light.folded, lightEntry{Entry: h})
+				} else {
+					s.folded = append(s.folded, readerMessage(h))
+				}
 			}
 			if !e.ByBackend && s.turn.ID != "" && h.turn == s.turnN && h.msg.Role == protocol.RoleUser && !h.readerOnly {
 				h.carried = true
