@@ -65,17 +65,21 @@ func (s *checkpointStore) ReadSeqs(ctx context.Context, session string, seqs []u
 	seqs = append([]uint64(nil), seqs...)
 	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 	var out []harness.Record
-	for i, seq := range seqs {
-		if seq == 0 || i > 0 && seq == seqs[i-1] {
+	for i := 0; i < len(seqs); {
+		if seqs[i] == 0 || i > 0 && seqs[i] == seqs[i-1] {
+			i++
 			continue
 		}
-		records, err := s.Store.Read(ctx, session, seq-1, 1)
+		end := i + 1
+		for end < len(seqs) && seqs[end] == seqs[end-1]+1 {
+			end++
+		}
+		records, err := s.Store.Read(ctx, session, seqs[i]-1, end-i)
 		if err != nil {
 			return nil, err
 		}
-		if len(records) != 0 && records[0].Seq == seq {
-			out = append(out, records[0])
-		}
+		out = append(out, records...)
+		i = end
 	}
 	return out, nil
 }
@@ -353,7 +357,8 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 	t.Helper()
 	ctx := t.Context()
 	head := want.Snapshot().HeadSeq
-	headPages := cacheViewReads(t, want)
+	captures := syntheticCaptureBySeq(t, base, id, head)
+	headPages := cacheViewReads(t, want, captures[head])
 	for seq := uint64(1); seq <= head; seq++ {
 		prefixBase := prefixStore{Store: base, head: seq}
 		wantPrefix, prefixClock, err := openParityView(ctx, prefixBase, id)
@@ -365,7 +370,7 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		if err != nil {
 			t.Fatalf("OpenView prefix %d: %v", seq, err)
 		}
-		prefixPages := cacheViewReads(t, wantPrefix)
+		prefixPages := cacheViewReads(t, wantPrefix, captures[seq])
 		checkCachedViewParity(t, first, wantPrefix, prefixPages, firstClock, prefixClock)
 		saved, data, err := prefix.LoadCheckpoint(ctx, id)
 		if err != nil || saved != seq || len(data) == 0 {
@@ -387,15 +392,11 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 				t.Fatalf("OpenView checkpoint %d, ReadSeqs=%v: %v", seq, fetch, err)
 			}
 			checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)
-			if fetch && want.Snapshot().HeadSeq > 0 {
-				page, err := want.Messages(ctx, 0, 1)
-				if err != nil {
-					t.Fatal(err)
-				}
+			if fetch && head > 0 {
 				cp.mu.Lock()
 				reads := cp.seqReads
 				cp.mu.Unlock()
-				if page.Total > 0 && reads == 0 {
+				if headPages.pages[0].page.Total > 0 && reads == 0 {
 					t.Fatalf("message pages did not use ReadSeqs with checkpoint at seq %d", seq)
 				}
 			}
@@ -414,11 +415,13 @@ type expectedViewReads struct {
 	syntheticCapture int64
 }
 
-func cacheViewReads(t *testing.T, view *harness.View) expectedViewReads {
+func cacheViewReads(t *testing.T, view *harness.View, capture ...int64) expectedViewReads {
 	t.Helper()
 	ctx := t.Context()
 	var out expectedViewReads
-	if view.Snapshot().SubscriptionUsage != nil {
+	if len(capture) > 0 {
+		out.syntheticCapture = capture[0]
+	} else if view.Snapshot().SubscriptionUsage != nil {
 		out.syntheticCapture = syntheticCaptureTime(t, view)
 	}
 	for _, limit := range []int{1, 2, protocol.MaxMessageLimit} {
@@ -446,6 +449,35 @@ func openParityView(ctx context.Context, st harness.Store, id string) (*harness.
 	before := time.Now().Unix()
 	view, err := harness.OpenView(ctx, st, id)
 	return view, viewClock{before: before, after: time.Now().Unix()}, err
+}
+
+func syntheticCaptureBySeq(t *testing.T, st harness.Store, id string, head uint64) []int64 {
+	t.Helper()
+	out := make([]int64, head+1)
+	var costAt int64
+	var recorded bool
+	for event, err := range harness.ReadEvents(t.Context(), st, id, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Seq > head {
+			break
+		}
+		if event.Kind == "context.measured" {
+			var measured protocol.ContextMeasured
+			if err := json.Unmarshal(event.Data, &measured); err != nil {
+				t.Fatal(err)
+			}
+			recorded = recorded || measured.SubscriptionUsage != nil
+			if measured.CostUSD != nil {
+				costAt = event.Time.Unix()
+			}
+		}
+		if !recorded {
+			out[event.Seq] = costAt
+		}
+	}
+	return out
 }
 
 func syntheticCaptureTime(t *testing.T, view *harness.View) int64 {
