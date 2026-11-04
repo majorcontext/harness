@@ -127,7 +127,7 @@ func (m *MemStore) LoadCheckpoint(ctx context.Context, session string) (seq uint
 	return 0, nil, nil
 }
 
-// SaveCheckpoint stores a checkpoint if its sequence exceeds the saved sequence.
+// SaveCheckpoint stores a checkpoint if its sequence is at least the saved sequence.
 func (m *MemStore) SaveCheckpoint(ctx context.Context, session string, seq uint64, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -138,7 +138,7 @@ func (m *MemStore) SaveCheckpoint(ctx context.Context, session string, seq uint6
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.session(session)
-	if !s.checkpointSet || seq > s.checkpointSeq {
+	if !s.checkpointSet || seq >= s.checkpointSeq {
 		s.checkpointSeq = seq
 		s.checkpointData = slices.Clone(data)
 		s.checkpointSet = true

@@ -33,11 +33,15 @@ func openCheckpointView(ctx context.Context, st Store, checkpoints checkpointSto
 		return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	}
 	s := eventlog.NewLightState()
-	seq, data, err := checkpoints.LoadCheckpoint(ctx, id)
-	if err == nil && seq > 0 && seq <= head {
-		if restored, err := eventlog.RestoreLightState(data); err == nil && restored.Head() == seq {
-			s = restored
+	if eventlog.CheckpointVersion() != "" {
+		seq, data, err := checkpoints.LoadCheckpoint(ctx, id)
+		if err == nil && seq > 0 && seq <= head {
+			if restored, err := eventlog.RestoreLightState(data); err == nil && restored.Head() == seq {
+				s = restored
+			}
 		}
+	} else {
+		checkpoints = nil
 	}
 	start := s.Head()
 	if err := session.ReplayLight(ctx, storeLog{st, id}, s, head); err != nil {
@@ -50,7 +54,7 @@ func openCheckpointView(ctx context.Context, st Store, checkpoints checkpointSto
 			return nil, err
 		}
 	}
-	if start == 0 || head-start >= checkpointTail {
+	if checkpoints != nil && (start == 0 || head-start >= checkpointTail) {
 		if data, err := s.Checkpoint(); err == nil {
 			_ = checkpoints.SaveCheckpoint(ctx, id, head, data)
 		}

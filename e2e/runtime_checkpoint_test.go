@@ -1,18 +1,12 @@
 package e2e
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"reflect"
 	"sort"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -24,9 +18,9 @@ import (
 )
 
 var checkpointRows = map[string]runtimeRow{
+	"checkpoint_uncacheable_build_replays_without_cache_calls":         sameAsServe(),
 	"oversized_encoded_checkpoint_falls_back_to_replay":                sameAsServe(),
 	"checkpoint_page_corrupt_source_replays_and_read_errors_propagate": sameAsServe(),
-	"checkpoint_invalid_head_and_oversized_collection_fall_back":       sameAsServe(),
 	"stopped_view_checkpoint_preserves_reads":                          sameAsServe(),
 	"stopped_view_checkpoint_preserves_attachments":                    sameAsServe(),
 	"checkpoint_compaction_and_command_history":                        sameAsServe(),
@@ -41,18 +35,22 @@ type checkpointStore struct {
 	seq      uint64
 	data     []byte
 	seqReads int
+	loads    int
+	saves    int
 }
 
 func (s *checkpointStore) LoadCheckpoint(_ context.Context, _ string) (uint64, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.loads++
 	return s.seq, append([]byte(nil), s.data...), nil
 }
 
 func (s *checkpointStore) SaveCheckpoint(_ context.Context, _ string, seq uint64, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if seq > s.seq {
+	s.saves++
+	if seq >= s.seq {
 		s.seq, s.data = seq, append([]byte(nil), data...)
 	}
 	return nil
@@ -129,9 +127,19 @@ func (s *replayTrackingStore) Read(ctx context.Context, id string, after uint64,
 }
 
 type checkpointView struct{ as string }
+type checkpointUncacheable struct{ as string }
+
+func (a checkpointUncacheable) run(t *testing.T, r *run) {
+	t.Helper()
+	base := plainStore{store.NewDiskStore(r.drv.storeDir())}
+	checkCheckpointBypass(t, base, r.id(t, a.as))
+}
 
 func TestContractStoppedViewCheckpoint(t *testing.T) {
 	runScenarios(t, []scenario{{
+		name:    "checkpoint_uncacheable_build_replays_without_cache_calls",
+		actions: []action{create{as: "a"}, restart{}, checkpointUncacheable{as: "a"}},
+	}, {
 		name: "stopped_view_checkpoint_preserves_reads",
 		model: []harnesstest.Step{
 			{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "first"}},
@@ -156,8 +164,14 @@ func (a checkpointView) run(t *testing.T, r *run) {
 		t.Fatal(err)
 	}
 	st := &checkpointStore{Store: base}
-	if _, err := harness.OpenView(ctx, st, id); err != nil {
+	gotInitial, err := harness.OpenView(ctx, st, id)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !testHasVCS() {
+		checkViewParity(t, gotInitial, want)
+		checkCheckpointEmptyValues(t, base, id)
+		return
 	}
 	seq, data, err := st.LoadCheckpoint(ctx, id)
 	if err != nil {
@@ -165,6 +179,11 @@ func (a checkpointView) run(t *testing.T, r *run) {
 	}
 	if seq == 0 || len(data) == 0 {
 		t.Errorf("OpenView did not save a checkpoint for the stopped session: seq=%d bytes=%d", seq, len(data))
+		return
+	}
+	checkCheckpointBuildIdentity(t, base, id, seq, data)
+	checkCheckpointEmptyValues(t, base, id)
+	if !testHasVCS() {
 		return
 	}
 	got, err := harness.OpenView(ctx, st, id)
@@ -192,6 +211,7 @@ func (a checkpointView) run(t *testing.T, r *run) {
 		t.Fatalf("OpenView with corrupt checkpoint: %v", err)
 	}
 	checkViewParity(t, fallback, want)
+	checkCheckpointRepair(t, st, id, seq, []byte("corrupt checkpoint"))
 	checkCheckpointVersions(t, st, id, seq, data, want)
 	first := &checkpointStore{Store: prefixStore{Store: base, head: 1}}
 	if _, err := harness.OpenView(ctx, first, id); err != nil {
@@ -217,17 +237,22 @@ func checkMemCheckpointOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	data[0] = 'X'
-	for _, seq := range []uint64{4, 10} {
-		if err := st.SaveCheckpoint(ctx, "s1", seq, []byte("older")); err != nil {
-			t.Fatal(err)
-		}
+	if err := st.SaveCheckpoint(ctx, "s1", 4, []byte("older")); err != nil {
+		t.Fatal(err)
 	}
 	seq, loaded, err := st.LoadCheckpoint(ctx, "s1")
 	if err != nil || seq != 10 || string(loaded) != "newer" {
-		t.Fatalf("MemStore checkpoint after lower/equal save = %d, %q, %v; want 10, newer, nil", seq, loaded, err)
+		t.Fatalf("MemStore checkpoint after lower save = %d, %q, %v; want 10, newer, nil", seq, loaded, err)
+	}
+	if err := st.SaveCheckpoint(ctx, "s1", 10, []byte("replacement")); err != nil {
+		t.Fatal(err)
+	}
+	seq, loaded, err = st.LoadCheckpoint(ctx, "s1")
+	if err != nil || seq != 10 || string(loaded) != "replacement" {
+		t.Fatalf("MemStore checkpoint after equal save = %d, %q, %v; want 10, replacement, nil", seq, loaded, err)
 	}
 	loaded[0] = 'X'
-	if _, loaded, err := st.LoadCheckpoint(ctx, "s1"); err != nil || string(loaded) != "newer" {
+	if _, loaded, err := st.LoadCheckpoint(ctx, "s1"); err != nil || string(loaded) != "replacement" {
 		t.Fatalf("checkpoint changed after caller mutated loaded bytes: %q, %v", loaded, err)
 	}
 	checkMemReadSeqs(t, st)
@@ -278,7 +303,7 @@ func checkCheckpointVersions(t *testing.T, st *checkpointStore, id string, seq u
 	if err := json.Unmarshal(data, &encoded); err != nil || encoded["version"] == nil {
 		t.Fatalf("checkpoint has no readable version: %v", err)
 	}
-	encoded["version"] = json.RawMessage("999999")
+	encoded["version"] = json.RawMessage(`"other-vcs:true"`)
 	unknown, err := json.Marshal(encoded)
 	if err != nil {
 		t.Fatal(err)
@@ -291,6 +316,7 @@ func checkCheckpointVersions(t *testing.T, st *checkpointStore, id string, seq u
 		t.Fatalf("OpenView with unsupported checkpoint version: %v", err)
 	}
 	checkViewParity(t, v, want)
+	checkCheckpointRepair(t, st, id, seq, unknown)
 }
 
 func checkScenarioCheckpointParity(t *testing.T, dir string) {
@@ -378,6 +404,12 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		}
 		prefixPages := cacheViewReads(t, wantPrefix, captures[seq])
 		checkCachedViewParity(t, first, wantPrefix, prefixPages, firstClock, prefixClock)
+		if !testHasVCS() {
+			if prefix.loads != 0 || prefix.saves != 0 {
+				t.Fatalf("prefix %d: loads=%d saves=%d", seq, prefix.loads, prefix.saves)
+			}
+			continue
+		}
 		saved, data, err := prefix.LoadCheckpoint(ctx, id)
 		if err != nil || saved != seq || len(data) == 0 {
 			t.Fatalf("prefix %d checkpoint = %d, %d bytes, %v", seq, saved, len(data), err)
@@ -387,10 +419,14 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 			t.Fatalf("restore prefix %d: %v", seq, err)
 		}
 		checkCachedViewParity(t, restored, wantPrefix, prefixPages, restoredClock, prefixClock)
-		cp := &checkpointStore{Store: base, seq: saved, data: data}
+		tracking := &replayTrackingStore{Store: base}
+		cp := &checkpointStore{Store: tracking, seq: saved, data: data}
 		v, gotClock, err := openParityView(ctx, cp, id)
 		if err != nil {
 			t.Fatalf("OpenView checkpoint %d: %v", seq, err)
+		}
+		if testHasVCS() && tracking.fromStart {
+			t.Fatalf("checkpoint %d replayed the prefix", seq)
 		}
 		checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)
 		cp.mu.Lock()
@@ -585,196 +621,6 @@ func checkBlobParity(t *testing.T, got, want *harness.View, key string) {
 	if ge != nil || we != nil || gb.MediaType != wb.MediaType || gb.Size != wb.Size || !reflect.DeepEqual(gd, wd) {
 		t.Fatalf("Blob(%q) differs between checkpoint and replay", key)
 	}
-}
-
-func checkCorruptCheckpointState(t *testing.T, base harness.Store, id string, data []byte, want *harness.View) {
-	t.Helper()
-	if want.Snapshot().HeadSeq <= 1 {
-		t.Fatal("corrupt checkpoint fixture needs a nonempty tail")
-	}
-	packed, body := unpackCheckpoint(t, data)
-	pos := checkpointInputsOffset(t, body)
-	for _, offset := range []int{0, pos} {
-		changed := bytes.Clone(body)
-		if offset == 0 {
-			changed[offset] = 0
-		} else {
-			changed[offset] = 1
-		}
-		checkCorruptReplay(t, base, id, packCheckpoint(t, packed, changed), want, false)
-	}
-	var turnID string
-	for event, err := range harness.ReadEvents(t.Context(), base, id, 1) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		if event.Kind == "turn.started" {
-			var started struct {
-				TurnID string `json:"turn_id"`
-			}
-			if err := json.Unmarshal(event.Data, &started); err != nil {
-				t.Fatal(err)
-			}
-			turnID = started.TurnID
-			break
-		}
-	}
-	if turnID == "" {
-		t.Fatal("corrupt checkpoint fixture needs a turn in the tail")
-	}
-	changed := corruptUsedTurn(t, body, pos, turnID)
-	checkCorruptReplay(t, base, id, packCheckpoint(t, packed, changed), want, true)
-}
-
-func unpackCheckpoint(t *testing.T, data []byte) ([]byte, []byte) {
-	t.Helper()
-	var wrapper struct {
-		Data string `json:"data"`
-	}
-	if err := json.Unmarshal(data, &wrapper); err != nil {
-		t.Fatal(err)
-	}
-	packed, err := base64.StdEncoding.DecodeString(wrapper.Data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	zr, err := zlib.NewReader(bytes.NewReader(packed[4:]))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := io.ReadAll(zr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := zr.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return packed, body
-}
-
-type checkpointCursor struct {
-	t    *testing.T
-	body []byte
-	pos  int
-}
-
-func (c *checkpointCursor) integer() int64 {
-	c.t.Helper()
-	v, n := binary.Varint(c.body[c.pos:])
-	if n <= 0 {
-		c.t.Fatal("invalid checkpoint fixture")
-	}
-	c.pos += n
-	return v
-}
-
-func (c *checkpointCursor) text() {
-	c.t.Helper()
-	n := c.integer()
-	if n < 0 || n > int64(len(c.body)-c.pos) {
-		c.t.Fatal("invalid checkpoint string")
-	}
-	c.pos += int(n)
-}
-
-func checkpointInputsOffset(t *testing.T, body []byte) int {
-	t.Helper()
-	c := checkpointCursor{t: t, body: body, pos: 1}
-	for range 10 {
-		c.text()
-	}
-	first, second := c.integer(), c.integer()
-	if first != -1 || second != -1 {
-		t.Fatal("unexpected checkpoint fixture")
-	}
-	c.integer()
-	c.text()
-	c.text()
-	if body[c.pos] != 0 {
-		t.Fatal("expected empty inputs map")
-	}
-	return c.pos
-}
-
-func corruptTurnID(t *testing.T, body []byte, inputs int) []byte {
-	t.Helper()
-	c := checkpointCursor{t: t, body: body, pos: inputs + 1}
-	_, n := binary.Uvarint(body[c.pos:])
-	if n <= 0 {
-		t.Fatal("invalid checkpoint sequence")
-	}
-	c.pos += n
-	c.text()
-	c.text()
-	first, second := c.integer(), c.integer()
-	if first != -1 || second != -1 {
-		t.Fatal("expected empty progress lists")
-	}
-	if body[c.pos] != 0 || body[c.pos+1] != 0 {
-		t.Fatal("expected empty progress pointers")
-	}
-	c.pos += 2
-	if body[c.pos] != 0 {
-		t.Fatal("expected no current turn")
-	}
-	changed := append(bytes.Clone(body[:c.pos]), 2, 'x')
-	return append(changed, body[c.pos+1:]...)
-}
-
-func corruptUsedTurn(t *testing.T, body []byte, inputs int, turnID string) []byte {
-	t.Helper()
-	c := checkpointCursor{t: t, body: body, pos: inputs + 1}
-	_, n := binary.Uvarint(body[c.pos:])
-	if n <= 0 {
-		t.Fatal("invalid checkpoint sequence")
-	}
-	c.pos += n
-	c.text()
-	c.text()
-	first, second := c.integer(), c.integer()
-	if first != -1 || second != -1 {
-		t.Fatal("expected empty progress lists")
-	}
-	if body[c.pos] != 0 || body[c.pos+1] != 0 {
-		t.Fatal("expected empty progress pointers")
-	}
-	c.pos += 2
-	c.text()
-	if c.integer() != -1 {
-		t.Fatal("expected empty turn input list")
-	}
-	if body[c.pos] != 0 {
-		t.Fatal("expected unsuspended turn")
-	}
-	c.pos++
-	c.integer()
-	if body[c.pos] != 0 {
-		t.Fatal("expected empty used-turn map")
-	}
-	changed := append(bytes.Clone(body[:c.pos]), 2)
-	changed = binary.AppendVarint(changed, int64(len(turnID)))
-	changed = append(changed, turnID...)
-	changed = append(changed, 1)
-	return append(changed, body[c.pos+1:]...)
-}
-
-func packCheckpoint(t *testing.T, packed, changed []byte) []byte {
-	t.Helper()
-	if len(changed) <= sha256.Size {
-		t.Fatal("checkpoint has no state checksum")
-	}
-	sum := sha256.Sum256(changed[:len(changed)-sha256.Size])
-	copy(changed[len(changed)-sha256.Size:], sum[:])
-	var compressed bytes.Buffer
-	compressed.Write(packed[:4])
-	zw := zlib.NewWriter(&compressed)
-	if _, err := zw.Write(changed); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return []byte(`{"version":` + strconv.Itoa(int(packed[3])) + `,"data":"` + base64.StdEncoding.EncodeToString(compressed.Bytes()) + `"}`)
 }
 
 func checkCorruptReplay(t *testing.T, base harness.Store, id string, data []byte, want *harness.View, tailFirst bool) {

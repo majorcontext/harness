@@ -4,316 +4,87 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"math"
-	"sort"
-	"strconv"
-	"unsafe"
+	"runtime/debug"
 )
 
-const checkpointVersion = 4
 const maxCheckpointBytes = 128 << 20
-const maxCheckpointDepth = 128
 
-type codecWriter struct {
-	buf []byte
-	err error
-}
-
-func (w *codecWriter) fail(err error) {
-	if w.err == nil {
-		w.err = err
-	}
-}
-func (w *codecWriter) unsigned(v uint64) { w.buf = binary.AppendUvarint(w.buf, v) }
-func (w *codecWriter) signed(v int64)    { w.buf = binary.AppendVarint(w.buf, v) }
-func (w *codecWriter) length(v int)      { w.signed(int64(v)) }
-func (w *codecWriter) boolean(v bool) {
-	if v {
-		w.unsigned(1)
-	} else {
-		w.unsigned(0)
-	}
-}
-func (w *codecWriter) float64(v float64) {
-	w.buf = binary.LittleEndian.AppendUint64(w.buf, math.Float64bits(v))
-}
-func (w *codecWriter) bytes(v []byte)  { w.length(len(v)); w.buf = append(w.buf, v...) }
-func (w *codecWriter) string(v string) { w.length(len(v)); w.buf = append(w.buf, v...) }
-
-type codecReader struct {
-	buf       []byte
-	err       error
-	allocated uint64
-	depth     int
+type checkpointEnvelope struct {
+	Version  string            `json:"version"`
+	Data     []byte            `json:"data"`
+	Checksum [sha256.Size]byte `json:"checksum"`
 }
 
-func (r *codecReader) allocate(n int, size uintptr) bool {
-	if r.err != nil {
-		return false
-	}
-	if n < 0 || uint64(size) > maxCheckpointBytes || uint64(n) > (maxCheckpointBytes-r.allocated)/max(uint64(size), 1) {
-		r.fail(errors.New("checkpoint allocation budget exceeded"))
-		return false
-	}
-	bytes := uint64(n) * uint64(size)
-	if bytes != 0 {
-		bytes = (bytes + 15) &^ 15
-	}
-	if bytes > maxCheckpointBytes-r.allocated {
-		r.fail(errors.New("checkpoint allocation budget exceeded"))
-		return false
-	}
-	r.allocated += bytes
-	return true
-}
-
-func (r *codecReader) allocateMap(n int, valueSize uintptr) bool {
-	return r.allocate(1, 128) && r.allocate(n, 4*(unsafe.Sizeof("")+valueSize+16))
-}
-
-func (r *codecReader) fail(err error) {
-	if err != nil && r.err == nil {
-		r.err = err
-	}
-}
-func (r *codecReader) unsigned() uint64 {
-	v, n := binary.Uvarint(r.buf)
-	if n <= 0 {
-		r.fail(errors.New("invalid unsigned integer"))
-		return 0
-	}
-	r.buf = r.buf[n:]
-	return v
-}
-func (r *codecReader) signed() int64 {
-	v, n := binary.Varint(r.buf)
-	if n <= 0 {
-		r.fail(errors.New("invalid signed integer"))
-		return 0
-	}
-	r.buf = r.buf[n:]
-	return v
-}
-func (r *codecReader) length() int {
-	v := r.signed()
-	if v < -1 || v > maxCheckpointBytes {
-		r.fail(errors.New("invalid length"))
-		return -1
-	}
-	return int(v)
-}
-func (r *codecReader) count(n int) bool {
-	if r.err != nil || n > len(r.buf) {
-		r.fail(errors.New("invalid count"))
-		return false
-	}
-	return true
-}
-func (r *codecReader) boolean() bool {
-	v := r.unsigned()
-	if v > 1 {
-		r.fail(errors.New("invalid boolean"))
-	}
-	return v == 1
-}
-func (r *codecReader) float64() float64 {
-	if len(r.buf) < 8 {
-		r.fail(io.ErrUnexpectedEOF)
-		return 0
-	}
-	v := binary.LittleEndian.Uint64(r.buf)
-	r.buf = r.buf[8:]
-	return math.Float64frombits(v)
-}
-func (r *codecReader) bytes() []byte {
-	n := r.length()
-	if n < 0 {
-		r.fail(errors.New("invalid bytes"))
-		return nil
-	}
-	if !r.count(n) {
-		return nil
-	}
-	v := r.buf[:n]
-	r.buf = r.buf[n:]
-	return v
-}
-func (r *codecReader) string() string {
-	b := r.bytes()
-	if !r.allocate(len(b), 1) {
+// CheckpointVersion returns the clean VCS revision, or an empty string when unavailable.
+func CheckpointVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
 		return ""
 	}
-	return string(b)
+	var revision, dirty string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value
+		}
+	}
+	if dirty != "false" {
+		return ""
+	}
+	return revision
 }
 
-func (w *codecWriter) value(v any) {
-	switch x := v.(type) {
-	case nil:
-		w.unsigned(0)
-	case bool:
-		w.unsigned(1)
-		w.boolean(x)
-	case string:
-		w.unsigned(2)
-		w.string(x)
-	case float64:
-		w.unsigned(3)
-		w.float64(x)
-	case json.Number:
-		w.unsigned(4)
-		w.string(string(x))
-	case []any:
-		w.unsigned(5)
-		w.length(len(x))
-		for _, v := range x {
-			w.value(v)
-		}
-	case map[string]any:
-		w.unsigned(6)
-		w.length(len(x))
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			w.string(k)
-			w.value(x[k])
-		}
-	default:
-		w.fail(fmt.Errorf("unsupported JSON value %T", v))
-	}
-}
-func (r *codecReader) enter() bool {
-	if r.err != nil {
-		return false
-	}
-	if r.depth >= maxCheckpointDepth {
-		r.fail(errors.New("checkpoint value nesting too deep"))
-		return false
-	}
-	r.depth++
-	return true
-}
-func (r *codecReader) leave() { r.depth-- }
-func (r *codecReader) value() any {
-	if !r.enter() {
-		return nil
-	}
-	defer r.leave()
-	switch r.unsigned() {
-	case 0:
-		return nil
-	case 1:
-		return r.boolean()
-	case 2:
-		if !r.allocate(1, unsafe.Sizeof("")) {
-			return nil
-		}
-		return r.string()
-	case 3:
-		if !r.allocate(1, unsafe.Sizeof(float64(0))) {
-			return nil
-		}
-		return r.float64()
-	case 4:
-		if !r.allocate(1, unsafe.Sizeof("")) {
-			return nil
-		}
-		return json.Number(r.string())
-	case 5:
-		n := r.length()
-		if n < 0 || !r.count(n) {
-			r.fail(errors.New("invalid array"))
-			return nil
-		}
-		if !r.allocate(n, unsafe.Sizeof(*new(any))) {
-			return nil
-		}
-		v := make([]any, n)
-		for i := range v {
-			v[i] = r.value()
-			if r.err != nil {
-				return nil
-			}
-		}
-		return v
-	case 6:
-		n := r.length()
-		if n < 0 || !r.count(n) {
-			r.fail(errors.New("invalid object"))
-			return nil
-		}
-		if !r.allocateMap(n, unsafe.Sizeof(*new(any))) {
-			return nil
-		}
-		v := make(map[string]any, n)
-		for i := 0; i < n; i++ {
-			k := r.string()
-			x := r.value()
-			if r.err != nil {
-				return nil
-			}
-			v[k] = x
-		}
-		return v
-	default:
-		r.fail(errors.New("invalid value tag"))
-		return nil
-	}
-}
-
-// Checkpoint serializes the light state in a versioned, compressed form.
+// Checkpoint serializes the light state as a versioned cache.
 func (l *LightState) Checkpoint() ([]byte, error) {
 	if l == nil {
 		return nil, errors.New("nil light state")
 	}
-	w := codecWriter{}
-	codecLightStateEncode(&w, *l)
-	if w.err != nil {
-		return nil, w.err
+	version := CheckpointVersion()
+	if version == "" {
+		return nil, errors.New("checkpoint version unavailable")
 	}
-	sum := sha256.Sum256(w.buf)
-	w.buf = append(w.buf, sum[:]...)
-	var out bytes.Buffer
-	out.Write([]byte{'H', 'L', 'S', checkpointVersion})
-	z := zlib.NewWriter(&out)
-	if _, err := z.Write(w.buf); err != nil {
+	var packed bytes.Buffer
+	z := zlib.NewWriter(&packed)
+	if err := gob.NewEncoder(z).Encode(l.snapshot()); err != nil {
 		return nil, err
 	}
 	if err := z.Close(); err != nil {
 		return nil, err
 	}
-	return []byte(`{"version":` + strconv.Itoa(checkpointVersion) + `,"data":"` + base64.StdEncoding.EncodeToString(out.Bytes()) + `"}`), nil
+	if packed.Len() > maxCheckpointBytes {
+		return nil, errors.New("checkpoint too large")
+	}
+	return json.Marshal(checkpointEnvelope{Version: version, Data: packed.Bytes(), Checksum: sha256.Sum256(packed.Bytes())})
 }
 
 // RestoreLightState decodes a checkpoint into a light state.
 func RestoreLightState(data []byte) (*LightState, error) {
-	prefix := `{"version":` + strconv.Itoa(checkpointVersion) + `,"data":"`
-	if len(data) < len(prefix)+2 || !bytes.HasPrefix(data, []byte(prefix)) || !bytes.HasSuffix(data, []byte(`"}`)) {
-		return nil, errors.New("invalid checkpoint version")
-	}
-	if len(data)-len(prefix)-2 > base64.StdEncoding.EncodedLen(2*maxCheckpointBytes+1024) {
+	if len(data) > (maxCheckpointBytes*4/3)+2048 {
 		return nil, errors.New("checkpoint too large")
 	}
-	data, err := base64.StdEncoding.DecodeString(string(data[len(prefix) : len(data)-2]))
-	if err != nil {
+	var encoded checkpointEnvelope
+	if err := json.Unmarshal(data, &encoded); err != nil {
 		return nil, err
 	}
-	if len(data) < 4 || string(data[:3]) != "HLS" || data[3] != checkpointVersion {
+	version := CheckpointVersion()
+	if version == "" || encoded.Version != version {
 		return nil, errors.New("invalid checkpoint version")
 	}
-	z, err := zlib.NewReader(bytes.NewReader(data[4:]))
+	sum := sha256.Sum256(encoded.Data)
+	if !bytes.Equal(encoded.Checksum[:], sum[:]) {
+		return nil, errors.New("invalid checkpoint checksum")
+	}
+	z, err := zlib.NewReader(bytes.NewReader(encoded.Data))
 	if err != nil {
 		return nil, err
 	}
-	b, err := io.ReadAll(io.LimitReader(z, maxCheckpointBytes+1))
+	body, err := io.ReadAll(io.LimitReader(z, maxCheckpointBytes+1))
 	closeErr := z.Close()
 	if err != nil {
 		return nil, err
@@ -321,29 +92,20 @@ func RestoreLightState(data []byte) (*LightState, error) {
 	if closeErr != nil {
 		return nil, closeErr
 	}
-	if len(b) > maxCheckpointBytes {
+	if len(body) > maxCheckpointBytes {
 		return nil, errors.New("checkpoint too large")
 	}
-	if len(b) < sha256.Size {
-		return nil, errors.New("invalid checkpoint checksum")
+	dec := gob.NewDecoder(bytes.NewReader(body))
+	var snapshot checkpointSnapshot
+	if err := dec.Decode(&snapshot); err != nil {
+		return nil, err
 	}
-	body, checksum := b[:len(b)-sha256.Size], b[len(b)-sha256.Size:]
-	sum := sha256.Sum256(body)
-	if !bytes.Equal(sum[:], checksum) {
-		return nil, errors.New("invalid checkpoint checksum")
-	}
-	r := codecReader{buf: body}
-	l := new(LightState)
-	codecLightStateDecode(&r, l)
-	if r.err != nil {
-		return nil, r.err
-	}
-	if len(r.buf) != 0 {
+	if err := dec.Decode(new(any)); err != io.EOF {
 		return nil, errors.New("trailing checkpoint data")
 	}
+	l := snapshot.lightState()
 	if err := l.validateCheckpoint(); err != nil {
 		return nil, err
 	}
-	l.state.light = l
 	return l, nil
 }

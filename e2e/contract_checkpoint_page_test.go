@@ -1,13 +1,10 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
@@ -17,6 +14,21 @@ import (
 var errPageReadFailure = errors.New("page read failure")
 
 type pageFailureStore struct{ *checkpointStore }
+
+type corruptPageStore struct{ *checkpointStore }
+
+func (s corruptPageStore) ReadSeqs(ctx context.Context, session string, seqs []uint64) ([]harness.Record, error) {
+	records, err := s.checkpointStore.ReadSeqs(ctx, session, seqs)
+	if err != nil || len(records) == 0 {
+		return records, err
+	}
+	first, err := s.Read(ctx, session, 0, 1)
+	if err != nil {
+		return nil, err
+	}
+	records[len(records)-1].Data = first[0].Data
+	return records, nil
+}
 
 func (s pageFailureStore) ReadSeqs(ctx context.Context, _ string, _ []uint64) ([]harness.Record, error) {
 	if err := ctx.Err(); err != nil {
@@ -52,23 +64,15 @@ func (a checkpointPageFallback) run(t *testing.T, r *run) {
 	if _, err := harness.OpenView(ctx, initial, id); err != nil {
 		t.Fatal(err)
 	}
+	if !testHasVCS() {
+		return
+	}
 	seq, data, err := initial.LoadCheckpoint(ctx, id)
 	if err != nil || seq != want.Snapshot().HeadSeq {
 		t.Fatalf("head checkpoint: %d %v", seq, err)
 	}
-	packed, body := unpackCheckpoint(t, data)
-	var source uint64
-	for event, err := range harness.ReadEvents(ctx, base, id, 0) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		if event.Kind == "item.completed" && event.Time.Equal(page.Messages[0].CreatedAt) {
-			source = event.Seq
-		}
-	}
-	changed := corruptPageSource(t, body, source, page.Messages[0].CreatedAt)
 	tracking := &replayTrackingStore{Store: base}
-	corrupt := &checkpointStore{Store: tracking, seq: seq, data: packCheckpoint(t, packed, changed)}
+	corrupt := corruptPageStore{&checkpointStore{Store: tracking, seq: seq, data: data}}
 	view, err := harness.OpenView(ctx, corrupt, id)
 	if err != nil || tracking.fromStart {
 		t.Fatalf("restore corrupt source: %v, replay=%v", err, tracking.fromStart)
@@ -78,26 +82,6 @@ func (a checkpointPageFallback) run(t *testing.T, r *run) {
 		t.Fatalf("corrupt page: %+v, %v, replay=%v; want %+v", got, err, tracking.fromStart, page)
 	}
 	checkPageErrors(t, base, id, seq, data)
-}
-
-func corruptPageSource(t *testing.T, body []byte, seq uint64, at time.Time) []byte {
-	t.Helper()
-	stamp, err := at.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pattern := binary.AppendUvarint(nil, seq)
-	pattern = binary.AppendVarint(pattern, 1)
-	prefix := len(pattern)
-	pattern = binary.AppendUvarint(pattern, seq)
-	pattern = binary.AppendVarint(pattern, int64(len(stamp)))
-	pattern = append(pattern, stamp...)
-	if seq <= 1 || seq >= 128 || bytes.Count(body, pattern) != 1 {
-		t.Fatalf("message source pattern not unique for seq %d", seq)
-	}
-	changed := bytes.Clone(body)
-	changed[bytes.Index(body, pattern)+prefix] = 1
-	return changed
 }
 
 func checkPageErrors(t *testing.T, base harness.Store, id string, seq uint64, data []byte) {

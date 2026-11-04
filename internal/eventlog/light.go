@@ -24,15 +24,12 @@ type LightState struct {
 	state       State
 	folded      []lightEntry
 	attachments map[string]attachmentInfo
-	asked       map[string]uint64
-	resolved    map[string]uint64
 	commands    map[string]uint64
-	retained    []uint64
 }
 
 // NewLightState returns an empty light fold.
 func NewLightState() *LightState {
-	l := &LightState{attachments: map[string]attachmentInfo{}, asked: map[string]uint64{}, resolved: map[string]uint64{}, commands: map[string]uint64{}}
+	l := &LightState{attachments: map[string]attachmentInfo{}, commands: map[string]uint64{}}
 	l.state.light = l
 	return l
 }
@@ -99,10 +96,8 @@ func (l *LightState) trim(env Envelope) {
 		h.sources = []uint64{env.Seq}
 		l.trimEntry(h)
 	case protocol.RequestOpened:
-		l.asked[e.RequestID] = env.Seq
 		delete(s.asked, e.RequestID)
 	case protocol.RequestResolved:
-		l.resolved[e.RequestID] = env.Seq
 		delete(s.resolved, e.RequestID)
 		if n := len(s.history); n > 0 && s.history[n-1].seq == env.Seq {
 			h := &s.history[n-1]
@@ -117,7 +112,6 @@ func (l *LightState) trim(env Envelope) {
 	case protocol.CompactionApplied:
 		s.compaction.Summary = ""
 	case protocol.ToolResultRetained:
-		l.retained = append(l.retained, env.Seq)
 		s.retained[len(s.retained)-1] = protocol.ToolResultRetained{Handle: e.Handle, BlobKey: e.BlobKey}
 	}
 }

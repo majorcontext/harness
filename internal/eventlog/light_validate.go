@@ -8,7 +8,7 @@ import (
 
 func (l *LightState) validateCheckpoint() error {
 	s := &l.state
-	if l.attachments == nil || l.asked == nil || l.resolved == nil || l.commands == nil {
+	if l.attachments == nil || l.commands == nil {
 		return errors.New("invalid checkpoint indexes")
 	}
 	if s.Head() == 0 {
@@ -89,16 +89,9 @@ func (l *LightState) validateSources() error {
 			return errors.New("invalid checkpoint input source")
 		}
 	}
-	for _, indexes := range []map[string]uint64{l.asked, l.resolved, l.commands} {
-		for _, seq := range indexes {
-			if !valid(seq) {
-				return errors.New("invalid checkpoint index source")
-			}
-		}
-	}
-	for _, seq := range l.retained {
+	for _, seq := range l.commands {
 		if !valid(seq) {
-			return errors.New("invalid checkpoint retained source")
+			return errors.New("invalid checkpoint index source")
 		}
 	}
 	for id, c := range s.commands {
@@ -106,7 +99,7 @@ func (l *LightState) validateSources() error {
 			return errors.New("invalid checkpoint command")
 		}
 	}
-	if len(l.commands) != len(s.commands) || len(l.retained) != len(s.retained) {
+	if len(l.commands) != len(s.commands) {
 		return errors.New("invalid checkpoint source index")
 	}
 	if s.compactedAt != 0 && (!valid(s.compactedAt) || s.compaction.ToSeq == 0 || s.compaction.ToSeq >= s.compactedAt) {

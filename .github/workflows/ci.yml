@@ -311,7 +311,8 @@ jobs:
         # the serve binary and the CLI, which the Contract job runs.
         run: |
           set -o pipefail
-          HARNESS_E2E_RUNTIME=1 go test -race -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract' -job runtime
+          HARNESS_E2E_RUNTIME=1 go test -race -buildvcs=true -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract' -job runtime
+          HARNESS_E2E_RUNTIME=1 go test -race -buildvcs=false -count=1 ./e2e/ -run '^TestContractStoppedViewCheckpoint$/^runtime$/(stopped_view_checkpoint_preserves_reads|checkpoint_uncacheable_build_replays_without_cache_calls)$'
 
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
