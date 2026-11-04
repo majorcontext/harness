@@ -142,6 +142,10 @@ func withoutTaskReports(parts []protocol.LogPart) []protocol.LogPart {
 	return slices.DeleteFunc(slices.Clone(parts), func(p protocol.LogPart) bool { return p.Type == protocol.LogPartTaskReport })
 }
 
+func inputMessage(in protocol.InputAdmitted) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)}
+}
+
 // History returns the summary of the newest compaction as a user message, then
 // each later message in log order, with no pinned segment. Readers see more:
 // see Transcript.
@@ -203,7 +207,7 @@ func (s *State) remember(env Envelope) {
 			if IsReport(in.Parts) && !sayReport {
 				continue
 			}
-			s.say(env.Seq, env.Time, "msg_"+id, protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)})
+			s.say(env.Seq, env.Time, "msg_"+id, inputMessage(in))
 			s.history[len(s.history)-1].from = provenance{in.Source, in.SourceID, in.SourceLabel}
 			sayReport = false
 		}

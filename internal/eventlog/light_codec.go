@@ -3,6 +3,7 @@ package eventlog
 import (
 	"bytes"
 	"compress/zlib"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -11,9 +12,10 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strconv"
 )
 
-const checkpointVersion = 1
+const checkpointVersion = 2
 const maxCheckpointBytes = 128 << 20
 
 type codecWriter struct {
@@ -226,6 +228,8 @@ func (l *LightState) Checkpoint() ([]byte, error) {
 	if w.err != nil {
 		return nil, w.err
 	}
+	sum := sha256.Sum256(w.buf)
+	w.buf = append(w.buf, sum[:]...)
 	var out bytes.Buffer
 	out.Write([]byte{'H', 'L', 'S', checkpointVersion})
 	z := zlib.NewWriter(&out)
@@ -235,12 +239,12 @@ func (l *LightState) Checkpoint() ([]byte, error) {
 	if err := z.Close(); err != nil {
 		return nil, err
 	}
-	return []byte(`{"version":1,"data":"` + base64.StdEncoding.EncodeToString(out.Bytes()) + `"}`), nil
+	return []byte(`{"version":` + strconv.Itoa(checkpointVersion) + `,"data":"` + base64.StdEncoding.EncodeToString(out.Bytes()) + `"}`), nil
 }
 
 // RestoreLightState decodes a checkpoint into a light state.
 func RestoreLightState(data []byte) (*LightState, error) {
-	const prefix = `{"version":1,"data":"`
+	prefix := `{"version":` + strconv.Itoa(checkpointVersion) + `,"data":"`
 	if !bytes.HasPrefix(data, []byte(prefix)) || !bytes.HasSuffix(data, []byte(`"}`)) {
 		return nil, errors.New("invalid checkpoint version")
 	}
@@ -266,7 +270,15 @@ func RestoreLightState(data []byte) (*LightState, error) {
 	if len(b) > maxCheckpointBytes {
 		return nil, errors.New("checkpoint too large")
 	}
-	r := codecReader{buf: b}
+	if len(b) < sha256.Size {
+		return nil, errors.New("invalid checkpoint checksum")
+	}
+	body, checksum := b[:len(b)-sha256.Size], b[len(b)-sha256.Size:]
+	sum := sha256.Sum256(body)
+	if !bytes.Equal(sum[:], checksum) {
+		return nil, errors.New("invalid checkpoint checksum")
+	}
+	r := codecReader{buf: body}
 	l := new(LightState)
 	codecLightStateDecode(&r, l)
 	if r.err != nil {
@@ -274,6 +286,9 @@ func RestoreLightState(data []byte) (*LightState, error) {
 	}
 	if len(r.buf) != 0 {
 		return nil, errors.New("trailing checkpoint data")
+	}
+	if err := l.validateCheckpoint(); err != nil {
+		return nil, err
 	}
 	l.state.light = l
 	return l, nil

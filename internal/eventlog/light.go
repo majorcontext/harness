@@ -114,6 +114,8 @@ func (l *LightState) trim(env Envelope) {
 		c := s.commands[e.InputID]
 		c.rec = protocol.CommandRecorded{InputID: e.InputID, Status: e.Status}
 		s.commands[e.InputID] = c
+	case protocol.CompactionApplied:
+		s.compaction.Summary = ""
 	case protocol.ToolResultRetained:
 		l.retained = append(l.retained, env.Seq)
 		s.retained[len(s.retained)-1] = protocol.ToolResultRetained{Handle: e.Handle, BlobKey: e.BlobKey}
@@ -310,7 +312,7 @@ func (l *LightState) RenderPage(p PagePlan, records []Record) (protocol.MessageP
 		if !ok {
 			return protocol.MessagePage{}, fmt.Errorf("eventlog: invalid command source %d", c.latest)
 		}
-		out.Commands = append(out.Commands, protocol.MessageCommand{InputID: r.InputID, Line: r.Line, Name: r.Name, Args: r.Args, Status: r.Status, Text: r.Text, Result: r.Result, ResultTruncated: r.ResultTruncated, AfterMessageID: c.after, Seq: c.seq})
+		out.Commands = append(out.Commands, commandView(r, c.seq, c.after))
 	}
 	return out, nil
 }
@@ -325,7 +327,7 @@ func renderLightEntry(x lightEntry, events map[uint64]Envelope) (protocol.Messag
 		if !ok {
 			return protocol.Message{}, fmt.Errorf("eventlog: invalid summary source %d", x.Summary)
 		}
-		return protocol.Message{ID: summaryID(x.Summary), Role: protocol.RoleUser, CreatedAt: x.At, Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: c.Summary}}}, nil
+		return summaryMessage(x.Summary, x.At, c.Summary), nil
 	}
 	h := x.Entry
 	var ins []protocol.InputAdmitted
@@ -341,7 +343,7 @@ func renderLightEntry(x lightEntry, events map[uint64]Envelope) (protocol.Messag
 			h.msg = v.Message
 		case protocol.RequestResolved:
 			if h.readerOnly {
-				h.msg = protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: v.Response}}}
+				h.msg = responseMessage(v.Response)
 			} else if len(h.msg.Parts) > 0 {
 				part := h.msg.Parts[0]
 				h.msg = dismissal(OpenToolCall{CallID: part.CallID, Name: part.Name}, v.SourceLabel)
@@ -355,7 +357,7 @@ func renderLightEntry(x lightEntry, events map[uint64]Envelope) (protocol.Messag
 			h.msg = SteerMessage(partsOf(ins))
 			h.promoted = ins
 		} else {
-			h.msg = protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(ins[0].Parts)}
+			h.msg = inputMessage(ins[0])
 		}
 	}
 	return readerMessage(h), nil

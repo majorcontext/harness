@@ -3,6 +3,7 @@ package harness
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -40,7 +41,14 @@ func openCheckpointView(ctx context.Context, st Store, checkpoints checkpointSto
 	}
 	start := s.Head()
 	if err := session.ReplayLight(ctx, storeLog{st, id}, s, head); err != nil {
-		return nil, err
+		if start == 0 || !errors.Is(err, ErrUnreplayable) {
+			return nil, err
+		}
+		s = eventlog.NewLightState()
+		start = 0
+		if err := session.ReplayLight(ctx, storeLog{st, id}, s, head); err != nil {
+			return nil, err
+		}
 	}
 	if start == 0 || head-start >= checkpointTail {
 		if data, err := s.Checkpoint(); err == nil {

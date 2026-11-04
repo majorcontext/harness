@@ -3,6 +3,7 @@ package eventlog
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/majorcontext/harness/protocol"
 )
@@ -47,8 +48,12 @@ func (s *State) Transcript() []protocol.Message {
 
 // summaryMessage is the divider message of the newest compaction.
 func (s *State) summaryMessage() protocol.Message {
-	return protocol.Message{ID: summaryID(s.compactedAt), Role: protocol.RoleUser, CreatedAt: s.compactedTime,
-		Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: s.compaction.Summary}}}
+	return summaryMessage(s.compactedAt, s.compactedTime, s.compaction.Summary)
+}
+
+func summaryMessage(seq uint64, at time.Time, summary string) protocol.Message {
+	return protocol.Message{ID: summaryID(seq), Role: protocol.RoleUser, CreatedAt: at,
+		Parts: []protocol.MessagePart{{Type: protocol.MessagePartText, Text: summary}}}
 }
 
 func cloneReaderMessage(m protocol.Message) protocol.Message {
@@ -134,11 +139,14 @@ func (s *State) commandsIn(window []protocol.Message, fromFirst bool) []protocol
 	slices.SortFunc(in, func(a, b command) int { return cmp.Compare(a.seq, b.seq) })
 	out := make([]protocol.MessageCommand, 0, len(in))
 	for _, c := range in {
-		r := c.rec
-		out = append(out, protocol.MessageCommand{InputID: r.InputID, Line: r.Line, Name: r.Name, Args: r.Args, Status: r.Status,
-			Text: r.Text, Result: r.Result, ResultTruncated: r.ResultTruncated, AfterMessageID: c.after, Seq: c.seq})
+		out = append(out, commandView(c.rec, c.seq, c.after))
 	}
 	return out
+}
+
+func commandView(r protocol.CommandRecorded, seq uint64, after string) protocol.MessageCommand {
+	return protocol.MessageCommand{InputID: r.InputID, Line: r.Line, Name: r.Name, Args: r.Args, Status: r.Status,
+		Text: r.Text, Result: r.Result, ResultTruncated: r.ResultTruncated, AfterMessageID: after, Seq: seq}
 }
 
 // QueuedInputs returns the queued inputs as a reader sees them, oldest first.

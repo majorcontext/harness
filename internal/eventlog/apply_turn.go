@@ -197,7 +197,7 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 			calls[k].answered = true
 			if e.Response != "" {
 				s.history = append(s.history, entry{seq: seq, at: at, id: "msg_response_" + e.RequestID, by: s.turnBy, turn: s.turnN, readerOnly: true,
-					msg:  protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: e.Response}}},
+					msg:  responseMessage(e.Response),
 					from: provenance{e.Source, e.SourceID, e.SourceLabel}})
 			}
 		} else {
@@ -213,6 +213,10 @@ func (s *State) applyRequestResolved(e protocol.RequestResolved, seq uint64, at 
 	}
 	s.resolved[e.RequestID] = e
 	return nil
+}
+
+func responseMessage(text string) protocol.LogMessage {
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}
 }
 
 func (s *State) isOpen(id string) bool {

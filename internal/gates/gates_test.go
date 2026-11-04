@@ -624,6 +624,9 @@ func resolveBase(load func(root, ref string) (Base, error), root, ref string) (B
 func checkRepository(t *testing.T, load func(root, ref string) (Base, error)) {
 	t.Helper()
 	const root = "../.."
+	if err := checkCheckpointCodec(os.DirFS(root)); err != nil {
+		t.Fatal(err)
+	}
 	ref := os.Getenv("GATES_BASE_REF")
 	if ref == "" {
 		ref = "origin/main"
