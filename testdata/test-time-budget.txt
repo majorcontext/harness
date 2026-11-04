@@ -9,7 +9,7 @@
 #
 # Package        slowest CI run  budget
 # e2e (Contract)         77 s     116 s (the jj rows run jj for each fixture)
-# e2e@runtime            27 s      41 s (its slowest row took 27 s)
+# e2e@runtime           101 s     152 s (each runtime scenario checks every log prefix against replay)
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
 # gates                 24 s       36 s (cold build of the fake CLI)
@@ -21,7 +21,7 @@
 leaf 10
 package default 10
 package e2e 116
-package e2e@runtime 41
+package e2e@runtime 152
 package internal/backend/claudecode 21
 package internal/imageclamp 13
 package internal/gates 36
@@ -34,13 +34,35 @@ package internal/workspace 18
 # has; a cold node start on a loaded runner can use most of it.
 test internal/plugin TestTypeScriptSDK 35
 
-# The gates run the whole repository against the merge base.
-test internal/gates TestRepository 12
+# The repository gate also validates the generated checkpoint codec (18.56 s on CI).
+test internal/gates TestRepository 28
 
 # The first test of the package to start a runtime builds the fake CLI (12 s on CI, budget 1.5 times).
 test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
 # Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 7 s alone and 16-41 s on CI, where it runs beside the whole parallel package. The state must pass the 4 MiB chunk and the sync batch cap, and the race detector spends the time decoding it.
 test e2e TestContractRuntimeClaudeCodeStateChunks 60
+# Runtime rows check every session log prefix, checkpoint restore, tail, and message page against replay.
+# Budgets are 1.5 times the slowest observed CI row, rounded up.
+test e2e TestContractCheckInputEqualsSubmit/runtime/too_large 16
+test e2e TestContractTaskSend/runtime/task_two_sends_to_a_settled_child_need_one_slot 16
+test e2e TestContractTaskSend/runtime/task_send_runs_a_settled_child_again 21
+test e2e TestContractWebFetchRefusals/runtime/web_fetch_refuses_private_loopback_and_link_local_addresses 25
+test e2e TestContractTaskTree/runtime/task_cancel_of_a_child_stops_the_grandchild 16
+test e2e TestContractTaskTree/runtime/task_cancel_of_a_grandchild_reports_to_the_nearest_live_ancestor 17
+test e2e TestContractWebFetchContent/runtime/web_fetch_bounds_the_output_for_a_deeply_nested_page 17
+test e2e TestContractToolResultAcrossTurns/runtime/tool_result_handles_continue_across_turns_and_a_restart 26
+test e2e TestContractTaskSpawnModelAndEffort/runtime/task_spawn_runs_the_child_on_its_model_and_effort 23
+test e2e TestContractGoalEvaluatorTranscriptBudget/runtime/an_evaluator_model_reads_half_its_window_less_the_reserve 44
+test e2e TestContractFileToolsEdges/runtime/file_tools_refuse_a_named_pipe 22
+test e2e TestContractModelTool/runtime/model_tool_reports_lists_and_switches_the_model 17
+test e2e TestContractFileToolsEdges/runtime/file_tools_search_edges 31
+test e2e TestContractMCPAvailability/runtime/pins_after_a_compaction_keep_each_request_a_prefix_of_the_next 17
+test e2e TestContractMCPAvailability/runtime/bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next 17
+test e2e TestContractMCPSkills/runtime/mcp_skill_file_over_8_mib_of_base64_reads_over_sse 21
+test e2e TestContractCommands/runtime/typed_commands_record_their_outcome 17
+test e2e TestContractFileToolsWrites/runtime/file_tools_roundtrip 24
+test e2e TestContractFileToolsWrites/runtime/file_tools_write_edit_guards 30
+
 # Rows that build a large transcript for a goal evaluator (7-12 s on CI).
 test e2e TestContractGoalEvaluatorTranscript 18
 # Rows that wait for a real hook timeout (6 s on CI).

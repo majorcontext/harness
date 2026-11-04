@@ -14,7 +14,7 @@ import (
 	"github.com/majorcontext/harness/store"
 )
 
-var pageReadFailure = errors.New("page read failure")
+var errPageReadFailure = errors.New("page read failure")
 
 type pageFailureStore struct{ *checkpointStore }
 
@@ -22,7 +22,7 @@ func (s pageFailureStore) ReadSeqs(ctx context.Context, _ string, _ []uint64) ([
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, pageReadFailure
+	return nil, errPageReadFailure
 }
 
 type checkpointPageFallback struct{ as string }
@@ -108,7 +108,7 @@ func checkPageErrors(t *testing.T, base harness.Store, id string, seq uint64, da
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.Messages(t.Context(), 0, 1); !errors.Is(err, pageReadFailure) || tracking.fromStart {
+	if _, err := v.Messages(t.Context(), 0, 1); !errors.Is(err, errPageReadFailure) || tracking.fromStart {
 		t.Fatalf("page store failure = %v, replay=%v", err, tracking.fromStart)
 	}
 	ctx, cancel := context.WithCancel(t.Context())

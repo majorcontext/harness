@@ -74,7 +74,7 @@ func (s *checkpointStore) ReadSeqs(ctx context.Context, session string, seqs []u
 		for end < len(seqs) && seqs[end] == seqs[end-1]+1 {
 			end++
 		}
-		records, err := s.Store.Read(ctx, session, seqs[i]-1, end-i)
+		records, err := s.Read(ctx, session, seqs[i]-1, end-i)
 		if err != nil {
 			return nil, err
 		}
@@ -572,8 +572,14 @@ func checkBlobParity(t *testing.T, got, want *harness.View, key string) {
 	if ge != nil || we != nil {
 		t.Fatalf("Blob(%q): checkpoint=%v replay=%v", key, ge, we)
 	}
-	defer gb.Body.Close()
-	defer wb.Body.Close()
+	defer func() {
+		if err := gb.Body.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := wb.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	gd, ge := io.ReadAll(gb.Body)
 	wd, we := io.ReadAll(wb.Body)
 	if ge != nil || we != nil || gb.MediaType != wb.MediaType || gb.Size != wb.Size || !reflect.DeepEqual(gd, wd) {
@@ -677,7 +683,8 @@ func checkpointInputsOffset(t *testing.T, body []byte) int {
 	for range 10 {
 		c.text()
 	}
-	if c.integer() != -1 || c.integer() != -1 {
+	first, second := c.integer(), c.integer()
+	if first != -1 || second != -1 {
 		t.Fatal("unexpected checkpoint fixture")
 	}
 	c.integer()
@@ -699,7 +706,8 @@ func corruptTurnID(t *testing.T, body []byte, inputs int) []byte {
 	c.pos += n
 	c.text()
 	c.text()
-	if c.integer() != -1 || c.integer() != -1 {
+	first, second := c.integer(), c.integer()
+	if first != -1 || second != -1 {
 		t.Fatal("expected empty progress lists")
 	}
 	if body[c.pos] != 0 || body[c.pos+1] != 0 {
@@ -723,7 +731,8 @@ func corruptUsedTurn(t *testing.T, body []byte, inputs int, turnID string) []byt
 	c.pos += n
 	c.text()
 	c.text()
-	if c.integer() != -1 || c.integer() != -1 {
+	first, second := c.integer(), c.integer()
+	if first != -1 || second != -1 {
 		t.Fatal("expected empty progress lists")
 	}
 	if body[c.pos] != 0 || body[c.pos+1] != 0 {

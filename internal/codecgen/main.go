@@ -18,7 +18,10 @@ import (
 	"strings"
 )
 
-type packageExport struct{ ImportPath, Export string }
+type packageExport struct {
+	ImportPath, Export string
+	GoFiles            []string
+}
 
 type generator struct {
 	pkg   *types.Package
@@ -111,6 +114,7 @@ func load() (*types.Package, error) {
 		return nil, fmt.Errorf("go list: %w", err)
 	}
 	exports := map[string]string{}
+	var names []string
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	for {
 		var p packageExport
@@ -120,27 +124,25 @@ func load() (*types.Package, error) {
 			return nil, err
 		}
 		exports[p.ImportPath] = p.Export
+		if p.ImportPath == "github.com/majorcontext/harness/internal/eventlog" {
+			names = p.GoFiles
+		}
 	}
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, "internal/eventlog", func(info os.FileInfo) bool {
-		n := info.Name()
-		return strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") && !strings.HasPrefix(n, "light_codec_fields_")
-	}, 0)
-	if err != nil {
-		return nil, err
-	}
-	p := pkgs["eventlog"]
-	if p == nil {
+	if len(names) == 0 {
 		return nil, fmt.Errorf("eventlog package not found")
 	}
-	names := make([]string, 0, len(p.Files))
-	for n := range p.Files {
-		names = append(names, n)
-	}
+	fset := token.NewFileSet()
 	slicesSort(names)
 	files := make([]*ast.File, 0, len(names))
 	for _, n := range names {
-		files = append(files, p.Files[n])
+		if strings.HasPrefix(n, "light_codec_fields_") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("internal/eventlog", n), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, f)
 	}
 	imp := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) { return os.Open(exports[path]) })
 	cfg := types.Config{Importer: imp, Error: func(error) {}}
