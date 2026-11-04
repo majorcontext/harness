@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"go/types"
 	"strings"
@@ -17,13 +18,15 @@ func (g *generator) typeName(t types.Type) string {
 }
 
 func (g *generator) add(t types.Type) string {
-	if n, ok := g.names[t]; ok {
-		return n
+	for _, existing := range g.queue {
+		if types.Identical(existing, t) {
+			return g.names[existing]
+		}
 	}
 	n := codecName(g.typeName(t))
-	canonical := map[string]int{"SliceOfstring": 76, "MapOfJSONRawMessage": 100, "PtrTofloat64": 75, "SliceOfuint64": 78, "SliceOfProtocolCitation": 101, "SliceOfProtocolSearchResult": 102}
-	if preferred, ok := canonical[n]; g.used[n] || ok && len(g.queue) != preferred {
-		n += fmt.Sprint(len(g.queue))
+	if g.used[n] {
+		sum := sha256.Sum256([]byte(types.TypeString(t, func(p *types.Package) string { return p.Path() })))
+		n += fmt.Sprintf("%x", sum[:8])
 	}
 	g.names[t] = n
 	g.used[n] = true

@@ -12,6 +12,7 @@ var _ json.RawMessage
 var _ time.Time
 var _ = sort.Strings
 var _ protocol.Settings
+var _ = unsafe.Sizeof(0)
 
 func codecStateEncode(w *codecWriter, v State) {
 	codecBoolEncode(w, v.created)
@@ -24,7 +25,7 @@ func codecStateEncode(w *codecWriter, v State) {
 	codecStringEncode(w, v.modeled)
 	codecStringEncode(w, v.derived)
 	codecProtocolSettingsEncode(w, v.settings)
-	codecSliceOfstring5Encode(w, v.allowed)
+	codecSliceOfstringEncode(w, v.allowed)
 	codecIntEncode(w, v.maxSteps)
 	codecTimeTimeEncode(w, v.createdAt)
 	codecTimeTimeEncode(w, v.updatedAt)
@@ -36,7 +37,7 @@ func codecStateEncode(w *codecWriter, v State) {
 	codecSliceOfOpenToolCallEncode(w, v.calls)
 	codecMapOfpendingRequestEncode(w, v.requests)
 	codecMapOfProtocolRequestResolvedEncode(w, v.resolved)
-	codecMapOfJSONRawMessage16Encode(w, v.asked)
+	codecMapOfJSONRawMessageEncode(w, v.asked)
 	codecStringEncode(w, v.evaluated)
 	codecProtocolUsageEncode(w, v.usage)
 	codecProtocolContextMeasuredEncode(w, v.context)
@@ -44,7 +45,7 @@ func codecStateEncode(w *codecWriter, v State) {
 	codecTimeTimeEncode(w, v.readAt)
 	codecTimeDurationEncode(w, v.readTTL)
 	codecPtrToProtocolSubscriptionUsageEncode(w, v.subscribed)
-	codecPtrTofloat6421Encode(w, v.cost)
+	codecPtrTofloat64Encode(w, v.cost)
 	codecProtocolCompactionAppliedEncode(w, v.compaction)
 	codecUint64Encode(w, v.compactedAt)
 	codecTimeTimeEncode(w, v.compactedTime)
@@ -56,7 +57,7 @@ func codecStateEncode(w *codecWriter, v State) {
 	codecMapOfcommandEncode(w, v.commands)
 	codecSliceOfentryEncode(w, v.history)
 	codecSliceOfProtocolMessageEncode(w, v.folded)
-	codecSliceOfentry30Encode(w, v.stranded)
+	codecSliceOfentryEncode(w, v.stranded)
 	codecIntEncode(w, v.turnAt)
 	codecStringEncode(w, v.turnBy)
 	codecIntEncode(w, v.turnN)
@@ -74,7 +75,7 @@ func codecStateDecode(r *codecReader, v *State) {
 	codecStringDecode(r, &v.modeled)
 	codecStringDecode(r, &v.derived)
 	codecProtocolSettingsDecode(r, &v.settings)
-	codecSliceOfstring5Decode(r, &v.allowed)
+	codecSliceOfstringDecode(r, &v.allowed)
 	codecIntDecode(r, &v.maxSteps)
 	codecTimeTimeDecode(r, &v.createdAt)
 	codecTimeTimeDecode(r, &v.updatedAt)
@@ -86,7 +87,7 @@ func codecStateDecode(r *codecReader, v *State) {
 	codecSliceOfOpenToolCallDecode(r, &v.calls)
 	codecMapOfpendingRequestDecode(r, &v.requests)
 	codecMapOfProtocolRequestResolvedDecode(r, &v.resolved)
-	codecMapOfJSONRawMessage16Decode(r, &v.asked)
+	codecMapOfJSONRawMessageDecode(r, &v.asked)
 	codecStringDecode(r, &v.evaluated)
 	codecProtocolUsageDecode(r, &v.usage)
 	codecProtocolContextMeasuredDecode(r, &v.context)
@@ -94,7 +95,7 @@ func codecStateDecode(r *codecReader, v *State) {
 	codecTimeTimeDecode(r, &v.readAt)
 	codecTimeDurationDecode(r, &v.readTTL)
 	codecPtrToProtocolSubscriptionUsageDecode(r, &v.subscribed)
-	codecPtrTofloat6421Decode(r, &v.cost)
+	codecPtrTofloat64Decode(r, &v.cost)
 	codecProtocolCompactionAppliedDecode(r, &v.compaction)
 	codecUint64Decode(r, &v.compactedAt)
 	codecTimeTimeDecode(r, &v.compactedTime)
@@ -106,7 +107,7 @@ func codecStateDecode(r *codecReader, v *State) {
 	codecMapOfcommandDecode(r, &v.commands)
 	codecSliceOfentryDecode(r, &v.history)
 	codecSliceOfProtocolMessageDecode(r, &v.folded)
-	codecSliceOfentry30Decode(r, &v.stranded)
+	codecSliceOfentryDecode(r, &v.stranded)
 	codecIntDecode(r, &v.turnAt)
 	codecStringDecode(r, &v.turnBy)
 	codecIntDecode(r, &v.turnN)
@@ -119,18 +120,18 @@ func codecLightStateEncode(w *codecWriter, v LightState) {
 	codecSliceOflightEntryEncode(w, v.folded)
 	codecMapOfattachmentInfoEncode(w, v.attachments)
 	codecMapOfuint64Encode(w, v.asked)
-	codecMapOfuint6435Encode(w, v.resolved)
-	codecMapOfuint6436Encode(w, v.commands)
-	codecSliceOfuint6437Encode(w, v.retained)
+	codecMapOfuint64Encode(w, v.resolved)
+	codecMapOfuint64Encode(w, v.commands)
+	codecSliceOfuint64Encode(w, v.retained)
 }
 func codecLightStateDecode(r *codecReader, v *LightState) {
 	codecStateDecode(r, &v.state)
 	codecSliceOflightEntryDecode(r, &v.folded)
 	codecMapOfattachmentInfoDecode(r, &v.attachments)
 	codecMapOfuint64Decode(r, &v.asked)
-	codecMapOfuint6435Decode(r, &v.resolved)
-	codecMapOfuint6436Decode(r, &v.commands)
-	codecSliceOfuint6437Decode(r, &v.retained)
+	codecMapOfuint64Decode(r, &v.resolved)
+	codecMapOfuint64Decode(r, &v.commands)
+	codecSliceOfuint64Decode(r, &v.retained)
 }
 
 func codecBoolEncode(w *codecWriter, v bool) {
@@ -158,7 +159,7 @@ func codecProtocolSettingsDecode(r *codecReader, v *protocol.Settings) {
 	codecMapOfstringDecode(r, &v.Accounts)
 }
 
-func codecSliceOfstring5Encode(w *codecWriter, v []string) {
+func codecSliceOfstringEncode(w *codecWriter, v []string) {
 	if v == nil {
 		w.length(-1)
 		return
@@ -168,7 +169,7 @@ func codecSliceOfstring5Encode(w *codecWriter, v []string) {
 		codecStringEncode(w, x)
 	}
 }
-func codecSliceOfstring5Decode(r *codecReader, v *[]string) {
+func codecSliceOfstringDecode(r *codecReader, v *[]string) {
 	n := r.length()
 	if n < 0 {
 		*v = nil
@@ -254,8 +255,8 @@ func codecProtocolProgressEncode(w *codecWriter, v protocol.Progress) {
 	codecUint64Encode(w, v.Seq)
 	codecProtocolStatusEncode(w, v.Status)
 	codecStringEncode(w, v.TurnID)
-	codecSliceOfstring41Encode(w, v.Queued)
-	codecSliceOfstring42Encode(w, v.Requests)
+	codecSliceOfstringEncode(w, v.Queued)
+	codecSliceOfstringEncode(w, v.Requests)
 	codecPtrToProtocolGoalViewEncode(w, v.Goal)
 	codecPtrToProtocolLastTurnEncode(w, v.LastTurn)
 }
@@ -263,21 +264,21 @@ func codecProtocolProgressDecode(r *codecReader, v *protocol.Progress) {
 	codecUint64Decode(r, &v.Seq)
 	codecProtocolStatusDecode(r, &v.Status)
 	codecStringDecode(r, &v.TurnID)
-	codecSliceOfstring41Decode(r, &v.Queued)
-	codecSliceOfstring42Decode(r, &v.Requests)
+	codecSliceOfstringDecode(r, &v.Queued)
+	codecSliceOfstringDecode(r, &v.Requests)
 	codecPtrToProtocolGoalViewDecode(r, &v.Goal)
 	codecPtrToProtocolLastTurnDecode(r, &v.LastTurn)
 }
 
 func codecTurnEncode(w *codecWriter, v Turn) {
 	codecStringEncode(w, v.ID)
-	codecSliceOfstring45Encode(w, v.InputIDs)
+	codecSliceOfstringEncode(w, v.InputIDs)
 	codecBoolEncode(w, v.Suspended)
 	codecIntEncode(w, v.Resumes)
 }
 func codecTurnDecode(r *codecReader, v *Turn) {
 	codecStringDecode(r, &v.ID)
-	codecSliceOfstring45Decode(r, &v.InputIDs)
+	codecSliceOfstringDecode(r, &v.InputIDs)
 	codecBoolDecode(r, &v.Suspended)
 	codecIntDecode(r, &v.Resumes)
 }
@@ -456,7 +457,7 @@ func codecMapOfProtocolRequestResolvedDecode(r *codecReader, v *map[string]proto
 	}
 }
 
-func codecMapOfJSONRawMessage16Encode(w *codecWriter, v map[string]json.RawMessage) {
+func codecMapOfJSONRawMessageEncode(w *codecWriter, v map[string]json.RawMessage) {
 	if v == nil {
 		w.length(-1)
 		return
@@ -472,7 +473,7 @@ func codecMapOfJSONRawMessage16Encode(w *codecWriter, v map[string]json.RawMessa
 		codecJSONRawMessageEncode(w, v[string(k)])
 	}
 }
-func codecMapOfJSONRawMessage16Decode(r *codecReader, v *map[string]json.RawMessage) {
+func codecMapOfJSONRawMessageDecode(r *codecReader, v *map[string]json.RawMessage) {
 	n := r.length()
 	if n < 0 {
 		*v = nil
@@ -518,8 +519,8 @@ func codecProtocolContextMeasuredEncode(w *codecWriter, v protocol.ContextMeasur
 	codecStringEncode(w, v.Source)
 	codecInt64Encode(w, v.CacheTTLSeconds)
 	codecProtocolUsageEncode(w, v.Usage)
-	codecPtrToProtocolSubscriptionUsage54Encode(w, v.SubscriptionUsage)
-	codecPtrTofloat6455Encode(w, v.CostUSD)
+	codecPtrToProtocolSubscriptionUsageEncode(w, v.SubscriptionUsage)
+	codecPtrTofloat64Encode(w, v.CostUSD)
 }
 func codecProtocolContextMeasuredDecode(r *codecReader, v *protocol.ContextMeasured) {
 	codecInt64Decode(r, &v.Tokens)
@@ -528,8 +529,8 @@ func codecProtocolContextMeasuredDecode(r *codecReader, v *protocol.ContextMeasu
 	codecStringDecode(r, &v.Source)
 	codecInt64Decode(r, &v.CacheTTLSeconds)
 	codecProtocolUsageDecode(r, &v.Usage)
-	codecPtrToProtocolSubscriptionUsage54Decode(r, &v.SubscriptionUsage)
-	codecPtrTofloat6455Decode(r, &v.CostUSD)
+	codecPtrToProtocolSubscriptionUsageDecode(r, &v.SubscriptionUsage)
+	codecPtrTofloat64Decode(r, &v.CostUSD)
 }
 
 func codecTimeDurationEncode(w *codecWriter, v time.Duration) {

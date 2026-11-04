@@ -52,7 +52,7 @@ func checkCheckpointCodec(fsys fs.FS) error {
 	}
 	slices.Sort(s.parts)
 	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(s.parts, "\n"))))
-	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf"}
+	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf", "4": "9858daaade7ceaa905474cffc7cf10416f75f3b4487bb82287a5d3cb67f3516c"}
 	if versions[s.version] != sum {
 		return fmt.Errorf("checkpoint schema or codec changed: version %s has fingerprint %s; increment checkpointVersion and record the new fingerprint", s.version, sum)
 	}

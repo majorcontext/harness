@@ -12,195 +12,7 @@ var _ json.RawMessage
 var _ time.Time
 var _ = sort.Strings
 var _ protocol.Settings
-
-func codecSliceOfProtocolInputAdmittedEncode(w *codecWriter, v []protocol.InputAdmitted) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecProtocolInputAdmittedEncode(w, x)
-	}
-}
-func codecSliceOfProtocolInputAdmittedDecode(r *codecReader, v *[]protocol.InputAdmitted) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(protocol.InputAdmitted{})) {
-		return
-	}
-	*v = make([]protocol.InputAdmitted, n)
-	for i := range *v {
-		codecProtocolInputAdmittedDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
-func codecProvenanceEncode(w *codecWriter, v provenance) {
-	codecStringEncode(w, v.source)
-	codecStringEncode(w, v.id)
-	codecStringEncode(w, v.label)
-}
-func codecProvenanceDecode(r *codecReader, v *provenance) {
-	codecStringDecode(r, &v.source)
-	codecStringDecode(r, &v.id)
-	codecStringDecode(r, &v.label)
-}
-
-func codecSliceOfProtocolMessagePartEncode(w *codecWriter, v []protocol.MessagePart) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecProtocolMessagePartEncode(w, x)
-	}
-}
-func codecSliceOfProtocolMessagePartDecode(r *codecReader, v *[]protocol.MessagePart) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(protocol.MessagePart{})) {
-		return
-	}
-	*v = make([]protocol.MessagePart, n)
-	for i := range *v {
-		codecProtocolMessagePartDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
-func codecSliceOfProtocolOperatorBatchEntryEncode(w *codecWriter, v []protocol.OperatorBatchEntry) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecProtocolOperatorBatchEntryEncode(w, x)
-	}
-}
-func codecSliceOfProtocolOperatorBatchEntryDecode(r *codecReader, v *[]protocol.OperatorBatchEntry) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(protocol.OperatorBatchEntry{})) {
-		return
-	}
-	*v = make([]protocol.OperatorBatchEntry, n)
-	for i := range *v {
-		codecProtocolOperatorBatchEntryDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
-func codecProtocolDeliveryEncode(w *codecWriter, v protocol.Delivery) {
-	w.string(string(v))
-}
-func codecProtocolDeliveryDecode(r *codecReader, v *protocol.Delivery) {
-	*v = protocol.Delivery(r.string())
-}
-
-func codecSliceOfProtocolLogPartEncode(w *codecWriter, v []protocol.LogPart) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecProtocolLogPartEncode(w, x)
-	}
-}
-func codecSliceOfProtocolLogPartDecode(r *codecReader, v *[]protocol.LogPart) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(protocol.LogPart{})) {
-		return
-	}
-	*v = make([]protocol.LogPart, n)
-	for i := range *v {
-		codecProtocolLogPartDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
-func codecProtocolGoalEncode(w *codecWriter, v protocol.Goal) {
-	codecStringEncode(w, v.Condition)
-	codecIntEncode(w, v.MaxTurns)
-}
-func codecProtocolGoalDecode(r *codecReader, v *protocol.Goal) {
-	codecStringDecode(r, &v.Condition)
-	codecIntDecode(r, &v.MaxTurns)
-}
-
-func codecProtocolGoalStateEncode(w *codecWriter, v protocol.GoalState) {
-	w.string(string(v))
-}
-func codecProtocolGoalStateDecode(r *codecReader, v *protocol.GoalState) {
-	*v = protocol.GoalState(r.string())
-}
-
-func codecProtocolVerdictEncode(w *codecWriter, v protocol.Verdict) {
-	w.string(string(v))
-}
-func codecProtocolVerdictDecode(r *codecReader, v *protocol.Verdict) {
-	*v = protocol.Verdict(r.string())
-}
-
-func codecProtocolSubscriptionUsageWindowEncode(w *codecWriter, v protocol.SubscriptionUsageWindow) {
-	codecStringEncode(w, v.Key)
-	codecStringEncode(w, v.Label)
-	codecFloat64Encode(w, v.UsedPercent)
-	codecInt64Encode(w, v.ResetsAt)
-}
-func codecProtocolSubscriptionUsageWindowDecode(r *codecReader, v *protocol.SubscriptionUsageWindow) {
-	codecStringDecode(r, &v.Key)
-	codecStringDecode(r, &v.Label)
-	codecFloat64Decode(r, &v.UsedPercent)
-	codecInt64Decode(r, &v.ResetsAt)
-}
-
-func codecProtocolSubscriptionOverageEncode(w *codecWriter, v protocol.SubscriptionOverage) {
-	codecBoolEncode(w, v.InUse)
-	codecStringEncode(w, v.Status)
-	codecInt64Encode(w, v.ResetsAt)
-}
-func codecProtocolSubscriptionOverageDecode(r *codecReader, v *protocol.SubscriptionOverage) {
-	codecBoolDecode(r, &v.InUse)
-	codecStringDecode(r, &v.Status)
-	codecInt64Decode(r, &v.ResetsAt)
-}
+var _ = unsafe.Sizeof(0)
 
 func codecMapOfanyEncode(w *codecWriter, v map[string]any) {
 	if v == nil {
@@ -242,37 +54,6 @@ func codecMapOfanyDecode(r *codecReader, v *map[string]any) {
 	}
 }
 
-func codecSliceOfProtocolLogPart92Encode(w *codecWriter, v []protocol.LogPart) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecProtocolLogPartEncode(w, x)
-	}
-}
-func codecSliceOfProtocolLogPart92Decode(r *codecReader, v *[]protocol.LogPart) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(protocol.LogPart{})) {
-		return
-	}
-	*v = make([]protocol.LogPart, n)
-	for i := range *v {
-		codecProtocolLogPartDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
 func codecProtocolMessagePartEncode(w *codecWriter, v protocol.MessagePart) {
 	codecStringEncode(w, v.Type)
 	codecStringEncode(w, v.Text)
@@ -284,9 +65,9 @@ func codecProtocolMessagePartEncode(w *codecWriter, v protocol.MessagePart) {
 	codecStringEncode(w, v.MediaType)
 	codecIntEncode(w, v.Bytes)
 	codecStringEncode(w, v.Key)
-	codecSliceOfProtocolCitation97Encode(w, v.Citations)
+	codecSliceOfProtocolCitationEncode(w, v.Citations)
 	codecStringEncode(w, v.Query)
-	codecSliceOfProtocolSearchResult98Encode(w, v.Results)
+	codecSliceOfProtocolSearchResultEncode(w, v.Results)
 }
 func codecProtocolMessagePartDecode(r *codecReader, v *protocol.MessagePart) {
 	codecStringDecode(r, &v.Type)
@@ -299,9 +80,9 @@ func codecProtocolMessagePartDecode(r *codecReader, v *protocol.MessagePart) {
 	codecStringDecode(r, &v.MediaType)
 	codecIntDecode(r, &v.Bytes)
 	codecStringDecode(r, &v.Key)
-	codecSliceOfProtocolCitation97Decode(r, &v.Citations)
+	codecSliceOfProtocolCitationDecode(r, &v.Citations)
 	codecStringDecode(r, &v.Query)
-	codecSliceOfProtocolSearchResult98Decode(r, &v.Results)
+	codecSliceOfProtocolSearchResultDecode(r, &v.Results)
 }
 
 func codecProtocolOperatorBatchEntryEncode(w *codecWriter, v protocol.OperatorBatchEntry) {
@@ -330,7 +111,7 @@ func codecProtocolLogPartEncode(w *codecWriter, v protocol.LogPart) {
 	codecStringEncode(w, v.MediaType)
 	codecStringEncode(w, v.BlobKey)
 	codecIntEncode(w, v.Bytes)
-	codecSliceOfProtocolLogPart99Encode(w, v.Blobs)
+	codecSliceOfProtocolLogPartEncode(w, v.Blobs)
 	codecMapOfJSONRawMessageEncode(w, v.ProviderData)
 	codecSliceOfProtocolCitationEncode(w, v.Citations)
 	codecStringEncode(w, v.Query)
@@ -351,7 +132,7 @@ func codecProtocolLogPartDecode(r *codecReader, v *protocol.LogPart) {
 	codecStringDecode(r, &v.MediaType)
 	codecStringDecode(r, &v.BlobKey)
 	codecIntDecode(r, &v.Bytes)
-	codecSliceOfProtocolLogPart99Decode(r, &v.Blobs)
+	codecSliceOfProtocolLogPartDecode(r, &v.Blobs)
 	codecMapOfJSONRawMessageDecode(r, &v.ProviderData)
 	codecSliceOfProtocolCitationDecode(r, &v.Citations)
 	codecStringDecode(r, &v.Query)
@@ -365,7 +146,7 @@ func codecAnyDecode(r *codecReader, v *any) {
 	*v = r.value()
 }
 
-func codecSliceOfProtocolCitation97Encode(w *codecWriter, v []protocol.Citation) {
+func codecSliceOfProtocolCitationEncode(w *codecWriter, v []protocol.Citation) {
 	if v == nil {
 		w.length(-1)
 		return
@@ -375,7 +156,7 @@ func codecSliceOfProtocolCitation97Encode(w *codecWriter, v []protocol.Citation)
 		codecProtocolCitationEncode(w, x)
 	}
 }
-func codecSliceOfProtocolCitation97Decode(r *codecReader, v *[]protocol.Citation) {
+func codecSliceOfProtocolCitationDecode(r *codecReader, v *[]protocol.Citation) {
 	n := r.length()
 	if n < 0 {
 		*v = nil
@@ -396,7 +177,7 @@ func codecSliceOfProtocolCitation97Decode(r *codecReader, v *[]protocol.Citation
 	}
 }
 
-func codecSliceOfProtocolSearchResult98Encode(w *codecWriter, v []protocol.SearchResult) {
+func codecSliceOfProtocolSearchResultEncode(w *codecWriter, v []protocol.SearchResult) {
 	if v == nil {
 		w.length(-1)
 		return
@@ -406,7 +187,7 @@ func codecSliceOfProtocolSearchResult98Encode(w *codecWriter, v []protocol.Searc
 		codecProtocolSearchResultEncode(w, x)
 	}
 }
-func codecSliceOfProtocolSearchResult98Decode(r *codecReader, v *[]protocol.SearchResult) {
+func codecSliceOfProtocolSearchResultDecode(r *codecReader, v *[]protocol.SearchResult) {
 	n := r.length()
 	if n < 0 {
 		*v = nil
@@ -427,33 +208,22 @@ func codecSliceOfProtocolSearchResult98Decode(r *codecReader, v *[]protocol.Sear
 	}
 }
 
-func codecSliceOfProtocolLogPart99Encode(w *codecWriter, v []protocol.LogPart) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecProtocolLogPartEncode(w, x)
-	}
+func codecProtocolCitationEncode(w *codecWriter, v protocol.Citation) {
+	codecStringEncode(w, v.URL)
+	codecStringEncode(w, v.Title)
+	codecStringEncode(w, v.Quote)
 }
-func codecSliceOfProtocolLogPart99Decode(r *codecReader, v *[]protocol.LogPart) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(protocol.LogPart{})) {
-		return
-	}
-	*v = make([]protocol.LogPart, n)
-	for i := range *v {
-		codecProtocolLogPartDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
+func codecProtocolCitationDecode(r *codecReader, v *protocol.Citation) {
+	codecStringDecode(r, &v.URL)
+	codecStringDecode(r, &v.Title)
+	codecStringDecode(r, &v.Quote)
+}
+
+func codecProtocolSearchResultEncode(w *codecWriter, v protocol.SearchResult) {
+	codecStringEncode(w, v.Title)
+	codecStringEncode(w, v.URL)
+}
+func codecProtocolSearchResultDecode(r *codecReader, v *protocol.SearchResult) {
+	codecStringDecode(r, &v.Title)
+	codecStringDecode(r, &v.URL)
 }

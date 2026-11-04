@@ -516,7 +516,7 @@ Ephemeral frames go to subscribers and never to the store: `item.started`, `item
 func (s *State) Apply(r Record) error
 ```
 
-`Apply` is the only code that changes durable state. Live code appends, then applies the same record. Full replay applies the whole log from seq 1. A light read fold uses the same `Apply` function and may start from a checkpoint, then applies the tail through the head it read. It produces the same read results as full replay. `Advance` runs the same fold of status, queue, goal, and last turn one event at a time.
+`Apply` is the only code that changes durable state. Live code appends, then applies the same record. Full replay applies the whole log from seq 1. A light read fold uses the same `Apply` function and may start from a checkpoint, then applies the tail through the head it read. After applying an event, it retains references to source records and drops old message bodies. It produces the same read results as full replay. `Advance` runs the same fold of status, queue, goal, and last turn one event at a time.
 
 ```go
 // Advance applies one durable event to p. It is the code that State.Apply uses for these fields.

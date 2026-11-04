@@ -12,144 +12,7 @@ var _ json.RawMessage
 var _ time.Time
 var _ = sort.Strings
 var _ protocol.Settings
-
-func codecProtocolStatusEncode(w *codecWriter, v protocol.Status) {
-	w.string(string(v))
-}
-func codecProtocolStatusDecode(r *codecReader, v *protocol.Status) {
-	*v = protocol.Status(r.string())
-}
-
-func codecSliceOfstring41Encode(w *codecWriter, v []string) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecStringEncode(w, x)
-	}
-}
-func codecSliceOfstring41Decode(r *codecReader, v *[]string) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
-		return
-	}
-	*v = make([]string, n)
-	for i := range *v {
-		codecStringDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
-func codecSliceOfstring42Encode(w *codecWriter, v []string) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecStringEncode(w, x)
-	}
-}
-func codecSliceOfstring42Decode(r *codecReader, v *[]string) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
-		return
-	}
-	*v = make([]string, n)
-	for i := range *v {
-		codecStringDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
-func codecPtrToProtocolGoalViewEncode(w *codecWriter, v *protocol.GoalView) {
-	w.boolean(v != nil)
-	if v != nil {
-		codecProtocolGoalViewEncode(w, *v)
-	}
-}
-func codecPtrToProtocolGoalViewDecode(r *codecReader, v **protocol.GoalView) {
-	if r.boolean() {
-		if !r.allocate(1, unsafe.Sizeof(*new(protocol.GoalView))) {
-			return
-		}
-		v2 := new(protocol.GoalView)
-		codecProtocolGoalViewDecode(r, v2)
-		*v = v2
-	} else {
-		*v = nil
-	}
-}
-
-func codecPtrToProtocolLastTurnEncode(w *codecWriter, v *protocol.LastTurn) {
-	w.boolean(v != nil)
-	if v != nil {
-		codecProtocolLastTurnEncode(w, *v)
-	}
-}
-func codecPtrToProtocolLastTurnDecode(r *codecReader, v **protocol.LastTurn) {
-	if r.boolean() {
-		if !r.allocate(1, unsafe.Sizeof(*new(protocol.LastTurn))) {
-			return
-		}
-		v2 := new(protocol.LastTurn)
-		codecProtocolLastTurnDecode(r, v2)
-		*v = v2
-	} else {
-		*v = nil
-	}
-}
-
-func codecSliceOfstring45Encode(w *codecWriter, v []string) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecStringEncode(w, x)
-	}
-}
-func codecSliceOfstring45Decode(r *codecReader, v *[]string) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
-		return
-	}
-	*v = make([]string, n)
-	for i := range *v {
-		codecStringDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
+var _ = unsafe.Sizeof(0)
 
 func codecProtocolStopReasonEncode(w *codecWriter, v protocol.StopReason) {
 	w.string(string(v))
@@ -251,44 +114,6 @@ func codecJSONRawMessageDecode(r *codecReader, v *json.RawMessage) {
 	}
 }
 
-func codecPtrToProtocolSubscriptionUsage54Encode(w *codecWriter, v *protocol.SubscriptionUsage) {
-	w.boolean(v != nil)
-	if v != nil {
-		codecProtocolSubscriptionUsageEncode(w, *v)
-	}
-}
-func codecPtrToProtocolSubscriptionUsage54Decode(r *codecReader, v **protocol.SubscriptionUsage) {
-	if r.boolean() {
-		if !r.allocate(1, unsafe.Sizeof(*new(protocol.SubscriptionUsage))) {
-			return
-		}
-		v2 := new(protocol.SubscriptionUsage)
-		codecProtocolSubscriptionUsageDecode(r, v2)
-		*v = v2
-	} else {
-		*v = nil
-	}
-}
-
-func codecPtrTofloat6455Encode(w *codecWriter, v *float64) {
-	w.boolean(v != nil)
-	if v != nil {
-		codecFloat64Encode(w, *v)
-	}
-}
-func codecPtrTofloat6455Decode(r *codecReader, v **float64) {
-	if r.boolean() {
-		if !r.allocate(1, unsafe.Sizeof(*new(float64))) {
-			return
-		}
-		v2 := new(float64)
-		codecFloat64Decode(r, v2)
-		*v = v2
-	} else {
-		*v = nil
-	}
-}
-
 func codecProtocolSubscriptionUsageEncode(w *codecWriter, v protocol.SubscriptionUsage) {
 	codecStringEncode(w, v.Provider)
 	codecStringEncode(w, v.Account)
@@ -335,4 +160,132 @@ func codecBackendChainDecode(r *codecReader, v *BackendChain) {
 	codecStringDecode(r, &v.Legacy)
 	codecIntDecode(r, &v.Entries)
 	codecStringDecode(r, &v.Sum)
+}
+
+func codecProtocolToolResultRetainedEncode(w *codecWriter, v protocol.ToolResultRetained) {
+	codecStringEncode(w, v.Handle)
+	codecStringEncode(w, v.Tool)
+	codecStringEncode(w, v.BlobKey)
+	codecIntEncode(w, v.Bytes)
+	codecIntEncode(w, v.Lines)
+	codecStringEncode(w, v.Head)
+}
+func codecProtocolToolResultRetainedDecode(r *codecReader, v *protocol.ToolResultRetained) {
+	codecStringDecode(r, &v.Handle)
+	codecStringDecode(r, &v.Tool)
+	codecStringDecode(r, &v.BlobKey)
+	codecIntDecode(r, &v.Bytes)
+	codecIntDecode(r, &v.Lines)
+	codecStringDecode(r, &v.Head)
+}
+
+func codecCommandEncode(w *codecWriter, v command) {
+	codecProtocolCommandRecordedEncode(w, v.rec)
+	codecUint64Encode(w, v.seq)
+	codecStringEncode(w, v.after)
+}
+func codecCommandDecode(r *codecReader, v *command) {
+	codecProtocolCommandRecordedDecode(r, &v.rec)
+	codecUint64Decode(r, &v.seq)
+	codecStringDecode(r, &v.after)
+}
+
+func codecEntryEncode(w *codecWriter, v entry) {
+	codecUint64Encode(w, v.seq)
+	codecSliceOfuint64Encode(w, v.sources)
+	codecTimeTimeEncode(w, v.at)
+	codecStringEncode(w, v.id)
+	codecProtocolLogMessageEncode(w, v.msg)
+	codecStringEncode(w, v.by)
+	codecIntEncode(w, v.turn)
+	codecSliceOfProtocolInputAdmittedEncode(w, v.promoted)
+	codecUint64Encode(w, v.last)
+	codecProvenanceEncode(w, v.from)
+	codecBoolEncode(w, v.pinned)
+	codecBoolEncode(w, v.readerOnly)
+	codecBoolEncode(w, v.carried)
+}
+func codecEntryDecode(r *codecReader, v *entry) {
+	codecUint64Decode(r, &v.seq)
+	codecSliceOfuint64Decode(r, &v.sources)
+	codecTimeTimeDecode(r, &v.at)
+	codecStringDecode(r, &v.id)
+	codecProtocolLogMessageDecode(r, &v.msg)
+	codecStringDecode(r, &v.by)
+	codecIntDecode(r, &v.turn)
+	codecSliceOfProtocolInputAdmittedDecode(r, &v.promoted)
+	codecUint64Decode(r, &v.last)
+	codecProvenanceDecode(r, &v.from)
+	codecBoolDecode(r, &v.pinned)
+	codecBoolDecode(r, &v.readerOnly)
+	codecBoolDecode(r, &v.carried)
+}
+
+func codecProtocolMessageEncode(w *codecWriter, v protocol.Message) {
+	codecStringEncode(w, v.ID)
+	codecStringEncode(w, v.Role)
+	codecSliceOfProtocolMessagePartEncode(w, v.Parts)
+	codecTimeTimeEncode(w, v.CreatedAt)
+	codecStringEncode(w, v.Source)
+	codecStringEncode(w, v.SourceID)
+	codecStringEncode(w, v.SourceLabel)
+	codecSliceOfProtocolOperatorBatchEntryEncode(w, v.OperatorBatch)
+}
+func codecProtocolMessageDecode(r *codecReader, v *protocol.Message) {
+	codecStringDecode(r, &v.ID)
+	codecStringDecode(r, &v.Role)
+	codecSliceOfProtocolMessagePartDecode(r, &v.Parts)
+	codecTimeTimeDecode(r, &v.CreatedAt)
+	codecStringDecode(r, &v.Source)
+	codecStringDecode(r, &v.SourceID)
+	codecStringDecode(r, &v.SourceLabel)
+	codecSliceOfProtocolOperatorBatchEntryDecode(r, &v.OperatorBatch)
+}
+
+func codecLightEntryEncode(w *codecWriter, v lightEntry) {
+	codecEntryEncode(w, v.Entry)
+	codecUint64Encode(w, v.Summary)
+	codecTimeTimeEncode(w, v.At)
+}
+func codecLightEntryDecode(r *codecReader, v *lightEntry) {
+	codecEntryDecode(r, &v.Entry)
+	codecUint64Decode(r, &v.Summary)
+	codecTimeTimeDecode(r, &v.At)
+}
+
+func codecAttachmentInfoEncode(w *codecWriter, v attachmentInfo) {
+	codecStringEncode(w, v.MediaType)
+	codecIntEncode(w, v.Size)
+}
+func codecAttachmentInfoDecode(r *codecReader, v *attachmentInfo) {
+	codecStringDecode(r, &v.MediaType)
+	codecIntDecode(r, &v.Size)
+}
+
+func codecInputStateEncode(w *codecWriter, v inputState) {
+	w.string(string(v))
+}
+func codecInputStateDecode(r *codecReader, v *inputState) {
+	*v = inputState(r.string())
+}
+
+func codecProtocolInputAdmittedEncode(w *codecWriter, v protocol.InputAdmitted) {
+	codecStringEncode(w, v.InputID)
+	codecProtocolDeliveryEncode(w, v.Delivery)
+	codecStringEncode(w, v.Source)
+	codecStringEncode(w, v.SourceID)
+	codecStringEncode(w, v.SourceLabel)
+	codecSliceOfProtocolLogPartEncode(w, v.Parts)
+	codecStringEncode(w, v.Traceparent)
+	codecStringEncode(w, v.Tracestate)
+}
+func codecProtocolInputAdmittedDecode(r *codecReader, v *protocol.InputAdmitted) {
+	codecStringDecode(r, &v.InputID)
+	codecProtocolDeliveryDecode(r, &v.Delivery)
+	codecStringDecode(r, &v.Source)
+	codecStringDecode(r, &v.SourceID)
+	codecStringDecode(r, &v.SourceLabel)
+	codecSliceOfProtocolLogPartDecode(r, &v.Parts)
+	codecStringDecode(r, &v.Traceparent)
+	codecStringDecode(r, &v.Tracestate)
 }

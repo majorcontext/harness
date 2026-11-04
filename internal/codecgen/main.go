@@ -91,6 +91,16 @@ func run(out string, check bool) error {
 			return err
 		}
 	}
+	if !check {
+		for _, name := range matches {
+			var index int
+			if _, err := fmt.Sscanf(filepath.Base(name), "light_codec_fields_%02d.go", &index); err != nil || index >= len(files) {
+				if err := os.Remove(name); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -161,4 +171,5 @@ var _ json.RawMessage
 var _ time.Time
 var _ = sort.Strings
 var _ protocol.Settings
+var _ = unsafe.Sizeof(0)
 `

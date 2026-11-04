@@ -16,7 +16,7 @@ import (
 	"unsafe"
 )
 
-const checkpointVersion = 3
+const checkpointVersion = 4
 const maxCheckpointBytes = 128 << 20
 const maxCheckpointDepth = 128
 
@@ -269,27 +269,6 @@ func (r *codecReader) value() any {
 	}
 }
 
-func encodeState(s *State) ([]byte, error) {
-	if s == nil {
-		return nil, errors.New("nil state")
-	}
-	w := codecWriter{}
-	codecStateEncode(&w, *s)
-	return w.buf, w.err
-}
-func decodeState(b []byte) (*State, error) {
-	r := codecReader{buf: b}
-	s := new(State)
-	codecStateDecode(&r, s)
-	if r.err != nil {
-		return nil, r.err
-	}
-	if len(r.buf) != 0 {
-		return nil, errors.New("trailing state data")
-	}
-	return s, nil
-}
-
 // Checkpoint serializes the light state in a versioned, compressed form.
 func (l *LightState) Checkpoint() ([]byte, error) {
 	if l == nil {
@@ -317,8 +296,11 @@ func (l *LightState) Checkpoint() ([]byte, error) {
 // RestoreLightState decodes a checkpoint into a light state.
 func RestoreLightState(data []byte) (*LightState, error) {
 	prefix := `{"version":` + strconv.Itoa(checkpointVersion) + `,"data":"`
-	if !bytes.HasPrefix(data, []byte(prefix)) || !bytes.HasSuffix(data, []byte(`"}`)) {
+	if len(data) < len(prefix)+2 || !bytes.HasPrefix(data, []byte(prefix)) || !bytes.HasSuffix(data, []byte(`"}`)) {
 		return nil, errors.New("invalid checkpoint version")
+	}
+	if len(data)-len(prefix)-2 > base64.StdEncoding.EncodedLen(2*maxCheckpointBytes+1024) {
+		return nil, errors.New("checkpoint too large")
 	}
 	data, err := base64.StdEncoding.DecodeString(string(data[len(prefix) : len(data)-2]))
 	if err != nil {

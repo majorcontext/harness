@@ -12,6 +12,7 @@ var _ json.RawMessage
 var _ time.Time
 var _ = sort.Strings
 var _ protocol.Settings
+var _ = unsafe.Sizeof(0)
 
 func codecPtrToProtocolSubscriptionUsageEncode(w *codecWriter, v *protocol.SubscriptionUsage) {
 	w.boolean(v != nil)
@@ -32,13 +33,13 @@ func codecPtrToProtocolSubscriptionUsageDecode(r *codecReader, v **protocol.Subs
 	}
 }
 
-func codecPtrTofloat6421Encode(w *codecWriter, v *float64) {
+func codecPtrTofloat64Encode(w *codecWriter, v *float64) {
 	w.boolean(v != nil)
 	if v != nil {
 		codecFloat64Encode(w, *v)
 	}
 }
-func codecPtrTofloat6421Decode(r *codecReader, v **float64) {
+func codecPtrTofloat64Decode(r *codecReader, v **float64) {
 	if r.boolean() {
 		if !r.allocate(1, unsafe.Sizeof(*new(float64))) {
 			return
@@ -288,37 +289,6 @@ func codecSliceOfProtocolMessageDecode(r *codecReader, v *[]protocol.Message) {
 	}
 }
 
-func codecSliceOfentry30Encode(w *codecWriter, v []entry) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	for _, x := range v {
-		codecEntryEncode(w, x)
-	}
-}
-func codecSliceOfentry30Decode(r *codecReader, v *[]entry) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocate(n, unsafe.Sizeof(entry{})) {
-		return
-	}
-	*v = make([]entry, n)
-	for i := range *v {
-		codecEntryDecode(r, &(*v)[i])
-		if r.err != nil {
-			return
-		}
-	}
-}
-
 func codecSliceOfintEncode(w *codecWriter, v []int) {
 	if v == nil {
 		w.length(-1)
@@ -461,87 +431,7 @@ func codecMapOfuint64Decode(r *codecReader, v *map[string]uint64) {
 	}
 }
 
-func codecMapOfuint6435Encode(w *codecWriter, v map[string]uint64) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	keys := make([]string, 0, len(v))
-	for k := range v {
-		keys = append(keys, string(k))
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		w.string(k)
-		codecUint64Encode(w, v[string(k)])
-	}
-}
-func codecMapOfuint6435Decode(r *codecReader, v *map[string]uint64) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocateMap(n, unsafe.Sizeof(*new(uint64))) {
-		return
-	}
-	*v = make(map[string]uint64, n)
-	for i := 0; i < n; i++ {
-		k := string(r.string())
-		var x uint64
-		codecUint64Decode(r, &x)
-		if r.err != nil {
-			return
-		}
-		(*v)[k] = x
-	}
-}
-
-func codecMapOfuint6436Encode(w *codecWriter, v map[string]uint64) {
-	if v == nil {
-		w.length(-1)
-		return
-	}
-	w.length(len(v))
-	keys := make([]string, 0, len(v))
-	for k := range v {
-		keys = append(keys, string(k))
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		w.string(k)
-		codecUint64Encode(w, v[string(k)])
-	}
-}
-func codecMapOfuint6436Decode(r *codecReader, v *map[string]uint64) {
-	n := r.length()
-	if n < 0 {
-		*v = nil
-		return
-	}
-	if !r.count(n) {
-		return
-	}
-	if !r.allocateMap(n, unsafe.Sizeof(*new(uint64))) {
-		return
-	}
-	*v = make(map[string]uint64, n)
-	for i := 0; i < n; i++ {
-		k := string(r.string())
-		var x uint64
-		codecUint64Decode(r, &x)
-		if r.err != nil {
-			return
-		}
-		(*v)[k] = x
-	}
-}
-
-func codecSliceOfuint6437Encode(w *codecWriter, v []uint64) {
+func codecSliceOfuint64Encode(w *codecWriter, v []uint64) {
 	if v == nil {
 		w.length(-1)
 		return
@@ -551,7 +441,7 @@ func codecSliceOfuint6437Encode(w *codecWriter, v []uint64) {
 		codecUint64Encode(w, x)
 	}
 }
-func codecSliceOfuint6437Decode(r *codecReader, v *[]uint64) {
+func codecSliceOfuint64Decode(r *codecReader, v *[]uint64) {
 	n := r.length()
 	if n < 0 {
 		*v = nil
@@ -623,4 +513,49 @@ func codecInputDecode(r *codecReader, v *input) {
 	codecUint64Decode(r, &v.seq)
 	codecProtocolInputAdmittedDecode(r, &v.event)
 	codecStringDecode(r, &v.turnID)
+}
+
+func codecProtocolStatusEncode(w *codecWriter, v protocol.Status) {
+	w.string(string(v))
+}
+func codecProtocolStatusDecode(r *codecReader, v *protocol.Status) {
+	*v = protocol.Status(r.string())
+}
+
+func codecPtrToProtocolGoalViewEncode(w *codecWriter, v *protocol.GoalView) {
+	w.boolean(v != nil)
+	if v != nil {
+		codecProtocolGoalViewEncode(w, *v)
+	}
+}
+func codecPtrToProtocolGoalViewDecode(r *codecReader, v **protocol.GoalView) {
+	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.GoalView))) {
+			return
+		}
+		v2 := new(protocol.GoalView)
+		codecProtocolGoalViewDecode(r, v2)
+		*v = v2
+	} else {
+		*v = nil
+	}
+}
+
+func codecPtrToProtocolLastTurnEncode(w *codecWriter, v *protocol.LastTurn) {
+	w.boolean(v != nil)
+	if v != nil {
+		codecProtocolLastTurnEncode(w, *v)
+	}
+}
+func codecPtrToProtocolLastTurnDecode(r *codecReader, v **protocol.LastTurn) {
+	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.LastTurn))) {
+			return
+		}
+		v2 := new(protocol.LastTurn)
+		codecProtocolLastTurnDecode(r, v2)
+		*v = v2
+	} else {
+		*v = nil
+	}
 }

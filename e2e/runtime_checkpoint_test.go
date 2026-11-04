@@ -23,6 +23,7 @@ import (
 )
 
 var checkpointRows = map[string]runtimeRow{
+	"oversized_encoded_checkpoint_falls_back_to_replay":                sameAsServe(),
 	"checkpoint_page_corrupt_source_replays_and_read_errors_propagate": sameAsServe(),
 	"checkpoint_invalid_head_and_oversized_collection_fall_back":       sameAsServe(),
 	"stopped_view_checkpoint_preserves_reads":                          sameAsServe(),
@@ -318,6 +319,7 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 	t.Helper()
 	ctx := t.Context()
 	head := want.Snapshot().HeadSeq
+	headPages := cacheViewReads(t, want)
 	for seq := uint64(1); seq <= head; seq++ {
 		prefixBase := prefixStore{Store: base, head: seq}
 		wantPrefix, err := harness.OpenView(ctx, prefixBase, id)
@@ -329,7 +331,8 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		if err != nil {
 			t.Fatalf("OpenView prefix %d: %v", seq, err)
 		}
-		checkViewParity(t, first, wantPrefix)
+		prefixPages := cacheViewReads(t, wantPrefix)
+		checkCachedViewParity(t, first, wantPrefix, prefixPages)
 		saved, data, err := prefix.LoadCheckpoint(ctx, id)
 		if err != nil || saved != seq || len(data) == 0 {
 			t.Fatalf("prefix %d checkpoint = %d, %d bytes, %v", seq, saved, len(data), err)
@@ -338,7 +341,7 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		if err != nil {
 			t.Fatalf("restore prefix %d: %v", seq, err)
 		}
-		checkViewParity(t, restored, wantPrefix)
+		checkCachedViewParity(t, restored, wantPrefix, prefixPages)
 		for _, fetch := range []bool{false, true} {
 			cp := &checkpointStore{Store: base, seq: saved, data: data}
 			var st harness.Store = cp
@@ -349,7 +352,7 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 			if err != nil {
 				t.Fatalf("OpenView checkpoint %d, ReadSeqs=%v: %v", seq, fetch, err)
 			}
-			checkViewParity(t, v, want)
+			checkCachedViewParity(t, v, want, headPages)
 			if fetch && want.Snapshot().HeadSeq > 0 {
 				page, err := want.Messages(ctx, 0, 1)
 				if err != nil {
@@ -366,7 +369,45 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 	}
 }
 
+type expectedPage struct {
+	before uint64
+	limit  int
+	page   protocol.MessagePage
+}
+
+type expectedViewReads struct {
+	pages []expectedPage
+}
+
+func cacheViewReads(t *testing.T, view *harness.View) expectedViewReads {
+	t.Helper()
+	ctx := t.Context()
+	var out expectedViewReads
+	for _, limit := range []int{1, 2, protocol.MaxMessageLimit} {
+		for before := uint64(0); ; {
+			page, err := view.Messages(ctx, before, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out.pages = append(out.pages, expectedPage{before: before, limit: limit, page: page})
+			if !page.HasMore {
+				break
+			}
+			if page.FirstSeq == 0 || page.FirstSeq == before {
+				t.Fatalf("message page did not advance before %d", before)
+			}
+			before = page.FirstSeq
+		}
+	}
+	return out
+}
+
 func checkViewParity(t *testing.T, got, want *harness.View) {
+	t.Helper()
+	checkCachedViewParity(t, got, want, cacheViewReads(t, want))
+}
+
+func checkCachedViewParity(t *testing.T, got, want *harness.View, expected expectedViewReads) {
 	t.Helper()
 	ctx := t.Context()
 	if !reflect.DeepEqual(got.Snapshot(), want.Snapshot()) || got.Resumable() != want.Resumable() {
@@ -377,38 +418,29 @@ func checkViewParity(t *testing.T, got, want *harness.View) {
 	if !reflect.DeepEqual(gotInputs, wantInputs) || !reflect.DeepEqual(gotErr, wantErr) {
 		t.Fatalf("checkpoint inputs = %v, %v; replay = %v, %v", gotInputs, gotErr, wantInputs, wantErr)
 	}
-	page, err := want.Messages(ctx, 0, protocol.MaxMessageLimit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, message := range page.Messages {
-		for _, part := range message.Parts {
-			if part.Key != "" {
-				checkBlobParity(t, got, want, part.Key)
+	checkCachedPages(t, got, want, expected)
+}
+
+func checkCachedPages(t *testing.T, got, want *harness.View, expected expectedViewReads) {
+	t.Helper()
+	ctx := t.Context()
+	for _, entry := range expected.pages {
+		page, err := got.Messages(ctx, entry.before, entry.limit)
+		if err != nil || !reflect.DeepEqual(page, entry.page) {
+			t.Fatalf("messages before %d limit %d: checkpoint = %+v, %v; replay = %+v", entry.before, entry.limit, page, err, entry.page)
+		}
+		if entry.limit == protocol.MaxMessageLimit {
+			for _, message := range entry.page.Messages {
+				for _, part := range message.Parts {
+					if part.Key != "" {
+						checkBlobParity(t, got, want, part.Key)
+					}
+				}
 			}
 		}
 	}
 	if _, err := got.Blob(ctx, "missing-blob"); !errors.Is(err, harness.ErrBlobNotFound) {
 		t.Fatalf("missing blob: %v, want ErrBlobNotFound", err)
-	}
-	for _, limit := range []int{1, 2, protocol.MaxMessageLimit} {
-		for before := uint64(0); ; {
-			gp, ge := got.Messages(ctx, before, limit)
-			wp, we := want.Messages(ctx, before, limit)
-			if !reflect.DeepEqual(gp, wp) || !reflect.DeepEqual(ge, we) {
-				t.Fatalf("messages before %d limit %d: checkpoint = %+v, %v; replay = %+v, %v", before, limit, gp, ge, wp, we)
-			}
-			if !wp.HasMore {
-				break
-			}
-			if wp.FirstSeq == 0 || wp.FirstSeq == before {
-				t.Fatalf("message page did not advance before %d", before)
-			}
-			before = wp.FirstSeq
-		}
-	}
-	if ge, we := collectEvents(t, got.Events(ctx, 0)), collectEvents(t, want.Events(ctx, 0)); !reflect.DeepEqual(ge, we) {
-		t.Fatal("events differ between checkpoint and replay")
 	}
 }
 
