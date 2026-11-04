@@ -10,7 +10,7 @@ First tagged release.
 
 ### Added
 
-- **Faster stopped-session reads** (`harness`, `store`) — stores can cache a light session checkpoint and fetch source records by sequence, so message pages need not rebuild every message body.
+- **Faster stopped-session reads** (`harness`, `store`) — stores can cache a light session checkpoint and fetch source records by sequence, so message pages need not rebuild every message body. Checkpoints use the harness module identity; a local-path dependency replacement bypasses the cache.
 
 - **Turn continues the trace of its one input** (`internal/session`, `protocol`, `docs/architecture.md`) — a turn that starts from exactly one input with a valid `traceparent` makes its `invoke_agent` span a child of that span, in the same trace, with no link. A turn that starts from no such input, or from two or more, is still a root that links to each. The turn of a child session, the parent turn that reads a child report, a goal continuation turn, and the `/compact` turn of a backend that owns its context follow the same rule. A steer input still adds a link.
 

@@ -18,6 +18,8 @@ import (
 )
 
 var checkpointRows = map[string]runtimeRow{
+	"checkpoint_versioned_dependency_identity":                         sameAsServe(),
+	"checkpoint_dependency_local_replacement_bypasses_cache":           sameAsServe(),
 	"checkpoint_uncacheable_build_replays_without_cache_calls":         sameAsServe(),
 	"oversized_uncompressed_checkpoint_is_not_saved":                   sameAsServe(),
 	"oversized_encoded_checkpoint_falls_back_to_replay":                sameAsServe(),
@@ -139,6 +141,12 @@ func (a checkpointUncacheable) run(t *testing.T, r *run) {
 
 func TestContractStoppedViewCheckpoint(t *testing.T) {
 	runScenarios(t, []scenario{{
+		name:    "checkpoint_versioned_dependency_identity",
+		actions: []action{create{as: "a"}, restart{}, checkpointDependencyVersioned{as: "a"}},
+	}, {
+		name:    "checkpoint_dependency_local_replacement_bypasses_cache",
+		actions: []action{create{as: "a"}, restart{}, checkpointDependencyLocal{as: "a"}},
+	}, {
 		name:    "checkpoint_uncacheable_build_replays_without_cache_calls",
 		actions: []action{create{as: "a"}, restart{}, checkpointUncacheable{as: "a"}},
 	}, {

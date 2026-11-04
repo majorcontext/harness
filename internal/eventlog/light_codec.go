@@ -33,10 +33,26 @@ type checkpointEnvelope struct {
 	Checksum [sha256.Size]byte `json:"checksum"`
 }
 
-// CheckpointVersion returns the clean VCS revision, or an empty string when unavailable.
+// CheckpointVersion returns the harness build identity, or an empty string when unavailable.
 func CheckpointVersion() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
+		return ""
+	}
+	const module = "github.com/majorcontext/harness"
+	if info.Main.Path != module {
+		for _, dep := range info.Deps {
+			if dep.Path != module {
+				continue
+			}
+			if dep.Replace != nil {
+				dep = dep.Replace
+			}
+			if dep.Version == "" || dep.Sum == "" {
+				return ""
+			}
+			return dep.Version + "\n" + dep.Sum
+		}
 		return ""
 	}
 	var revision, dirty string
