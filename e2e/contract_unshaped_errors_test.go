@@ -42,6 +42,7 @@ func (a expectTurnError) run(t *testing.T, r *run) {
 }
 
 func TestContractUnshapedProviderErrors(t *testing.T) {
+	t.Parallel()
 	rows := []struct{ name, body, want string }{
 		{"plain", "request is too large\ntry less", "request is too large try less"},
 		{"html", "<html>\n <body>bad request</body>\n</html>", "<html> <body>bad request</body> </html>"},
