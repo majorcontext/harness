@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"strconv"
@@ -56,12 +57,9 @@ func (a oversizedCheckpoint) run(t *testing.T, r *run) {
 	}
 	prefix := `{"version":` + strconv.Itoa(int(packed[3])) + `,"data":"`
 	encodedLen := base64.StdEncoding.EncodedLen(2*(128<<20)+1024) + 4
-	wrapper := make([]byte, len(prefix)+encodedLen+2)
+	wrapper := bytes.Repeat([]byte{'A'}, len(prefix)+encodedLen+2)
 	copy(wrapper, prefix)
 	base64.StdEncoding.Encode(wrapper[len(prefix):], packed)
-	for i := len(prefix) + base64.StdEncoding.EncodedLen(len(packed)); i < len(wrapper)-2; i++ {
-		wrapper[i] = 'A'
-	}
 	copy(wrapper[len(wrapper)-2:], `"}`)
 	tracking := &replayTrackingStore{Store: base}
 	st := oversizedCheckpointStore{Store: tracking, seq: seq, data: wrapper}

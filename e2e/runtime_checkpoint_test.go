@@ -172,6 +172,12 @@ func (a checkpointView) run(t *testing.T, r *run) {
 		t.Fatal(err)
 	}
 	checkViewParity(t, got, want)
+	withoutSeqs := checkpointsWithoutSeqs{Store: base, checkpoint: st}
+	withoutSeqView, err := harness.OpenView(ctx, withoutSeqs, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkViewParity(t, withoutSeqView, want)
 	if err := st.SaveCheckpoint(ctx, id, seq-1, []byte("older")); err != nil {
 		t.Fatal(err)
 	}
@@ -381,25 +387,17 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 			t.Fatalf("restore prefix %d: %v", seq, err)
 		}
 		checkCachedViewParity(t, restored, wantPrefix, prefixPages, restoredClock, prefixClock)
-		for _, fetch := range []bool{false, true} {
-			cp := &checkpointStore{Store: base, seq: saved, data: data}
-			var st harness.Store = cp
-			if !fetch {
-				st = checkpointsWithoutSeqs{Store: base, checkpoint: cp}
-			}
-			v, gotClock, err := openParityView(ctx, st, id)
-			if err != nil {
-				t.Fatalf("OpenView checkpoint %d, ReadSeqs=%v: %v", seq, fetch, err)
-			}
-			checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)
-			if fetch && head > 0 {
-				cp.mu.Lock()
-				reads := cp.seqReads
-				cp.mu.Unlock()
-				if headPages.pages[0].page.Total > 0 && reads == 0 {
-					t.Fatalf("message pages did not use ReadSeqs with checkpoint at seq %d", seq)
-				}
-			}
+		cp := &checkpointStore{Store: base, seq: saved, data: data}
+		v, gotClock, err := openParityView(ctx, cp, id)
+		if err != nil {
+			t.Fatalf("OpenView checkpoint %d: %v", seq, err)
+		}
+		checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)
+		cp.mu.Lock()
+		reads := cp.seqReads
+		cp.mu.Unlock()
+		if headPages.pages[0].page.Total > 0 && reads == 0 {
+			t.Fatalf("message pages did not use ReadSeqs with checkpoint at seq %d", seq)
 		}
 	}
 }
