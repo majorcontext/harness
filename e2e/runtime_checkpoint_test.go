@@ -428,9 +428,8 @@ func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *
 		if err != nil {
 			t.Fatalf("OpenView checkpoint %d: %v", seq, err)
 		}
-		if testCleanVCS() && tracking.fromStart {
-			t.Fatalf("checkpoint %d replayed the prefix", seq)
-		}
+		headPages.tracking = tracking
+		headPages.checkpointSeq = seq
 		checkCachedViewParity(t, v, want, headPages, gotClock, wantClock)
 		cp.mu.Lock()
 		reads := cp.seqReads
@@ -450,6 +449,8 @@ type expectedPage struct {
 type expectedViewReads struct {
 	pages            []expectedPage
 	syntheticCapture int64
+	tracking         *replayTrackingStore
+	checkpointSeq    uint64
 }
 
 func cacheViewReads(t *testing.T, view *harness.View, capture ...int64) expectedViewReads {
@@ -586,6 +587,9 @@ func checkCachedPages(t *testing.T, got, want *harness.View, expected expectedVi
 	ctx := t.Context()
 	for _, entry := range expected.pages {
 		page, err := got.Messages(ctx, entry.before, entry.limit)
+		if expected.tracking != nil && expected.tracking.fromStart {
+			t.Fatalf("checkpoint %d replayed the prefix on messages before %d limit %d", expected.checkpointSeq, entry.before, entry.limit)
+		}
 		if err != nil || !reflect.DeepEqual(page, entry.page) {
 			t.Fatalf("messages before %d limit %d: checkpoint = %+v, %v; replay = %+v", entry.before, entry.limit, page, err, entry.page)
 		}
