@@ -9,7 +9,7 @@
 #
 # Package        slowest CI run  budget
 # e2e (Contract)         77 s     116 s (the jj rows run jj for each fixture)
-# e2e@runtime           101 s     152 s (each runtime scenario checks every log prefix against replay)
+# e2e@runtime        101.36 s     153 s (each runtime scenario checks every log prefix against replay)
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
 # gates                 24 s       36 s (cold build of the fake CLI)
@@ -21,7 +21,7 @@
 leaf 10
 package default 10
 package e2e 116
-package e2e@runtime 152
+package e2e@runtime 153
 package internal/backend/claudecode 21
 package internal/imageclamp 13
 package internal/gates 36
