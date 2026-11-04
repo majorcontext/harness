@@ -4,8 +4,36 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 )
+
+// HTTPError reports a status and a bounded excerpt of an unshaped response body.
+func HTTPError(name string, status int, body []byte) error {
+	truncated := len(body) > 512
+	if truncated {
+		body = body[:512]
+	}
+	text := strings.ToValidUTF8(string(body), "�")
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, text)
+	text = strings.Join(strings.Fields(text), " ")
+	if truncated {
+		if text != "" {
+			text += " "
+		}
+		text += "...[truncated]"
+	}
+	if text == "" {
+		return fmt.Errorf("%s: HTTP %d", name, status)
+	}
+	return fmt.Errorf("%s: HTTP %d: %s", name, status, text)
+}
 
 // ErrorKind classifies an error reported by a provider.
 type ErrorKind int

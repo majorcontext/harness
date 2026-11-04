@@ -38,6 +38,8 @@ type Reply struct {
 	// ErrorMessage is the message of the error body of an HTTPStatus reply.
 	// The default is "harnesstest: scripted error".
 	ErrorMessage string
+	// ErrorBody, when set, is the exact HTTP error response body.
+	ErrorBody *string
 	// RetryAfter is the Retry-After header value of an HTTPStatus reply.
 	RetryAfter string
 	// Hangup closes the connection with no response. It sets no status. The websocket transport of the Responses server ignores it.

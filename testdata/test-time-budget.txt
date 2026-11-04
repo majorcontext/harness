@@ -44,9 +44,9 @@ test internal/backend/claudecode TestClaudeCodeRoutesTheSelectedAccountThroughTh
 test e2e TestContractRuntimeClaudeCodeStateChunks 60
 # The search edge row checks each log prefix (20.90 s on CI).
 test e2e TestContractFileToolsEdges/runtime/file_tools_search_edges 32
-# Isolated module proxy rows build five embedder variants (24.12 s serve on CI, 16.17 s runtime locally).
+# Isolated module proxy rows build five embedder variants (24.12 s serve and 26.0 s runtime on CI).
 test e2e TestContractCheckpointDependency/serve/checkpoint_versioned_dependency_identity 37
-test e2e TestContractCheckpointDependency/runtime/checkpoint_versioned_dependency_identity 25
+test e2e TestContractCheckpointDependency/runtime/checkpoint_versioned_dependency_identity 39
 # The race detector processes a compressible state over the 128 MiB checkpoint limit (45.47 s under runtime suite load).
 test e2e TestContractOversizedCheckpoint/runtime/oversized_uncompressed_checkpoint_is_not_saved 69
 # Runtime suite load slows the checkpoint history replay and network refusal rows to 12.75 s and 12.24 s.

@@ -199,6 +199,11 @@ func writeReplyError(w http.ResponseWriter, rep Reply) {
 	if rep.RetryAfter != "" {
 		w.Header().Set("Retry-After", rep.RetryAfter)
 	}
+	if rep.ErrorBody != nil {
+		w.WriteHeader(rep.HTTPStatus)
+		_, _ = w.Write([]byte(*rep.ErrorBody))
+		return
+	}
 	msg := rep.ErrorMessage
 	if msg == "" {
 		msg = "harnesstest: scripted error"
