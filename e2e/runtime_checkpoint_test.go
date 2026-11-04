@@ -302,13 +302,46 @@ func checkScenarioCheckpointParity(t *testing.T, dir string) {
 	}
 }
 
+type snapshotLogStore struct {
+	harness.Store
+	blobs harness.Store
+}
+
+func (s snapshotLogStore) GetBlob(ctx context.Context, id, key string) (io.ReadCloser, error) {
+	return s.blobs.GetBlob(ctx, id, key)
+}
+
+func snapshotScenarioLog(t *testing.T, source harness.Store, id string, head uint64) harness.Store {
+	t.Helper()
+	ctx := t.Context()
+	memory := store.NewMemStore()
+	for after := uint64(0); after < head; {
+		records, err := source.Read(ctx, id, after, int(min(head-after, 512)))
+		if err != nil || len(records) == 0 {
+			t.Fatalf("snapshot log after %d: %d records, %v", after, len(records), err)
+		}
+		data := make([][]byte, len(records))
+		for i, record := range records {
+			if record.Seq != after+uint64(i)+1 {
+				t.Fatalf("snapshot log: sequence %d after %d", record.Seq, after)
+			}
+			data[i] = record.Data
+		}
+		if err := memory.Append(ctx, id, after, data...); err != nil {
+			t.Fatal(err)
+		}
+		after = records[len(records)-1].Seq
+	}
+	return plainStore{snapshotLogStore{Store: memory, blobs: source}}
+}
+
 func checkScenarioSessionParity(t *testing.T, base harness.Store, id string) {
 	t.Helper()
 	head, err := base.Head(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixed := prefixStore{Store: base, head: head}
+	fixed := prefixStore{Store: snapshotScenarioLog(t, base, id, head), head: head}
 	want, wantClock, err := openParityView(t.Context(), fixed, id)
 	if err != nil {
 		t.Fatalf("full replay of %s: %v", id, err)

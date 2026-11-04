@@ -49,12 +49,15 @@ func checkCheckpointCodec(fsys fs.FS) error {
 		}
 	}
 	s.foldFingerprint()
+	if err := s.payloadSchemas(); err != nil {
+		return err
+	}
 	if err := s.checkFields(); err != nil {
 		return err
 	}
 	slices.Sort(s.parts)
 	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(s.parts, "\n"))))
-	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf", "4": "941fb30233d6e462461ab6a59de63e28eb89f8a1f098f85a04e2eca6a755998a"}
+	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf", "4": "bbef47632c9527c33790b3a28c12e0ad205c6babe3c7ed4de3e16e1422db7ddc"}
 	if versions[s.version] != sum {
 		return fmt.Errorf("checkpoint schema or codec changed: version %s has fingerprint %s; increment checkpointVersion and record the new fingerprint", s.version, sum)
 	}
@@ -101,7 +104,7 @@ func (s *checkpointSchema) collect(f *ast.File, dir, file string) {
 }
 
 func (s *checkpointSchema) foldFingerprint() {
-	pending := map[string]bool{"Apply": true, "remember": true, "trim": true}
+	pending := map[string]bool{"Apply": true, "remember": true, "trim": true, "protocol.UnmarshalJSON": true, "protocol.UnmarshalText": true}
 	values := map[string]bool{}
 	seen := map[*ast.FuncDecl]bool{}
 	seenValues := map[*ast.GenDecl]bool{}
@@ -158,13 +161,54 @@ func checkpointReferences(node ast.Node, prefix string, funcs, values map[string
 				if prefix == "" {
 					funcs[f.Sel.Name] = true
 				}
-				if id, ok := f.X.(*ast.Ident); ok && id.Name == "protocol" {
-					funcs["protocol."+f.Sel.Name] = true
-				}
+				funcs["protocol."+f.Sel.Name] = true
 			}
 		}
 		return true
 	})
+}
+
+func (s *checkpointSchema) payloadSchemas() error {
+	registry := s.foldValues["protocol.payloads"]
+	if registry == nil {
+		return fmt.Errorf("missing protocol payload registry")
+	}
+	pending := map[string]bool{}
+	var addTypes func(ast.Node)
+	addTypes = func(node ast.Node) {
+		ast.Inspect(node, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.Field:
+				addTypes(n.Type)
+				return false
+			case *ast.SelectorExpr:
+				return false
+			case *ast.Ident:
+				pending["protocol."+n.Name] = true
+			}
+			return true
+		})
+	}
+	addTypes(registry)
+	seen := map[string]bool{}
+	for len(pending) > 0 {
+		var name string
+		for name = range pending {
+			break
+		}
+		delete(pending, name)
+		ts := s.types[name]
+		if ts == nil || seen[name] {
+			continue
+		}
+		seen[name] = true
+		s.parts = append(s.parts, name+s.node(ts))
+		addTypes(ts.Type)
+	}
+	if len(seen) == 0 {
+		return fmt.Errorf("protocol payload registry has no types")
+	}
+	return nil
 }
 
 func (s *checkpointSchema) checkFields() error {
