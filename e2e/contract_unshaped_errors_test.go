@@ -13,6 +13,7 @@ var unshapedErrorRows = map[string]runtimeRow{
 	"unshaped_provider_error_long":       sameAsServe(),
 	"unshaped_provider_error_boundary":   sameAsServe(),
 	"unshaped_provider_error_whitespace": sameAsServe(),
+	"unshaped_provider_error_retry":      sameAsServe(),
 	"unshaped_provider_error_empty":      sameAsServe(),
 	"unshaped_provider_error_controls":   sameAsServe(),
 	"unshaped_provider_error_json":       sameAsServe(),
@@ -63,6 +64,15 @@ func TestContractUnshapedProviderErrors(t *testing.T) {
 			actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, expectTurnError{want: want}},
 		}})
 	}
+	body := "<html>temporarily unavailable</html>"
+	scenarios = append(scenarios, codexScenario{scenario: scenario{
+		name: "unshaped_provider_error_retry",
+		model: []harnesstest.Step{
+			{Name: "error", Reply: harnesstest.Reply{HTTPStatus: 503, ErrorBody: &body}},
+			{Name: "ok", Reply: harnesstest.Reply{Text: "recovered"}},
+		},
+		actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}},
+	}})
 	runCodexScenarios(t, scenarios)
 }
 
