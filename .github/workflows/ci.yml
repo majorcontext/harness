@@ -266,7 +266,8 @@ jobs:
           HARNESS_E2E_COVER: '1'
         run: |
           set -o pipefail
-          go test -race -count=1 -json ./e2e/ | go run ./internal/testtime -title Contract -job contract
+          go test -race -count=1 -json ./e2e/ -skip '^TestContractCheckpointDependency$' | go run ./internal/testtime -title Contract -job contract
+          go test -race -count=1 -json -parallel=1 ./e2e/ -run '^TestContractCheckpointDependency$/^serve$' | go run ./internal/testtime -title 'Checkpoint dependency contract' -job contract
 
       - name: Save the Go caches
         # Only main saves, so every job restores the newest build of main.
@@ -311,7 +312,8 @@ jobs:
         # the serve binary and the CLI, which the Contract job runs.
         run: |
           set -o pipefail
-          HARNESS_E2E_RUNTIME=1 HARNESS_E2E_CHECKPOINT=restore go test -race -buildvcs=true -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips)' | go run ./internal/testtime -title 'Runtime contract' -job runtime
+          HARNESS_E2E_RUNTIME=1 HARNESS_E2E_CHECKPOINT=restore go test -race -buildvcs=true -count=1 -json ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$' -skip '^TestContract(CLI|Serve|TurnMetrics|StartupPrewarmLines|UnknownModel|Inventory|ListSkips|CheckpointDependency)' | go run ./internal/testtime -title 'Runtime contract' -job runtime
+          HARNESS_E2E_RUNTIME=1 HARNESS_E2E_CHECKPOINT=restore go test -race -buildvcs=true -count=1 -json -parallel=1 ./e2e/ -run '^TestContractCheckpointDependency$/^runtime$' | go run ./internal/testtime -title 'Runtime checkpoint dependency contract' -job runtime
           HARNESS_E2E_RUNTIME=1 HARNESS_E2E_CHECKPOINT=bypass go test -race -buildvcs=false -count=1 ./e2e/ -run '^TestContractStoppedViewCheckpoint$/^runtime$/(stopped_view_checkpoint_preserves_reads|checkpoint_uncacheable_build_replays_without_cache_calls)$'
 
       - name: Save the Go caches

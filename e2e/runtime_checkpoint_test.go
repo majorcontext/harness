@@ -139,14 +139,18 @@ func (a checkpointUncacheable) run(t *testing.T, r *run) {
 	checkCheckpointBypass(t, base, r.id(t, a.as))
 }
 
-func TestContractStoppedViewCheckpoint(t *testing.T) {
+func TestContractCheckpointDependency(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name:    "checkpoint_versioned_dependency_identity",
 		actions: []action{create{as: "a"}, restart{}, checkpointDependencyVersioned{as: "a"}},
 	}, {
 		name:    "checkpoint_dependency_local_replacement_bypasses_cache",
 		actions: []action{create{as: "a"}, restart{}, checkpointDependencyLocal{as: "a"}},
-	}, {
+	}})
+}
+
+func TestContractStoppedViewCheckpoint(t *testing.T) {
+	runScenarios(t, []scenario{{
 		name:    "checkpoint_uncacheable_build_replays_without_cache_calls",
 		actions: []action{create{as: "a"}, restart{}, checkpointUncacheable{as: "a"}},
 	}, {
