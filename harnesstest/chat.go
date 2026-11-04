@@ -199,6 +199,11 @@ func writeChatErrorCode(w http.ResponseWriter, status int, msg, code string) {
 }
 
 func writeChatReplyError(w http.ResponseWriter, rep Reply) {
+	if rep.ErrorBody != nil {
+		w.WriteHeader(rep.HTTPStatus)
+		_, _ = w.Write([]byte(*rep.ErrorBody))
+		return
+	}
 	if rep.RetryAfter != "" {
 		w.Header().Set("Retry-After", rep.RetryAfter)
 	}

@@ -159,7 +159,7 @@ func apiError(family string, resp *http.Response) error {
 		}
 		err = errors.New(msg)
 	} else {
-		err = fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
+		err = provider.HTTPError(fmt.Sprintf("openaicompat(%s)", family), resp.StatusCode, raw)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
 		return provider.MarkRetryableHTTP(err, class, resp)

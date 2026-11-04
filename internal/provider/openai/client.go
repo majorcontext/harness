@@ -408,7 +408,7 @@ func apiError(resp *http.Response) error {
 		}
 		err = errors.New(msg)
 	} else {
-		err = fmt.Errorf("openai: HTTP %d", resp.StatusCode)
+		err = provider.HTTPError("openai", resp.StatusCode, raw)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
 		return provider.MarkRetryableHTTP(err, class, resp)

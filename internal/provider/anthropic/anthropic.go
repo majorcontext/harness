@@ -204,7 +204,7 @@ func apiError(resp *http.Response) error {
 		}
 		err = errors.New(msg)
 	} else {
-		err = fmt.Errorf("anthropic: HTTP %d", resp.StatusCode)
+		err = provider.HTTPError("anthropic", resp.StatusCode, raw)
 	}
 	if class, ok := classifyStatus(resp.StatusCode); ok {
 		return provider.MarkRetryableHTTP(err, class, resp)
