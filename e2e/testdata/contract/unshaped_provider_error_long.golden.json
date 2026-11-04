@@ -52,7 +52,7 @@
   "calls": {
     "turn_error.a": {
       "status": 200,
-      "body": "openai: HTTP 400: too large ...[truncated]"
+      "body": "openai: HTTP 400: A ...[truncated]"
     }
   }
 }

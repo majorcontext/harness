@@ -8,14 +8,16 @@ import (
 )
 
 var unshapedErrorRows = map[string]runtimeRow{
-	"unshaped_provider_error_plain":     sameAsServe(),
-	"unshaped_provider_error_html":      sameAsServe(),
-	"unshaped_provider_error_long":      sameAsServe(),
-	"unshaped_provider_error_empty":     sameAsServe(),
-	"unshaped_provider_error_controls":  sameAsServe(),
-	"unshaped_provider_error_json":      sameAsServe(),
-	"unshaped_provider_error_anthropic": sameAsServe(),
-	"unshaped_provider_error_compat":    sameAsServe(),
+	"unshaped_provider_error_plain":      sameAsServe(),
+	"unshaped_provider_error_html":       sameAsServe(),
+	"unshaped_provider_error_long":       sameAsServe(),
+	"unshaped_provider_error_boundary":   sameAsServe(),
+	"unshaped_provider_error_whitespace": sameAsServe(),
+	"unshaped_provider_error_empty":      sameAsServe(),
+	"unshaped_provider_error_controls":   sameAsServe(),
+	"unshaped_provider_error_json":       sameAsServe(),
+	"unshaped_provider_error_anthropic":  sameAsServe(),
+	"unshaped_provider_error_compat":     sameAsServe(),
 }
 
 type expectTurnError struct{ want string }
@@ -42,7 +44,9 @@ func TestContractUnshapedProviderErrors(t *testing.T) {
 	rows := []struct{ name, body, want string }{
 		{"plain", "request is too large\ntry less", "request is too large try less"},
 		{"html", "<html>\n <body>bad request</body>\n</html>", "<html> <body>bad request</body> </html>"},
-		{"long", "too large" + strings.Repeat(" ", 591), "too large ...[truncated]"},
+		{"long", strings.Repeat(" ", 511) + "A" + strings.Repeat("B", 88), "A ...[truncated]"},
+		{"boundary", strings.Repeat(" ", 511) + "A", "A"},
+		{"whitespace", strings.Repeat(" ", 513), "...[truncated]"},
 		{"empty", "", ""},
 		{"controls", "bad\x00\tresponse\xff", "bad response�"},
 		{"json", `{"detail":"refused"}`, `{"detail":"refused"}`},
