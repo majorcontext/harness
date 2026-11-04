@@ -5,6 +5,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 var _ json.RawMessage
@@ -176,9 +177,15 @@ func codecSliceOfstring5Decode(r *codecReader, v *[]string) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
+		return
+	}
 	*v = make([]string, n)
 	for i := range *v {
 		codecStringDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -228,11 +235,17 @@ func codecMapOfinputDecode(r *codecReader, v *map[string]input) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(input))) {
+		return
+	}
 	*v = make(map[string]input, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x input
 		codecInputDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -294,11 +307,17 @@ func codecMapOfboolDecode(r *codecReader, v *map[string]bool) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(bool))) {
+		return
+	}
 	*v = make(map[string]bool, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x bool
 		codecBoolDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -345,9 +364,15 @@ func codecSliceOfOpenToolCallDecode(r *codecReader, v *[]OpenToolCall) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(OpenToolCall{})) {
+		return
+	}
 	*v = make([]OpenToolCall, n)
 	for i := range *v {
 		codecOpenToolCallDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -376,11 +401,17 @@ func codecMapOfpendingRequestDecode(r *codecReader, v *map[string]pendingRequest
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(pendingRequest))) {
+		return
+	}
 	*v = make(map[string]pendingRequest, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x pendingRequest
 		codecPendingRequestDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -410,11 +441,17 @@ func codecMapOfProtocolRequestResolvedDecode(r *codecReader, v *map[string]proto
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(protocol.RequestResolved))) {
+		return
+	}
 	*v = make(map[string]protocol.RequestResolved, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x protocol.RequestResolved
 		codecProtocolRequestResolvedDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -444,11 +481,17 @@ func codecMapOfJSONRawMessage16Decode(r *codecReader, v *map[string]json.RawMess
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(json.RawMessage))) {
+		return
+	}
 	*v = make(map[string]json.RawMessage, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x json.RawMessage
 		codecJSONRawMessageDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }

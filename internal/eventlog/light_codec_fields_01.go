@@ -5,6 +5,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 var _ json.RawMessage
@@ -20,6 +21,9 @@ func codecPtrToProtocolSubscriptionUsageEncode(w *codecWriter, v *protocol.Subsc
 }
 func codecPtrToProtocolSubscriptionUsageDecode(r *codecReader, v **protocol.SubscriptionUsage) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.SubscriptionUsage))) {
+			return
+		}
 		v2 := new(protocol.SubscriptionUsage)
 		codecProtocolSubscriptionUsageDecode(r, v2)
 		*v = v2
@@ -36,6 +40,9 @@ func codecPtrTofloat6421Encode(w *codecWriter, v *float64) {
 }
 func codecPtrTofloat6421Decode(r *codecReader, v **float64) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(float64))) {
+			return
+		}
 		v2 := new(float64)
 		codecFloat64Decode(r, v2)
 		*v = v2
@@ -93,11 +100,17 @@ func codecMapOfProtocolOutcomeDecode(r *codecReader, v *map[string]protocol.Outc
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(protocol.Outcome))) {
+		return
+	}
 	*v = make(map[string]protocol.Outcome, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x protocol.Outcome
 		codecProtocolOutcomeDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -127,11 +140,17 @@ func codecMapOfBackendChainDecode(r *codecReader, v *map[string]BackendChain) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(BackendChain))) {
+		return
+	}
 	*v = make(map[string]BackendChain, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x BackendChain
 		codecBackendChainDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -155,9 +174,15 @@ func codecSliceOfProtocolToolResultRetainedDecode(r *codecReader, v *[]protocol.
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.ToolResultRetained{})) {
+		return
+	}
 	*v = make([]protocol.ToolResultRetained, n)
 	for i := range *v {
 		codecProtocolToolResultRetainedDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -186,11 +211,17 @@ func codecMapOfcommandDecode(r *codecReader, v *map[string]command) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(command))) {
+		return
+	}
 	*v = make(map[string]command, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x command
 		codecCommandDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -214,9 +245,15 @@ func codecSliceOfentryDecode(r *codecReader, v *[]entry) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(entry{})) {
+		return
+	}
 	*v = make([]entry, n)
 	for i := range *v {
 		codecEntryDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -239,9 +276,15 @@ func codecSliceOfProtocolMessageDecode(r *codecReader, v *[]protocol.Message) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.Message{})) {
+		return
+	}
 	*v = make([]protocol.Message, n)
 	for i := range *v {
 		codecProtocolMessageDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -264,9 +307,15 @@ func codecSliceOfentry30Decode(r *codecReader, v *[]entry) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(entry{})) {
+		return
+	}
 	*v = make([]entry, n)
 	for i := range *v {
 		codecEntryDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -289,9 +338,15 @@ func codecSliceOfintDecode(r *codecReader, v *[]int) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(int))) {
+		return
+	}
 	*v = make([]int, n)
 	for i := range *v {
 		codecIntDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -314,9 +369,15 @@ func codecSliceOflightEntryDecode(r *codecReader, v *[]lightEntry) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(lightEntry{})) {
+		return
+	}
 	*v = make([]lightEntry, n)
 	for i := range *v {
 		codecLightEntryDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -345,11 +406,17 @@ func codecMapOfattachmentInfoDecode(r *codecReader, v *map[string]attachmentInfo
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(attachmentInfo))) {
+		return
+	}
 	*v = make(map[string]attachmentInfo, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x attachmentInfo
 		codecAttachmentInfoDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -379,11 +446,17 @@ func codecMapOfuint64Decode(r *codecReader, v *map[string]uint64) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(uint64))) {
+		return
+	}
 	*v = make(map[string]uint64, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x uint64
 		codecUint64Decode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -413,11 +486,17 @@ func codecMapOfuint6435Decode(r *codecReader, v *map[string]uint64) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(uint64))) {
+		return
+	}
 	*v = make(map[string]uint64, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x uint64
 		codecUint64Decode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -447,11 +526,17 @@ func codecMapOfuint6436Decode(r *codecReader, v *map[string]uint64) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(uint64))) {
+		return
+	}
 	*v = make(map[string]uint64, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x uint64
 		codecUint64Decode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -475,9 +560,15 @@ func codecSliceOfuint6437Decode(r *codecReader, v *[]uint64) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(uint64))) {
+		return
+	}
 	*v = make([]uint64, n)
 	for i := range *v {
 		codecUint64Decode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -506,11 +597,17 @@ func codecMapOfstringDecode(r *codecReader, v *map[string]string) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(string))) {
+		return
+	}
 	*v = make(map[string]string, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x string
 		codecStringDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }

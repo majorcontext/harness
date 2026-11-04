@@ -15,11 +15,12 @@ import (
 )
 
 type checkpointSchema struct {
-	fset    *token.FileSet
-	types   map[string]*ast.TypeSpec
-	funcs   []*ast.FuncDecl
-	parts   []string
-	version string
+	fset      *token.FileSet
+	types     map[string]*ast.TypeSpec
+	funcs     []*ast.FuncDecl
+	foldFuncs []*ast.FuncDecl
+	parts     []string
+	version   string
 }
 
 func checkCheckpointCodec(fsys fs.FS) error {
@@ -45,12 +46,13 @@ func checkCheckpointCodec(fsys fs.FS) error {
 			s.collect(f, dir, name)
 		}
 	}
+	s.foldFingerprint()
 	if err := s.checkFields(); err != nil {
 		return err
 	}
 	slices.Sort(s.parts)
 	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(s.parts, "\n"))))
-	versions := map[string]string{"2": "6a4b8c5b468373468e94bb504b29d36c428266d94cca751029e85e3cec4ae885"}
+	versions := map[string]string{"3": "a0cb64c089d46ca2e4b7a93be8a010ed2195ce69dd25806ddd03141e0e18bbcf"}
 	if versions[s.version] != sum {
 		return fmt.Errorf("checkpoint schema or codec changed: version %s has fingerprint %s; increment checkpointVersion and record the new fingerprint", s.version, sum)
 	}
@@ -76,6 +78,9 @@ func (s *checkpointSchema) collect(f *ast.File, dir, file string) {
 				}
 			}
 		case *ast.FuncDecl:
+			if dir == "internal/eventlog" && !strings.HasPrefix(file, "light_codec") {
+				s.foldFuncs = append(s.foldFuncs, d)
+			}
 			if strings.HasPrefix(file, "light_codec_fields_") {
 				s.funcs = append(s.funcs, d)
 				s.parts = append(s.parts, s.node(d))
@@ -83,6 +88,38 @@ func (s *checkpointSchema) collect(f *ast.File, dir, file string) {
 			if file == "light_codec.go" && (strings.HasPrefix(d.Name.Name, "codec") || d.Recv != nil && len(d.Recv.List) == 1 && strings.Contains(s.node(d.Recv.List[0].Type), "codec")) {
 				s.parts = append(s.parts, s.node(d))
 			}
+		}
+	}
+}
+
+func (s *checkpointSchema) foldFingerprint() {
+	pending := map[string]bool{"Apply": true, "remember": true, "trim": true}
+	seen := map[*ast.FuncDecl]bool{}
+	for len(pending) > 0 {
+		var name string
+		for name = range pending {
+			break
+		}
+		delete(pending, name)
+		for _, fn := range s.foldFuncs {
+			if fn.Name.Name != name || seen[fn] {
+				continue
+			}
+			seen[fn] = true
+			s.parts = append(s.parts, s.node(fn))
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				switch f := call.Fun.(type) {
+				case *ast.Ident:
+					pending[f.Name] = true
+				case *ast.SelectorExpr:
+					pending[f.Sel.Name] = true
+				}
+				return true
+			})
 		}
 	}
 }

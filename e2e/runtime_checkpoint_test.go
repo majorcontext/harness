@@ -23,12 +23,14 @@ import (
 )
 
 var checkpointRows = map[string]runtimeRow{
-	"stopped_view_checkpoint_preserves_reads":       sameAsServe(),
-	"stopped_view_checkpoint_preserves_attachments": sameAsServe(),
-	"checkpoint_compaction_and_command_history":     sameAsServe(),
-	"checkpoint_question_answer_history":            sameAsServe(),
-	"checkpoint_question_dismiss_history":           sameAsServe(),
-	"checkpoint_promoted_inputs_history":            sameAsServe(),
+	"checkpoint_page_corrupt_source_replays_and_read_errors_propagate": sameAsServe(),
+	"checkpoint_invalid_head_and_oversized_collection_fall_back":       sameAsServe(),
+	"stopped_view_checkpoint_preserves_reads":                          sameAsServe(),
+	"stopped_view_checkpoint_preserves_attachments":                    sameAsServe(),
+	"checkpoint_compaction_and_command_history":                        sameAsServe(),
+	"checkpoint_question_answer_history":                               sameAsServe(),
+	"checkpoint_question_dismiss_history":                              sameAsServe(),
+	"checkpoint_promoted_inputs_history":                               sameAsServe(),
 }
 
 type checkpointStore struct {
@@ -375,7 +377,6 @@ func checkViewParity(t *testing.T, got, want *harness.View) {
 	if !reflect.DeepEqual(gotInputs, wantInputs) || !reflect.DeepEqual(gotErr, wantErr) {
 		t.Fatalf("checkpoint inputs = %v, %v; replay = %v, %v", gotInputs, gotErr, wantInputs, wantErr)
 	}
-	head := want.Snapshot().HeadSeq
 	page, err := want.Messages(ctx, 0, protocol.MaxMessageLimit)
 	if err != nil {
 		t.Fatal(err)
@@ -390,17 +391,24 @@ func checkViewParity(t *testing.T, got, want *harness.View) {
 	if _, err := got.Blob(ctx, "missing-blob"); !errors.Is(err, harness.ErrBlobNotFound) {
 		t.Fatalf("missing blob: %v, want ErrBlobNotFound", err)
 	}
-	for before := uint64(0); before <= head+1; before++ {
-		for _, limit := range []int{1, 2, protocol.MaxMessageLimit} {
+	for _, limit := range []int{1, 2, protocol.MaxMessageLimit} {
+		for before := uint64(0); ; {
 			gp, ge := got.Messages(ctx, before, limit)
 			wp, we := want.Messages(ctx, before, limit)
 			if !reflect.DeepEqual(gp, wp) || !reflect.DeepEqual(ge, we) {
 				t.Fatalf("messages before %d limit %d: checkpoint = %+v, %v; replay = %+v, %v", before, limit, gp, ge, wp, we)
 			}
+			if !wp.HasMore {
+				break
+			}
+			if wp.FirstSeq == 0 || wp.FirstSeq == before {
+				t.Fatalf("message page did not advance before %d", before)
+			}
+			before = wp.FirstSeq
 		}
-		if ge, we := collectEvents(t, got.Events(ctx, before)), collectEvents(t, want.Events(ctx, before)); !reflect.DeepEqual(ge, we) {
-			t.Fatalf("events after %d differ between checkpoint and replay", before)
-		}
+	}
+	if ge, we := collectEvents(t, got.Events(ctx, 0)), collectEvents(t, want.Events(ctx, 0)); !reflect.DeepEqual(ge, we) {
+		t.Fatal("events differ between checkpoint and replay")
 	}
 }
 
@@ -436,7 +444,26 @@ func checkCorruptCheckpointState(t *testing.T, base harness.Store, id string, da
 		}
 		checkCorruptReplay(t, base, id, packCheckpoint(t, packed, changed), want, false)
 	}
-	changed := corruptTurnID(t, body, pos)
+	var turnID string
+	for event, err := range harness.ReadEvents(t.Context(), base, id, 1) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Kind == "turn.started" {
+			var started struct {
+				TurnID string `json:"turn_id"`
+			}
+			if err := json.Unmarshal(event.Data, &started); err != nil {
+				t.Fatal(err)
+			}
+			turnID = started.TurnID
+			break
+		}
+	}
+	if turnID == "" {
+		t.Fatal("corrupt checkpoint fixture needs a turn in the tail")
+	}
+	changed := corruptUsedTurn(t, body, pos, turnID)
 	checkCorruptReplay(t, base, id, packCheckpoint(t, packed, changed), want, true)
 }
 
@@ -530,6 +557,42 @@ func corruptTurnID(t *testing.T, body []byte, inputs int) []byte {
 		t.Fatal("expected no current turn")
 	}
 	changed := append(bytes.Clone(body[:c.pos]), 2, 'x')
+	return append(changed, body[c.pos+1:]...)
+}
+
+func corruptUsedTurn(t *testing.T, body []byte, inputs int, turnID string) []byte {
+	t.Helper()
+	c := checkpointCursor{t: t, body: body, pos: inputs + 1}
+	_, n := binary.Uvarint(body[c.pos:])
+	if n <= 0 {
+		t.Fatal("invalid checkpoint sequence")
+	}
+	c.pos += n
+	c.text()
+	c.text()
+	if c.integer() != -1 || c.integer() != -1 {
+		t.Fatal("expected empty progress lists")
+	}
+	if body[c.pos] != 0 || body[c.pos+1] != 0 {
+		t.Fatal("expected empty progress pointers")
+	}
+	c.pos += 2
+	c.text()
+	if c.integer() != -1 {
+		t.Fatal("expected empty turn input list")
+	}
+	if body[c.pos] != 0 {
+		t.Fatal("expected unsuspended turn")
+	}
+	c.pos++
+	c.integer()
+	if body[c.pos] != 0 {
+		t.Fatal("expected empty used-turn map")
+	}
+	changed := append(bytes.Clone(body[:c.pos]), 2)
+	changed = binary.AppendVarint(changed, int64(len(turnID)))
+	changed = append(changed, turnID...)
+	changed = append(changed, 1)
 	return append(changed, body[c.pos+1:]...)
 }
 

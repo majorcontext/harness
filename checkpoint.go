@@ -59,7 +59,7 @@ func openCheckpointView(ctx context.Context, st Store, checkpoints checkpointSto
 	if windows != nil {
 		caps = windows(s.Model())
 	}
-	return &View{st: st, id: id, state: session.Describe(id, s, caps, threshold), light: s}, nil
+	return &View{st: st, id: id, state: session.Describe(id, s, caps, threshold), light: s, restored: start > 0}, nil
 }
 
 func (v *View) lightMessages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) {
@@ -68,7 +68,15 @@ func (v *View) lightMessages(ctx context.Context, before uint64, limit int) (pro
 	if err != nil {
 		return protocol.MessagePage{}, err
 	}
-	return v.light.RenderPage(plan, records)
+	page, err := v.light.RenderPage(plan, records)
+	if err == nil || !v.restored {
+		return page, err
+	}
+	s, err := session.LoadThrough(ctx, storeLog{v.st, v.id}, v.state.HeadSeq)
+	if err != nil {
+		return protocol.MessagePage{}, err
+	}
+	return s.MessagePage(before, limit), nil
 }
 
 func readPageSources(ctx context.Context, st Store, id string, seqs []uint64) ([]eventlog.Record, error) {

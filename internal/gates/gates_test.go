@@ -624,6 +624,11 @@ func resolveBase(load func(root, ref string) (Base, error), root, ref string) (B
 func checkRepository(t *testing.T, load func(root, ref string) (Base, error)) {
 	t.Helper()
 	const root = "../.."
+	cmd := exec.Command("go", "run", "./internal/codecgen", "-check")
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkpoint generation: %v: %s", err, output)
+	}
 	if err := checkCheckpointCodec(os.DirFS(root)); err != nil {
 		t.Fatal(err)
 	}

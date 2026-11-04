@@ -13,10 +13,12 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"unsafe"
 )
 
-const checkpointVersion = 2
+const checkpointVersion = 3
 const maxCheckpointBytes = 128 << 20
+const maxCheckpointDepth = 128
 
 type codecWriter struct {
 	buf []byte
@@ -45,8 +47,34 @@ func (w *codecWriter) bytes(v []byte)  { w.length(len(v)); w.buf = append(w.buf,
 func (w *codecWriter) string(v string) { w.length(len(v)); w.buf = append(w.buf, v...) }
 
 type codecReader struct {
-	buf []byte
-	err error
+	buf       []byte
+	err       error
+	allocated uint64
+	depth     int
+}
+
+func (r *codecReader) allocate(n int, size uintptr) bool {
+	if r.err != nil {
+		return false
+	}
+	if n < 0 || uint64(size) > maxCheckpointBytes || uint64(n) > (maxCheckpointBytes-r.allocated)/max(uint64(size), 1) {
+		r.fail(errors.New("checkpoint allocation budget exceeded"))
+		return false
+	}
+	bytes := uint64(n) * uint64(size)
+	if bytes != 0 {
+		bytes = (bytes + 15) &^ 15
+	}
+	if bytes > maxCheckpointBytes-r.allocated {
+		r.fail(errors.New("checkpoint allocation budget exceeded"))
+		return false
+	}
+	r.allocated += bytes
+	return true
+}
+
+func (r *codecReader) allocateMap(n int, valueSize uintptr) bool {
+	return r.allocate(1, 128) && r.allocate(n, 4*(unsafe.Sizeof("")+valueSize+16))
 }
 
 func (r *codecReader) fail(err error) {
@@ -116,7 +144,13 @@ func (r *codecReader) bytes() []byte {
 	r.buf = r.buf[n:]
 	return v
 }
-func (r *codecReader) string() string { return string(r.bytes()) }
+func (r *codecReader) string() string {
+	b := r.bytes()
+	if !r.allocate(len(b), 1) {
+		return ""
+	}
+	return string(b)
+}
 
 func (w *codecWriter) value(v any) {
 	switch x := v.(type) {
@@ -156,17 +190,42 @@ func (w *codecWriter) value(v any) {
 		w.fail(fmt.Errorf("unsupported JSON value %T", v))
 	}
 }
+func (r *codecReader) enter() bool {
+	if r.err != nil {
+		return false
+	}
+	if r.depth >= maxCheckpointDepth {
+		r.fail(errors.New("checkpoint value nesting too deep"))
+		return false
+	}
+	r.depth++
+	return true
+}
+func (r *codecReader) leave() { r.depth-- }
 func (r *codecReader) value() any {
+	if !r.enter() {
+		return nil
+	}
+	defer r.leave()
 	switch r.unsigned() {
 	case 0:
 		return nil
 	case 1:
 		return r.boolean()
 	case 2:
+		if !r.allocate(1, unsafe.Sizeof("")) {
+			return nil
+		}
 		return r.string()
 	case 3:
+		if !r.allocate(1, unsafe.Sizeof(float64(0))) {
+			return nil
+		}
 		return r.float64()
 	case 4:
+		if !r.allocate(1, unsafe.Sizeof("")) {
+			return nil
+		}
 		return json.Number(r.string())
 	case 5:
 		n := r.length()
@@ -174,9 +233,15 @@ func (r *codecReader) value() any {
 			r.fail(errors.New("invalid array"))
 			return nil
 		}
+		if !r.allocate(n, unsafe.Sizeof(*new(any))) {
+			return nil
+		}
 		v := make([]any, n)
 		for i := range v {
 			v[i] = r.value()
+			if r.err != nil {
+				return nil
+			}
 		}
 		return v
 	case 6:
@@ -185,10 +250,17 @@ func (r *codecReader) value() any {
 			r.fail(errors.New("invalid object"))
 			return nil
 		}
+		if !r.allocateMap(n, unsafe.Sizeof(*new(any))) {
+			return nil
+		}
 		v := make(map[string]any, n)
 		for i := 0; i < n; i++ {
 			k := r.string()
-			v[k] = r.value()
+			x := r.value()
+			if r.err != nil {
+				return nil
+			}
+			v[k] = x
 		}
 		return v
 	default:

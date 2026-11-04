@@ -5,6 +5,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 var _ json.RawMessage
@@ -37,11 +38,17 @@ func codecMapOfJSONRawMessageDecode(r *codecReader, v *map[string]json.RawMessag
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(json.RawMessage))) {
+		return
+	}
 	*v = make(map[string]json.RawMessage, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x json.RawMessage
 		codecJSONRawMessageDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -65,9 +72,15 @@ func codecSliceOfProtocolCitationDecode(r *codecReader, v *[]protocol.Citation) 
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.Citation{})) {
+		return
+	}
 	*v = make([]protocol.Citation, n)
 	for i := range *v {
 		codecProtocolCitationDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -90,9 +103,15 @@ func codecSliceOfProtocolSearchResultDecode(r *codecReader, v *[]protocol.Search
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.SearchResult{})) {
+		return
+	}
 	*v = make([]protocol.SearchResult, n)
 	for i := range *v {
 		codecProtocolSearchResultDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 

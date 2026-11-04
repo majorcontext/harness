@@ -343,11 +343,12 @@ func attachment(ctx context.Context, st Store, id, key, mediaType string, size i
 
 // View is a session read from a Store with no owner. It is immutable.
 type View struct {
-	st    Store
-	id    string
-	state protocol.Session
-	log   *eventlog.State
-	light *eventlog.LightState
+	st       Store
+	id       string
+	state    protocol.Session
+	log      *eventlog.State
+	light    *eventlog.LightState
+	restored bool
 	// plugins are those of the runtime that read the view; the log holds none.
 	plugins []protocol.Plugin
 }

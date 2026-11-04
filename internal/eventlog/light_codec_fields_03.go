@@ -5,6 +5,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 var _ json.RawMessage
@@ -218,9 +219,15 @@ func codecSliceOfProtocolSubscriptionUsageWindowDecode(r *codecReader, v *[]prot
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.SubscriptionUsageWindow{})) {
+		return
+	}
 	*v = make([]protocol.SubscriptionUsageWindow, n)
 	for i := range *v {
 		codecProtocolSubscriptionUsageWindowDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -232,6 +239,9 @@ func codecPtrToProtocolSubscriptionOverageEncode(w *codecWriter, v *protocol.Sub
 }
 func codecPtrToProtocolSubscriptionOverageDecode(r *codecReader, v **protocol.SubscriptionOverage) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.SubscriptionOverage))) {
+			return
+		}
 		v2 := new(protocol.SubscriptionOverage)
 		codecProtocolSubscriptionOverageDecode(r, v2)
 		*v = v2
@@ -248,6 +258,9 @@ func codecPtrTofloat64Encode(w *codecWriter, v *float64) {
 }
 func codecPtrTofloat64Decode(r *codecReader, v **float64) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(float64))) {
+			return
+		}
 		v2 := new(float64)
 		codecFloat64Decode(r, v2)
 		*v = v2
@@ -275,9 +288,15 @@ func codecSliceOfstringDecode(r *codecReader, v *[]string) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
+		return
+	}
 	*v = make([]string, n)
 	for i := range *v {
 		codecStringDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -321,9 +340,15 @@ func codecSliceOfuint64Decode(r *codecReader, v *[]uint64) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(uint64))) {
+		return
+	}
 	*v = make([]uint64, n)
 	for i := range *v {
 		codecUint64Decode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 var _ json.RawMessage
@@ -38,9 +39,15 @@ func codecSliceOfstring41Decode(r *codecReader, v *[]string) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
+		return
+	}
 	*v = make([]string, n)
 	for i := range *v {
 		codecStringDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -63,9 +70,15 @@ func codecSliceOfstring42Decode(r *codecReader, v *[]string) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
+		return
+	}
 	*v = make([]string, n)
 	for i := range *v {
 		codecStringDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -77,6 +90,9 @@ func codecPtrToProtocolGoalViewEncode(w *codecWriter, v *protocol.GoalView) {
 }
 func codecPtrToProtocolGoalViewDecode(r *codecReader, v **protocol.GoalView) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.GoalView))) {
+			return
+		}
 		v2 := new(protocol.GoalView)
 		codecProtocolGoalViewDecode(r, v2)
 		*v = v2
@@ -93,6 +109,9 @@ func codecPtrToProtocolLastTurnEncode(w *codecWriter, v *protocol.LastTurn) {
 }
 func codecPtrToProtocolLastTurnDecode(r *codecReader, v **protocol.LastTurn) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.LastTurn))) {
+			return
+		}
 		v2 := new(protocol.LastTurn)
 		codecProtocolLastTurnDecode(r, v2)
 		*v = v2
@@ -120,9 +139,15 @@ func codecSliceOfstring45Decode(r *codecReader, v *[]string) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(*new(string))) {
+		return
+	}
 	*v = make([]string, n)
 	for i := range *v {
 		codecStringDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -214,9 +239,15 @@ func codecJSONRawMessageDecode(r *codecReader, v *json.RawMessage) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, 1) {
+		return
+	}
 	*v = make(json.RawMessage, n)
 	for i := range *v {
 		codecByteDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -228,6 +259,9 @@ func codecPtrToProtocolSubscriptionUsage54Encode(w *codecWriter, v *protocol.Sub
 }
 func codecPtrToProtocolSubscriptionUsage54Decode(r *codecReader, v **protocol.SubscriptionUsage) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(protocol.SubscriptionUsage))) {
+			return
+		}
 		v2 := new(protocol.SubscriptionUsage)
 		codecProtocolSubscriptionUsageDecode(r, v2)
 		*v = v2
@@ -244,6 +278,9 @@ func codecPtrTofloat6455Encode(w *codecWriter, v *float64) {
 }
 func codecPtrTofloat6455Decode(r *codecReader, v **float64) {
 	if r.boolean() {
+		if !r.allocate(1, unsafe.Sizeof(*new(float64))) {
+			return
+		}
 		v2 := new(float64)
 		codecFloat64Decode(r, v2)
 		*v = v2

@@ -5,6 +5,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 var _ json.RawMessage
@@ -31,9 +32,15 @@ func codecSliceOfProtocolInputAdmittedDecode(r *codecReader, v *[]protocol.Input
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.InputAdmitted{})) {
+		return
+	}
 	*v = make([]protocol.InputAdmitted, n)
 	for i := range *v {
 		codecProtocolInputAdmittedDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -67,9 +74,15 @@ func codecSliceOfProtocolMessagePartDecode(r *codecReader, v *[]protocol.Message
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.MessagePart{})) {
+		return
+	}
 	*v = make([]protocol.MessagePart, n)
 	for i := range *v {
 		codecProtocolMessagePartDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -92,9 +105,15 @@ func codecSliceOfProtocolOperatorBatchEntryDecode(r *codecReader, v *[]protocol.
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.OperatorBatchEntry{})) {
+		return
+	}
 	*v = make([]protocol.OperatorBatchEntry, n)
 	for i := range *v {
 		codecProtocolOperatorBatchEntryDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -124,9 +143,15 @@ func codecSliceOfProtocolLogPartDecode(r *codecReader, v *[]protocol.LogPart) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.LogPart{})) {
+		return
+	}
 	*v = make([]protocol.LogPart, n)
 	for i := range *v {
 		codecProtocolLogPartDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -202,11 +227,17 @@ func codecMapOfanyDecode(r *codecReader, v *map[string]any) {
 	if !r.count(n) {
 		return
 	}
+	if !r.allocateMap(n, unsafe.Sizeof(*new(any))) {
+		return
+	}
 	*v = make(map[string]any, n)
 	for i := 0; i < n; i++ {
 		k := string(r.string())
 		var x any
 		codecAnyDecode(r, &x)
+		if r.err != nil {
+			return
+		}
 		(*v)[k] = x
 	}
 }
@@ -230,9 +261,15 @@ func codecSliceOfProtocolLogPart92Decode(r *codecReader, v *[]protocol.LogPart) 
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.LogPart{})) {
+		return
+	}
 	*v = make([]protocol.LogPart, n)
 	for i := range *v {
 		codecProtocolLogPartDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -300,6 +337,10 @@ func codecProtocolLogPartEncode(w *codecWriter, v protocol.LogPart) {
 	codecSliceOfProtocolSearchResultEncode(w, v.Results)
 }
 func codecProtocolLogPartDecode(r *codecReader, v *protocol.LogPart) {
+	if !r.enter() {
+		return
+	}
+	defer r.leave()
 	codecStringDecode(r, &v.Type)
 	codecStringDecode(r, &v.Text)
 	codecStringDecode(r, &v.CallID)
@@ -343,9 +384,15 @@ func codecSliceOfProtocolCitation97Decode(r *codecReader, v *[]protocol.Citation
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.Citation{})) {
+		return
+	}
 	*v = make([]protocol.Citation, n)
 	for i := range *v {
 		codecProtocolCitationDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -368,9 +415,15 @@ func codecSliceOfProtocolSearchResult98Decode(r *codecReader, v *[]protocol.Sear
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.SearchResult{})) {
+		return
+	}
 	*v = make([]protocol.SearchResult, n)
 	for i := range *v {
 		codecProtocolSearchResultDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }
 
@@ -393,8 +446,14 @@ func codecSliceOfProtocolLogPart99Decode(r *codecReader, v *[]protocol.LogPart) 
 	if !r.count(n) {
 		return
 	}
+	if !r.allocate(n, unsafe.Sizeof(protocol.LogPart{})) {
+		return
+	}
 	*v = make([]protocol.LogPart, n)
 	for i := range *v {
 		codecProtocolLogPartDecode(r, &(*v)[i])
+		if r.err != nil {
+			return
+		}
 	}
 }

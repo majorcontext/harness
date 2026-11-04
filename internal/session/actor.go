@@ -411,6 +411,12 @@ func ReplayLight(ctx context.Context, log Log, s *eventlog.LightState, head uint
 	return replay(ctx, log, s, head)
 }
 
+// LoadThrough replays a log through head without owning it.
+func LoadThrough(ctx context.Context, log Log, head uint64) (*eventlog.State, error) {
+	s := &eventlog.State{}
+	return s, replay(ctx, log, s, head)
+}
+
 // Load replays a whole log without owning it.
 func Load(ctx context.Context, id string, log Log) (*eventlog.State, error) {
 	head, err := log.Head(ctx)
