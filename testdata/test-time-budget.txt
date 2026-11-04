@@ -37,13 +37,26 @@ test internal/plugin TestTypeScriptSDK 35
 # The repository gate also validates the generated checkpoint codec (18.56 s on CI).
 test internal/gates TestRepository 28
 
-# The first test of the package to start a runtime builds the fake CLI (12 s on CI, budget 1.5 times).
+# The first test of the package to start a runtime builds the fake CLI (up to 14.01 s on CI, budget 1.5 times).
 test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
+test internal/backend/claudecode TestClaudeCodeRoutesTheSelectedAccountThroughTheProxy 22
 # Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 7 s alone and 16-41 s on CI, where it runs beside the whole parallel package. The state must pass the 4 MiB chunk and the sync batch cap, and the race detector spends the time decoding it.
 test e2e TestContractRuntimeClaudeCodeStateChunks 60
 # Runtime rows check every session log prefix, checkpoint restore, tail, and message page against replay.
-# Budgets are 1.5 times the slowest observed CI row, rounded up.
+# Budgets are 1.5 times the slowest observed row, rounded up.
 test e2e TestContractCheckInputEqualsSubmit/runtime/too_large 16
+test e2e TestContractCheckpointHistory/runtime/checkpoint_compaction_and_command_history 19
+test e2e TestContractSessionAutoCompactionGuards/runtime/auto_compaction_waits_for_the_reading_to_fall_before_it_runs_again 16
+test e2e TestContractToolResultRetention/runtime/tool_result_retention_keeps_a_preview_and_reads_it_back 24
+test e2e TestContractToolResultRetention/runtime/tool_result_over_the_session_budget_keeps_a_preview_with_a_notice 27
+test e2e TestContractFileToolsEdges/runtime/file_tools_read_edges 17
+test e2e TestContractOversizedCheckpoint/runtime/oversized_encoded_checkpoint_falls_back_to_replay 16
+test e2e TestContractChildReportPinnedAcrossTurns/runtime/child_report_to_a_busy_parent_stays_through_an_in_turn_compaction 16
+test e2e TestContractChildReportPinnedAcrossTurns/runtime/child_report_to_a_busy_parent_folded_with_a_long_kept_tail 16
+test e2e TestContractChildReportPinned/runtime/task_log_of_a_child_shows_no_pinned_report 16
+test e2e TestContractTaskRefusedActions/runtime/task_action_refusals 16
+test e2e TestContractTaskTree/runtime/task_tree_reaches_a_grandchild 17
+test e2e TestContractClaudeCodeTools/runtime/claudecode_parallel_edit_file_calls_on_one_path_lose_no_edit 25
 test e2e TestContractTaskSend/runtime/task_two_sends_to_a_settled_child_need_one_slot 16
 test e2e TestContractTaskSend/runtime/task_send_runs_a_settled_child_again 21
 test e2e TestContractWebFetchRefusals/runtime/web_fetch_refuses_private_loopback_and_link_local_addresses 25
@@ -74,8 +87,8 @@ test e2e TestContractServeStopReportsCrashed 15
 test e2e TestContractRuntimeSessionMCP 15
 # Rows that run git on a fixture repository (9 s under load locally).
 test e2e TestContractWorkspace 15
-# A row that pages the skill list of a server past 100 pages and reads each file it checks (10.4 s on CI).
-test e2e TestContractMCPSkillVerification/runtime/mcp_skill_listed_beyond_page_100 16
+# A row that pages the skill list of a server past 100 pages and reads each file it checks (17.51 s runtime, 10.4 s serve on CI).
+test e2e TestContractMCPSkillVerification/runtime/mcp_skill_listed_beyond_page_100 27
 test e2e TestContractMCPSkillVerification/serve/mcp_skill_listed_beyond_page_100 16
 
 # Builds the fake CLI; a cold build cache makes it 7 s to 21 s on CI (24 s for the package).
