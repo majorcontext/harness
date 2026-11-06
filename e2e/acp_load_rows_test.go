@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -53,8 +55,8 @@ type acpList struct {
 	more, fromCursor bool
 }
 
-// acpSeed creates n sessions in the main directory directly in the session
-// store, named prefix0 to prefix(n-1), without any ACP traffic.
+// acpSeed creates n sessions named prefix0 to prefix(n-1), without ACP traffic.
+// Disk fixtures need no durability barrier; ACP reads them through DiskStore.
 type acpSeed struct {
 	n      int
 	prefix string
@@ -235,7 +237,8 @@ func (s acpSeed) run(t *testing.T, c *acpConn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := harness.New(harness.Options{Store: store.NewDiskStore(c.env.sessDir), Config: *cfg, WorkDir: c.dir(""), Getenv: acpGetenv})
+	seed := store.NewMemStore()
+	rt, err := harness.New(harness.Options{Store: seed, Config: *cfg, WorkDir: c.dir(""), Getenv: acpGetenv})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +251,29 @@ func (s acpSeed) run(t *testing.T, c *acpConn) {
 	}
 	if err := rt.Close(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	for i := range s.n {
+		id := c.sessions[fmt.Sprintf("%s%d", s.prefix, i)]
+		head, err := seed.Head(t.Context(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records, err := seed.Read(t.Context(), id, 0, int(head))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(c.env.sessDir, id)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var log []byte
+		for _, record := range records {
+			log = append(log, record.Data...)
+			log = append(log, '\n')
+		}
+		if err := os.WriteFile(filepath.Join(dir, "log.jsonl"), log, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
