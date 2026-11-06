@@ -104,6 +104,11 @@ type Options struct {
 	Tools []Tool
 	// StopAfterTools names tools whose successful calls end a turn after the step. Empty: off. Backends that own their loop ignore it.
 	StopAfterTools []string
+	// StopAfter ends a turn after its step when it returns true for a successful result.
+	// It sees the model call and the full result after After hooks, before Join hooks and retention.
+	// Calls are serial in model call order within a turn, but may overlap across sessions.
+	// The callback must not mutate its arguments, block, or panic. nil: off. OwnsLoop backends ignore it.
+	StopAfter func(call protocol.ToolCall, result protocol.ToolResult) bool
 	// Skills supplies embedded skills for each session; see SkillSource.
 	Skills SkillSource
 	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
@@ -236,7 +241,7 @@ func New(opts Options) (*Runtime, error) {
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
-		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools)}
+		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools), StopAfter: opts.StopAfter}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
 	r.prompt = func(e []prompt.Embedded) prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, e, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
