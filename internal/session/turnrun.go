@@ -9,6 +9,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -27,7 +28,7 @@ func (t *turnRun) Item(m protocol.LogMessage) error { return t.ItemAs("", m) }
 
 // ItemAs records m under id, or a new ID when id is "".
 func (t *turnRun) ItemAs(id string, m protocol.LogMessage) error {
-	_, err := call(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.item(t.r, id, m)) })
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.item(t.r, id, m)) })
 	return err
 }
 
@@ -71,12 +72,12 @@ func (t *turnRun) Status(f protocol.StatusFrame) {
 
 // Telemetry adds the usage of tel to the turn and records its context reading.
 func (t *turnRun) Telemetry(tel turn.Telemetry) {
-	_, _ = call(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.telemetry(t.r, tel)) })
+	_, _ = callRun(context.Background(), t.a, func(reply func(struct{}, error)) { reply(struct{}{}, t.a.telemetry(t.r, tel)) })
 }
 
 // Steer promotes the queued steer inputs into the turn and returns them.
 func (t *turnRun) Steer() ([]protocol.LogMessage, error) {
-	return call(context.Background(), t.a, func(reply func([]protocol.LogMessage, error)) { reply(t.a.steer(t.r)) })
+	return callRun(context.Background(), t.a, func(reply func([]protocol.LogMessage, error)) { reply(t.a.steer(t.r)) })
 }
 
 // Settings returns the model and the settings of the session while the turn
@@ -86,7 +87,7 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 		model string
 		set   protocol.Settings
 	}
-	h, _ := call(context.Background(), t.a, func(reply func(held, error)) {
+	h, _ := callRun(context.Background(), t.a, func(reply func(held, error)) {
 		if t.a.run == t.r {
 			reply(held{t.a.state.Model(), t.a.state.Settings()}, nil)
 			return
@@ -97,19 +98,25 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 }
 
 // Pin pins ns on the actor, which owns the pins, and returns every pin. The
-// first call of a process pins a status that has no place after the banner, as
-// the log alone fixes that place, so a new process pins the status of a server
-// that is down where the process before it did. A later change follows the
-// history of its call. A pin never falls before an older one, so the notices
-// are set in the order of their places, and a notice of the same place keeps
-// its order.
+// log records each new pin but the banner, so a new process starts with the
+// pins of the process before it, each at its place. The first call of a
+// process pins a status of a kind that the log never recorded after the banner,
+// as the log alone fixes that place. A later change, and a change of a recorded
+// status, follows the history of its call. A pin never falls before an older
+// one, so the notices are set in the order of their places, and a notice of the
+// same place keeps its order.
 func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
-	pins, _ := call(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
+	pins, _ := callRun(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
 		first := !t.a.pinned
 		t.a.pinned = true
 		placed := slices.Clone(ns)
+		if len(placed) > 0 && placed[0].Kind == turn.BannerKind && placed[0].Text != "" && !t.a.pins.Has(turn.BannerKind) {
+			b := placed[0]
+			t.a.pins.Prepend(turn.Pin{Kind: b.Kind, Text: b.Text, At: b.At})
+		}
+		known := len(t.a.pins.Pinned())
 		for i := range placed {
-			if first && placed[i].At == 0 {
+			if first && placed[i].At == 0 && !t.a.pins.Has(placed[i].Kind) {
 				placed[i].At = t.a.state.BannerAt()
 			}
 			placed[i].At = cmp.Or(placed[i].At, at)
@@ -118,14 +125,33 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		for _, n := range placed {
 			t.a.pins.Set(n.Kind, n.Text, n.Cleared, n.At)
 		}
-		reply(t.a.pins.Pinned(), nil)
+		pinned := t.a.pins.Pinned()
+		var recorded []protocol.Payload
+		for _, p := range pinned[known:] {
+			if p.Kind != turn.BannerKind {
+				recorded = append(recorded, protocol.PinRecorded{Notice: p.Kind, Text: p.Text, At: p.At})
+			}
+		}
+		if len(recorded) > 0 {
+			_ = t.a.append(recorded...)
+		}
+		reply(pinned, nil)
 	})
 	return pins
 }
 
+// restoredPins returns the pins that the log of s records.
+func restoredPins(s *eventlog.State) turn.Pins {
+	var ps turn.Pins
+	for _, p := range s.Pins() {
+		ps.Add(turn.Pin{Kind: p.Notice, Text: p.Text, At: p.At})
+	}
+	return ps
+}
+
 // Ended ends the turn by the cause of its stop.
 func (t *turnRun) Ended(runErr error) {
-	_, _ = call(context.Background(), t.a, func(reply func(struct{}, error)) {
+	_, _ = callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
 		t.a.ended(t.r, runErr)
 		if t.r.span != nil {
 			t.r.span.End()
@@ -146,7 +172,7 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool,
 // threshold. A summary that fails or comes back empty leaves the turn on its
 // history, with no error.
 func (t *turnRun) AutoCompact(ctx context.Context) ([]protocol.LogMessage, bool, error) {
-	due, err := call(ctx, t.a, func(reply func(bool, error)) {
+	due, err := callRun(ctx, t.a, func(reply func(bool, error)) {
 		if t.a.run != t.r {
 			reply(false, ErrTurnMismatch)
 			return
@@ -170,7 +196,7 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 		ok    bool
 		metas []toolresult.Meta
 	}
-	f, err := call(ctx, a, func(reply func(folding, error)) {
+	f, err := callRun(ctx, a, func(reply func(folding, error)) {
 		if a.run != r {
 			reply(folding{}, ErrTurnMismatch)
 			return
@@ -183,7 +209,7 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 	}
 	summary, usage, err := a.summarize(ctx, f.req, f.src)
 	if err != nil {
-		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+		_, _ = callRun(context.Background(), a, func(reply func(struct{}, error)) {
 			if a.run == r {
 				recordErr := a.recordUsage(usage)
 				a.latched = recordErr == nil && ctx.Err() == nil && (soft || errors.Is(err, turn.ErrEmptySummary))
@@ -198,7 +224,7 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 		return nil, false, err
 	}
 	f.c.Summary, f.c.Index, f.c.Usage = summary, a.resultIndex(f.metas), usage
-	h, err := call(ctx, a, func(reply func([]protocol.LogMessage, error)) {
+	h, err := callRun(ctx, a, func(reply func([]protocol.LogMessage, error)) {
 		if a.run != r || ctx.Err() != nil {
 			reply(nil, cmp.Or(context.Cause(ctx), error(ErrTurnMismatch)))
 			return

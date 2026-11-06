@@ -168,6 +168,7 @@ const (
 	KindContextMeasured    = "context.measured"
 	KindBackendState       = "backend.state"
 	KindToolResultRetained = "tool_result.retained"
+	KindPinRecorded        = "pin.recorded"
 )
 
 // Settings are the session settings other than the model.
@@ -478,6 +479,14 @@ type ToolResultRetained struct {
 	Head    string `json:"head"`
 }
 
+// PinRecorded records one pin, a segment of engine context that the model
+// reads after the first At messages of the history. The banner has no record.
+type PinRecorded struct {
+	Notice string `json:"notice"`
+	Text   string `json:"text"`
+	At     int    `json:"at"`
+}
+
 // Kind returns KindSessionCreated.
 func (SessionCreated) Kind() string { return KindSessionCreated }
 
@@ -546,6 +555,9 @@ func (ContextMeasured) Kind() string { return KindContextMeasured }
 
 // Kind returns KindBackendState.
 func (BackendState) Kind() string { return KindBackendState }
+
+// Kind returns KindPinRecorded.
+func (PinRecorded) Kind() string { return KindPinRecorded }
 
 // Kind returns KindToolResultRetained.
 func (ToolResultRetained) Kind() string { return KindToolResultRetained }

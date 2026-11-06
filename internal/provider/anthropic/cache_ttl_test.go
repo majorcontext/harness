@@ -16,7 +16,7 @@ import (
 func cacheTTLRequest(t *testing.T, ttl string) *apiRequest {
 	t.Helper()
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
-	out, err := transcodeRequest(req, ttl)
+	out, err := transcodeRequest(req, ttl, true)
 	if err != nil {
 		t.Fatal(err)
 	}

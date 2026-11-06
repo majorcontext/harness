@@ -102,8 +102,15 @@ type Options struct {
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
+	// DisableRetryAfterOutput stops retries of each model call after its first non-empty text or reasoning delta. False keeps the retry policy unchanged.
+	DisableRetryAfterOutput bool
 	// StopAfterTools names tools whose successful calls end a turn after the step. Empty: off. Backends that own their loop ignore it.
 	StopAfterTools []string
+	// StopAfter ends a turn after its step when it returns true for a successful result.
+	// It sees the model call and the full result after After hooks, before Join hooks and retention.
+	// Calls are serial in model call order within a turn, but may overlap across sessions.
+	// The callback must not mutate its arguments, block, or panic. nil: off. OwnsLoop backends ignore it.
+	StopAfter func(call protocol.ToolCall, result protocol.ToolResult) bool
 	// Skills supplies embedded skills for each session; see SkillSource.
 	Skills SkillSource
 	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
@@ -234,9 +241,9 @@ func New(opts Options) (*Runtime, error) {
 		titleModel: modelRef(opts.Config, opts.Config.TitleModel),
 		threshold:  positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
-	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
+	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(), DisableRetryAfterOutput: opts.DisableRetryAfterOutput,
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
-		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools)}
+		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools), StopAfter: opts.StopAfter}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
 	r.prompt = func(e []prompt.Embedded) prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, e, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
@@ -495,27 +502,36 @@ func (r *Runtime) loaded(ctx context.Context, id string) *Session {
 	}
 }
 
-// End stops session id on this runtime and releases its ownership once Sync
-// has acknowledged every record. It appends nothing and deletes nothing: the
-// log stays in the store, and Open runs the session again. It also stops the
-// turn of each descendant that this runtime runs, and opens no session. A
-// session with a running turn or control command fails with ErrSessionBusy and
-// stops no descendant; a running compaction or evaluation that no command
-// started stops as under Release. A
-// session that this runtime does not run is ended already; an ID with no log
-// fails with ErrSessionNotFound.
+// End withdraws queued inputs, cancels the run, and unloads session id.
+// It also stops each descendant turn that this runtime runs. It opens no
+// session and deletes no log; the embedder owns log cleanup. Cleanup continues
+// if ctx ends, including when ctx has ended on entry. Before deleting the log
+// after a timeout, wait for Session.Done. A session that this runtime does not
+// run is ended already; an ID with no log fails with ErrSessionNotFound.
 func (r *Runtime) End(ctx context.Context, id string) error {
 	if err := storecheck.Name(id); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	s := r.loaded(ctx, id)
-	return r.tree.End(ctx, id, func(ctx context.Context) error {
-		if s != nil {
-			return s.a.End(ctx)
-		}
-		_, err := OpenView(ctx, r.store, id)
+	if err := r.hold(); err != nil {
 		return err
-	})
+	}
+	done := make(chan error, 1)
+	go func() {
+		defer r.group.Done()
+		done <- r.tree.End(context.WithoutCancel(ctx), id, func(ctx context.Context) error {
+			if s := r.loaded(ctx, id); s != nil {
+				return s.a.End(ctx)
+			}
+			_, err := OpenView(ctx, r.store, id)
+			return err
+		})
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 // List returns a page of sessions in creation order. The After of a page is
@@ -545,8 +561,9 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 // every later call returns its result. Each call returns by the end of its
 // ctx with context.Cause(ctx). When the ctx of the first call ends, it
 // cancels every run and kills the processes, and does not wait for a tool
-// that ignores its ctx; a session whose run is still going keeps its
-// Ownership until that run returns, and the next Open finds a crashed turn.
+// that ignores its ctx. The detached tool can still have side effects, but
+// cannot append a late result. Other runtime work must honor its ctx; a
+// session whose backend still runs keeps ownership until that run returns.
 // An external harness ends within its own stop grace.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()

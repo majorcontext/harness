@@ -21,17 +21,22 @@ const dirMimeType = "inode/directory"
 // handled is false for any other URI, which reads as an ordinary resource. A file of a skill that the session
 // loaded from another server is refused, so a skill never makes a read from a server other than its own.
 func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri string) (res protocol.ToolResult, handled bool, err error) {
+	sv := s.view().live[server]
+	incomplete := sv != nil && sv.servesSkills() && sv.skillsErr != nil
 	byServer := s.root().held.containing(turn.SessionID(ctx), uri)
 	e, isHeld := byServer[server]
 	if !isHeld {
 		for _, other := range slices.Sorted(maps.Keys(byServer)) {
-			if _, ok := ownSkill(s.view().live[server], uri); !ok {
+			if _, ok := ownSkill(sv, uri); !ok {
 				return protocol.ToolResult{}, true, fmt.Errorf("%s is a file of the skill %s that the server %q serves; read it from %q",
 					uri, byServer[other].URI, other, other)
 			}
 		}
 		var ok bool
-		if e, ok = ownSkill(s.view().live[server], uri); !ok {
+		if e, ok = ownSkill(sv, uri); !ok {
+			if incomplete {
+				return protocol.ToolResult{}, true, fmt.Errorf("%w: the skill list of server %q is incomplete; load the skill with %s before reading its files", errVerify, server, loadName)
+			}
 			return protocol.ToolResult{}, false, nil
 		}
 	}
@@ -41,8 +46,10 @@ func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri strin
 	}
 	listed := e.Dynamic || slices.ContainsFunc(e.Resources, func(r mcp.SkillResource) bool { return r.URI == uri })
 	switch {
-	case !listed && !isHeld:
+	case !listed && !isHeld && !incomplete:
 		return protocol.ToolResult{}, false, nil
+	case !listed && !isHeld:
+		err = fmt.Errorf("%w: %s is not in the entry of the skill %s", errVerify, uri, e.URI)
 	case !listed:
 		err = fmt.Errorf("%w: %s is not in the entry of the skill %s that this session loaded", errVerify, uri, e.URI)
 	default:

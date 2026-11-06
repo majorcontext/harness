@@ -22,6 +22,7 @@ type stopTool struct {
 	release <-chan struct{}
 	// readOnly lets calls of the tool overlap.
 	readOnly bool
+	text     string
 }
 
 func (s stopTool) Spec() protocol.ToolSpec {
@@ -40,10 +41,19 @@ func (s stopTool) Run(ctx context.Context, _ harness.Call) (protocol.ToolResult,
 	if s.fail == "error" {
 		return protocol.ToolResult{}, errors.New("tool failed")
 	}
-	return protocol.ToolResult{Text: s.name + " result", IsError: s.fail == "result"}, nil
+	text := s.text
+	if text == "" {
+		text = s.name + " result"
+	}
+	return protocol.ToolResult{Text: text, IsError: s.fail == "result"}, nil
 }
 
 func stopRuntime(t *testing.T, provider string, tools []harness.Tool, listed []string, steps ...harnesstest.Step) (*harness.Session, *harnesstest.Server) {
+	t.Helper()
+	return stopRuntimeOptions(t, provider, harness.Options{Tools: tools, StopAfterTools: listed}, steps...)
+}
+
+func stopRuntimeOptions(t *testing.T, provider string, opts harness.Options, steps ...harnesstest.Step) (*harness.Session, *harnesstest.Server) {
 	t.Helper()
 	var fake *harnesstest.Server
 	var cfg config.Provider
@@ -54,7 +64,10 @@ func stopRuntime(t *testing.T, provider string, tools []harness.Tool, listed []s
 		fake = harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...).Server
 		cfg = config.Provider{Type: config.TypeOpenAI, BaseURL: fake.URL(), ResponsesPath: "/backend-api/codex/responses", APIKeyEnv: "KEY"}
 	}
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Tools: tools, StopAfterTools: listed, Getenv: func(string) string { return "k" }, Config: config.Config{ContextWindowTokens: 100000, Providers: map[string]config.Provider{provider: cfg}}})
+	opts.Store = store.NewMemStore()
+	opts.Getenv = func(string) string { return "k" }
+	opts.Config = config.Config{ContextWindowTokens: 100000, Providers: map[string]config.Provider{provider: cfg}}
+	r, err := harness.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

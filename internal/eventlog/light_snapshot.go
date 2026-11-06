@@ -42,6 +42,7 @@ type checkpointState struct {
 	Children                                map[string]protocol.Outcome
 	Backends                                map[string]BackendChain
 	Retained                                []protocol.ToolResultRetained
+	Pins                                    []protocol.PinRecorded
 	Commands                                map[string]checkpointCommand
 	History                                 []checkpointEntry
 	Stranded                                []checkpointEntry
@@ -144,7 +145,7 @@ func saveState(s State) checkpointState {
 		SubscriptionWindowsSet: s.subscribed != nil && s.subscribed.Windows != nil,
 		SubscriptionCostSet:    s.subscribed != nil && s.subscribed.SessionCostUSD != nil,
 		Compaction:             s.compaction, CompactedAt: s.compactedAt, CompactedTime: s.compactedTime, Compacted: s.compacted, CompactedLen: s.compactedLen,
-		Children: s.children, Backends: s.backends, Retained: s.retained,
+		Children: s.children, Backends: s.backends, Retained: s.retained, Pins: s.pins,
 		Commands: mapValues(s.commands, func(v command) checkpointCommand { return checkpointCommand{v.rec, v.seq, v.after} }),
 		History:  mapSlice(s.history, saveEntry), Stranded: mapSlice(s.stranded, saveEntry),
 		TurnAt: s.turnAt, TurnBy: s.turnBy, TurnN: s.turnN, TurnItems: s.turnItems, Unran: s.unran,
@@ -192,7 +193,7 @@ func loadState(s checkpointState) State {
 		evaluated: s.Evaluated, usage: s.Usage, context: s.Context,
 		measuredTurn: s.MeasuredTurn, readAt: s.ReadAt, readTTL: s.ReadTTL, subscribed: s.Subscribed, cost: s.Cost,
 		compaction: s.Compaction, compactedAt: s.CompactedAt, compactedTime: s.CompactedTime, compacted: s.Compacted, compactedLen: s.CompactedLen,
-		children: s.Children, backends: s.Backends, retained: s.Retained,
+		children: s.Children, backends: s.Backends, retained: s.Retained, pins: s.Pins,
 		commands: mapValues(s.Commands, func(v checkpointCommand) command { return command{v.Rec, v.Seq, v.After} }),
 		history:  mapSlice(s.History, loadEntry), stranded: mapSlice(s.Stranded, loadEntry),
 		turnAt: s.TurnAt, turnBy: s.TurnBy, turnN: s.TurnN, turnItems: s.TurnItems, unran: s.Unran,

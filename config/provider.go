@@ -161,6 +161,8 @@ type Provider struct {
 	UseWebSocketTransport bool `json:"use_websocket_transport,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache lifetime: "5m" or "1h".
 	CacheTTL string `json:"cache_ttl,omitempty"`
+	// CacheFinalMessage adds the final-message cache marker; nil defaults to true.
+	CacheFinalMessage *bool `json:"cache_final_message,omitempty"`
 	// Models lists the model ids of the entry as its API names them, without the provider key. When it is set, it is the model list of the entry, in this order.
 	Models []string `json:"models,omitempty"`
 
@@ -196,8 +198,12 @@ func (p *Provider) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Clone returns a copy of p that shares no map or slice with it.
+// Clone returns a copy of p that shares no mutable field with it.
 func (p Provider) Clone() Provider {
+	if p.CacheFinalMessage != nil {
+		value := *p.CacheFinalMessage
+		p.CacheFinalMessage = &value
+	}
 	p.ExtraHeaders = maps.Clone(p.ExtraHeaders)
 	p.OmitResponseParams = slices.Clone(p.OmitResponseParams)
 	p.Models = slices.Clone(p.Models)
@@ -543,6 +549,9 @@ func validateSanitizeToolSchemas(name string, p Provider) error {
 
 // validateCacheTTL rejects an unknown cache_ttl, and any value outside the native anthropic entry.
 func validateCacheTTL(name string, p Provider) error {
+	if p.CacheFinalMessage != nil && (name != "anthropic" || p.Type != "") {
+		return fmt.Errorf("providers.%s: cache_final_message is only valid on the native anthropic provider", name)
+	}
 	if p.CacheTTL == "" {
 		return nil
 	}

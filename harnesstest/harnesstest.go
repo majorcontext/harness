@@ -27,8 +27,10 @@ type Step struct {
 
 // Reply is what the server sends when a Step matches.
 type Reply struct {
-	Text      string
-	ToolCalls []ToolCall // emitted as tool_use blocks after Text
+	// TextChunkRunes splits Anthropic text into deltas of at most this many runes. Zero sends one delta.
+	TextChunkRunes int
+	Text           string
+	ToolCalls      []ToolCall // emitted as tool_use blocks after Text
 	// Calls, when set, replaces ToolCalls with the calls that it returns for
 	// the request, so a reply can name an ID that only the conversation holds.
 	Calls      func(Request) []ToolCall

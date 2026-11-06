@@ -114,49 +114,13 @@ func TestContractGoalEvaluatorTranscriptBudget(t *testing.T) {
 		t.Run("an evaluator model reads half its window less the reserve", func(t *testing.T) {
 			t.Parallel()
 			const budget = (120000/2 - 2048) * 4
-			body := evaluatorBudget(t, h, map[string]any{"context_window_tokens": 120000, "compaction_threshold": 0.99}, 32)
-			if len(body) > budget || len(body) < budget-pair {
-				t.Errorf("transcript = %d bytes, want between %d and %d", len(body), budget-pair, budget)
-			}
+			checkEvaluatorTranscriptBudget(t, h, 120000, budget)
 		})
 
 		t.Run("a large evaluator window is capped at the 200k transcript budget", func(t *testing.T) {
 			t.Parallel()
 			const budget = (200000/2 - 2048) * 4
-			const tail = "ASSISTANT:\ndone"
-			d, fake := startOn(t, h, t.TempDir(), map[string]any{"context_window_tokens": 1050000, "compaction_threshold": 0.99},
-				agentStep("old", "done", false),
-				harnesstest.Step{Name: "work", Reply: harnesstest.Reply{Text: "done", Block: true}},
-				evaluatorStep("judge", "MET: ok", false))
-			id := d.Create(t)
-			d.Submit(t, id, "x")
-			d.WaitIdle(t, id)
-			var parts []protocol.Part
-			var texts []string
-			for remaining := budget - len("USER:\n\n\n"+tail+"\n\n"); remaining > 0; {
-				n := min(remaining, 4096)
-				text := strings.Repeat("x", n)
-				texts = append(texts, text)
-				parts = append(parts, protocol.Part{Type: protocol.PartText, Text: text})
-				remaining -= n
-				if remaining > 0 {
-					remaining--
-				}
-			}
-			path, input := d.input(id, "", "", "")
-			input["parts"] = parts
-			d.expect(t, http.StatusCreated, http.MethodPost, path, input, nil)
-			if !fake.AwaitBlocked("work", waitBound) {
-				t.Fatal("the goal turn did not reach the model")
-			}
-			d.SetGoal(t, id, "say done", 1, false)
-			fake.Release("work")
-			d.WaitIdle(t, id)
-			_, body, _ := strings.Cut(evaluatorTranscript(t, fake), "CONVERSATION TRANSCRIPT:\n")
-			want := "[earlier conversation omitted to fit the evaluator's context budget]\n\nUSER:\n" + strings.Join(texts, "\n") + "\n\n" + tail
-			if body != want {
-				t.Errorf("transcript = %.200q (%d bytes), want %.200q (%d bytes)", body, len(body), want, len(want))
-			}
+			checkEvaluatorTranscriptBudget(t, h, 1050000, budget)
 		})
 
 		t.Run("Claude Code aliases provide metadata windows to the goal evaluator", func(t *testing.T) {
@@ -164,6 +128,44 @@ func TestContractGoalEvaluatorTranscriptBudget(t *testing.T) {
 			claudeCodeGoalEvaluatorBudget(t, h)
 		})
 	})
+}
+
+func checkEvaluatorTranscriptBudget(t *testing.T, h host, window, budget int) {
+	t.Helper()
+	const tail = "ASSISTANT:\ndone"
+	d, fake := startOn(t, h, t.TempDir(), map[string]any{"context_window_tokens": window, "compaction_threshold": 0.99},
+		agentStep("old", "done", false),
+		harnesstest.Step{Name: "work", Reply: harnesstest.Reply{Text: "done", Block: true}},
+		evaluatorStep("judge", "MET: ok", false))
+	id := d.Create(t)
+	d.Submit(t, id, "x")
+	d.WaitIdle(t, id)
+	var parts []protocol.Part
+	var texts []string
+	for remaining := budget - len("USER:\n\n\n"+tail+"\n\n"); remaining > 0; {
+		n := min(remaining, 4096)
+		text := strings.Repeat("x", n)
+		texts = append(texts, text)
+		parts = append(parts, protocol.Part{Type: protocol.PartText, Text: text})
+		remaining -= n
+		if remaining > 0 {
+			remaining--
+		}
+	}
+	path, input := d.input(id, "", "", "")
+	input["parts"] = parts
+	d.expect(t, http.StatusCreated, http.MethodPost, path, input, nil)
+	if !fake.AwaitBlocked("work", waitBound) {
+		t.Fatal("the goal turn did not reach the model")
+	}
+	d.SetGoal(t, id, "say done", 1, false)
+	fake.Release("work")
+	d.WaitIdle(t, id)
+	_, body, _ := strings.Cut(evaluatorTranscript(t, fake), "CONVERSATION TRANSCRIPT:\n")
+	want := "[earlier conversation omitted to fit the evaluator's context budget]\n\nUSER:\n" + strings.Join(texts, "\n") + "\n\n" + tail
+	if body != want {
+		t.Errorf("transcript = %.200q (%d bytes), want %.200q (%d bytes)", body, len(body), want, len(want))
+	}
 }
 
 func claudeCodeGoalEvaluatorBudget(t *testing.T, h host) {

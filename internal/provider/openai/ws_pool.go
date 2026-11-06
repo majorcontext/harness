@@ -293,7 +293,7 @@ func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamReque
 	// not-found on that connection is still recoverable. A brand-new dial
 	// serving a non-chained request has nothing stale to recover from, so
 	// its not-found is a genuine error.
-	recoverable := !req.Prewarm && (chainedRequest || reuse)
+	recoverable := !req.Prewarm && provider.RetriesAllowed(ctx) && (chainedRequest || reuse)
 	newSource := func(name string, data []byte) *wsFrameSource {
 		return &wsFrameSource{
 			ctx:         ctx,

@@ -398,6 +398,12 @@ export interface Part {
   data?: string;
 }
 
+export interface PinRecorded {
+  notice: string;
+  text: string;
+  at: number;
+}
+
 export interface Plugin {
   name: string;
   state: string;
@@ -480,6 +486,7 @@ export interface Provider {
   sanitize_tool_schemas?: boolean;
   use_websocket_transport?: boolean;
   cache_ttl?: string;
+  cache_final_message?: boolean;
   models?: string[];
   binary_path?: string;
   extra_args?: string[];

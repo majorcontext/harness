@@ -10,11 +10,21 @@ type Pin struct {
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
-// changes only when a compaction moves or retires it. The pins live in memory: a new
-// process makes them again at its first model call, and the banner, which
-// comes from the log, comes out the same. The session actor owns Pins.
+// changes only when a compaction moves or retires it. The log records each pin
+// but the banner. The session actor owns Pins.
 type Pins struct {
 	pins []Pin
+}
+
+// Add appends q with no check, for a replay of recorded pins.
+func (p *Pins) Add(q Pin) { p.pins = append(p.pins, q) }
+
+// Prepend puts q before every pin.
+func (p *Pins) Prepend(q Pin) { p.pins = slices.Insert(p.pins, 0, q) }
+
+// Has reports whether a pin of kind exists.
+func (p *Pins) Has(kind string) bool {
+	return slices.ContainsFunc(p.pins, func(q Pin) bool { return q.Kind == kind })
 }
 
 // Set makes a pin of kind after the first at messages of the history when

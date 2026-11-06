@@ -109,6 +109,9 @@ func (b *Backend) effortControl(ref modelref.ModelRef) (modelmeta.EffortControl,
 // Run makes one model call on the history of req and reports its assistant item.
 // A response that the output cap cut off records no item and fails as a retryable error.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
+	if req.RetryAllowed != nil {
+		ctx = provider.WithRetryPermission(ctx, req.RetryAllowed)
+	}
 	preq, err := b.request(ctx, req)
 	if err != nil {
 		return err

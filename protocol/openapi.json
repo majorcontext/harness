@@ -1386,6 +1386,25 @@
           "type"
         ]
       },
+      "PinRecorded": {
+        "properties": {
+          "notice": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "at": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notice",
+          "text",
+          "at"
+        ]
+      },
       "Plugin": {
         "properties": {
           "name": {
@@ -1686,6 +1705,9 @@
           },
           "cache_ttl": {
             "type": "string"
+          },
+          "cache_final_message": {
+            "type": "boolean"
           },
           "models": {
             "items": {

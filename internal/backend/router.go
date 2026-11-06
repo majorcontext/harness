@@ -153,7 +153,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 			key, reason = env.key(p.KeyEnv(name))
 		}
 		return &anthropic.Client{APIKey: key, NoKeyReason: reason, NoKey: p.HasCredentialHeader(), BaseURL: p.BaseURL,
-			HTTPClient: traced(key != "" || p.HasCredentialHeader()), CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
+			HTTPClient: traced(key != "" || p.HasCredentialHeader()), CacheTTL: p.CacheTTL, CacheFinalMessage: p.CacheFinalMessage, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
 }
@@ -176,7 +176,7 @@ func codexClient(hc *http.Client, src *codexauth.Source, endpoints ...string) *h
 		out = &http.Client{Transport: hc.Transport, Jar: hc.Jar, Timeout: hc.Timeout}
 	}
 	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	out.Transport = codexauth.NewTransport(src, out.Transport, endpoints...)
+	out.Transport = codexauth.NewTransport(src, out.Transport, provider.RetriesAllowed, endpoints...)
 	return out
 }
 
