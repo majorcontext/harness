@@ -105,6 +105,8 @@ type Request struct {
 	// AcceptCut makes a response that MaxTokens cut off the answer. Otherwise
 	// the backend records no item for it and fails with a retryable error.
 	AcceptCut bool
+	// RetryAllowed reports whether this call may send a failed request again. Nil keeps the backend retry policy.
+	RetryAllowed func() bool
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
@@ -214,6 +216,8 @@ type Attacher interface {
 type Limits struct {
 	// Retries bounds the new attempts of a model call after an ErrRetryable error.
 	Retries int
+	// DisableRetryAfterOutput stops recovery calls after a text or reasoning delta of each model call.
+	DisableRetryAfterOutput bool
 	// Idle stops a model call that reports nothing to its Sink for this
 	// long. Zero or less: no limit.
 	Idle time.Duration
@@ -368,6 +372,10 @@ func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []pro
 // times, after an ErrRetryable error that came before any item. The wait is
 // the advice of the provider, else backoff.Delay.
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) (err error) {
+	if lim.DisableRetryAfterOutput {
+		s.output = new(bool)
+		req.RetryAllowed = func() bool { return !*s.output }
+	}
 	ctx, s.rec = begin(ctx, lim, b, req, ownsLoop)
 	defer func() {
 		s.rec.end(req, s.items, err)
@@ -484,6 +492,8 @@ func sleep(ctx context.Context, d time.Duration) error {
 type sink struct {
 	Turn
 	items []protocol.LogMessage
+	// output tracks text and reasoning deltas when this call disables recovery after output.
+	output *bool
 	// item is the item that the deltas since the last Item build, or "".
 	item string
 	// rec reports the model call in flight.
@@ -515,14 +525,17 @@ func (s *sink) startEarly(ctx, step context.Context, t runner, ownsLoop bool) *b
 	return s.early
 }
 
-// fresh reports whether the model call has recorded nothing and started no tool, so that it may run again.
+// fresh reports whether the model call may recover without a recorded item, a started tool, or output that forbids recovery.
 func (s *sink) fresh() bool {
-	return len(s.items) == 0 && (s.early == nil || !s.early.started())
+	return (s.output == nil || !*s.output) && len(s.items) == 0 && (s.early == nil || !s.early.started())
 }
 
 // Delta streams d into the next item. The backend item ID is not used: one
 // harness item can join several backend items, such as reasoning and text.
 func (s *sink) Delta(_ string, d Delta) {
+	if s.output != nil && d.Text != "" {
+		*s.output = true
+	}
 	if s.item == "" {
 		s.item = s.Started()
 	}

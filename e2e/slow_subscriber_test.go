@@ -13,20 +13,38 @@ import (
 )
 
 var slowSubscriberRows = map[string]runtimeRow{
+	"a_slow_embedded_subscriber_receives_every_text_delta_in_order":           runtimeOnly("embedded-subscriber-held"),
 	"a_slow_embedded_subscriber_reconciles_dropped_text_from_completed_items": runtimeOnly("embedded-subscriber-held"),
 }
 
 func TestContractSlowEmbeddedSubscriber(t *testing.T) {
-	runScenarios(t, []scenario{{
-		name: "a_slow_embedded_subscriber_reconciles_dropped_text_from_completed_items",
-		model: []harnesstest.Step{{Name: "answer", Reply: harnesstest.Reply{
-			Text: strings.Repeat("answer ", 512), TextChunkRunes: 7,
-		}}},
-		actions: []action{create{as: "a"}, slowEmbeddedSubscriber{as: "a"}},
-	}})
+	var rows []scenario
+	for _, row := range []struct {
+		name     string
+		lossless bool
+	}{
+		{"a_slow_embedded_subscriber_reconciles_dropped_text_from_completed_items", false},
+		{"a_slow_embedded_subscriber_receives_every_text_delta_in_order", true},
+	} {
+		text, chunkRunes := strings.Repeat("answer ", 512), 7
+		if row.lossless {
+			text, chunkRunes = promptStreamText(), 512
+		}
+		rows = append(rows, scenario{
+			name: row.name,
+			model: []harnesstest.Step{{Name: "answer", Reply: harnesstest.Reply{
+				Text: text, TextChunkRunes: chunkRunes,
+			}}},
+			actions: []action{create{as: "a"}, slowEmbeddedSubscriber{as: "a", lossless: row.lossless}},
+		})
+	}
+	runScenarios(t, rows)
 }
 
-type slowEmbeddedSubscriber struct{ as string }
+type slowEmbeddedSubscriber struct {
+	as       string
+	lossless bool
+}
 
 type slowTextFeed struct {
 	cursor    uint64
@@ -69,6 +87,10 @@ func (f *slowTextFeed) apply(t *testing.T, e protocol.Event) bool {
 func (a slowEmbeddedSubscriber) run(t *testing.T, r *run) {
 	t.Helper()
 	d := r.drv.(*runtimeDriver)
+	if a.lossless {
+		a.losslessRun(t, r, d)
+		return
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	s, err := d.rt.Open(ctx, r.id(t, a.as))
@@ -103,7 +125,7 @@ func (a slowEmbeddedSubscriber) run(t *testing.T, r *run) {
 	d.WaitIdle(t, s.ID())
 	close(resume)
 	<-done
-	if !feed.dropped || feed.completed != 1 || len(feed.text) != 1 {
+	if feed.dropped == a.lossless || feed.completed != 1 || len(feed.text) != 1 {
 		t.Fatalf("overflow=%v, completed=%d, items=%d", feed.dropped, feed.completed, len(feed.text))
 	}
 	for id, text := range feed.text {

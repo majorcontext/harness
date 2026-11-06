@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+
+	"github.com/majorcontext/harness/internal/provider"
 )
 
 // Transport adds the login to the requests that go to the endpoints it is
@@ -62,7 +64,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	resp, err := t.base.RoundTrip(withLogin(req, creds))
-	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+	if err != nil || resp.StatusCode != http.StatusUnauthorized || !provider.RetriesAllowed(req.Context()) {
 		return resp, err
 	}
 	again, ok := replay(req)
