@@ -59,6 +59,8 @@ type batch struct {
 
 	mu      sync.Mutex
 	flights map[string]*flight
+	// held is set once a call must wait for the end of the step: no later call starts early.
+	held bool
 	// excl ends with the last exclusive call; reads are the read-only calls since.
 	excl  <-chan struct{}
 	reads []<-chan struct{}
@@ -104,22 +106,23 @@ func (t runner) late(c protocol.ToolCall) (late bool) {
 	return late
 }
 
-// early reports whether c may start before the step ends. A call to the
-// question tool and a call to a Late tool wait for the end of the step. A call
-// with no ID cannot be matched with its item.
-func (b *batch) early(c protocol.ToolCall) bool {
-	return c.ID != "" && !(c.Name == AskTool && b.t.find(AskTool) != nil) && !b.t.late(c)
-}
-
 // Call submits c, which the model stream delivered complete. It starts c at
-// once when its turn comes under the rules of batch.
+// once when its turn comes under the rules of batch. A call to the question
+// tool waits for the end of the step and takes no turn. A call to a Late tool,
+// or with no ID to match its item, also waits, and so does every call after it,
+// so that calls keep their arrival order.
 func (b *batch) Call(c protocol.ToolCall) {
-	if b.early(c) {
-		b.mu.Lock()
-		if _, ok := b.flights[c.ID]; !ok {
-			b.submit(c)
-		}
-		b.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.held || c.Name == AskTool && b.t.find(AskTool) != nil {
+		return
+	}
+	if c.ID == "" || b.t.late(c) {
+		b.held = true
+		return
+	}
+	if _, ok := b.flights[c.ID]; !ok {
+		b.submit(c)
 	}
 }
 

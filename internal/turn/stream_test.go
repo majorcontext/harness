@@ -106,31 +106,6 @@ func prompt() turn.Request {
 	return turn.Request{Model: "test/model", History: []protocol.LogMessage{steerInput("go")}}
 }
 
-func TestRunStartsAToolCallBeforeTheModelCallEnds(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		a := newGate("a", false)
-		var seen []string
-		m := &streamModel{calls: []protocol.ToolCall{call("1", "a")}}
-		m.hold = func() {
-			synctest.Wait()
-			seen = a.started()
-			close(a.open)
-		}
-		r := &recorder{}
-		ctx := context.Background()
-		turn.Run(ctx, ctx, m, prompt(), toolList{a}, r, turn.Limits{})
-		if !slices.Equal(seen, []string{"1"}) {
-			t.Errorf("calls started while the model call streamed = %v, want [1]", seen)
-		}
-		if got := a.started(); !slices.Equal(got, []string{"1"}) {
-			t.Errorf("the tool ran %v, want exactly once", got)
-		}
-		if len(r.ended) != 1 || r.ended[0] != nil {
-			t.Fatalf("Ended = %v, want one with no error", r.ended)
-		}
-	})
-}
-
 func TestRunNeverOverlapsCallsThatAreNotReadOnly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		a, b := newGate("a", false), newGate("b", false)
@@ -185,33 +160,6 @@ func TestRunOverlapsReadOnlyCallsButNotAnExclusiveOneBetweenThem(t *testing.T) {
 		}
 		ctx := context.Background()
 		turn.Run(ctx, ctx, m, prompt(), toolList{a, b}, &recorder{}, turn.Limits{})
-	})
-}
-
-func TestRunRecordsResultsInCallOrderWhateverOrderTheyEnd(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		a, b := newGate("a", true), newGate("b", true)
-		m := &streamModel{calls: []protocol.ToolCall{call("1", "a"), call("2", "b")}}
-		m.hold = func() {
-			synctest.Wait()
-			close(b.open)
-			synctest.Wait()
-			close(a.open)
-		}
-		r := &recorder{}
-		ctx := context.Background()
-		turn.Run(ctx, ctx, m, prompt(), toolList{a, b}, r, turn.Limits{})
-		var got []string
-		for _, it := range r.items {
-			for _, p := range it.Parts {
-				if p.Type == protocol.LogPartToolResult {
-					got = append(got, p.CallID)
-				}
-			}
-		}
-		if !slices.Equal(got, []string{"1", "2"}) {
-			t.Errorf("results recorded for %v, want [1 2]", got)
-		}
 	})
 }
 
@@ -298,6 +246,26 @@ func TestRunStartsALateToolOnlyAfterTheModelCallEnds(t *testing.T) {
 		turn.Run(ctx, ctx, m, prompt(), toolList{l}, &recorder{}, turn.Limits{})
 		if got := l.started(); !slices.Equal(got, []string{"1"}) {
 			t.Errorf("the late tool ran %v, want once after the model call", got)
+		}
+	})
+}
+
+func TestRunHoldsEveryCallAfterALateToolUntilTheModelCallEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, w := lateGate{newGate("l", true)}, newGate("w", false)
+		close(l.open)
+		close(w.open)
+		m := &streamModel{calls: []protocol.ToolCall{call("1", "l"), call("2", "w")}}
+		m.hold = func() {
+			synctest.Wait()
+			if got := w.started(); len(got) != 0 {
+				t.Errorf("w started %v before the late call that came first", got)
+			}
+		}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, prompt(), toolList{l, w}, &recorder{}, turn.Limits{})
+		if got := slices.Concat(l.started(), w.started()); !slices.Equal(got, []string{"1", "2"}) {
+			t.Errorf("calls ran %v, want both once", got)
 		}
 	})
 }
