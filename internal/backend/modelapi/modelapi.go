@@ -288,7 +288,8 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ThinksByDefault: control.ThinksByDefault, OffThinking: control.OffThinking, ServiceTier: req.Settings.ServiceTier,
 		SessionKey: req.SessionID, WebSearch: req.WebSearch && b.nativeSearch(ref.Model),
 		Temperature: req.Temperature, TopP: req.TopP, OneShot: req.Purpose != turn.PurposeTurn}
-	if req.Instructions != "" {
+	preq.System, preq.SystemCacheBreakpoint = slices.Clone(req.SystemBlocks), req.SystemCacheBreakpoint
+	if req.SystemBlocks == nil && req.Instructions != "" {
 		preq.System = []string{req.Instructions}
 	}
 	return preq, nil

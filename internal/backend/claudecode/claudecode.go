@@ -305,7 +305,11 @@ func (b *Backend) systemPrompt(req turn.Request) string {
 	if req.OneShot {
 		return strings.Join(slices.DeleteFunc([]string{req.Instructions, b.system}, func(s string) bool { return s == "" }), "\n\n")
 	}
-	segs := []string{toolNamesOf(req.Tools, req.WebSearch), b.system, req.Skills}
+	system, skills := b.system, req.Skills
+	if req.SystemOverride {
+		system, skills = strings.Join(req.SystemBlocks, "\n\n"), ""
+	}
+	segs := []string{toolNamesOf(req.Tools, req.WebSearch), system, skills}
 	if req.Foreign {
 		segs = append(segs, historyDirective)
 	}

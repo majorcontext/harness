@@ -108,12 +108,12 @@ func (p *Prompt) Sent(system string) {
 // System returns the system prompt of a turn: the prompt of the session, the
 // prompt of its agent profile, and the process status line. It records the
 // segments as the segments of the turn.
-func (p *Prompt) System() string {
+func (p *Prompt) System() []string {
 	segs := slices.Clone(p.segments)
 	p.mu.Lock()
 	p.turn, p.reported = segs, false
 	p.mu.Unlock()
-	return strings.Join(segs, "\n\n")
+	return segs
 }
 
 // Recording returns src and records each Toolset that it gives.

@@ -442,6 +442,15 @@
           },
           "max_steps": {
             "type": "integer"
+          },
+          "system_blocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_cache_breakpoint": {
+            "type": "integer"
           }
         },
         "additionalProperties": false,
@@ -2047,6 +2056,15 @@
             "type": "array"
           },
           "max_steps": {
+            "type": "integer"
+          },
+          "system_blocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_cache_breakpoint": {
             "type": "integer"
           }
         },

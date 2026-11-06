@@ -28,13 +28,15 @@ type ToolDef struct {
 // owns all wire-format concerns, including prompt-cache markers (injected at
 // transcode time, never stored).
 type Request struct {
-	Model       modelref.ModelRef
-	System      []string // system prompt segments, in order
-	Messages    []message.Message
-	Tools       []ToolDef
-	Temperature *float64
-	TopP        *float64
-	MaxTokens   int
+	Model  modelref.ModelRef
+	System []string // system prompt segments, in order
+	// SystemCacheBreakpoint selects one system block; nil uses the last block.
+	SystemCacheBreakpoint *int
+	Messages              []message.Message
+	Tools                 []ToolDef
+	Temperature           *float64
+	TopP                  *float64
+	MaxTokens             int
 	// Effort is the unified reasoning-effort level, clamped to the levels of the
 	// model. The zero value sends no reasoning control.
 	Effort modelref.Effort

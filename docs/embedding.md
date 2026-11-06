@@ -105,6 +105,20 @@ The Go API keeps the built-in default model, `anthropic/claude-fable-5`, and doe
 not look for a subscription login. An embedder that wants the subscription
 default sets `Config.SubscriptionDefault`.
 
+## Per-session system blocks
+
+Set `CreateSession.SystemBlocks` to replace the default system prompt for one session. A single string is a one-element list. Nil uses the runtime defaults; an empty list clears them. An empty string block is invalid. The runtime copies the list and stores it with the session, so `Open` restores it. Children use their own default prompt, not the parent's override. Tools, skills, and runtime notices remain available; MCP guidance follows the supplied blocks.
+
+```go
+breakpoint := 0
+s, err := rt.Create(ctx, protocol.CreateSession{
+    SystemBlocks: []string{"Stable application rules.", "Session-specific context."},
+    SystemCacheBreakpoint: &breakpoint,
+})
+```
+
+`SystemCacheBreakpoint` selects a zero-based system block for Anthropic's cache marker. The index must name a supplied block when an override is present, or a default session segment otherwise, before MCP guidance. Nil keeps the default: cache the last system block. The newest message block is still cached, and both markers use the configured TTL. Other provider wires ignore the selection. Blocks remain distinct through the model API path; providers that take a text prompt join them at their wire boundary. Claude Code uses the supplied text instead of the shared appended prompt, but keeps its own base prompt and runtime guidance. Neither field can change after creation.
+
 ## Stop after a tool
 
 Set `Options.StopAfterTools` to tool names that end a turn. If any named call succeeds, the runtime completes and records every call in that model step, then ends the turn without another model call. If all named calls fail, the model can try again. The option is off by default and applies to every session of the runtime. It has no effect on backends that own their loop. Set it again when opening a session on a new runtime.

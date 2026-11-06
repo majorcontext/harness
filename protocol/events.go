@@ -249,11 +249,14 @@ type SessionCreated struct {
 	Origin   string   `json:"origin"`
 	// WorkDir is the work directory of the runtime that created the session.
 	WorkDir string `json:"work_dir,omitempty"`
-	// AllowedTools names the tools of the session: those of the embedder, the
-	// runtime, plugins, and MCP, and its model. nil allows every tool.
+	// AllowedTools names the embedder, runtime, plugin, MCP, and backend tools; nil allows all.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 	// MaxSteps caps the model requests of each turn; zero is no cap.
 	MaxSteps int `json:"max_steps,omitempty"`
+	// SystemBlocks records the copied session prompt override; nil uses defaults and empty clears it.
+	SystemBlocks []string `json:"system_blocks,omitzero"`
+	// SystemCacheBreakpoint records the zero-based system cache selection; nil uses the last block.
+	SystemCacheBreakpoint *int `json:"system_cache_breakpoint,omitempty"`
 }
 
 // OwnerAcquired fences every earlier owner of the session.
@@ -274,8 +277,7 @@ type SettingsChanged struct {
 	MaxSteps *int `json:"max_steps,omitempty"`
 }
 
-// SessionTitled sets the session title. The title is not empty and has no control character, such as a tab or a line break.
-// A title from a person always replaces the title; a title from a model applies only while no person has titled the session. A derived title record changes no state.
+// SessionTitled sets a non-empty title with no control characters; a person's title always wins, and a derived record changes no state.
 type SessionTitled struct {
 	Title  string      `json:"title"`
 	Source TitleSource `json:"source"`

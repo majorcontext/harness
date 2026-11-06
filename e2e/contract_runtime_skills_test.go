@@ -56,6 +56,19 @@ func loadSkillStep(input map[string]any) harnesstest.Step {
 
 func TestContractRuntimeSkills(t *testing.T) {
 	skipShort(t)
+	t.Run("a_system_override_keeps_the_embedded_skill_catalog", func(t *testing.T) {
+		r, fake := skillsRuntime(t, &fakeSkills{}, harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+		blocks, breakpoint := []string{"Private rules."}, 0
+		s, err := r.Create(t.Context(), protocol.CreateSession{Model: "bifrost/gpt-test", SystemBlocks: blocks, SystemCacheBreakpoint: &breakpoint})
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocks[0], breakpoint = "Changed rules.", 99
+		sessionMCPTurn(t, s, "a", "go")
+		if system := fake.Requests()[0].System; !strings.Contains(system, "Private rules.") || !strings.Contains(system, "refunds — Process refund requests (load with load_skill)") {
+			t.Fatalf("system override lost the embedded skill catalog: %q", system)
+		}
+	})
 	t.Run("an_embedded_skill_is_listed_and_load_skill_reads_it_from_the_source", func(t *testing.T) {
 		t.Parallel()
 		src := &fakeSkills{}
