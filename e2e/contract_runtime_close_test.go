@@ -91,6 +91,7 @@ func TestContractRuntimeClose(t *testing.T) {
 		{"a_later_close_returns_at_the_end_of_its_own_context", rowALaterCloseReturnsAtTheEndOfItsOwnContext},
 		{"a_close_that_passes_its_deadline_stops_the_session_with_cause_released", rowACloseThatPassesItsDeadlineStopsTheSessionWithCauseReleased},
 		{"a_close_stops_the_session_with_cause_released", rowACloseStopsTheSessionWithCauseReleased},
+		{"shutdown_during_a_store_append_keeps_the_released_cause", rowShutdownDuringAppendKeepsReleasedCause},
 		{"provider_set_and_reconnect_after_close_are_draining", rowProviderCallsAfterCloseAreDraining},
 	}
 	for _, row := range rows {
@@ -184,6 +185,57 @@ func rowACloseStopsTheSessionWithCauseReleased(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkCause(t, s, harness.ErrSessionReleased)
+}
+
+type cancelAppendStore struct {
+	harness.Store
+	hold    atomic.Bool
+	entered chan struct{}
+}
+
+func (s *cancelAppendStore) Append(ctx context.Context, id string, head uint64, records ...[]byte) error {
+	if !s.hold.Swap(false) {
+		return s.Store.Append(ctx, id, head, records...)
+	}
+	close(s.entered)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func rowShutdownDuringAppendKeepsReleasedCause(t *testing.T) {
+	st := &cancelAppendStore{Store: store.NewMemStore(), entered: make(chan struct{})}
+	r := lifetimeRuntimeOn(t, st, nil)
+	s := lifetimeSession(t, r)
+	head, err := st.Head(t.Context(), s.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.hold.Store(true)
+	pending := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "never run"}}})
+		pending <- err
+	}()
+	bound, stop := context.WithTimeout(t.Context(), waitBound)
+	defer stop()
+	select {
+	case <-st.entered:
+	case <-bound.Done():
+		t.Fatal("store append did not start")
+	}
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errStopWaiting)
+	if err := r.Close(ctx); !errors.Is(err, errStopWaiting) {
+		t.Fatalf("Close = %v, want %v", err, errStopWaiting)
+	}
+	if err := <-pending; err == nil {
+		t.Fatal("canceled append admitted an input")
+	}
+	checkCause(t, s, harness.ErrSessionReleased)
+	after, err := st.Head(t.Context(), s.ID())
+	if err != nil || after != head {
+		t.Fatalf("shutdown changed the durable log: %d -> %d, %v", head, after, err)
+	}
 }
 
 func rowProviderCallsAfterCloseAreDraining(t *testing.T) {

@@ -677,6 +677,10 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 			a.stopWith(lost)
 			return lost
 		}
+		if baseErr := a.cfg.Base.Err(); baseErr != nil && errors.Is(err, baseErr) {
+			a.stopWith(cmp.Or[error](a.endCause, ErrReleased))
+			return err
+		}
 		a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))
 		return err
 	}
