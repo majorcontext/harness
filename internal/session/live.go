@@ -39,10 +39,12 @@ func (l *live) subscribe() (chan protocol.Event, []protocol.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	ch := make(chan protocol.Event, liveBuffer)
-	if l.subs == nil {
-		l.subs = map[chan protocol.Event]struct{}{}
+	if !l.stopped {
+		if l.subs == nil {
+			l.subs = map[chan protocol.Event]struct{}{}
+		}
+		l.subs[ch] = struct{}{}
 	}
-	l.subs[ch] = struct{}{}
 	return ch, slices.Clone(l.item)
 }
 
@@ -94,6 +96,7 @@ func (l *live) forget() {
 // in flight must not leave a partial item behind. It needs l.mu.
 func (l *live) stop() {
 	l.forget()
+	clear(l.subs)
 	l.stopped = true
 }
 

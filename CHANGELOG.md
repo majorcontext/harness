@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Tool cancellation and session cleanup** — cancellation stops waiting for custom tools that ignore their context and discards late results. `Runtime.End` and session deletion cancel busy work instead of returning 409, withdraw queued inputs, and continue cleanup after caller timeout. Durable logs stay in the store; embedders own their deletion after the session's `Done` closes.
+
 - **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an uncovered resource bypass skill verification, regardless of URI scheme; load the skill before reading its files. Tool-list refreshes preserve skill entries and their incomplete-list error.
 
 ### Added

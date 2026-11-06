@@ -50,9 +50,8 @@ func (t *Tree) Cancel(ctx context.Context, id string, up []string, fallback stri
 }
 
 // End is Interrupt for the end of session id: each descendant turn that it
-// stops ends with cause ended. It silences no child of id, so a report that
-// lands while stop refuses the end still reaches id; it marks them, so none
-// opens id again once stop has released it.
+// stops ends with cause ended. It marks children so no report opens id again
+// once stop has released it.
 func (t *Tree) End(ctx context.Context, id string, stop func(context.Context) error) error {
 	return t.walk(ctx, id, stop, walkKind{end: true})
 }
@@ -79,10 +78,10 @@ func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) e
 		marked[id] = walkMark{route: k.route}
 		t.hush(id, marked[id], 1)
 	}
-	return t.stopTree(ctx, id, stop, marked, k, true)
+	return t.stopTree(ctx, id, stop, marked, k)
 }
 
-func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Context) error, marked map[string]walkMark, k walkKind, top bool) error {
+func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Context) error, marked map[string]walkMark, k walkKind) error {
 	mark := func() ([]string, error) {
 		var kids []string
 		err := t.s.Read(ctx, id, func(st *eventlog.State) { kids = st.Children() })
@@ -94,7 +93,7 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 		}
 		for _, kid := range kids {
 			if _, ok := marked[kid]; !ok {
-				m := walkMark{quiet: !k.end || !top, ending: k.end, route: k.route}
+				m := walkMark{quiet: true, ending: k.end, route: k.route}
 				marked[kid] = m
 				t.hush(kid, m, 1)
 			}
@@ -109,7 +108,7 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 	}
 	kids, err := mark()
 	for _, kid := range kids {
-		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, k) }, marked, k, false))
+		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, k) }, marked, k))
 	}
 	return err
 }

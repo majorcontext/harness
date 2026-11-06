@@ -3,14 +3,16 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
 // Tool is an embedder tool that the model can call. The runtime reads Spec
-// once, at New. Run allows concurrent calls and must return when ctx ends. An
-// error from Run becomes an error result.
+// once, at New. Run allows concurrent calls and should return when ctx ends.
+// Cancellation stops waiting for Run and discards a late result, but cannot
+// stop its goroutine or side effects. An error from Run becomes an error result.
 type Tool interface {
 	Spec() protocol.ToolSpec
 	Run(ctx context.Context, call Call) (protocol.ToolResult, error)
@@ -45,7 +47,7 @@ type KeyedTool interface {
 type embedded struct{ Tool }
 
 func (e embedded) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	return e.Tool.Run(ctx, Call{ID: c.ID, Name: c.Name, Arguments: c.Arguments})
+	return runEmbedded(ctx, e.Tool, Call{ID: c.ID, Name: c.Name, Arguments: c.Arguments})
 }
 
 // bind returns the tool for one turn of session, with the Alone and Key of the embedder tool.
@@ -76,7 +78,40 @@ func (b bound) call(c protocol.ToolCall) Call {
 }
 
 func (b bound) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	return b.t.Run(ctx, b.call(c))
+	return runEmbedded(ctx, b.t, b.call(c))
+}
+
+func runEmbedded(ctx context.Context, tool Tool, call Call) (protocol.ToolResult, error) {
+	if ctx.Err() != nil {
+		return protocol.ToolResult{}, context.Cause(ctx)
+	}
+	type outcome struct {
+		result protocol.ToolResult
+		err    error
+	}
+	call.Arguments = append(json.RawMessage(nil), call.Arguments...)
+	done := make(chan outcome, 1)
+	go func() {
+		var out outcome
+		defer func() {
+			if recover() != nil {
+				out = outcome{err: errors.New("tool call failed: the tool panicked")}
+			}
+			done <- out
+		}()
+		out.result, out.err = tool.Run(ctx, call)
+	}()
+	select {
+	case out := <-done:
+		return out.result, out.err
+	case <-ctx.Done():
+		select {
+		case out := <-done:
+			return out.result, out.err
+		default:
+			return protocol.ToolResult{}, context.Cause(ctx)
+		}
+	}
 }
 
 type boundAlone struct{ bound }

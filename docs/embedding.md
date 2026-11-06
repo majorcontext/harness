@@ -105,6 +105,12 @@ The Go API keeps the built-in default model, `anthropic/claude-fable-5`, and doe
 not look for a subscription login. An embedder that wants the subscription
 default sets `Config.SubscriptionDefault`.
 
+## Cancellation and cleanup
+
+`Turn.Cancel` and `Runtime.End` cancel the context passed to custom `Tool.Run` calls. The runtime stops waiting even if a custom tool ignores that context. A result accepted before cancellation stays in the log; a late result is discarded. Go cannot kill the tool goroutine. Detached tool code can still have side effects after the session ends, so the embedder must make those effects safe.
+
+`Runtime.End` cancels busy work, withdraws queued inputs, releases session connections and subscribers, and unloads the session. It does not delete the append-only log or call a store cleanup callback. Cleanup continues if the caller's context times out, including when that context has ended before the call. If `End` returns a timeout, wait for the session's `Done` before deleting its log. The embedder owns that deletion. `Store`, `Owner`, hooks, and transports must honor their contexts; ignored cancellation in those dependencies can still delay cleanup.
+
 ## Per-session system blocks
 
 Set `CreateSession.SystemBlocks` to replace the default system prompt for one session. A single string is a one-element list. Nil uses the runtime defaults; an empty list clears them. An empty string block is invalid. The runtime copies the list and stores it with the session, so `Open` restores it. Children use their own default prompt, not the parent's override. Tools, skills, and runtime notices remain available; MCP guidance follows the supplied blocks.

@@ -500,27 +500,36 @@ func (r *Runtime) loaded(ctx context.Context, id string) *Session {
 	}
 }
 
-// End stops session id on this runtime and releases its ownership once Sync
-// has acknowledged every record. It appends nothing and deletes nothing: the
-// log stays in the store, and Open runs the session again. It also stops the
-// turn of each descendant that this runtime runs, and opens no session. A
-// session with a running turn or control command fails with ErrSessionBusy and
-// stops no descendant; a running compaction or evaluation that no command
-// started stops as under Release. A
-// session that this runtime does not run is ended already; an ID with no log
-// fails with ErrSessionNotFound.
+// End withdraws queued inputs, cancels the run, and unloads session id.
+// It also stops each descendant turn that this runtime runs. It opens no
+// session and deletes no log; the embedder owns log cleanup. Cleanup continues
+// if ctx ends, including when ctx has ended on entry. Before deleting the log
+// after a timeout, wait for Session.Done. A session that this runtime does not
+// run is ended already; an ID with no log fails with ErrSessionNotFound.
 func (r *Runtime) End(ctx context.Context, id string) error {
 	if err := storecheck.Name(id); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	s := r.loaded(ctx, id)
-	return r.tree.End(ctx, id, func(ctx context.Context) error {
-		if s != nil {
-			return s.a.End(ctx)
-		}
-		_, err := OpenView(ctx, r.store, id)
+	if err := r.hold(); err != nil {
 		return err
-	})
+	}
+	done := make(chan error, 1)
+	go func() {
+		defer r.group.Done()
+		done <- r.tree.End(context.WithoutCancel(ctx), id, func(ctx context.Context) error {
+			if s := r.loaded(ctx, id); s != nil {
+				return s.a.End(ctx)
+			}
+			_, err := OpenView(ctx, r.store, id)
+			return err
+		})
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 // List returns a page of sessions in creation order. The After of a page is
@@ -550,8 +559,9 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 // every later call returns its result. Each call returns by the end of its
 // ctx with context.Cause(ctx). When the ctx of the first call ends, it
 // cancels every run and kills the processes, and does not wait for a tool
-// that ignores its ctx; a session whose run is still going keeps its
-// Ownership until that run returns, and the next Open finds a crashed turn.
+// that ignores its ctx. The detached tool can still have side effects, but
+// cannot append a late result. Other runtime work must honor its ctx; a
+// session whose backend still runs keeps ownership until that run returns.
 // An external harness ends within its own stop grace.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
