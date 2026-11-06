@@ -57,15 +57,62 @@ func (a expectSystemBlocks) run(t *testing.T, r *run) {
 var sessionSystemRows = map[string]runtimeRow{
 	"session_system_blocks_are_isolated_and_survive_reopen": sameAsServe(),
 	"session_system_rejects_invalid_breakpoint":             sameAsServe(),
+	"session_system_cache_without_final_message":            sameAsServe(),
+}
+
+type expectFinalMessageCache bool
+
+func (a expectFinalMessageCache) run(t *testing.T, r *run) {
+	requests := r.fake.RawRequests()
+	var messages []struct {
+		Content []struct {
+			Cache json.RawMessage `json:"cache_control"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(first(requests[len(requests)-1], "messages"), &messages); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, m := range messages {
+		for _, b := range m.Content {
+			if len(b.Cache) > 0 {
+				count++
+			}
+		}
+	}
+	want := 0
+	if a {
+		want = 1
+	}
+	if count != want {
+		t.Fatalf("message cache markers = %d, want %d", count, want)
+	}
 }
 
 func TestContractSessionSystem(t *testing.T) {
 	runScenarios(t, []scenario{{name: "session_system_blocks_are_isolated_and_survive_reopen", model: []harnesstest.Step{{Name: "reply", Repeat: true, Reply: harnesstest.Reply{Text: "ok"}}}, actions: []action{
 		createSystem{as: "a", body: map[string]any{"system_blocks": []string{"stable", "private"}, "system_cache_breakpoint": 0}, status: 201},
-		submit{as: "a", text: "first"}, waitIdle{as: "a"}, expectSystemBlocks{[]string{"stable", "private"}, 0},
+		submit{as: "a", text: "first"}, waitIdle{as: "a"}, expectSystemBlocks{[]string{"stable", "private"}, 0}, expectFinalMessageCache(true),
 		createSystem{as: "b", body: map[string]any{"system_blocks": []string{"other", "last"}}, status: 201}, submit{as: "b", text: "second"}, waitIdle{as: "b"}, expectSystemBlocks{[]string{"other", "last"}, 1},
 		createSystem{as: "c", body: map[string]any{"system_blocks": []string{}}, status: 201}, submit{as: "c", text: "clear"}, waitIdle{as: "c"}, expectSystemBlocks{nil, -1},
 		restart{}, submit{as: "a", text: "again"}, waitIdle{as: "a"}, expectSystemBlocks{[]string{"stable", "private"}, 0},
+	}}, {name: "session_system_cache_without_final_message", entry: map[string]any{"cache_final_message": false, "cache_ttl": "5m"}, model: []harnesstest.Step{{Name: "reply", Repeat: true, Reply: harnesstest.Reply{Text: "ok"}}}, actions: []action{
+		createSystem{as: "a", body: map[string]any{"system_blocks": []string{"stable", "private"}, "system_cache_breakpoint": 0}, status: 201},
+		submit{as: "a", text: "first"}, waitIdle{as: "a"}, expectSystemBlocks{[]string{"stable", "private"}, 0}, expectFinalMessageCache(false),
+		restart{}, submit{as: "a", text: "again"}, waitIdle{as: "a"}, expectSystemBlocks{[]string{"stable", "private"}, 0}, expectFinalMessageCache(false),
+		putProviders{body: providersOf(func(string) map[string]any {
+			return map[string]any{"openai": map[string]any{"cache_final_message": false}}
+		}), status: http.StatusBadRequest},
+		putProviders{body: providersOf(func(url string) map[string]any {
+			return map[string]any{"anthropic": map[string]any{"type": "openai-compat", "base_url": url, "cache_final_message": true}}
+		}), status: http.StatusBadRequest},
+		putProviders{body: providersOf(func(string) map[string]any {
+			return map[string]any{"anthropic": map[string]any{"cache_final_message": "false"}}
+		}), status: http.StatusBadRequest},
+		putProviders{body: providersOf(func(url string) map[string]any {
+			return map[string]any{"anthropic": map[string]any{"base_url": url, "cache_final_message": true, "cache_ttl": "5m"}}
+		})},
+		submit{as: "a", text: "enabled"}, waitIdle{as: "a"}, expectSystemBlocks{[]string{"stable", "private"}, 0}, expectFinalMessageCache(true),
 	}}, {name: "session_system_rejects_invalid_breakpoint", actions: []action{
 		createSystem{body: map[string]any{"system_blocks": []string{""}}, status: 400},
 		createSystem{body: map[string]any{"system_blocks": []string{}, "system_cache_breakpoint": 0}, status: 400},

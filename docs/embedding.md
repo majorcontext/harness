@@ -117,7 +117,23 @@ s, err := rt.Create(ctx, protocol.CreateSession{
 })
 ```
 
-`SystemCacheBreakpoint` selects a zero-based system block for Anthropic's cache marker. The index must name a supplied block when an override is present, or a default session segment otherwise, before MCP guidance. Nil keeps the default: cache the last system block. The newest message block is still cached, and both markers use the configured TTL. Other provider wires ignore the selection. Blocks remain distinct through the model API path; providers that take a text prompt join them at their wire boundary. Claude Code uses the supplied text instead of the shared appended prompt, but keeps its own base prompt and runtime guidance. Neither field can change after creation.
+`SystemCacheBreakpoint` selects a zero-based system block for Anthropic's cache marker. The index must name a supplied block when an override is present, or a default session segment otherwise, before MCP guidance. Nil keeps the default: cache the last system block. The newest message block is cached by default. Set `config.Provider.CacheFinalMessage` to a pointer to false to omit that marker while keeping the selected system marker. `CacheTTL` selects `"5m"` or `"1h"` (default `"1h"`) for each remaining marker. Other provider wires ignore the selection. Blocks remain distinct through the model API path; providers that take a text prompt join them at their wire boundary. Claude Code uses the supplied text instead of the shared appended prompt, but keeps its own base prompt and runtime guidance. `SystemBlocks` and `SystemCacheBreakpoint` cannot change after creation.
+
+For a five-minute system-only cache, set the provider entry in `Options.Config`:
+
+```go
+cacheFinalMessage := false
+cfg := config.Config{
+    Providers: map[string]config.Provider{
+        "anthropic": {
+            CacheTTL: "5m",
+            CacheFinalMessage: &cacheFinalMessage,
+        },
+    },
+}
+```
+
+Pass `cfg` as `Options.Config`. Keep the entry's credentials, auth, and endpoint settings when replacing an existing entry. Nil or a pointer to true keeps automatic final-message caching. This control applies to every model API call through that entry, not to Claude Code's own cache policy.
 
 ## Stop after a tool
 

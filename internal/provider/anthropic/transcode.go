@@ -260,11 +260,11 @@ func wireCallID(id string) string {
 }
 
 // transcodeRequest maps a canonical request to the Anthropic Messages API.
-// Cache markers are injected here, on the selected system block and the last
-// content block of the final message, and never stored in the session log.
+// Cache markers are injected here, on the selected system block and, when enabled,
+// the last content block of the final message, and never stored in the session log.
 // ttl is the resolved cache lifetime (see resolveCacheTTL); the caller sends
 // the extendedCacheTTLBeta header when it is CacheTTL1h.
-func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
+func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool) (*apiRequest, error) {
 	out := &apiRequest{
 		Model:       req.Model.Model,
 		MaxTokens:   req.MaxTokens,
@@ -391,8 +391,10 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	if len(out.Messages) == 0 {
 		return nil, fmt.Errorf("anthropic: request has no transcodable messages")
 	}
-	last := &out.Messages[len(out.Messages)-1]
-	last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
+	if cacheFinalMessage {
+		last := &out.Messages[len(out.Messages)-1]
+		last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
+	}
 
 	return out, nil
 }

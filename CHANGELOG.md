@@ -10,6 +10,8 @@ First tagged release.
 
 ### Added
 
+- **Anthropic cache controls** (`config.Provider`) — `CacheFinalMessage` (`cache_final_message`) can disable the automatic final-message cache marker while keeping the selected system marker. Nil or true keeps the default behavior. Embedding and config docs show the existing five-minute TTL option.
+
 - **Per-session system blocks and cache selection** (`protocol.CreateSession`) — `SystemBlocks` replaces the default prompt for one session and survives reopen. `SystemCacheBreakpoint` selects the Anthropic system block to cache; absent keeps the last-block default. The newest message marker and configured TTL stay unchanged.
 
 - **Tools start while the model streams** (`harness`) — a tool call starts when the model stream delivers it complete, not after the model call ends. Calls of `ReadOnly` tools run together; every other call runs alone, in arrival order, as in Codex. Results are still recorded in call order after the model call ends. A call that started may already have had its effect when the model call fails. Backends that own their loop are unchanged.
