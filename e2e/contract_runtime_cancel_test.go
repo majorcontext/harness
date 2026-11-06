@@ -43,7 +43,7 @@ func (h *heldEmbedderTool) Run(ctx context.Context, call harness.Call) (protocol
 
 func heldToolRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, *store.MemStore, *heldEmbedderTool, func()) {
 	t.Helper()
-	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_done", Name: "probe", Input: map[string]any{}}, {ID: "call_1", Name: "probe", Input: map[string]any{}}}}})
+	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "stream prefix", ToolCalls: []harnesstest.ToolCall{{ID: "call_done", Name: "probe", Input: map[string]any{}}, {ID: "call_1", Name: "probe", Input: map[string]any{}}}}})
 	tool := &heldEmbedderTool{make(chan context.Context, 1), make(chan struct{}), make(chan struct{})}
 	st := store.NewMemStore()
 	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: []harness.Tool{tool}, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000, Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
@@ -59,7 +59,7 @@ func heldToolRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, *stor
 func TestContractRuntimeToolCancellation(t *testing.T) {
 	skipShort(t)
 	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
-	for _, mode := range []string{"cancel", "end", "end_with_slow_subscriber", "end_with_connection"} {
+	for _, mode := range []string{"cancel", "stream_context", "end", "end_with_stream", "end_with_slow_subscriber", "end_with_connection"} {
 		t.Run(mode, func(t *testing.T) { rowIgnoredToolCancellation(t, mode) })
 	}
 }
@@ -67,10 +67,10 @@ func TestContractRuntimeToolCancellation(t *testing.T) {
 func rowIgnoredToolCancellation(t *testing.T, mode string) {
 	r, st, tool, release := heldToolRuntime(t, nil)
 	s, checkConnection := cancellationSession(t, r, mode)
-	turn, err := s.Prompt(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	turn, stream, cancelPrompt := cancellationPrompt(t, s, mode)
+	defer cancelPrompt()
+	ending := mode != "cancel" && mode != "stream_context"
+	var err error
 	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
 	defer cancel()
 	var toolCtx context.Context
@@ -83,11 +83,14 @@ func rowIgnoredToolCancellation(t *testing.T, mode string) {
 	if mode == "end_with_slow_subscriber" {
 		defer slowEvents(t, ctx, s)()
 	}
-	if mode != "cancel" {
+	if ending {
 		if _, err := s.Prompt(ctx, protocol.Input{ID: "queued", Delivery: protocol.DeliveryQueue, Parts: []protocol.Part{{Type: protocol.PartText, Text: "never run"}}}); err != nil {
 			t.Fatal(err)
 		}
 		err = r.End(ctx, s.ID())
+	} else if mode == "stream_context" {
+		cancelPrompt()
+		_, err = turn.Wait(ctx)
 	} else {
 		err = turn.Cancel(ctx)
 	}
@@ -99,7 +102,7 @@ func rowIgnoredToolCancellation(t *testing.T, mode string) {
 	default:
 		t.Fatal("tool context was not canceled")
 	}
-	if mode != "cancel" {
+	if ending {
 		checkCause(t, s, harness.ErrSessionEnded)
 		checkConnection()
 	}
@@ -108,7 +111,7 @@ func rowIgnoredToolCancellation(t *testing.T, mode string) {
 		t.Fatal(err)
 	}
 	want := protocol.CauseStopped
-	if mode != "cancel" {
+	if ending {
 		want = protocol.CauseEnded
 	}
 	if result.Cause != want {
@@ -125,8 +128,60 @@ func rowIgnoredToolCancellation(t *testing.T, mode string) {
 		t.Fatalf("late result changed log: %d -> %d, %v", before, after, err)
 	}
 	checkKeptToolResult(t, st, s.ID())
-	if mode != "cancel" {
+	if stream != nil && ending {
+		checkEndedStream(t, ctx, stream)
+	}
+	if ending {
 		checkEndReopen(t, r, s)
+	}
+}
+
+func cancellationPrompt(t *testing.T, s *harness.Session, mode string) (*harness.Turn, *harness.Stream, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}
+	if mode == "stream_context" || mode == "end_with_stream" {
+		stream, err := s.PromptStream(ctx, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(stream.Close)
+		return stream.Turn, stream, cancel
+	}
+	turn, err := s.Prompt(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return turn, nil, cancel
+}
+
+func checkEndedStream(t *testing.T, ctx context.Context, stream *harness.Stream) {
+	t.Helper()
+	var completed, ended bool
+	var text strings.Builder
+	for e, err := range stream.Events(ctx) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == protocol.KindItemDelta {
+			var frame protocol.ItemFrame
+			if err := json.Unmarshal(e.Data, &frame); err != nil {
+				t.Fatal(err)
+			}
+			if frame.Type == "text" {
+				text.WriteString(frame.Text)
+			}
+		}
+		if e.Kind == protocol.KindItemCompleted && strings.Contains(string(e.Data), "completed tool result") {
+			completed = true
+		}
+		if e.Kind == protocol.KindTurnEnded {
+			ended = true
+		}
+	}
+	if !completed || !ended || text.String() != "stream prefix" {
+		t.Fatal("End discarded queued stream deltas, a result, or its terminal event")
 	}
 }
 

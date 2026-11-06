@@ -36,6 +36,15 @@ var (
 // Submit admits in and returns the seq of its input.admitted record. A
 // repeated input ID returns the original seq and repeat set.
 func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedTurn string) (seq uint64, repeat bool, err error) {
+	return a.submit(ctx, in, expectedTurn, nil)
+}
+
+// SubmitBound calls admitted only for a new input, before it replies to admission.
+func (a *Actor) SubmitBound(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64)) (seq uint64, repeat bool, err error) {
+	return a.submit(ctx, in, expectedTurn, admitted)
+}
+
+func (a *Actor) submit(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64)) (seq uint64, repeat bool, err error) {
 	type receipt struct {
 		seq    uint64
 		repeat bool
@@ -54,6 +63,9 @@ func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedT
 			return
 		}
 		seq, err := a.admit(in, expectedTurn, a.resumed()...)
+		if err == nil && admitted != nil {
+			admitted(seq)
+		}
 		reply(receipt{seq, false}, err)
 	})
 	return r.seq, r.repeat, err

@@ -30,7 +30,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: ".", Config: login.Config(), Getenv: os.Getenv})
+	rt, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: ".", Config: login.Config(), Getenv: os.Getenv, DisableRetryAfterOutput: true})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -39,10 +39,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	t, err := s.Prompt(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}})
+	t, err := s.PromptStream(ctx, protocol.Input{ID: "prompt-1", Parts: []protocol.Part{{Type: protocol.PartText, Text: prompt}}})
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer t.Close()
 	for e, err := range t.Events(ctx) {
 		if err != nil {
 			log.Fatal(err)

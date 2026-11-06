@@ -115,13 +115,17 @@ func (t *Turn) fate(ctx context.Context) (turnID string, withdrawn bool, err err
 // passes each one to emit. It returns the outcome when it is final, with no
 // error, also when emit returns false.
 func (t *Turn) follow(ctx context.Context, emit func(protocol.Event) bool) (TurnResult, error) {
+	return t.followEvents(t.s.Events(ctx, t.adm.Seq-1), emit, false)
+}
+
+func (t *Turn) followEvents(events iter.Seq2[protocol.Event, error], emit func(protocol.Event) bool, ownTurn bool) (TurnResult, error) {
 	res := TurnResult{InputID: t.adm.InputID}
 	if t.adm.Seq == 0 || t.adm.InputID == "" {
 		return res, fmt.Errorf("%w: the receipt names no input", ErrInvalidRequest)
 	}
 	var usage protocol.Usage
 	admitted := false
-	for e, err := range t.s.Events(ctx, t.adm.Seq-1) {
+	for e, err := range events {
 		if err != nil {
 			return res, err
 		}
@@ -132,6 +136,9 @@ func (t *Turn) follow(ctx context.Context, emit func(protocol.Event) bool) (Turn
 		done, err := step(e, &res, &usage)
 		if err != nil {
 			return res, err
+		}
+		if ownTurn && res.TurnID == "" && (e.Ephemeral || e.Seq != t.adm.Seq) && !done {
+			continue
 		}
 		if !emit(e) || done {
 			return res, nil

@@ -80,18 +80,28 @@ func subscriptionView(u *protocol.SubscriptionUsage) *protocol.SubscriptionUsage
 	return v
 }
 
-// Events yields the durable records after seq, then each record that the
-// actor appends, with the ephemeral frames of its turns between them. It
-// subscribes before it yields. It first yields the frames of the item that
-// streams, all of them or none: none when the item started before after. It loads the view before it drains the
-// frames: a frame sent before an append is then never yielded after the
-// record. A full subscriber drops frames, never records. When the actor
-// stops, it waits for Done and ends with Err.
+// Events yields durable records and best-effort frames after seq. It subscribes
+// before it yields and replays the kept item only when its start is not before
+// after. A drain captures its batch and durable head together; it yields outside
+// the live mutex. When the actor stops, it waits for Done and ends with Err.
 func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return func(yield func(protocol.Event, error) bool) {
-		frames, kept := a.live.subscribe()
+		frames, kept := a.live.subscribe(false)
 		defer a.live.unsubscribe(frames)
+		a.events(ctx, after, frames, kept)(yield)
+	}
+}
+
+func (a *Actor) events(ctx context.Context, after uint64, frames *liveSubscriber, kept []protocol.Event) iter.Seq2[protocol.Event, error] {
+	return func(yield func(protocol.Event, error) bool) {
 		place := func(f protocol.Event) bool {
+			if ctx.Err() != nil {
+				yield(protocol.Event{}, ctx.Err())
+				return false
+			}
+			if f.Seq < after {
+				return true
+			}
 			return through(ctx, a.cfg.Store, &after, f.Seq, yield) && yield(f, nil)
 		}
 		if len(kept) > 0 && kept[0].Seq >= after {
@@ -102,15 +112,14 @@ func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Eve
 			}
 		}
 		for {
-			v := a.View()
-			for drained := false; !drained; {
-				select {
-				case f := <-frames:
-					if !place(f) {
-						return
-					}
-				default:
-					drained = true
+			if ctx.Err() != nil {
+				yield(protocol.Event{}, ctx.Err())
+				return
+			}
+			v, batch := a.drain(frames)
+			for _, f := range batch {
+				if !place(f) {
+					return
 				}
 			}
 			if !through(ctx, a.cfg.Store, &after, v.Session.HeadSeq, yield) {
@@ -127,10 +136,7 @@ func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Eve
 			}
 			select {
 			case <-v.changed:
-			case f := <-frames:
-				if !place(f) {
-					return
-				}
+			case <-frames.ready:
 			case <-ctx.Done():
 				yield(protocol.Event{}, ctx.Err())
 				return

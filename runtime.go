@@ -102,6 +102,8 @@ type Options struct {
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
+	// DisableRetryAfterOutput stops retries of each model call after its first non-empty text or reasoning delta. False keeps the retry policy unchanged.
+	DisableRetryAfterOutput bool
 	// StopAfterTools names tools whose successful calls end a turn after the step. Empty: off. Backends that own their loop ignore it.
 	StopAfterTools []string
 	// StopAfter ends a turn after its step when it returns true for a successful result.
@@ -239,7 +241,7 @@ func New(opts Options) (*Runtime, error) {
 		titleModel: modelRef(opts.Config, opts.Config.TitleModel),
 		threshold:  positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens
-	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
+	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(), DisableRetryAfterOutput: opts.DisableRetryAfterOutput,
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
 		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools), StopAfter: opts.StopAfter}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)

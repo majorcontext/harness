@@ -176,7 +176,7 @@ func codexClient(hc *http.Client, src *codexauth.Source, endpoints ...string) *h
 		out = &http.Client{Transport: hc.Transport, Jar: hc.Jar, Timeout: hc.Timeout}
 	}
 	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	out.Transport = codexauth.NewTransport(src, out.Transport, endpoints...)
+	out.Transport = codexauth.NewTransport(src, out.Transport, provider.RetriesAllowed, endpoints...)
 	return out
 }
 
