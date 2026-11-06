@@ -38,8 +38,9 @@ type MCPSpec struct {
 	PageSize      int  // when positive, tools/list, resources/list, and skills/list answer in pages of this size
 	NoListChanged bool `json:",omitempty"` // when true, the fake server omits tools.listChanged
 	// Skills are served through the Skills extension; DirectoryRead declares resources/directory/read.
-	Skills        []MCPSkill `json:",omitempty"`
-	DirectoryRead bool       `json:",omitempty"`
+	Skills             []MCPSkill `json:",omitempty"`
+	DirectoryRead      bool       `json:",omitempty"`
+	SkillsListFailPage int        `json:",omitempty"`
 }
 
 // MCPTool is one scripted tool. A tools/call answers with the first of

@@ -38,7 +38,8 @@ func TestContractRetryAfterOutput(t *testing.T) {
 		}
 		steps := []harnesstest.Step{{Name: "first", Reply: first}}
 		wantCalls := 2
-		if mode == "across_model_calls" || mode == "across_transport_errors" || mode == "after_tool_only" {
+		switch mode {
+		case "across_model_calls", "across_transport_errors", "after_tool_only":
 			wantCalls = 3
 			steps[0].Reply.StopReason = "tool_use"
 			steps[0].Reply.ToolCalls = []harnesstest.ToolCall{{ID: "toolu_1", Name: "no_such_tool", Input: map[string]any{}}}
@@ -47,7 +48,7 @@ func TestContractRetryAfterOutput(t *testing.T) {
 				failure = harnesstest.Reply{Hangup: true}
 			}
 			steps = append(steps, harnesstest.Step{Name: "failure", Reply: failure})
-		} else if mode == "after_visible_text" || mode == "after_reasoning_only" {
+		case "after_visible_text", "after_reasoning_only":
 			wantCalls = 1
 		}
 		steps = append(steps, harnesstest.Step{Name: "answer", Repeat: true, Reply: harnesstest.Reply{Text: "done"}})
