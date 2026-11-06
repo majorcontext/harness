@@ -266,7 +266,7 @@ func (a *Actor) ended(r *running, runErr error) {
 	}
 	turnID := r.id
 	a.run = nil
-	cause := context.Cause(r.step)
+	cause := cmp.Or(context.Cause(r.ctx), context.Cause(r.step))
 	r.cancel(nil)
 	var err error
 	next := false
@@ -647,7 +647,7 @@ func (a *Actor) turnRuns() bool { return a.run != nil && a.run.kind == kindTurn 
 // halt runs begin on the actor goroutine, and returns once the actor that
 // begin stopped has released its ownership.
 func (a *Actor) halt(ctx context.Context, begin func(reply func(struct{}, error))) error {
-	_, err := call(ctx, a, begin)
+	_, err := callRun(ctx, a, begin)
 	if err != nil && !errors.Is(err, ErrNotOwned) {
 		return err
 	}

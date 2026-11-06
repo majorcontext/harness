@@ -308,6 +308,13 @@ func (h heldCanceledTransport) RoundTrip(req *http.Request) (*http.Response, err
 
 func TestContractRuntimeEndRefusesNewControlCommands(t *testing.T) {
 	skipShort(t)
+	for _, mode := range []string{"end", "release_then_end"} {
+		t.Run(mode, func(t *testing.T) { rowEndRefusesNewControlCommands(t, mode == "release_then_end") })
+	}
+}
+
+func heldTransportRuntime(t *testing.T) (*harness.Runtime, heldCanceledTransport, func()) {
+	t.Helper()
 	transport := heldCanceledTransport{make(chan struct{}), make(chan struct{}), make(chan struct{})}
 	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: func(string) string { return "k" },
 		ModelTransport: func(string) http.RoundTripper { return transport },
@@ -319,8 +326,17 @@ func TestContractRuntimeEndRefusesNewControlCommands(t *testing.T) {
 	var once sync.Once
 	release := func() { once.Do(func() { close(transport.release) }) }
 	t.Cleanup(func() { release(); _ = r.Close(context.Background()) })
+	return r, transport, release
+}
+
+func rowEndRefusesNewControlCommands(t *testing.T, releaseFirst bool) {
+	r, transport, release := heldTransportRuntime(t)
 	s := lifetimeSession(t, r)
-	stopPrompt(t, s, "a", "go")
+	turn := stopPrompt(t, s, "a", "go")
+	queued, err := s.Prompt(t.Context(), protocol.Input{ID: "queued", Delivery: protocol.DeliveryQueue, Parts: []protocol.Part{{Type: protocol.PartText, Text: "never run"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
 	defer cancel()
 	select {
@@ -328,12 +344,20 @@ func TestContractRuntimeEndRefusesNewControlCommands(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("model call did not start")
 	}
+	released := make(chan error, 1)
+	if releaseFirst {
+		go func() { released <- s.Release(ctx) }()
+		select {
+		case <-transport.canceled:
+		case <-ctx.Done():
+			t.Fatal("Release did not request handoff")
+		}
+	}
 	ended := make(chan error, 1)
 	go func() { ended <- r.End(ctx, s.ID()) }()
-	select {
-	case <-transport.canceled:
-	case <-ctx.Done():
-		t.Fatal("End did not cancel the model call")
+	withdrawn, err := queued.Wait(ctx)
+	if err != nil || !withdrawn.Withdrawn {
+		t.Fatalf("End did not withdraw the queue: %+v, %v", withdrawn, err)
 	}
 	if err := s.SetGoal(ctx, protocol.Goal{Condition: "never restart"}); !errors.Is(err, harness.ErrSessionNotOwned) {
 		t.Errorf("SetGoal after End = %v, want not owned", err)
@@ -351,7 +375,18 @@ func TestContractRuntimeEndRefusesNewControlCommands(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("End did not finish after the transport returned")
 	}
-	checkCause(t, s, harness.ErrSessionEnded)
+	result, err := turn.Wait(ctx)
+	if err != nil || result.Cause != protocol.CauseEnded {
+		t.Errorf("End left the turn resumable: %+v, %v", result, err)
+	}
+	cause := harness.ErrSessionEnded
+	if releaseFirst {
+		cause = harness.ErrSessionReleased
+		if err := <-released; err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkCause(t, s, cause)
 }
 
 type panickingEmbedderTool struct{ stopTool }

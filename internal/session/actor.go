@@ -605,11 +605,11 @@ type reply[T any] struct {
 	err error
 }
 
-// call refuses new commands once End starts. An admitted command calls
+// call refuses new commands once a requested stop starts. An admitted command calls
 // its reply func exactly once, at once or later from another command.
 func call[T any](ctx context.Context, a *Actor, f func(func(T, error))) (T, error) {
 	return callRun(ctx, a, func(reply func(T, error)) {
-		if a.endCause == ErrEnded {
+		if a.endCause != nil {
 			var zero T
 			reply(zero, ErrNotOwned)
 			return
