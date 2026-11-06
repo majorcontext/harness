@@ -139,6 +139,32 @@ Pass `cfg` as `Options.Config`. Keep the entry's credentials, auth, and endpoint
 
 Set `Options.StopAfterTools` to tool names that end a turn. If any named call succeeds, the runtime completes and records every call in that model step, then ends the turn without another model call. If all named calls fail, the model can try again. The option is off by default and applies to every session of the runtime. It has no effect on backends that own their loop. Set it again when opening a session on a new runtime.
 
+Set `Options.StopAfter` when the result decides whether to stop. It is independent of `StopAfterTools`: either condition can end the turn. Leave a tool out of `StopAfterTools` when it should stop only if the predicate returns true.
+
+```go
+opts.StopAfter = func(call protocol.ToolCall, result protocol.ToolResult) bool {
+    var output struct {
+        Question string `json:"question"`
+        Success  bool   `json:"success"`
+    }
+    if json.Unmarshal([]byte(result.Text), &output) != nil {
+        return false
+    }
+    switch call.Name {
+    case "suggestReplies":
+        return output.Question != ""
+    case "routeToService":
+        return output.Success
+    default:
+        return false
+    }
+}
+```
+
+The predicate gets the original model call and the full successful result after `After` hooks, before `Join` hooks and retention. It is not called for error results, tool errors, denied calls, calls that did not run, or an open question. Calls are serial in model call order within a turn, even after one returns true, but may overlap across sessions. Shared callback state must be concurrency-safe. Do not mutate the arguments, block, or panic; a panic is not recovered at this boundary. The predicate has no error return. Cancellation and recording errors still take precedence over a successful stop.
+
+Every call in the step finishes and its result is recorded before the turn completes. The stop takes precedence over `MaxSteps`; a waiting steer input runs in the next turn. The predicate is Go-only, off when nil, not persisted, and ignored by backends that own their loop. Supply it again when opening on a new runtime.
+
 ## Continue the session
 
 Prompt the same session again with a new input ID:

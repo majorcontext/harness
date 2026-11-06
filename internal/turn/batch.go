@@ -205,7 +205,7 @@ func (b *batch) abort(cause error) {
 
 // runBatch runs calls, at most MaxParallel read-only calls at once, and gives the result of
 // each call that ran to emit in call order as soon as it and every earlier
-// call have ended, after the Join of the hooks. A call that the stream already
+// call have ended. A call that the stream already
 // started is not started again. When ctx ends, every running
 // call is canceled and none starts; the result of each call that ran is still
 // recorded in call order, and the cause is returned. When only step ends, running calls finish, no new call starts, and
@@ -246,7 +246,7 @@ func (b *batch) collect(ctx context.Context, fs []*flight, emit func(i int, r pr
 		if !f.out.ran {
 			continue
 		}
-		if err := emit(i, b.t.join(ctx, f.call, f.out.res)); err != nil {
+		if err := emit(i, f.out.res); err != nil {
 			return err
 		}
 	}
