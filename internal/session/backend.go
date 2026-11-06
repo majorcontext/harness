@@ -19,7 +19,7 @@ import (
 // outside the actor.
 func (t *turnRun) State(backend string) (turn.Snapshot, error) {
 	a := t.a
-	chain, err := call(context.Background(), a, func(reply func(eventlog.BackendChain, error)) {
+	chain, err := callRun(context.Background(), a, func(reply func(eventlog.BackendChain, error)) {
 		if a.run != t.r {
 			reply(eventlog.BackendChain{}, ErrTurnMismatch)
 			return
@@ -53,7 +53,7 @@ type saveBase struct {
 // chunk of another owner and no chunk is written twice.
 func (t *turnRun) SaveState(backend string, s turn.Snapshot) error {
 	a := t.a
-	base, err := call(context.Background(), a, func(reply func(saveBase, error)) {
+	base, err := callRun(context.Background(), a, func(reply func(saveBase, error)) {
 		if a.run != t.r {
 			reply(saveBase{}, ErrTurnMismatch)
 			return
@@ -97,7 +97,7 @@ func (t *turnRun) Compacted(summary string) error {
 
 // onRun runs f in the actor while r runs.
 func (a *Actor) onRun(r *running, f func() error) error {
-	_, err := call(context.Background(), a, func(reply func(struct{}, error)) {
+	_, err := callRun(context.Background(), a, func(reply func(struct{}, error)) {
 		if a.run != r {
 			reply(struct{}{}, ErrTurnMismatch)
 			return
@@ -128,7 +128,7 @@ func (t *turnRun) Asked(id string) (json.RawMessage, bool) {
 		p  json.RawMessage
 		ok bool
 	}
-	f, _ := call(context.Background(), t.a, func(reply func(found, error)) {
+	f, _ := callRun(context.Background(), t.a, func(reply func(found, error)) {
 		p, ok := t.a.state.Asked(id)
 		reply(found{p, ok}, nil)
 	})
@@ -141,7 +141,7 @@ func (t *turnRun) Resolution(id string) (protocol.RequestResolved, bool) {
 		r  protocol.RequestResolved
 		ok bool
 	}
-	f, _ := call(context.Background(), t.a, func(reply func(found, error)) {
+	f, _ := callRun(context.Background(), t.a, func(reply func(found, error)) {
 		r, ok := t.a.state.Resolution(id)
 		reply(found{r, ok}, nil)
 	})

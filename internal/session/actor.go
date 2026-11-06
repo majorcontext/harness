@@ -330,7 +330,7 @@ func open(ctx context.Context, cfg Config, changes protocol.SettingsChanged) (*A
 	if err := a.applySettings(ctx, changes, nil); err != nil {
 		return nil, err
 	}
-	if err := a.endCommands(ctx); err != nil {
+	if err := a.endCommands(ctx, "harness restarted"); err != nil {
 		return nil, err
 	}
 	t, ok := s.Turn()
@@ -453,12 +453,12 @@ func (a *Actor) loop() {
 	}
 }
 
-// stopWith marks the actor stopped. The first cause stays; nil leaves the
-// cause to finish, which reads the Sync rejection.
+// stopWith marks the actor stopped. A requested or settled cause stays.
+// With neither, nil leaves the cause to finish, which reads the Sync rejection.
 func (a *Actor) stopWith(cause error) {
 	a.stopped = true
 	if a.cause == nil {
-		a.cause = cause
+		a.cause = cmp.Or(a.endCause, cause)
 	}
 }
 
@@ -605,9 +605,20 @@ type reply[T any] struct {
 	err error
 }
 
-// call runs f on the actor goroutine. f calls its reply func exactly once,
-// at once or later from another command.
+// call refuses new commands once a requested stop starts. An admitted command calls
+// its reply func exactly once, at once or later from another command.
 func call[T any](ctx context.Context, a *Actor, f func(func(T, error))) (T, error) {
+	return callRun(ctx, a, func(reply func(T, error)) {
+		if a.endCause != nil {
+			var zero T
+			reply(zero, ErrNotOwned)
+			return
+		}
+		f(reply)
+	})
+}
+
+func callRun[T any](ctx context.Context, a *Actor, f func(func(T, error))) (T, error) {
 	ch := make(chan reply[T], 1)
 	cmd := func() { f(func(v T, err error) { ch <- reply[T]{v, err} }) }
 	var zero T
@@ -665,6 +676,10 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 			lost := takenOver(a.cfg.ID, err)
 			a.stopWith(lost)
 			return lost
+		}
+		if baseErr := a.cfg.Base.Err(); baseErr != nil && errors.Is(err, baseErr) {
+			a.stopWith(ErrReleased)
+			return err
 		}
 		a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))
 		return err

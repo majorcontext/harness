@@ -573,7 +573,7 @@ var runtimeRows = withRows(promptStreamAdmissionRows, promptStreamContextRows, r
 	"two_turns_keep_history":                            sameAsServe(),
 	"usage_survives_a_mid_turn_restart":                 reGolden(specView, specHandoffResume),
 
-	"end_is_refused_while_a_typed_command_runs":                                             reGolden(specTypedReceipt, specErrors, specReceipt),
+	"end_cancels_a_running_typed_command":                                                   reGolden(specTypedReceipt, specErrors, specReceipt),
 	"a_kill_interrupts_an_unfinished_command":                                               reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_stays_after_the_results_when_a_compaction_follows_two_calls":                    reGolden(specMessages),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":                             reGolden(specOverflowFolds, specBannerPrefix, specView),

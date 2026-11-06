@@ -250,7 +250,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 		History: []protocol.LogMessage{{Role: protocol.RoleUser, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}}}
 	a.spawn(func() {
 		answer, _, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits)
-		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+		_, _ = callRun(context.Background(), a, func(reply func(struct{}, error)) {
 			a.judged(r, turnID, answer, err)
 			reply(struct{}{}, nil)
 		})

@@ -180,16 +180,6 @@
         ]
       },
       {
-        "id": "cmpsum#1",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "gist"
-          }
-        ]
-      },
-      {
         "id": "msg#3",
         "role": "user",
         "parts": [
@@ -226,25 +216,13 @@
         {
           "line": "/compact",
           "name": "compact",
-          "result": {
-            "folded": true,
-            "from_seq": 1,
-            "to_seq": 9
-          },
-          "status": "succeeded",
-          "text": "/compact succeeded"
+          "status": "interrupted",
+          "text": "session ended before /compact finished; it will not run again"
         }
       ]
     },
     "end_session.a": {
-      "status": 409,
-      "body": {
-        "error": {
-          "code": "session_busy",
-          "details": {},
-          "message": "harness: session busy"
-        }
-      }
+      "status": 204
     },
     "end_session.a#2": {
       "status": 204

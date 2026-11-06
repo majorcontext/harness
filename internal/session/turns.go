@@ -266,7 +266,7 @@ func (a *Actor) ended(r *running, runErr error) {
 	}
 	turnID := r.id
 	a.run = nil
-	cause := context.Cause(r.step)
+	cause := cmp.Or(context.Cause(r.ctx), context.Cause(r.step))
 	r.cancel(nil)
 	var err error
 	next := false
@@ -489,15 +489,9 @@ func (a *Actor) CancelForTask(ctx context.Context) error { return a.cancel(ctx, 
 
 func (a *Actor) cancel(ctx context.Context, why error) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		var events []protocol.Payload
-		for _, in := range a.state.Queue() {
-			events = append(events, protocol.InputWithdrawn{InputID: in.InputID})
-		}
-		if len(events) > 0 {
-			if err := a.append(events...); err != nil {
-				reply(struct{}{}, err)
-				return
-			}
+		if err := a.withdrawQueued(); err != nil {
+			reply(struct{}{}, err)
+			return
 		}
 		if err := a.stopIdleGoal(why); err != nil {
 			reply(struct{}{}, err)
@@ -506,6 +500,17 @@ func (a *Actor) cancel(ctx context.Context, why error) error {
 		a.interrupt("", why, reply)
 	})
 	return err
+}
+
+func (a *Actor) withdrawQueued() error {
+	var events []protocol.Payload
+	for _, in := range a.state.Queue() {
+		events = append(events, protocol.InputWithdrawn{InputID: in.InputID})
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	return a.append(events...)
 }
 
 // stopIdleGoal settles the goal of a session that runs nothing after a cancel
@@ -596,18 +601,29 @@ func (a *Actor) beginRelease(reply func(struct{}, error)) {
 	a.run.handoff(turn.ErrHandoff)
 }
 
-// End stops the actor and releases its ownership, as Release does, and
-// appends nothing. It fails with ErrBusy while a turn or a control command
-// runs; a compaction or an evaluation that no command started stops as under
-// Release. An actor that has stopped is ended already, so it returns nil.
+// End withdraws queued inputs, cancels the run, and releases ownership.
+// An actor that has stopped is ended already, so it returns nil.
 func (a *Actor) End(ctx context.Context) error {
 	err := a.halt(ctx, func(reply func(struct{}, error)) {
-		if a.turnRuns() || len(a.state.Unfinished()) > 0 {
-			reply(struct{}{}, ErrBusy)
+		a.requestStop(ErrEnded)
+		if err := a.withdrawQueued(); err != nil {
+			reply(struct{}{}, err)
 			return
 		}
-		a.requestStop(ErrEnded)
-		a.beginRelease(reply)
+		if err := a.endGoal(errEndTurn); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
+		if err := a.endCommands(a.cfg.Base, "session ended"); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
+		a.releasing = append(a.releasing, reply)
+		if a.run == nil {
+			a.stop(nil)
+			return
+		}
+		a.run.cancel(errEndTurn)
 	})
 	if errors.Is(err, ErrNotOwned) {
 		return nil
@@ -631,7 +647,7 @@ func (a *Actor) turnRuns() bool { return a.run != nil && a.run.kind == kindTurn 
 // halt runs begin on the actor goroutine, and returns once the actor that
 // begin stopped has released its ownership.
 func (a *Actor) halt(ctx context.Context, begin func(reply func(struct{}, error))) error {
-	_, err := call(ctx, a, begin)
+	_, err := callRun(ctx, a, begin)
 	if err != nil && !errors.Is(err, ErrNotOwned) {
 		return err
 	}
