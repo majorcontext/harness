@@ -83,7 +83,7 @@ func (b bound) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResul
 
 func runEmbedded(ctx context.Context, tool Tool, call Call) (protocol.ToolResult, error) {
 	if ctx.Err() != nil {
-		return protocol.ToolResult{}, context.Cause(ctx)
+		return protocol.ToolResult{}, ctx.Err()
 	}
 	type outcome struct {
 		result protocol.ToolResult
@@ -109,7 +109,7 @@ func runEmbedded(ctx context.Context, tool Tool, call Call) (protocol.ToolResult
 		case out := <-done:
 			return out.result, out.err
 		default:
-			return protocol.ToolResult{}, context.Cause(ctx)
+			return protocol.ToolResult{}, ctx.Err()
 		}
 	}
 }

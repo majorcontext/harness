@@ -35,6 +35,9 @@ func (h *heldEmbedderTool) Run(ctx context.Context, call harness.Call) (protocol
 	if call.ID == "call_done" {
 		return protocol.ToolResult{Text: "completed tool result"}, nil
 	}
+	if call.ID == "call_done_error" {
+		return protocol.ToolResult{}, errors.New("accepted callback error")
+	}
 	h.started <- ctx
 	<-h.release
 	defer close(h.returned)
@@ -43,7 +46,7 @@ func (h *heldEmbedderTool) Run(ctx context.Context, call harness.Call) (protocol
 
 func heldToolRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, *store.MemStore, *heldEmbedderTool, func()) {
 	t.Helper()
-	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "stream prefix", ToolCalls: []harnesstest.ToolCall{{ID: "call_done", Name: "probe", Input: map[string]any{}}, {ID: "call_1", Name: "probe", Input: map[string]any{}}}}})
+	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "stream prefix", ToolCalls: []harnesstest.ToolCall{{ID: "call_done", Name: "probe", Input: map[string]any{}}, {ID: "call_done_error", Name: "probe", Input: map[string]any{}}, {ID: "call_1", Name: "probe", Input: map[string]any{}}}}})
 	tool := &heldEmbedderTool{make(chan context.Context, 1), make(chan struct{}), make(chan struct{})}
 	st := store.NewMemStore()
 	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: []harness.Tool{tool}, Getenv: os.Getenv, Config: config.Config{ContextWindowTokens: 100000, Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
@@ -128,6 +131,7 @@ func rowIgnoredToolCancellation(t *testing.T, mode string) {
 		t.Fatalf("late result changed log: %d -> %d, %v", before, after, err)
 	}
 	checkKeptToolResult(t, st, s.ID())
+	checkSyntheticCancellation(t, st, s.ID())
 	if stream != nil && ending {
 		checkEndedStream(t, ctx, stream)
 	}
@@ -292,6 +296,41 @@ func checkKeptToolResult(t *testing.T, st harness.Store, id string) {
 	if !strings.Contains(log.String(), "completed tool result") || strings.Contains(log.String(), "late tool result") {
 		t.Fatal("cancellation did not preserve the completed result and discard the late result")
 	}
+}
+
+func checkSyntheticCancellation(t *testing.T, st harness.Store, id string) {
+	t.Helper()
+	acceptedError := false
+	for e, err := range harness.ReadEvents(t.Context(), st, id, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind != protocol.KindItemCompleted {
+			continue
+		}
+		var item protocol.ItemCompleted
+		if err := json.Unmarshal(e.Data, &item); err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range item.Message.Parts {
+			if part.Type != protocol.LogPartToolResult {
+				continue
+			}
+			if part.CallID == "call_done_error" {
+				acceptedError = part.IsError && part.Text == "accepted callback error"
+			}
+			if part.CallID == "call_1" {
+				if !acceptedError {
+					t.Error("cancellation did not preserve an accepted callback error")
+				}
+				if !part.IsError || part.Text != context.Canceled.Error() {
+					t.Fatalf("synthetic cancellation result = %+v, want ctx.Err()", part)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("synthetic cancellation result was not recorded")
 }
 
 type heldCanceledTransport struct {
