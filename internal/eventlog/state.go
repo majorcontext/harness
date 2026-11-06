@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -135,7 +134,7 @@ type State struct {
 	backends     map[string]BackendChain
 	retained     []protocol.ToolResultRetained
 	// pins holds the recorded pins that a compaction has not retired.
-	pins     turn.Pins
+	pins     []protocol.PinRecorded
 	commands map[string]command
 	history  []entry
 	// folded holds the messages that readers see before the summary of the
@@ -171,7 +170,7 @@ func (s *State) clone() *State {
 	c.stranded = slices.Clip(s.stranded)
 	c.folded = slices.Clip(s.folded)
 	c.retained = slices.Clip(s.retained)
-	c.pins = s.pins.Clone()
+	c.pins = slices.Clip(s.pins)
 	c.unran = slices.Clip(s.unran)
 	return &c
 }
@@ -388,7 +387,7 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 
 // Pins returns the pins that the log records, in the order the model reads
 // them.
-func (s *State) Pins() []turn.Pin { return s.pins.Pinned() }
+func (s *State) Pins() []protocol.PinRecorded { return slices.Clone(s.pins) }
 
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }

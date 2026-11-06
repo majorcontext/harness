@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -494,14 +493,14 @@ func TestRecordedPinsKeepTheirPlaceUntilACompactionMovesTheNewestOfEachKind(t *t
 	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), end("t1", protocol.StopCompleted, ""),
 		protocol.PinRecorded{Notice: "mcp", Text: "down", At: 2}, protocol.PinRecorded{Notice: "skills", Text: "list", At: 3}, protocol.PinRecorded{Notice: "mcp", Text: "up", At: 3})
 	got := replay(t, events).Pins()
-	want := []turn.Pin{{Kind: "mcp", Text: "down", At: 2}, {Kind: "skills", Text: "list", At: 3}, {Kind: "mcp", Text: "up", At: 3}}
+	want := []protocol.PinRecorded{{Notice: "mcp", Text: "down", At: 2}, {Notice: "skills", Text: "list", At: 3}, {Notice: "mcp", Text: "up", At: 3}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Pins() = %+v, want %+v", got, want)
 	}
 	s := replay(t, with(events, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), end("t2", protocol.StopCompleted, ""),
 		protocol.CompactionApplied{FromSeq: 1, ToSeq: 9, Summary: "sum"}))
 	n := len(s.ModelHistory())
-	want = []turn.Pin{{Kind: "skills", Text: "list", At: n}, {Kind: "mcp", Text: "up", At: n}}
+	want = []protocol.PinRecorded{{Notice: "skills", Text: "list", At: n}, {Notice: "mcp", Text: "up", At: n}}
 	if got := s.Pins(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Pins() after a compaction = %+v, want %+v", got, want)
 	}

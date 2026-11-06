@@ -16,19 +16,16 @@ type Pins struct {
 	pins []Pin
 }
 
-// NewPins returns Pins that hold ps, in the order the model reads them.
-func NewPins(ps []Pin) Pins { return Pins{pins: slices.Clone(ps)} }
-
 // Add appends q with no check, for a replay of recorded pins.
 func (p *Pins) Add(q Pin) { p.pins = append(p.pins, q) }
+
+// Prepend puts q before every pin.
+func (p *Pins) Prepend(q Pin) { p.pins = slices.Insert(p.pins, 0, q) }
 
 // Has reports whether a pin of kind exists.
 func (p *Pins) Has(kind string) bool {
 	return slices.ContainsFunc(p.pins, func(q Pin) bool { return q.Kind == kind })
 }
-
-// Clone returns a copy of p that shares no memory with it.
-func (p Pins) Clone() Pins { return Pins{pins: slices.Clone(p.pins)} }
 
 // Set makes a pin of kind after the first at messages of the history when
 // text differs from the newest pin of kind. An empty text makes a pin of

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -111,7 +112,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		placed := slices.Clone(ns)
 		if len(placed) > 0 && placed[0].Kind == turn.BannerKind && placed[0].Text != "" && !t.a.pins.Has(turn.BannerKind) {
 			b := placed[0]
-			t.a.pins = turn.NewPins(append([]turn.Pin{{Kind: b.Kind, Text: b.Text, At: b.At}}, t.a.pins.Pinned()...))
+			t.a.pins.Prepend(turn.Pin{Kind: b.Kind, Text: b.Text, At: b.At})
 		}
 		known := len(t.a.pins.Pinned())
 		for i := range placed {
@@ -137,6 +138,15 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		reply(pinned, nil)
 	})
 	return pins
+}
+
+// restoredPins returns the pins that the log of s records.
+func restoredPins(s *eventlog.State) turn.Pins {
+	var ps turn.Pins
+	for _, p := range s.Pins() {
+		ps.Add(turn.Pin{Kind: p.Notice, Text: p.Text, At: p.At})
+	}
+	return ps
 }
 
 // Ended ends the turn by the cause of its stop.
