@@ -18,6 +18,7 @@ import (
 )
 
 var checkpointRows = map[string]runtimeRow{
+	"disk_checkpoint_stopped_reads_reuse_and_repair":                   sameAsServe(),
 	"checkpoint_versioned_dependency_identity":                         sameAsServe(),
 	"checkpoint_dependency_local_replacement_bypasses_cache":           sameAsServe(),
 	"checkpoint_uncacheable_build_replays_without_cache_calls":         sameAsServe(),

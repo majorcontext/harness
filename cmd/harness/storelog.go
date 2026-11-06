@@ -11,6 +11,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/store"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 // observedStore logs the slow and the stuck operations of a Store, and the
 // records that name a new session or a spawned task.
 type observedStore struct {
-	harness.Store
+	*store.DiskStore
 	log *slog.Logger
 
 	mu      sync.Mutex
@@ -42,8 +43,8 @@ type flight struct {
 	since   time.Time
 }
 
-func newObservedStore(st harness.Store, logger *slog.Logger) *observedStore {
-	return &observedStore{Store: st, log: logger, flying: map[int]flight{}}
+func newObservedStore(st *store.DiskStore, logger *slog.Logger) *observedStore {
+	return &observedStore{DiskStore: st, log: logger, flying: map[int]flight{}}
 }
 
 // track records that op started, and returns the call that records its end.
@@ -97,7 +98,7 @@ func (s *observedStore) check(now time.Time) {
 
 func (s *observedStore) Append(ctx context.Context, session string, expectedSeq uint64, records ...[]byte) error {
 	done := s.track("append", session)
-	err := s.Store.Append(ctx, session, expectedSeq, records...)
+	err := s.DiskStore.Append(ctx, session, expectedSeq, records...)
 	elapsed := done()
 	if err == nil {
 		s.observe(session, elapsed, records)
@@ -128,25 +129,25 @@ func (s *observedStore) observe(session string, elapsed time.Duration, records [
 
 func (s *observedStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]harness.Record, error) {
 	defer s.track("read", session)()
-	return s.Store.Read(ctx, session, afterSeq, limit)
+	return s.DiskStore.Read(ctx, session, afterSeq, limit)
 }
 
 func (s *observedStore) Head(ctx context.Context, session string) (uint64, error) {
 	defer s.track("head", session)()
-	return s.Store.Head(ctx, session)
+	return s.DiskStore.Head(ctx, session)
 }
 
 func (s *observedStore) Sessions(ctx context.Context, after string, limit int) ([]string, error) {
 	defer s.track("sessions", "")()
-	return s.Store.Sessions(ctx, after, limit)
+	return s.DiskStore.Sessions(ctx, after, limit)
 }
 
 func (s *observedStore) PutBlob(ctx context.Context, session, key string, r io.Reader) error {
 	defer s.track("put_blob", session)()
-	return s.Store.PutBlob(ctx, session, key, r)
+	return s.DiskStore.PutBlob(ctx, session, key, r)
 }
 
 func (s *observedStore) GetBlob(ctx context.Context, session, key string) (io.ReadCloser, error) {
 	defer s.track("get_blob", session)()
-	return s.Store.GetBlob(ctx, session, key)
+	return s.DiskStore.GetBlob(ctx, session, key)
 }
