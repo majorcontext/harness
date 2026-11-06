@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -214,6 +215,8 @@ type Limits struct {
 	Log *slog.Logger
 	// Trace starts the spans of model calls and tool calls. The zero value records nothing.
 	Trace tracing.Tracer
+	// StopAfterTools names calls whose successful result completes the turn.
+	StopAfterTools []string
 }
 
 // Turn is what a running turn reports through, bound to its turn. Started
@@ -313,11 +316,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		req.History = append(req.History, s.items...)
-		asks, calls := splitAsks(t, calls)
-		if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return record(calls[i], r) }); err != nil {
-			return err
-		}
-		if opened, err := openAsk(ctx, step, t, to, asks, record); opened || err != nil {
+		if stop, err := runStepTools(ctx, step, t, to, calls, lim.StopAfterTools, record); stop || err != nil {
 			return err
 		}
 		if req.MaxSteps > 0 && steps >= req.MaxSteps {
@@ -329,6 +328,25 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		req.History = append(req.History, in...)
 	}
+}
+
+func runStepTools(ctx, step context.Context, t runner, to Sink, calls []protocol.ToolCall, stopNames []string, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
+	asks, calls := splitAsks(t, calls)
+	stop := false
+	store := func(c protocol.ToolCall, r protocol.ToolResult) error {
+		if err := record(c, r); err != nil {
+			return err
+		}
+		stop = stop || (!r.IsError && slices.Contains(stopNames, c.Name))
+		return nil
+	}
+	if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return store(calls[i], r) }); err != nil {
+		return false, err
+	}
+	if opened, err := openAsk(ctx, step, t, to, asks, store); opened || err != nil {
+		return opened, err
+	}
+	return stop, nil
 }
 
 // callModel runs one model call. It calls b again, at most lim.Retries
