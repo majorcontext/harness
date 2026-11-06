@@ -185,7 +185,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(sessionSystemRows, checkpointRows, deferredModelRows, mcpLiveRows, pluginLiveRows, providerLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, mcpSkillRows, claudeChildReportRows, accountRows, midTurnCompactionRows, stepLimitRows, unshapedErrorRows, map[string]runtimeRow{
+var runtimeRows = withRows(promptStreamAdmissionRows, promptStreamContextRows, retryOutputRows, promptStreamRows, slowSubscriberRows, sessionSystemRows, checkpointRows, deferredModelRows, mcpLiveRows, pluginLiveRows, providerLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, mcpSkillRows, claudeChildReportRows, accountRows, midTurnCompactionRows, stepLimitRows, unshapedErrorRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -573,7 +573,7 @@ var runtimeRows = withRows(sessionSystemRows, checkpointRows, deferredModelRows,
 	"two_turns_keep_history":                            sameAsServe(),
 	"usage_survives_a_mid_turn_restart":                 reGolden(specView, specHandoffResume),
 
-	"end_is_refused_while_a_typed_command_runs":                                             reGolden(specTypedReceipt, specErrors, specReceipt),
+	"end_cancels_a_running_typed_command":                                                   reGolden(specTypedReceipt, specErrors, specReceipt),
 	"a_kill_interrupts_an_unfinished_command":                                               reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_stays_after_the_results_when_a_compaction_follows_two_calls":                    reGolden(specMessages),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":                             reGolden(specOverflowFolds, specBannerPrefix, specView),

@@ -131,7 +131,7 @@ func TestContractCommandsEnd(t *testing.T) {
 		return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "ok"}}
 	}
 	runScenarios(t, []scenario{{
-		name:   "end_is_refused_while_a_typed_command_runs",
+		name:   "end_cancels_a_running_typed_command",
 		config: map[string]any{"compaction_keep_turns": 1},
 		model:  []harnesstest.Step{turn("one"), turn("two"), {Name: "summary", Reply: harnesstest.Reply{Text: "gist", Block: true}}},
 		actions: []action{

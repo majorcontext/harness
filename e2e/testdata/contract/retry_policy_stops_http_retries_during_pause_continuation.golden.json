@@ -1,0 +1,134 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "web_search",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "web_search",
+              "text": "query srvtoolu_1",
+              "tool_name": "web_search",
+              "tool_use_id": "srvtoolu_1"
+            },
+            {
+              "kind": "web_search_result",
+              "text": "https://example.com/srvtoolu_1",
+              "tool_use_id": "srvtoolu_1"
+            },
+            {
+              "kind": "text",
+              "text": "Leg srvtoolu_1."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "web_search",
+            "text": "query srvtoolu_1",
+            "call_id": "srvtoolu_1",
+            "content": "Source srvtoolu_1 \u003chttps://example.com/srvtoolu_1\u003e\n"
+          },
+          {
+            "type": "text",
+            "text": "Leg srvtoolu_1.",
+            "content": "cites Source srvtoolu_1 \u003chttps://example.com/srvtoolu_1\u003e\n"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "last_turn.a": {
+      "status": 200,
+      "body": {
+        "error": "incomplete response returned, reason: pause_turn",
+        "stop_reason": "failed"
+      }
+    }
+  }
+}

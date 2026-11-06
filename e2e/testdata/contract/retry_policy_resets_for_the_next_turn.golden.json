@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -58,7 +58,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -71,7 +71,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "ok"
+              "text": "done"
             }
           ]
         },
@@ -80,7 +80,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "two"
+              "text": "again"
             }
           ]
         }
@@ -110,7 +110,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -123,7 +123,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "ok"
+              "text": "done"
             }
           ]
         },
@@ -132,25 +132,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "two"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "Summarize the conversation above so that it can be folded into one message, freeing context for future turns.\n\nWrite a concise, information-preserving summary. Preserve:\n- the user's intent and goals\n- decisions made and their rationale\n- concrete facts a later turn depends on: file paths, commands, values, error text\n\nDo not transcribe tool-call arguments or outputs verbatim; describe what happened and why it matters instead. Be dense; omit anything a later turn would not need.\n\nDo not call a tool. Answer only with the summary text."
+              "text": "again"
             }
           ]
         }
@@ -165,7 +147,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "one"
+            "text": "go"
           }
         ]
       },
@@ -175,17 +157,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "ok"
-          }
-        ]
-      },
-      {
-        "id": "cmpsum#1",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "gist"
+            "text": "done"
           }
         ]
       },
@@ -195,7 +167,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "two"
+            "text": "again"
           }
         ]
       },
@@ -205,49 +177,19 @@
         "parts": [
           {
             "type": "text",
-            "text": "ok"
+            "text": "done again"
           }
         ]
       }
     ]
   },
   "calls": {
-    "command.a": {
-      "status": 201,
-      "body": {
-        "command": "accepted",
-        "input_id": "in3",
-        "seq": 14
-      }
-    },
-    "command_records.a": {
+    "last_turn.a": {
       "status": 200,
-      "body": [
-        {
-          "line": "/compact",
-          "name": "compact",
-          "result": {
-            "folded": true,
-            "from_seq": 1,
-            "to_seq": 9
-          },
-          "status": "succeeded",
-          "text": "/compact succeeded"
-        }
-      ]
-    },
-    "end_session.a": {
-      "status": 409,
       "body": {
-        "error": {
-          "code": "session_busy",
-          "details": {},
-          "message": "harness: session busy"
-        }
+        "error": null,
+        "stop_reason": "completed"
       }
-    },
-    "end_session.a#2": {
-      "status": 204
     }
   }
 }

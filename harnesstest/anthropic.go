@@ -263,7 +263,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": textBlockStart(rep.WebSearch)})
 		citeSources(e, idx, rep.WebSearch)
-		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Text}})
+		textDelta(e, idx, rep.Text, rep.TextChunkRunes)
 		if rep.Block && !s.block(r.Context(), name) {
 			return
 		}
@@ -298,6 +298,21 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 	}
 	e.event("message_delta", obj{"type": "message_delta", "delta": obj{"stop_reason": stop}, "usage": usageDelta(usage, rep.WebSearch)})
 	e.event("message_stop", obj{"type": "message_stop"})
+}
+
+func textDelta(e sseWriter, idx int, text string, chunkRunes int) {
+	runes := []rune(text)
+	if chunkRunes <= 0 {
+		chunkRunes = max(1, len(runes))
+	}
+	for {
+		n := min(chunkRunes, len(runes))
+		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": string(runes[:n])}})
+		runes = runes[n:]
+		if len(runes) == 0 {
+			return
+		}
+	}
 }
 
 // searchBlocks streams the server_tool_use block of a search and the block of

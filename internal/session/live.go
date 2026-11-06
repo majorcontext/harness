@@ -17,14 +17,13 @@ const liveBuffer = 256
 // item, so the kept deltas are a prefix.
 const liveItemBytes = 256 << 10
 
-// live fans ephemeral frames out to the subscribers of Events. A send to a
-// full subscriber drops the frame; durable events come from the log. mu
-// orders a frame's head read and send against publish. item holds the
-// item.started frame and the item.delta frames of the item that streams, so
-// a subscriber that registers later starts with them.
+// live fans ephemeral frames out to subscribers. A bounded subscriber drops
+// frames when full; a lossless subscriber keeps an unbounded FIFO. Durable
+// events come from the log. mu orders frames, drains, and published heads.
+// item holds a bounded preview for subscribers that register during an item.
 type live struct {
 	mu       sync.Mutex
-	subs     map[chan protocol.Event]struct{}
+	subs     map[*liveSubscriber]struct{}
 	itemID   string
 	item     []protocol.Event
 	itemSize int
@@ -32,34 +31,61 @@ type live struct {
 	stopped  bool
 }
 
-// subscribe registers a subscriber. It also returns the frames of the item
-// that streams, in the order sent, which belong before every frame on the
-// channel.
-func (l *live) subscribe() (chan protocol.Event, []protocol.Event) {
+type liveSubscriber struct {
+	frames   []protocol.Event
+	ready    chan struct{}
+	lossless bool
+	closed   bool
+}
+
+func (l *live) subscribe(lossless bool) (*liveSubscriber, []protocol.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ch := make(chan protocol.Event, liveBuffer)
-	if l.subs == nil {
-		l.subs = map[chan protocol.Event]struct{}{}
+	s := &liveSubscriber{ready: make(chan struct{}, 1), lossless: lossless}
+	if !l.stopped {
+		if l.subs == nil {
+			l.subs = map[*liveSubscriber]struct{}{}
+		}
+		l.subs[s] = struct{}{}
 	}
-	l.subs[ch] = struct{}{}
-	return ch, slices.Clone(l.item)
+	return s, slices.Clone(l.item)
 }
 
-func (l *live) unsubscribe(ch chan protocol.Event) {
+func (l *live) unsubscribe(s *liveSubscriber) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.subs, ch)
+	delete(l.subs, s)
+	s.frames = nil
+	if !s.closed {
+		s.closed = true
+		close(s.ready)
+	}
 }
 
-// send needs l.mu.
+// send needs l.mu and never waits for a consumer.
 func (l *live) send(e protocol.Event) {
-	for ch := range l.subs {
+	for s := range l.subs {
+		if !s.lossless && len(s.frames) >= liveBuffer {
+			continue
+		}
+		s.frames = append(s.frames, e)
 		select {
-		case ch <- e:
+		case s.ready <- struct{}{}:
 		default:
 		}
 	}
+}
+
+func (a *Actor) drain(s *liveSubscriber) (*View, []protocol.Event) {
+	a.live.mu.Lock()
+	defer a.live.mu.Unlock()
+	v, frames := a.View(), s.frames
+	s.frames = nil
+	select {
+	case <-s.ready:
+	default:
+	}
+	return v, frames
 }
 
 // remember keeps e when it belongs to the item that streams. A new item
@@ -94,6 +120,7 @@ func (l *live) forget() {
 // in flight must not leave a partial item behind. It needs l.mu.
 func (l *live) stop() {
 	l.forget()
+	clear(l.subs)
 	l.stopped = true
 }
 

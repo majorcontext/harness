@@ -122,7 +122,7 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error), link trace
 	a.spawn(func() {
 		summary, usage, err := a.summarize(tracing.WithLink(r.ctx, link), req, src)
 		c.Summary, c.Index, c.Usage = summary, a.resultIndex(metas), usage
-		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+		_, _ = callRun(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
 			reply(struct{}{}, nil)
 		})

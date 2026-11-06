@@ -71,7 +71,7 @@ func (a *Actor) askTitle(text string) {
 	a.spawn(func() {
 		defer cancel()
 		answer, usage, err := turn.Ask(ctx, a.cfg.Backend, req, a.cfg.Limits)
-		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+		_, _ = callRun(context.Background(), a, func(reply func(struct{}, error)) {
 			a.titled(answer, usage, err)
 			reply(struct{}{}, nil)
 		})
