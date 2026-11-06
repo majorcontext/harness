@@ -546,7 +546,9 @@ func (m listedMsg) handle(a *actor) {
 	}
 	e.readBusy = false
 	if m.err == nil {
-		e.sv = newServer(m.client, m.tools, e.spec.ToolTimeout())
+		sv := newServer(m.client, m.tools, e.spec.ToolTimeout())
+		sv.skills, sv.skillsErr = e.sv.skills, e.sv.skillsErr
+		e.sv = sv
 		a.remember(e.name, e.sv)
 	} else if e.ctx.Err() == nil {
 		a.s.log.Warn("mcp: tool list did not refresh", "server", e.name, "err", hide(e.name, m.err))

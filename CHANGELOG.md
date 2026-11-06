@@ -8,6 +8,10 @@ Harness is pre-1.0. The runtime API, config schema, and plugin protocol may chan
 
 First tagged release.
 
+### Fixed
+
+- **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an uncovered resource bypass skill verification, regardless of URI scheme; load the skill before reading its files. Tool-list refreshes preserve skill entries and their incomplete-list error.
+
 ### Added
 
 - **Anthropic cache controls** (`config.Provider`) — `CacheFinalMessage` (`cache_final_message`) can disable the automatic final-message cache marker while keeping the selected system marker. Nil or true keeps the default behavior. Embedding and config docs show the existing five-minute TTL option.

@@ -229,12 +229,13 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 		return nil, err
 	}
 	client.Store(c)
-	ctx, cancel := context.WithTimeout(ctx, cmp.Or(time.Duration(spec.ConnectTimeoutS)*time.Second, connectTimeout))
+	bound := cmp.Or(time.Duration(spec.ConnectTimeoutS)*time.Second, connectTimeout)
+	connectCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
-	init, err := c.Initialize(ctx)
+	init, err := c.Initialize(connectCtx)
 	var tools []mcp.Tool
 	if err == nil && init.Capabilities.Tools != nil {
-		tools, err = c.ListAllTools(ctx)
+		tools, err = c.ListAllTools(connectCtx)
 	}
 	if err != nil {
 		_ = c.Close()
@@ -243,7 +244,9 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
 	sv := newServer(c, tools, spec.ToolTimeout())
 	if sv.servesSkills() {
-		sv.skills, sv.skillsErr = listSkills(ctx, c)
+		listCtx, stop := context.WithTimeout(ctx, bound)
+		defer stop()
+		sv.skills, sv.skillsErr = listSkills(listCtx, c)
 	}
 	return sv, nil
 }

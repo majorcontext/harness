@@ -92,10 +92,8 @@ func (c ServerCapabilities) SkillsSupport() (skills, directoryRead bool) {
 	return true, read
 }
 
-// ListAllSkills reads every page of skills/list until a page has no cursor or
-// repeats one; the deadline of ctx bounds a server that never stops. An entry
-// that does not decode is left out and its error joins the returned one, so
-// the caller keeps the valid entries.
+// ListAllSkills reads all pages of skills/list and returns an error for any lost entry.
+// The context deadline bounds pagination. Valid entries survive a failed request or an entry that does not decode.
 func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, error) {
 	var out []Skill
 	var bad []error
