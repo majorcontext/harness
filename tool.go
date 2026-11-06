@@ -9,6 +9,12 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// StopToolCall is a tool call and its result in a stop context.
+type StopToolCall = turn.StopToolCall
+
+// StopContext is the output of a turn through the current tool result.
+type StopContext = turn.StopContext
+
 // Tool is an embedder tool that the model can call. The runtime reads Spec
 // once, at New. Run allows concurrent calls and should return when ctx ends.
 // Cancellation stops waiting for Run and discards a late result, but cannot
