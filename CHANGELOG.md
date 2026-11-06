@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Tools start while the model streams** (`harness`) — a tool call starts when the model stream delivers it complete, not after the model call ends. Calls of `ReadOnly` tools run together; every other call runs alone, in arrival order, as in Codex. Results are still recorded in call order after the model call ends. A call that started may already have had its effect when the model call fails. Backends that own their loop are unchanged.
 - **Stop after tools** (`harness`) — `Options.StopAfterTools` lets an embedder end a turn after a successful named tool call, without another model request. All calls in the step finish first. Backends that own their loop do not use this option.
 
 - **Faster stopped-session reads** (`harness`, `store`) — stores can cache a light session checkpoint and fetch source records by sequence, so message pages need not rebuild every message body. Checkpoints use the harness module identity; a local-path dependency replacement bypasses the cache.

@@ -20,10 +20,12 @@ type stopTool struct {
 	fail    string
 	started chan string
 	release <-chan struct{}
+	// readOnly lets calls of the tool overlap.
+	readOnly bool
 }
 
 func (s stopTool) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: s.name, Description: "test tool", InputSchema: json.RawMessage(`{"type":"object"}`)}
+	return protocol.ToolSpec{Name: s.name, Description: "test tool", InputSchema: json.RawMessage(`{"type":"object"}`), ReadOnly: s.readOnly}
 }
 
 func (s stopTool) Run(ctx context.Context, _ harness.Call) (protocol.ToolResult, error) {
@@ -116,7 +118,7 @@ func TestContractRuntimeFinishesBatchBeforeStoppingAndKeepsNextTurnPrefix(t *tes
 	for _, provider := range []string{"anthropic", "openai"} {
 		t.Run(provider, func(t *testing.T) {
 			started, release := make(chan string, 2), make(chan struct{})
-			tools := []harness.Tool{stopTool{name: "finish", started: started, release: release}, stopTool{name: "other", started: started, release: release}}
+			tools := []harness.Tool{stopTool{name: "finish", started: started, release: release, readOnly: true}, stopTool{name: "other", started: started, release: release, readOnly: true}}
 			next := harnesstest.Step{Name: "next", Match: harnesstest.LastUserText("next"), Reply: harnesstest.Reply{Text: "done"}}
 			s, fake := stopRuntime(t, provider, tools, []string{"finish"}, stopCall("finish", "other"), next)
 			t.Cleanup(func() {

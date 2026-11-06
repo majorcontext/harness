@@ -11,6 +11,7 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__fast__quick",
         "mcp__gate__hold",
         "model",
         "process",
@@ -64,10 +65,9 @@
           {
             "type": "tool_call",
             "call_id": "toolu#2",
-            "name": "write_file",
+            "name": "mcp__fast__quick",
             "arguments": {
-              "content": "w",
-              "path": "w.txt"
+              "id": "q"
             }
           }
         ]
@@ -91,7 +91,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#2",
-            "content": "wrote 1 bytes to \u003cworkdir\u003e/w.txt"
+            "content": "{\"id\":\"q\"}"
           }
         ]
       }

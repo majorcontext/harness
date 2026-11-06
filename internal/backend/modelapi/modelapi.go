@@ -137,6 +137,11 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartText, Text: ev.Text})
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartReasoning, Text: ev.Text})
+		case provider.EventToolCall:
+			out.Alive()
+			if cs, ok := out.(turn.CallSink); ok && ev.ToolCall != nil {
+				cs.Call(toolCall(ev.ToolCall))
+			}
 		case provider.EventDone:
 			cut := incomplete(ev, req.AcceptCut)
 			tel := b.telemetry(req.Model, ev.Usage, ev.Prompt, ev.SubscriptionUsage)

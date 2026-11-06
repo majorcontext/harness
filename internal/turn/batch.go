@@ -14,6 +14,7 @@ const MaxParallel = 8
 // each earlier call ends before it starts, and it ends before a later call
 // starts. A tool that changes what the next call sees, such as the model,
 // the goal, or the MCP servers, is Alone. A forwarded call is Alone only when its tool is.
+// A tool whose spec is not ReadOnly runs the same way.
 type Alone interface {
 	Alone()
 }
@@ -34,61 +35,215 @@ type outcome struct {
 	ran bool
 }
 
-// batch runs the tool calls of one model call.
-type batch struct {
-	ctx, step context.Context
-	run       func(context.Context, protocol.ToolCall) protocol.ToolResult
-	join      func(context.Context, protocol.ToolCall, protocol.ToolResult) protocol.ToolResult
-	alone     func(c protocol.ToolCall) bool
-	key       func(c protocol.ToolCall) string
-	calls     []protocol.ToolCall
-	outs      []outcome
-	done      []chan struct{}
+// flight is one call of a batch, from the moment it is submitted.
+type flight struct {
+	call    protocol.ToolCall
+	out     outcome
+	done    chan struct{}
+	claimed bool
 }
 
-// runBatch runs calls, at most MaxParallel at once, and gives the result of
+// batch runs the tool calls of one model call. A call starts when it is
+// submitted, which is when the model stream delivers it, or at the end of the
+// step for a call that the stream did not deliver. Calls are ordered by
+// submission: a ReadOnly call waits only for the last call that is not
+// ReadOnly or Alone, and runs beside other ReadOnly calls, at most MaxParallel
+// at once. Any other call waits for every earlier call and holds the batch
+// alone until it ends.
+type batch struct {
+	ctx, step context.Context
+	stop      context.CancelCauseFunc
+	t         runner
+	slots     chan struct{}
+	wg        sync.WaitGroup
+
+	mu      sync.Mutex
+	flights map[string]*flight
+	// excl ends with the last exclusive call; reads are the read-only calls since.
+	excl  <-chan struct{}
+	reads []<-chan struct{}
+	tail  map[string]chan struct{}
+}
+
+func newBatch(ctx, step context.Context, t runner) *batch {
+	wctx, stop := context.WithCancelCause(ctx)
+	return &batch{ctx: wctx, step: step, stop: stop, t: t, slots: make(chan struct{}, MaxParallel),
+		flights: map[string]*flight{}, tail: map[string]chan struct{}{}}
+}
+
+// readOnly reports whether c may run beside other read-only calls.
+func (t runner) readOnly(c protocol.ToolCall) (ro bool) {
+	defer func() {
+		if recover() != nil {
+			ro = false
+		}
+	}()
+	if t.alone(c) {
+		return false
+	}
+	tools, c := t.target(c)
+	tool := findIn(tools, c.Name)
+	return tool != nil && tool.Spec().ReadOnly
+}
+
+// Late is a Tool whose call starts only when its model call has ended, because
+// its result reads the state that the end of the model call changes, such as the usage.
+type Late interface {
+	Late()
+}
+
+// late reports whether c waits for the end of the model call.
+func (t runner) late(c protocol.ToolCall) (late bool) {
+	defer func() {
+		if recover() != nil {
+			late = true
+		}
+	}()
+	tools, c := t.target(c)
+	_, late = findIn(tools, c.Name).(Late)
+	return late
+}
+
+// early reports whether c may start before the step ends. A call to the
+// question tool and a call to a Late tool wait for the end of the step. A call
+// with no ID cannot be matched with its item.
+func (b *batch) early(c protocol.ToolCall) bool {
+	return c.ID != "" && !(c.Name == AskTool && b.t.find(AskTool) != nil) && !b.t.late(c)
+}
+
+// Call submits c, which the model stream delivered complete. It starts c at
+// once when its turn comes under the rules of batch.
+func (b *batch) Call(c protocol.ToolCall) {
+	if b.early(c) {
+		b.mu.Lock()
+		if _, ok := b.flights[c.ID]; !ok {
+			b.submit(c)
+		}
+		b.mu.Unlock()
+	}
+}
+
+// submit starts c. The caller holds b.mu.
+func (b *batch) submit(c protocol.ToolCall) *flight {
+	f := &flight{call: c, done: make(chan struct{})}
+	if c.ID != "" {
+		b.flights[c.ID] = f
+	}
+	var wait []<-chan struct{}
+	if b.excl != nil {
+		wait = append(wait, b.excl)
+	}
+	ro := b.t.readOnly(c)
+	if ro {
+		b.reads = append(b.reads, f.done)
+	} else {
+		wait = append(wait, b.reads...)
+		b.excl, b.reads = f.done, nil
+	}
+	var prev <-chan struct{}
+	var next chan struct{}
+	if k := b.t.key(c); k != "" {
+		prev, next = b.tail[k], make(chan struct{})
+		b.tail[k] = next
+	}
+	b.wg.Go(func() {
+		if next != nil {
+			defer close(next)
+		}
+		defer close(f.done)
+		if prev != nil {
+			<-prev
+		}
+		for _, w := range wait {
+			<-w
+		}
+		if ro {
+			b.slots <- struct{}{}
+			defer func() { <-b.slots }()
+		}
+		b.exec(f)
+	})
+	return f
+}
+
+// exec runs f unless the turn ended, and turns a panic into an error
+// result, so that every call has one result.
+func (b *batch) exec(f *flight) {
+	if b.step.Err() != nil || b.ctx.Err() != nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			f.out = outcome{protocol.ToolResult{Text: toolPanicked, IsError: true}, true}
+		}
+	}()
+	f.out = outcome{b.t.run(b.ctx, f.call), true}
+}
+
+// started reports whether any call has started or is waiting to start.
+func (b *batch) started() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.flights) > 0
+}
+
+// abort cancels every call and waits for them to end. It discards their results.
+// A nil cause or a nil batch does nothing.
+func (b *batch) abort(cause error) {
+	if b == nil || cause == nil {
+		return
+	}
+	b.stop(cause)
+	b.wg.Wait()
+}
+
+// runBatch runs calls, at most MaxParallel read-only calls at once, and gives the result of
 // each call that ran to emit in call order as soon as it and every earlier
-// call have ended, after the Join of the hooks. When ctx ends, every running
+// call have ended, after the Join of the hooks. A call that the stream already
+// started is not started again. When ctx ends, every running
 // call is canceled and none starts; the result of each call that ran is still
 // recorded in call order, and the cause is returned. When only step ends, running calls finish, no new call starts, and
 // the cause of step is returned unless every call ran. It returns after
 // every call it started has ended.
-func runBatch(ctx, step context.Context, t runner, calls []protocol.ToolCall, emit func(i int, r protocol.ToolResult) error) error {
-	wctx, stop := context.WithCancelCause(ctx)
-	defer stop(nil)
-	b := &batch{ctx: wctx, step: step, run: t.run, join: t.join, alone: t.alone, key: t.key, calls: calls,
-		outs: make([]outcome, len(calls)), done: make([]chan struct{}, len(calls))}
-	for i := range b.done {
-		b.done[i] = make(chan struct{})
+func (b *batch) run(ctx context.Context, calls []protocol.ToolCall, emit func(i int, r protocol.ToolResult) error) error {
+	defer b.stop(nil)
+	fs := make([]*flight, len(calls))
+	b.mu.Lock()
+	for i, c := range calls {
+		f := b.flights[c.ID]
+		if f == nil || f.claimed {
+			f = b.submit(c)
+		}
+		f.claimed = true
+		fs[i] = f
 	}
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		b.schedule()
-	}()
-	err := b.collect(ctx, emit)
+	b.mu.Unlock()
+	err := b.collect(ctx, fs, emit)
 	if err != nil {
-		stop(err)
+		b.stop(err)
 	}
-	<-finished
+	b.wg.Wait()
 	if err != nil {
 		return err
 	}
-	for _, o := range b.outs {
-		if !o.ran {
-			return context.Cause(step)
+	for _, f := range fs {
+		if !f.out.ran {
+			return context.Cause(b.step)
 		}
 	}
 	return nil
 }
 
-func (b *batch) collect(ctx context.Context, emit func(i int, r protocol.ToolResult) error) error {
-	for i := range b.calls {
-		<-b.done[i]
-		if !b.outs[i].ran {
+func (b *batch) collect(ctx context.Context, fs []*flight, emit func(i int, r protocol.ToolResult) error) error {
+	for i, f := range fs {
+		<-f.done
+		if !f.out.ran {
 			continue
 		}
-		if err := emit(i, b.join(ctx, b.calls[i], b.outs[i].res)); err != nil {
+		if err := emit(i, b.t.join(ctx, f.call, f.out.res)); err != nil {
 			return err
 		}
 	}
@@ -96,54 +251,4 @@ func (b *batch) collect(ctx context.Context, emit func(i int, r protocol.ToolRes
 		return context.Cause(ctx)
 	}
 	return nil
-}
-
-// schedule starts every call and closes the done channel of each. A call
-// that is Alone waits for the calls before it. A call with a key waits for
-// the call before it with the same key, then for a free slot, so a call that
-// cannot start holds no slot.
-func (b *batch) schedule() {
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, min(MaxParallel, len(b.calls)))
-	tail := map[string]chan struct{}{}
-	for i, c := range b.calls {
-		if b.alone(c) {
-			wg.Wait()
-			b.exec(i)
-			continue
-		}
-		var prev <-chan struct{}
-		var next chan struct{}
-		if k := b.key(c); k != "" {
-			prev, next = tail[k], make(chan struct{})
-			tail[k] = next
-		}
-		wg.Go(func() {
-			if next != nil {
-				defer close(next)
-			}
-			if prev != nil {
-				<-prev
-			}
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			b.exec(i)
-		})
-	}
-	wg.Wait()
-}
-
-// exec runs call i unless the turn ended, and turns a panic into an error
-// result, so that every call has one result.
-func (b *batch) exec(i int) {
-	defer close(b.done[i])
-	if b.step.Err() != nil || b.ctx.Err() != nil {
-		return
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			b.outs[i] = outcome{protocol.ToolResult{Text: toolPanicked, IsError: true}, true}
-		}
-	}()
-	b.outs[i] = outcome{b.run(b.ctx, b.calls[i]), true}
 }
