@@ -293,6 +293,9 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
 	}
+	if rep.EndBlock && !s.block(r.Context(), name+":end") {
+		return
+	}
 	e.event("message_delta", obj{"type": "message_delta", "delta": obj{"stop_reason": stop}, "usage": usageDelta(usage, rep.WebSearch)})
 	e.event("message_stop", obj{"type": "message_stop"})
 }

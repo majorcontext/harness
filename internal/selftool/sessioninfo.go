@@ -169,6 +169,9 @@ func (*SessionInfo) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: SessionInfoName, Description: sessionInfoDescription, InputSchema: json.RawMessage(sessionInfoSchema), ReadOnly: true}
 }
 
+// Late makes the call wait for the end of the model call, so that the report holds the usage of that call.
+func (*SessionInfo) Late() {}
+
 // Run reports the session.
 func (t *SessionInfo) Run(_ context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
 	s, ok := t.host.Session(t.session)

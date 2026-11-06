@@ -100,10 +100,9 @@ func TestContractProviderMaxTokens(t *testing.T) {
 			actions: oneTurn(getSession{as: "a"}),
 		},
 		{
-			name: "max_tokens_cut_tool_call_is_retried_without_running",
+			name: "max_tokens_cut_after_a_tool_call_started_is_not_retried",
 			model: []harnesstest.Step{
 				{Name: "cut", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "write_file", Input: map[string]any{"path": "cut.txt", "content": "abc"}}}, StopReason: "max_tokens"}},
-				{Name: "whole", Reply: harnesstest.Reply{Text: "whole answer"}},
 			},
 			actions: oneTurn(getSession{as: "a"}),
 		},

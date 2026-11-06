@@ -115,6 +115,7 @@ func TestContractDurabilityHandoff(t *testing.T) {
 				create{as: "a"},
 				submit{as: "a", text: "run"},
 				awaitFile{path: "tool-running"},
+				awaitCall{as: "a", callID: "toolu_next"},
 				restart{},
 				waitIdle{as: "a"},
 				getSession{as: "a"},

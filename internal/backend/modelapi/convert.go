@@ -97,15 +97,24 @@ func fromMessage(m *message.Message) protocol.LogMessage {
 				out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartReasoning, Text: p.Text, ProviderData: p.ProviderData})
 			}
 		case *message.ToolCall:
-			args := p.Arguments
-			// A model can send arguments that are not valid JSON. The wire sends nil as {}.
-			if !json.Valid(args) {
-				args = nil
-			}
+			args := validArguments(p.Arguments)
 			out.Parts = append(out.Parts, protocol.LogPart{Type: protocol.LogPartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args, ArgumentsText: argumentsText(args), ProviderData: p.ProviderData})
 		}
 	}
 	return out
+}
+
+// validArguments returns args, or nil when the model sent arguments that are not valid JSON. The wire sends nil as {}.
+func validArguments(args json.RawMessage) json.RawMessage {
+	if !json.Valid(args) {
+		return nil
+	}
+	return args
+}
+
+// toolCall is the call that a Sink runs for p, with the arguments that the item of p records.
+func toolCall(p *message.ToolCall) protocol.ToolCall {
+	return protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: validArguments(p.Arguments)}
 }
 
 // argumentsText returns args when the log encoding of args would change its bytes, else "". A Responses or

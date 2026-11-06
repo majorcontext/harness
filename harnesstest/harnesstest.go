@@ -52,6 +52,9 @@ type Reply struct {
 	// Block waits for Release or client cancel: after the first content delta on the Anthropic and chat servers, after
 	// response.created on the Responses server. A Repeat step blocks only until its first Release.
 	Block bool
+	// EndBlock makes the Anthropic server wait, after it streams every content block, for Release of the step name plus ":end"
+	// before it sends the end of the message.
+	EndBlock bool
 	// Reasoning is streamed before Text: as reasoning_content deltas by the
 	// chat-completions server (NewChat), and as a signed thinking block by the
 	// Anthropic server.

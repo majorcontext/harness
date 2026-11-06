@@ -49,6 +49,6 @@ func TestContractToolCallCancel(t *testing.T) {
 		name:  "interrupt_stops_a_running_bash_call",
 		model: toolChain(ftBash("touch tool-running; sleep 600"))[:1],
 		actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, awaitFile{path: "tool-running"},
-			interrupt{as: "a"}, waitIdle{as: "a"}},
+			awaitCall{as: "a", callID: "toolu_1"}, interrupt{as: "a"}, waitIdle{as: "a"}},
 	}})
 }

@@ -605,7 +605,7 @@ var runtimeRows = withRows(checkpointRows, deferredModelRows, mcpLiveRows, plugi
 	"restart_lets_a_running_tool_finish_and_cuts_the_next_alone_call":                       reGolden(specView, specHandoff),
 	"bifrost_max_tokens_cut_response_is_retried":                                            sameAsServe(),
 	"max_tokens_cut_response_fails_the_turn_after_stream_max_retries":                       sameAsServe(),
-	"max_tokens_cut_tool_call_is_retried_without_running":                                   sameAsServe(),
+	"max_tokens_cut_after_a_tool_call_started_is_not_retried":                               sameAsServe(),
 	"provider_5xx_is_retried_by_the_request_before_the_turn_retries":                        sameAsServe(),
 	"request_and_stream_retries_multiply":                                                   sameAsServe(),
 	"provider_429_is_not_retried_by_the_request":                                            sameAsServe(),

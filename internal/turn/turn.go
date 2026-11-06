@@ -300,8 +300,9 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			call.History = req.History
 		}
 		t := describe(&call, ts, to, caps.OwnsLoop, lim.Trace.Scope(ctx))
+		bt := s.startEarly(ctx, step, t, caps.OwnsLoop)
 		err = callModel(step, b, call, s, lim, caps.OwnsLoop)
-		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
+		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && s.fresh() {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
 				req.History = h
 				continue
@@ -316,7 +317,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		req.History = append(req.History, s.items...)
-		if stop, err := runStepTools(ctx, step, t, to, calls, lim.StopAfterTools, record); stop || err != nil {
+		if stop, err := runStepTools(ctx, bt, t, to, calls, lim.StopAfterTools, record); stop || err != nil {
 			return err
 		}
 		if req.MaxSteps > 0 && steps >= req.MaxSteps {
@@ -330,7 +331,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	}
 }
 
-func runStepTools(ctx, step context.Context, t runner, to Sink, calls []protocol.ToolCall, stopNames []string, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
+func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []protocol.ToolCall, stopNames []string, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
 	asks, calls := splitAsks(t, calls)
 	stop := false
 	store := func(c protocol.ToolCall, r protocol.ToolResult) error {
@@ -340,10 +341,10 @@ func runStepTools(ctx, step context.Context, t runner, to Sink, calls []protocol
 		stop = stop || (!r.IsError && slices.Contains(stopNames, c.Name))
 		return nil
 	}
-	if err := runBatch(ctx, step, t, calls, func(i int, r protocol.ToolResult) error { return store(calls[i], r) }); err != nil {
+	if err := bt.run(ctx, calls, func(i int, r protocol.ToolResult) error { return store(calls[i], r) }); err != nil {
 		return false, err
 	}
-	if opened, err := openAsk(ctx, step, t, to, asks, store); opened || err != nil {
+	if opened, err := openAsk(ctx, bt.step, t, to, asks, store); opened || err != nil {
 		return opened, err
 	}
 	return stop, nil
@@ -354,10 +355,13 @@ func runStepTools(ctx, step context.Context, t runner, to Sink, calls []protocol
 // the advice of the provider, else backoff.Delay.
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits, ownsLoop bool) (err error) {
 	ctx, s.rec = begin(ctx, lim, b, req, ownsLoop)
-	defer func() { s.rec.end(req, s.items, err) }()
+	defer func() {
+		s.rec.end(req, s.items, err)
+		s.early.abort(err)
+	}()
 	err = watch(ctx, b, req, s, lim.Idle)
 	s.rec.attempt(1, err)
-	for n := 0; n < lim.Retries && len(s.items) == 0 && retryable(err); n++ {
+	for n := 0; n < lim.Retries && s.fresh() && retryable(err); n++ {
 		s.Discard("")
 		if err = s.wait(ctx, n, err); err == nil {
 			s.rec.retry(n + 1)
@@ -402,6 +406,13 @@ func (w watched) Delta(itemID string, d Delta) {
 }
 
 func (w watched) Alive() { w.alive() }
+
+func (w watched) Call(c protocol.ToolCall) {
+	w.alive()
+	if cs, ok := w.Sink.(CallSink); ok {
+		cs.Call(c)
+	}
+}
 
 func (s *sink) wait(ctx context.Context, attempt int, cause error) error {
 	d := retryDelay(attempt+1, cause)
@@ -463,6 +474,36 @@ type sink struct {
 	item string
 	// rec reports the model call in flight.
 	rec *recorder
+	// early starts each tool call when the stream delivers it. nil: none starts early.
+	early *batch
+}
+
+// CallSink is a Sink that takes each complete tool call of the model stream
+// when it arrives, before the model call ends. A backend that streams
+// complete tool calls reports them to a Sink that implements it, in addition
+// to the assistant item that carries them at the end.
+type CallSink interface {
+	Call(c protocol.ToolCall)
+}
+
+// Call starts c at once, unless its turn must wait. The item that carries c still comes at the end of the model call.
+func (s *sink) Call(c protocol.ToolCall) {
+	if s.early != nil {
+		s.early.Call(c)
+	}
+}
+
+// startEarly returns the batch of the model call, where tool calls start as the stream delivers them. A backend that owns the loop has none.
+func (s *sink) startEarly(ctx, step context.Context, t runner, ownsLoop bool) *batch {
+	if !ownsLoop {
+		s.early = newBatch(ctx, step, t)
+	}
+	return s.early
+}
+
+// fresh reports whether the model call has recorded nothing and started no tool, so that it may run again.
+func (s *sink) fresh() bool {
+	return len(s.items) == 0 && (s.early == nil || !s.early.started())
 }
 
 // Delta streams d into the next item. The backend item ID is not used: one
