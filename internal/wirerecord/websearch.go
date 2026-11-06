@@ -86,7 +86,7 @@ func recordCodexSearch(r *recorder, _ string) error {
 		return err
 	}
 	src := codexauth.NewSource(codexauth.SourceOptions{Path: filepath.Join(home, ".harness", "auth", "codex.json")})
-	hc := &http.Client{Transport: codexauth.NewTransport(src, nil, codexResponse), Timeout: 3 * time.Minute}
+	hc := &http.Client{Transport: codexauth.NewTransport(src, nil, nil, codexResponse), Timeout: 3 * time.Minute}
 	raw, err := json.Marshal(obj{"model": codexSearch, "instructions": "You are a helpful assistant.", "stream": true, "store": false,
 		"include": []string{"reasoning.encrypted_content"}, "tools": []obj{{"type": "web_search"}}, "tool_choice": "auto", "parallel_tool_calls": true,
 		"input": []obj{userMessage(searchPrompt)}})

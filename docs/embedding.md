@@ -37,6 +37,7 @@ func main() {
 	}
 	rt, err := harness.New(harness.Options{
 		Store:   store.NewMemStore(),
+		DisableRetryAfterOutput: true,
 		WorkDir: ".",
 		Getenv:  os.Getenv,
 		Config: config.Config{
@@ -53,20 +54,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	turn, err := s.Prompt(ctx, protocol.Input{
+	turn, err := s.PromptStream(ctx, protocol.Input{
 		ID:    "prompt-1",
 		Parts: []protocol.Part{{Type: protocol.PartText, Text: "List the files in this directory."}},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer turn.Close()
 	for e, err := range turn.Events(ctx) {
 		if err != nil {
 			log.Fatal(err)
 		}
 		if e.Kind == protocol.KindItemDelta {
 			var f protocol.ItemFrame
-			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
+			if err := json.Unmarshal(e.Data, &f); err != nil {
+				log.Fatal(err)
+			}
+			if f.Type == "text" {
 				fmt.Print(f.Text)
 			}
 		}
@@ -104,6 +109,132 @@ access. A failed turn does not end `Events` with an error, so check
 The Go API keeps the built-in default model, `anthropic/claude-fable-5`, and does
 not look for a subscription login. An embedder that wants the subscription
 default sets `Config.SubscriptionDefault`.
+
+## Stream text without loss
+
+Use `Session.PromptStream` for an append-only consumer, such as the AI SDK.
+It registers an independent lossless queue **before** it admits the input.
+Reading `Stream.Events` can start after the model has streamed, or after the
+whole turn has ended: all frames of that input's turn remain in order. The
+queue has no size limit, so unread output uses memory until consumed or closed.
+The actor and other subscribers never wait for this reader.
+
+`PromptStream` uses queue delivery, even when `Input.Delivery` is empty. It
+rejects steer delivery and typed control commands with `ErrInvalidRequest`.
+Control commands are rejected before dispatch or recording; ordinary typed
+prompts can still start model turns. If a prior turn runs, its
+frames are not part of the new stream. Use a new input ID: a repeated identical
+ID returns `ErrInvalidRequest`, because earlier ephemeral frames cannot be
+recovered. A conflicting repeat still returns `ErrInputConflict`. Use the
+original `Stream`, or the durable log, to read an earlier input.
+
+Always `defer stream.Close()` after a successful call, even if you will not
+iterate. `Close` is idempotent and safe for concurrent use. It releases queued
+frames without interrupting the turn; use `stream.Cancel(ctx)` to stop the
+input. Each stream permits one `Events` iteration. Completion, an early break,
+or cancellation of either the prompt context or iterator context closes that
+subscription. The context passed to `PromptStream` bounds the whole input, not just
+admission. After admission, canceling it withdraws a queued input or interrupts
+its running turn, including cancellation of the context passed to custom tools.
+`Prompt` keeps its admission-only context behavior. A distinct context passed
+to `Stream.Events` controls only that subscription. A canceled prompt context before the call admits no input. During admission,
+an input can commit before the call returns a context error. The actor installs
+the cancellation binding only for that new admission, before replying, so the
+committed input is still canceled; a repeated earlier input is not. Use the
+input ID to inspect the durable outcome. Keep the prompt context alive for the
+life of the turn. The inherited `Wait` reads
+the outcome without consuming or closing the lossless queue.
+
+The prompt example uses this API. It prints every text delta without waiting
+for completion. Delivery preserves `item.started`, all `item.delta` frames,
+and `item.discarded` in order, before the durable record that follows them.
+It does not synthesize deltas from completed messages. A retry can discard an
+item after some text was streamed. An append-only display cannot retract that
+text: preserve the item lifecycle in your UI, or mark discarded attempts rather
+than showing their text as part of the final answer.
+
+For an append-only client, also set `Options.DisableRetryAfterOutput: true`,
+as the example does. Its default is false. In each harness-loop model call,
+the first output delta disables recovery resends of **that call**, including
+output-limit, truncated-stream, and context-overflow recovery. Text and reasoning
+deltas count as output; partial tool-argument bytes do not. A failed call that
+already streamed output
+fails the turn rather than discarding that output and trying the call again.
+Before its first output, a call keeps its normal retry budget. A later ordinary
+model call starts with retries enabled, even if an earlier step produced text.
+Provider pause/resume continuation remains allowed: it continues the response
+rather than resending the failed call. The option does not change a delegated
+backend's own retry policy. Cancellation still interrupts the turn. Partial
+output already read from the stream remains available to the caller, but
+`TurnResult` has no partial-text field; always check its stop reason and error.
+
+### Reconcile previews and durable replay
+
+Existing `Prompt`, `Turn.Events`, and `Session.Events` keep their bounded,
+best-effort live delivery. A slow event consumer can fill its buffer. The
+runtime then drops ephemeral frames without slowing the model. It never drops
+durable records. `item.completed` contains the full message, including text
+absent from a preview. Completed-item reconciliation is a backstop for these
+streams and for reconnects, not the lossless streaming API.
+
+Keep display state by `item_id`. Reset a preview on `item.started`, remove it
+on `item.discarded`, and **replace**, not append, its text on `item.completed`.
+Completion can arrive without a start or delta. Deltas can have gaps in the
+middle, so appending a missing suffix is not a general repair.
+
+This example uses `strings` in addition to the imports above. `items` represents
+an application's display state. Render the changed entry after each event:
+
+```go
+items := map[string]string{}
+var cursor uint64
+for e, err := range s.Events(ctx, cursor) {
+    if err != nil {
+        log.Fatal(err)
+    }
+    switch e.Kind {
+    case protocol.KindItemStarted, protocol.KindItemDelta, protocol.KindItemDiscarded:
+        var f protocol.ItemFrame
+        if err := json.Unmarshal(e.Data, &f); err != nil {
+            log.Fatal(err)
+        }
+        switch e.Kind {
+        case protocol.KindItemStarted:
+            items[f.ItemID] = ""
+        case protocol.KindItemDelta:
+            if f.Type == "text" {
+                items[f.ItemID] += f.Text
+            }
+        case protocol.KindItemDiscarded:
+            delete(items, f.ItemID)
+        }
+    case "item.completed":
+        var item protocol.ItemCompleted
+        if err := json.Unmarshal(e.Data, &item); err != nil {
+            log.Fatal(err)
+        }
+        var full strings.Builder
+        for _, p := range item.Message.Parts {
+            if p.Type == protocol.PartText {
+                full.WriteString(p.Text)
+            }
+        }
+        items[item.ItemID] = full.String()
+    }
+    if !e.Ephemeral {
+        cursor = e.Seq
+    }
+}
+```
+
+Save the durable cursor **after** applying the record. Resume with
+`s.Events(ctx, cursor)`. Never advance it from an ephemeral frame: its `Seq`
+only places that preview after a durable record. To survive a process restart,
+save completed item state and the cursor together, or rebuild them by replaying
+from zero. `harness.ReadEvents(ctx, st, s.ID(), cursor)` reads only durable
+records through the stored head; it does not follow a running turn. A replayed
+completion replaces the same item by ID and does not duplicate its text.
+The lossless guarantee covers completed items, not uncompleted previews.
 
 ## Per-session system blocks
 
@@ -170,15 +301,16 @@ Every call in the step finishes and its result is recorded before the turn compl
 Prompt the same session again with a new input ID:
 
 ```go
-turn, err = s.Prompt(ctx, protocol.Input{
+turn, err = s.PromptStream(ctx, protocol.Input{
 	ID:    "prompt-2",
 	Parts: []protocol.Part{{Type: protocol.PartText, Text: "Which of those files is the largest?"}},
 })
 ```
 
-Then read its events and call `turn.Wait` as before. The input ID makes a retry
-safe: the same ID and text returns the earlier turn, and the same ID with other
-text fails with `harness.ErrInputConflict`.
+Then close the new stream after reading its events and calling `turn.Wait`.
+Use a new input ID for each `PromptStream`. For idempotent admission without a
+lossless live stream, `Prompt` with the same ID and text returns the earlier
+turn; the same ID with other text fails with `harness.ErrInputConflict`.
 
 ## Keep sessions across restarts
 

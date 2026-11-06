@@ -30,7 +30,7 @@ func recordCodexModels(r *recorder, _ string) error {
 		return err
 	}
 	src := codexauth.NewSource(codexauth.SourceOptions{Path: filepath.Join(home, ".harness", "auth", "codex.json")})
-	hc := &http.Client{Transport: codexauth.NewTransport(src, nil, url), Timeout: time.Minute}
+	hc := &http.Client{Transport: codexauth.NewTransport(src, nil, nil, url), Timeout: time.Minute}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

@@ -64,6 +64,19 @@ func declaresPermanent(err error) bool {
 	return errors.As(err, &p) && p.Permanent()
 }
 
+type retryPermissionKey struct{}
+
+// WithRetryPermission makes allowed the retry decision for each request under ctx.
+func WithRetryPermission(ctx context.Context, allowed func() bool) context.Context {
+	return context.WithValue(ctx, retryPermissionKey{}, allowed)
+}
+
+// RetriesAllowed reports whether the call under ctx may send a failed request again.
+func RetriesAllowed(ctx context.Context) bool {
+	allowed, _ := ctx.Value(retryPermissionKey{}).(func() bool)
+	return allowed == nil || allowed()
+}
+
 // Do sends req on hc. It sends the request again, at most retries times, after
 // a 5xx status or a transport error, and waits backoff.Delay. A 429 is not sent
 // again, and neither is a 5xx with a Retry-After header: the turn waits for that
@@ -80,9 +93,9 @@ func Do(ctx context.Context, hc *http.Client, req *http.Request, retries int) (*
 			return nil, err
 		case err != nil && declaresPermanent(err):
 			return nil, MarkPermanent(PermanentCause(err))
-		case err != nil && n > retries:
+		case err != nil && (n > retries || !RetriesAllowed(ctx)):
 			return nil, MarkRetryable(err, RetryableConnectionFailed)
-		case err == nil && (resp.StatusCode < 500 || n > retries || advised(resp)):
+		case err == nil && (resp.StatusCode < 500 || n > retries || advised(resp) || !RetriesAllowed(ctx)):
 			return resp, nil
 		}
 		if err == nil {

@@ -85,7 +85,7 @@ func detach(s protocol.Session) protocol.Session {
 // records command.recorded instead of an input, and the receipt carries its
 // status; see docs/architecture.md, Inputs.
 func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error) {
-	adm, err := s.admitInput(ctx, in)
+	adm, err := s.admitInput(ctx, in, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error) 
 // runtime. It reads nothing until a method of the Turn runs.
 func (s *Session) Turn(a protocol.Admitted) *Turn { return &Turn{s: s, adm: a} }
 
-func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
+func (s *Session) admitInput(ctx context.Context, in protocol.Input, admitted func(protocol.Admitted)) (protocol.Admitted, error) {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
 		return protocol.Admitted{}, invalidInput(in.ID, err)
 	}
@@ -109,6 +109,9 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 			return protocol.Admitted{}, err
 		}
 		if p != nil {
+			if admitted != nil {
+				return protocol.Admitted{}, fmt.Errorf("%w: PromptStream does not accept control commands", ErrInvalidRequest)
+			}
 			return s.command(ctx, p)
 		}
 		in = next
@@ -125,7 +128,15 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input) (protocol.A
 			return protocol.Admitted{}, err
 		}
 	}
-	seq, repeat, err := s.a.Submit(ctx, ev, in.ExpectedTurnID)
+	var seq uint64
+	var repeat bool
+	if admitted == nil {
+		seq, repeat, err = s.a.Submit(ctx, ev, in.ExpectedTurnID)
+	} else {
+		seq, repeat, err = s.a.SubmitBound(ctx, ev, in.ExpectedTurnID, func(seq uint64) {
+			admitted(protocol.Admitted{InputID: in.ID, Seq: seq})
+		})
+	}
 	if err != nil {
 		return protocol.Admitted{}, err
 	}
