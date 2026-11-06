@@ -130,7 +130,6 @@ func rowIgnoredToolCancellation(t *testing.T, mode string) {
 	if err != nil || after != before {
 		t.Fatalf("late result changed log: %d -> %d, %v", before, after, err)
 	}
-	checkKeptToolResult(t, st, s.ID())
 	checkSyntheticCancellation(t, st, s.ID())
 	if stream != nil && ending {
 		checkEndedStream(t, ctx, stream)
@@ -283,27 +282,15 @@ func awaitKeptToolResult(t *testing.T, ctx context.Context, s *harness.Session) 
 	t.Fatal("completed tool result was not recorded")
 }
 
-func checkKeptToolResult(t *testing.T, st harness.Store, id string) {
-	t.Helper()
-	records, err := st.Read(t.Context(), id, 0, 1000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var log strings.Builder
-	for _, record := range records {
-		log.Write(record.Data)
-	}
-	if !strings.Contains(log.String(), "completed tool result") || strings.Contains(log.String(), "late tool result") {
-		t.Fatal("cancellation did not preserve the completed result and discard the late result")
-	}
-}
-
 func checkSyntheticCancellation(t *testing.T, st harness.Store, id string) {
 	t.Helper()
-	acceptedError := false
+	kept, acceptedError, canceled := false, false, false
 	for e, err := range harness.ReadEvents(t.Context(), st, id, 0) {
 		if err != nil {
 			t.Fatal(err)
+		}
+		if strings.Contains(string(e.Data), "late tool result") {
+			t.Fatal("cancellation recorded a late tool result")
 		}
 		if e.Kind != protocol.KindItemCompleted {
 			continue
@@ -316,21 +303,19 @@ func checkSyntheticCancellation(t *testing.T, st harness.Store, id string) {
 			if part.Type != protocol.LogPartToolResult {
 				continue
 			}
-			if part.CallID == "call_done_error" {
+			switch part.CallID {
+			case "call_done":
+				kept = !part.IsError && part.Text == "completed tool result"
+			case "call_done_error":
 				acceptedError = part.IsError && part.Text == "accepted callback error"
-			}
-			if part.CallID == "call_1" {
-				if !acceptedError {
-					t.Error("cancellation did not preserve an accepted callback error")
-				}
-				if !part.IsError || part.Text != context.Canceled.Error() {
-					t.Fatalf("synthetic cancellation result = %+v, want ctx.Err()", part)
-				}
-				return
+			case "call_1":
+				canceled = kept && acceptedError && part.IsError && part.Text == context.Canceled.Error()
 			}
 		}
 	}
-	t.Fatal("synthetic cancellation result was not recorded")
+	if !kept || !acceptedError || !canceled {
+		t.Fatalf("tool results: kept=%t, accepted error=%t, synthetic cancellation=%t", kept, acceptedError, canceled)
+	}
 }
 
 type heldCanceledTransport struct {

@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"runtime"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
@@ -130,12 +128,23 @@ func rowCloseReturnsAtTheEndOfItsContextWhileAToolIgnoresIt(t *testing.T) {
 }
 
 func rowALaterCloseReturnsAtTheEndOfItsOwnContext(t *testing.T) {
-	r, tool, _ := stuckRuntime(t, nil)
-	first, cancelFirst := context.WithCancelCause(t.Context())
+	owner := heldReleaseOwner{harness.NewLocalOwner(1), make(chan struct{}, 1), make(chan struct{})}
+	r := lifetimeRuntime(t, owner)
+	lifetimeSession(t, r)
+	t.Cleanup(func() { close(owner.release) })
+	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
+	defer cancel()
+	first, cancelFirst := context.WithCancelCause(ctx)
+	defer cancelFirst(nil)
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- r.Close(first) }()
-	awaitDraining(t, r)
-	second, cancelSecond := context.WithCancelCause(t.Context())
+	select {
+	case <-owner.started:
+	case <-ctx.Done():
+		t.Fatal("Close did not reach ownership release")
+	}
+	second, cancelSecond := context.WithCancelCause(ctx)
+	defer cancelSecond(nil)
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- r.Close(second) }()
 	cancelSecond(errLaterCause)
@@ -147,23 +156,9 @@ func rowALaterCloseReturnsAtTheEndOfItsOwnContext(t *testing.T) {
 	if !errors.Is(want, errStopWaiting) {
 		t.Fatalf("first Close = %v, want the cause %v", want, errStopWaiting)
 	}
-	close(tool.release)
 	if got := r.Close(t.Context()); got == nil || got.Error() != want.Error() {
 		t.Errorf("third Close = %v, want the first result %v", got, want)
 	}
-}
-
-// awaitDraining returns once a Close has started: Open then fails with ErrDraining.
-func awaitDraining(t *testing.T, r *harness.Runtime) {
-	t.Helper()
-	deadline := time.Now().Add(waitBound)
-	for time.Now().Before(deadline) {
-		if _, err := r.Open(t.Context(), "other"); errors.Is(err, harness.ErrDraining) {
-			return
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("Close did not start")
 }
 
 var (
