@@ -328,6 +328,9 @@ func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) ru
 	case ts.Prompt != "":
 		call.Instructions += "\n\n" + ts.Prompt
 	}
+	if !all && call.SystemBlocks != nil && ts.Prompt != "" {
+		call.SystemBlocks = append(slices.Clone(call.SystemBlocks), ts.Prompt)
+	}
 	call.MCPInstructions = ts.MCPInstructions
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))

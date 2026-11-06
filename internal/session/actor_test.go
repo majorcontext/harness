@@ -66,7 +66,7 @@ func actorConfig(t *testing.T, log Storage, own Ownership, b turn.Backend) Confi
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return Config{ID: "s1", Store: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() },
-		Prompt: func() string { return "" }}
+		Prompt: func() []string { return nil }}
 }
 
 func firstInput() *protocol.InputAdmitted {

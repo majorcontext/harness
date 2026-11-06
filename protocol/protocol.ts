@@ -138,6 +138,8 @@ export interface CreateSession {
   origin?: string;
   allowed_tools?: string[];
   max_steps?: number;
+  system_blocks?: string[];
+  system_cache_breakpoint?: number;
 }
 
 export interface Error {
@@ -582,6 +584,8 @@ export interface SessionCreated {
   work_dir?: string;
   allowed_tools?: string[];
   max_steps?: number;
+  system_blocks?: string[];
+  system_cache_breakpoint?: number;
 }
 
 export interface SessionPage {

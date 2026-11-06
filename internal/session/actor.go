@@ -147,7 +147,11 @@ type Config struct {
 	// result out of the history, after the hooks of Source.
 	Retain bool
 	// Prompt returns the system prompt of a turn, when the turn starts.
-	Prompt func() string
+	Prompt func() []string
+	// SystemCacheBreakpoint selects the system block to cache; nil uses the provider default.
+	SystemCacheBreakpoint *int
+	// SystemOverride says that the caller supplied the session prompt.
+	SystemOverride bool
 	// Skills is the skill segment of the session prompt, read when the
 	// session started.
 	Skills string

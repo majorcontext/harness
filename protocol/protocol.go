@@ -25,13 +25,14 @@ type CreateSession struct {
 	Effort      string `json:"effort,omitempty"`
 	ServiceTier string `json:"service_tier,omitempty"`
 	Origin      string `json:"origin,omitempty"`
-	// AllowedTools names the tools that the model sees and may call: the
-	// embedder tools, and the built-in tools of a backend that runs its own
-	// loop. nil allows every tool; an empty list allows none. For a backend
-	// that runs its own loop, any other name fails Create.
+	// AllowedTools lists embedder and backend tools: nil allows all, empty allows none; an unknown tool of an owned-loop backend fails Create.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 	// MaxSteps caps the model requests of each turn. Zero is no cap; a negative value is invalid.
 	MaxSteps int `json:"max_steps,omitempty"`
+	// SystemBlocks replaces the session prompt; nil uses defaults, empty clears it, and empty strings are invalid.
+	SystemBlocks []string `json:"system_blocks,omitzero"`
+	// SystemCacheBreakpoint selects a zero-based session system block on Anthropic; nil caches the last block, including MCP guidance.
+	SystemCacheBreakpoint *int `json:"system_cache_breakpoint,omitempty"`
 }
 
 // ToolSpec describes a tool to the model.

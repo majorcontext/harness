@@ -79,6 +79,12 @@ type Request struct {
 	Settings  protocol.Settings
 	// Instructions is the system prompt of the call.
 	Instructions string
+	// SystemBlocks preserves the system segments when set, in place of Instructions.
+	SystemBlocks []string
+	// SystemCacheBreakpoint selects one system block for a provider that supports it.
+	SystemCacheBreakpoint *int
+	// SystemOverride identifies a caller-owned session prompt for a backend that builds its own prompt.
+	SystemOverride bool
 	// MCPInstructions are the usage guidance of the MCP servers alone, for a backend that serves the tools to an external harness.
 	MCPInstructions MCPInstructions
 	// Skills is the skill segment of the session prompt, for a backend that builds its own prompt.
