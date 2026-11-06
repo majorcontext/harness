@@ -251,7 +251,7 @@ type Actor struct {
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
 	a := &Actor{cfg: cfg, mail: make(chan func()), quit: make(chan struct{}), done: make(chan struct{}),
-		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s}
+		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s, pins: restoredPins(s)}
 	a.view.Store(&View{changed: make(chan struct{})})
 	a.publish(false)
 	return a

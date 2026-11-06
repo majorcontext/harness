@@ -159,6 +159,27 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 	return nil
 }
 
+func (s *State) applyPin(e protocol.PinRecorded) error {
+	if e.Notice == "" || e.Text == "" || e.At < 0 {
+		return illegal("pin.recorded needs a notice, a text, and a place")
+	}
+	s.pins = append(s.pins, e)
+	return nil
+}
+
+// movePins keeps the newest pin of each notice and puts it after the first n
+// messages of the history.
+func (s *State) movePins(n int) {
+	var kept []protocol.PinRecorded
+	for i, p := range s.pins {
+		if !slices.ContainsFunc(s.pins[i+1:], func(q protocol.PinRecorded) bool { return q.Notice == p.Notice }) {
+			p.At = n
+			kept = append(kept, p)
+		}
+	}
+	s.pins = kept
+}
+
 func (s *State) applyRetained(e protocol.ToolResultRetained) error {
 	if e.Handle == "" || e.BlobKey == "" || slices.ContainsFunc(s.retained, func(r protocol.ToolResultRetained) bool { return r.Handle == e.Handle }) {
 		return illegal("tool_result.retained needs a new handle and a blob key")

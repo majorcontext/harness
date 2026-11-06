@@ -14,8 +14,8 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// bannerKind is the kind of the pin of Request.Banner.
-const bannerKind = "engine"
+// BannerKind is the kind of the pin of Request.Banner.
+const BannerKind = "engine"
 
 // HistoryTool is the name of the tool that gives a backend that owns its loop
 // the conversation that its own session lacks.
@@ -333,7 +333,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) ru
 	}
 	call.MCPInstructions = ts.MCPInstructions
 	if !all && to != nil {
-		call.Pins = to.Pin(append([]Notice{{Kind: bannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
+		call.Pins = to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
 	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID}
 	call.Call = t.run

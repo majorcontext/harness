@@ -50,14 +50,20 @@ var (
 func skillsAnthropicRuntime(t *testing.T, log *slog.Logger, src harness.SkillSource, steps ...harnesstest.Step) (*harness.Runtime, *harnesstest.Server) {
 	t.Helper()
 	fake := harnesstest.NewAnthropic(t, steps...)
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Logger: log, Skills: src, Getenv: func(string) string { return "k" }, Config: config.Config{
+	return skillsRuntimeOn(t, store.NewMemStore(), fake, log, src), fake
+}
+
+// skillsRuntimeOn returns a runtime over st that sends its requests to fake.
+func skillsRuntimeOn(t *testing.T, st harness.Store, fake *harnesstest.Server, log *slog.Logger, src harness.SkillSource) *harness.Runtime {
+	t.Helper()
+	r, err := harness.New(harness.Options{Store: st, Logger: log, Skills: src, Getenv: func(string) string { return "k" }, Config: config.Config{
 		ContextWindowTokens: 100000,
 		Providers:           map[string]config.Provider{"anthropic": {BaseURL: fake.URL(), APIKeyEnv: "SKILLS_KEY"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
-	return r, fake
+	return r
 }
 
 func anthropicSkillSession(t *testing.T, r *harness.Runtime) *harness.Session {
@@ -118,8 +124,9 @@ func TestContractRuntimeSkillsRefresh(t *testing.T) {
 	t.Run("a_removed_skill_is_named_once_and_load_skill_fails_for_it", rowARemovedSkillIsNamedOnceAndLoadSkillFailsForIt)
 	t.Run("a_failed_list_keeps_the_last_skills_and_adds_no_segment", rowAFailedListKeepsTheLastSkillsAndAddsNoSegment)
 	t.Run("a_skill_added_after_a_reopen_is_pinned_after_the_history", rowASkillAddedAfterAReopenIsPinnedAfterTheHistory)
+	t.Run("a_pin_stays_in_place_when_a_new_runtime_opens_the_session", rowAPinStaysInPlaceWhenANewRuntimeOpensTheSession)
 	t.Run("a_skill_added_after_a_reopen_keeps_an_mcp_notice_in_place", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
-	t.Run("a_reopened_session_lists_the_changed_skills_in_its_prompt_and_announces_nothing", rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing)
+	t.Run("a_reopened_session_lists_the_changed_skills_in_its_prompt_and_keeps_its_update", rowAReopenedSessionListsTheChangedSkillsInItsPromptAndKeepsItsUpdate)
 }
 
 func rowASkillAddedMidSessionIsAnnouncedOnceAfterTheHistoryAndLoads(t *testing.T) {
@@ -226,7 +233,7 @@ func rowAFailedListKeepsTheLastSkillsAndAddsNoSegment(t *testing.T) {
 	}
 }
 
-func rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing(t *testing.T) {
+func rowAReopenedSessionListsTheChangedSkillsInItsPromptAndKeepsItsUpdate(t *testing.T) {
 	t.Parallel()
 	src := &editableSkills{}
 	src.set(nil, skillRefunds)
@@ -244,8 +251,8 @@ func rowAReopenedSessionListsTheChangedSkillsInItsPromptAndAnnouncesNothing(t *t
 	}
 	sessionMCPTurn(t, s, "c", "three")
 	reqs := fake.Requests()
-	if updates(reqs[1]) != 1 || updates(reqs[2]) != 0 {
-		t.Errorf("skill updates = %d, then %d after the reopen, want 1, then 0", updates(reqs[1]), updates(reqs[2]))
+	if updates(reqs[1]) != 1 || updates(reqs[2]) != 1 {
+		t.Errorf("skill updates = %d, then %d after the reopen, want 1, then 1 (the recorded pin, no new one)", updates(reqs[1]), updates(reqs[2]))
 	}
 	if !strings.Contains(reqs[2].System, "invoices — Explain an invoice (load with load_skill)") {
 		t.Errorf("the system prompt after the reopen lacks the new skill: %s", reqs[2].System)
@@ -274,6 +281,34 @@ func rowASkillAddedAfterAReopenIsPinnedAfterTheHistory(t *testing.T) {
 	if updates(reqs[2]) != 1 {
 		t.Errorf("request 3 holds %d skill updates, want 1", updates(reqs[2]))
 	}
+}
+
+func rowAPinStaysInPlaceWhenANewRuntimeOpensTheSession(t *testing.T) {
+	t.Parallel()
+	st := store.NewMemStore()
+	fake := harnesstest.NewAnthropic(t, okReplies(3)...)
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r := skillsRuntimeOn(t, st, fake, nil, src)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "b", "two")
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	src.set(nil, skillRefunds)
+	r = skillsRuntimeOn(t, st, fake, nil, src)
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	if updates(reqs[1]) != 1 {
+		t.Fatalf("request 2 holds %d skill updates, want 1", updates(reqs[1]))
+	}
+	stableCache(t, reqs[1:])
 }
 
 func rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace(t *testing.T) {
