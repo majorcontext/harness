@@ -111,6 +111,11 @@ type Options struct {
 	// Calls are serial in model call order within a turn, but may overlap across sessions.
 	// The callback must not mutate its arguments, block, or panic. nil: off. OwnsLoop backends ignore it.
 	StopAfter func(call protocol.ToolCall, result protocol.ToolResult) bool
+	// StopAfterErrors lets both predicates inspect failed ordinary tool results.
+	StopAfterErrors bool
+	// StopAfterContext inspects the result and turn output at the same boundary as StopAfter.
+	// Both predicates run independently and follow the same concurrency and mutation rules.
+	StopAfterContext func(call protocol.ToolCall, result protocol.ToolResult, context StopContext) bool
 	// Skills supplies embedded skills for each session; see SkillSource.
 	Skills SkillSource
 	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
@@ -243,7 +248,8 @@ func New(opts Options) (*Runtime, error) {
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(), DisableRetryAfterOutput: opts.DisableRetryAfterOutput,
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
-		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools), StopAfter: opts.StopAfter}
+		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools), StopAfter: opts.StopAfter,
+		StopAfterErrors: opts.StopAfterErrors, StopAfterContext: opts.StopAfterContext}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
 	r.prompt = func(e []prompt.Embedded) prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, e, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
