@@ -63,24 +63,6 @@ func TestContractQueue(t *testing.T) {
 			},
 		},
 		{
-			name: "interrupt_cuts_a_running_tool_then_queue_continues",
-			model: []harnesstest.Step{
-				{Name: "call", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
-					{ID: "toolu_wait", Name: "bash", Input: map[string]any{"command": "touch tool-running; sleep 30"}},
-				}}},
-				{Name: "second", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "2"}, Repeat: true},
-			},
-			actions: []action{
-				create{as: "a"},
-				submit{as: "a", text: "first"},
-				awaitFile{path: "tool-running"},
-				awaitCall{as: "a", callID: "toolu_wait"},
-				enqueue{as: "a", text: "second"},
-				interrupt{as: "a"},
-				waitIdle{as: "a"},
-			},
-		},
-		{
 			name:  "input_receipts_and_conflicts",
 			model: []harnesstest.Step{slow("1"), second},
 			actions: []action{
@@ -130,5 +112,29 @@ func TestContractToolBoundaryDelivery(t *testing.T) {
 	runScenarios(t, []scenario{
 		row("steer_joins_the_turn_at_the_tool_boundary", "steer", func(as, text string) action { return submit{as: as, text: text} }),
 		row("enqueue_joins_the_turn_at_the_tool_boundary", "enqueued", func(as, text string) action { return enqueue{as: as, text: text} }),
+	})
+}
+
+func TestContractQueueInterruptsTool(t *testing.T) {
+	second := harnesstest.Step{Name: "second", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "2"}, Repeat: true}
+	runScenarios(t, []scenario{
+		{
+			name: "interrupt_cuts_a_running_tool_then_queue_continues",
+			model: []harnesstest.Step{
+				{Name: "call", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_wait", Name: "bash", Input: map[string]any{"command": "touch tool-running; sleep 30"}},
+				}}},
+				second,
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitFile{path: "tool-running"},
+				awaitCall{as: "a", callID: "toolu_wait"},
+				enqueue{as: "a", text: "second"},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+			},
+		},
 	})
 }
