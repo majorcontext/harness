@@ -97,8 +97,8 @@ func checkEntry(e mcp.Skill) error {
 }
 
 // listSkills reads the skill entries of c and keeps the valid ones. The error names each entry that it left out.
-func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, bool, error) {
-	all, complete, err := c.ListAllSkills(ctx)
+func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, error) {
+	all, err := c.ListAllSkills(ctx)
 	var rpc *mcp.RPCError
 	if err != nil && !errors.As(err, &rpc) {
 		err = fmt.Errorf("skills/list: %s", reason(err))
@@ -107,13 +107,12 @@ func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, bool, error) {
 	var out []mcp.Skill
 	for _, s := range all {
 		if cerr := checkEntry(s); cerr != nil {
-			complete = false
 			errs = append(errs, cerr)
 			continue
 		}
 		out = append(out, s)
 	}
-	return out, complete, errors.Join(errs...)
+	return out, errors.Join(errs...)
 }
 
 func (v view) skillsBlock() string {

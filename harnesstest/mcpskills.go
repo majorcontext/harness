@@ -16,7 +16,7 @@ import (
 	"github.com/majorcontext/harness/internal/skill"
 )
 
-// MCPSkill is one scripted skill at skill://<Path>/SKILL.md. Files maps each path under the skill root to its
+// MCPSkill is one scripted skill at RootURI, or skill://<Path> when RootURI is empty. Files maps each path under the skill root to its
 // content, and the entry lists the size and SHA-256 digest of each. Served replaces the content that
 // resources/read returns for a path, and Listed replaces the content that the entry of skills/list describes,
 // so a scenario can script content that does not match its entry. Frontmatter replaces the frontmatter of every
@@ -24,6 +24,7 @@ import (
 // files.
 type MCPSkill struct {
 	Path        string
+	RootURI     string `json:",omitempty"`
 	Files       map[string]string
 	Blobs       map[string][]byte `json:",omitempty"`
 	Served      map[string]string `json:",omitempty"`
@@ -33,7 +34,12 @@ type MCPSkill struct {
 	Dynamic     bool              `json:",omitempty"`
 }
 
-func (s MCPSkill) root() string { return "skill://" + s.Path }
+func (s MCPSkill) root() string {
+	if s.RootURI != "" {
+		return s.RootURI
+	}
+	return "skill://" + s.Path
+}
 
 func (s MCPSkill) entry(files map[string]string) mcp.Skill {
 	e := mcp.Skill{URI: s.root() + "/" + skill.Filename, Dynamic: s.Dynamic}

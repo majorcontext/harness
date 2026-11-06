@@ -10,7 +10,7 @@ First tagged release.
 
 ### Fixed
 
-- **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an unknown `skill:` resource bypass skill verification; load the skill before reading its files.
+- **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an uncovered resource bypass skill verification, regardless of URI scheme; load the skill before reading its files. Tool-list refreshes preserve skill entries and their incomplete-list error.
 
 ### Added
 

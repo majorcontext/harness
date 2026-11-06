@@ -37,6 +37,8 @@ func readRes(server, uri string) harnesstest.ToolCall {
 
 // mcpSkillRows are the runtime rows of the skill tests of this file.
 var mcpSkillRows = map[string]runtimeRow{
+	"mcp_complete_skill_list_allows_ordinary_resource_reads":                    sameAsServe(),
+	"mcp_incomplete_skill_list_blocks_uncovered_uris_of_any_scheme":             sameAsServe(),
 	"claudecode_mcp_skills_reach_the_cli_in_the_harness_server_instructions":    sameAsServe(),
 	"claudecode_long_unicode_skill_list_fits_the_cli_cut_with_its_count":        sameAsServe(),
 	"claudecode_mcp_skill_loads_through_the_harness_endpoint":                   sameAsServe(),
@@ -47,6 +49,7 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_skill_that_the_server_does_not_list_loads_by_its_uri":                  sameAsServe(),
 	"mcp_skill_listed_beyond_page_100_checks_its_files":                         sameAsServe(),
 	"mcp_skill_missing_page_101_does_not_read_unverified_files":                 sameAsServe(),
+	"mcp_skill_tool_refresh_keeps_listed_entries_and_incomplete_status":         sameAsServe(),
 	"mcp_invalid_skill_entry_does_not_allow_unverified_resource_reads":          sameAsServe(),
 	"mcp_skill_whose_name_is_not_its_last_path_segment_is_not_listed_or_loaded": sameAsServe(),
 	"mcp_dynamic_skill_loads_unverified_and_lists_its_root_with_the_server":     sameAsServe(),
@@ -222,6 +225,47 @@ func TestContractMCPSkillIncompleteLists(t *testing.T) {
 				loadSkill("docs", "skill://s100/refunds/SKILL.md"),
 				readRes("docs", "skill://s100/refunds/references/GUIDE.md")),
 			actions: withTurn(expectMCPCalls{server: "docs", want: readCalls("skill://s100/refunds/SKILL.md", "skill://s100/refunds/references/GUIDE.md")}),
+		},
+		{
+			name:  "mcp_skill_tool_refresh_keeps_listed_entries_and_incomplete_status",
+			setup: mcpSetup(nil, pagedSkillServer(101)),
+			model: afterFirstTurn(
+				mcpAction("action", "select", "tools", []string{"mcp__docs__updated"}),
+				readRes("docs", "skill://s100/refunds/references/GUIDE.md"),
+				readRes("docs", "skill://s000/refunds/references/GUIDE.md"),
+			),
+			actions: append(liveTurns(setMCPTools{server: "docs", tools: []harnesstest.MCPTool{{Name: "updated", Description: "Updated tool"}}}),
+				expectMCPCalls{server: "docs", want: readCalls("skill://s000/refunds/references/GUIDE.md")}),
+		},
+		{
+			name: "mcp_incomplete_skill_list_blocks_uncovered_uris_of_any_scheme",
+			setup: mcpSetup(nil, func() mcpServerDef {
+				d := pagedSkillServer(101)
+				d.spec.Skills[0].RootURI = "https://docs.example/known/refunds"
+				d.spec.Skills[100].RootURI = "https://docs.example/hidden/refunds"
+				d.spec.Resources = []harnesstest.MCPResource{{URI: "doc://guide", Text: "An ordinary resource."}}
+				return d
+			}()),
+			model: toolChain(
+				readRes("docs", "https://docs.example/hidden/refunds/references/GUIDE.md"),
+				readRes("docs", "doc://guide"),
+				readRes("docs", "https://docs.example/known/refunds/references/GUIDE.md"),
+				loadSkill("docs", "https://docs.example/hidden/refunds/SKILL.md"),
+				readRes("docs", "https://docs.example/hidden/refunds/references/GUIDE.md"),
+			),
+			actions: withTurn(expectMCPCalls{server: "docs", want: readCalls(
+				"https://docs.example/known/refunds/references/GUIDE.md", "https://docs.example/hidden/refunds/SKILL.md",
+				"https://docs.example/hidden/refunds/references/GUIDE.md")}),
+		},
+		{
+			name: "mcp_complete_skill_list_allows_ordinary_resource_reads",
+			setup: mcpSetup(nil, func() mcpServerDef {
+				d := skillServer("docs", refundsSkill())
+				d.spec.Resources = []harnesstest.MCPResource{{URI: "doc://guide", Text: "An ordinary resource."}}
+				return d
+			}()),
+			model:   toolChain(readRes("docs", "doc://guide")),
+			actions: withTurn(expectMCPCalls{server: "docs", want: readCalls("doc://guide")}),
 		},
 		{
 			name: "mcp_invalid_skill_entry_does_not_allow_unverified_resource_reads",

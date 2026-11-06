@@ -139,9 +139,8 @@ type server struct {
 	index  map[string]bool
 	limit  time.Duration
 	// skills are the valid entries of skills/list; skillsErr names the entries that it left out.
-	skills         []mcp.Skill
-	skillsComplete bool
-	skillsErr      error
+	skills    []mcp.Skill
+	skillsErr error
 }
 
 func newServer(c *mcp.Client, tools []mcp.Tool, limit time.Duration) *server {
@@ -247,7 +246,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 	if sv.servesSkills() {
 		listCtx, stop := context.WithTimeout(ctx, bound)
 		defer stop()
-		sv.skills, sv.skillsComplete, sv.skillsErr = listSkills(listCtx, c)
+		sv.skills, sv.skillsErr = listSkills(listCtx, c)
 	}
 	return sv, nil
 }

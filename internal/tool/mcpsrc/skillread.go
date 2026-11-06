@@ -22,7 +22,7 @@ const dirMimeType = "inode/directory"
 // loaded from another server is refused, so a skill never makes a read from a server other than its own.
 func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri string) (res protocol.ToolResult, handled bool, err error) {
 	sv := s.view().live[server]
-	incomplete := sv != nil && sv.servesSkills() && !sv.skillsComplete && strings.HasPrefix(strings.ToLower(uri), "skill:")
+	incomplete := sv != nil && sv.servesSkills() && sv.skillsErr != nil
 	byServer := s.root().held.containing(turn.SessionID(ctx), uri)
 	e, isHeld := byServer[server]
 	if !isHeld {
