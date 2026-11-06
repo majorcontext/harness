@@ -223,6 +223,8 @@ type Limits struct {
 	Trace tracing.Tracer
 	// StopAfterTools names calls whose successful result completes the turn.
 	StopAfterTools []string
+	// StopAfter inspects successful results before Join hooks.
+	StopAfter func(protocol.ToolCall, protocol.ToolResult) bool
 }
 
 // Turn is what a running turn reports through, bound to its turn. Started
@@ -323,7 +325,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		req.History = append(req.History, s.items...)
-		if stop, err := runStepTools(ctx, bt, t, to, calls, lim.StopAfterTools, record); stop || err != nil {
+		if stop, err := runStepTools(ctx, bt, t, to, calls, lim, record); stop || err != nil {
 			return err
 		}
 		if req.MaxSteps > 0 && steps >= req.MaxSteps {
@@ -337,17 +339,23 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	}
 }
 
-func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []protocol.ToolCall, stopNames []string, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
+func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []protocol.ToolCall, lim Limits, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
 	asks, calls := splitAsks(t, calls)
 	stop := false
 	store := func(c protocol.ToolCall, r protocol.ToolResult) error {
 		if err := record(c, r); err != nil {
 			return err
 		}
-		stop = stop || (!r.IsError && slices.Contains(stopNames, c.Name))
+		stop = stop || (!r.IsError && slices.Contains(lim.StopAfterTools, c.Name))
 		return nil
 	}
-	if err := bt.run(ctx, calls, func(i int, r protocol.ToolResult) error { return store(calls[i], r) }); err != nil {
+	if err := bt.run(ctx, calls, func(i int, r protocol.ToolResult) error {
+		c := calls[i]
+		if !r.IsError && lim.StopAfter != nil && lim.StopAfter(c, r) {
+			stop = true
+		}
+		return store(c, t.join(ctx, c, r))
+	}); err != nil {
 		return false, err
 	}
 	if opened, err := openAsk(ctx, bt.step, t, to, asks, store); opened || err != nil {
