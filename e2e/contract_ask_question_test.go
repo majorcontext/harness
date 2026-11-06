@@ -379,7 +379,7 @@ func TestContractModelAPIQuestionStops(t *testing.T) {
 				}}},
 				rest,
 			},
-			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitFile{path: "tool-running"}, restart{}, waitIdle{as: "a"}, getSession{as: "a"}},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, awaitFile{path: "tool-running"}, awaitCall{as: "a", callID: "toolu_ask"}, restart{}, waitIdle{as: "a"}, getSession{as: "a"}},
 		},
 	})
 }

@@ -74,6 +74,7 @@ func TestContractQueue(t *testing.T) {
 				create{as: "a"},
 				submit{as: "a", text: "first"},
 				awaitFile{path: "tool-running"},
+				awaitCall{as: "a", callID: "toolu_wait"},
 				enqueue{as: "a", text: "second"},
 				interrupt{as: "a"},
 				waitIdle{as: "a"},
