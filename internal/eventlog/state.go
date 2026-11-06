@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -133,8 +134,10 @@ type State struct {
 	children     map[string]protocol.Outcome
 	backends     map[string]BackendChain
 	retained     []protocol.ToolResultRetained
-	commands     map[string]command
-	history      []entry
+	// pins holds the recorded pins that a compaction has not retired.
+	pins     turn.Pins
+	commands map[string]command
+	history  []entry
 	// folded holds the messages that readers see before the summary of the
 	// newest compaction: what each compaction folded, and the summary of each
 	// earlier compaction in its place. The model never reads it.
@@ -168,6 +171,7 @@ func (s *State) clone() *State {
 	c.stranded = slices.Clip(s.stranded)
 	c.folded = slices.Clip(s.folded)
 	c.retained = slices.Clip(s.retained)
+	c.pins = s.pins.Clone()
 	c.unran = slices.Clip(s.unran)
 	return &c
 }
@@ -382,6 +386,10 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 	return c, ok
 }
 
+// Pins returns the pins that the log records, in the order the model reads
+// them.
+func (s *State) Pins() []turn.Pin { return s.pins.Pinned() }
+
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }
 
@@ -494,6 +502,8 @@ func (s *State) step(env Envelope) error {
 		return s.applyBackendState(e)
 	case protocol.ToolResultRetained:
 		return s.applyRetained(e)
+	case protocol.PinRecorded:
+		return s.applyPin(e)
 	}
 	return fmt.Errorf("%w: %T", ErrUnknownKind, env.Event)
 }

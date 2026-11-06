@@ -262,6 +262,7 @@ func (s *State) remember(env Envelope) {
 			s.settle(env.Seq)
 		}
 		s.compactedLen = len(s.messages(true))
+		s.pins.Move(s.compactedLen)
 	}
 }
 

@@ -398,6 +398,12 @@ export interface Part {
   data?: string;
 }
 
+export interface PinRecorded {
+  notice: string;
+  text: string;
+  at: number;
+}
+
 export interface Plugin {
   name: string;
   state: string;

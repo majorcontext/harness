@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -156,6 +157,14 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 	}
 	chain.Head, chain.Entries, chain.Sum = e.Head, e.Entries, e.Sum
 	s.backends[e.Backend] = chain
+	return nil
+}
+
+func (s *State) applyPin(e protocol.PinRecorded) error {
+	if e.Notice == "" || e.Text == "" || e.At < 0 {
+		return illegal("pin.recorded needs a notice, a text, and a place")
+	}
+	s.pins.Add(turn.Pin{Kind: e.Notice, Text: e.Text, At: e.At})
 	return nil
 }
 
