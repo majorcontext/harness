@@ -10,7 +10,7 @@ First tagged release.
 
 ### Fixed
 
-- **Tool cancellation and session cleanup** — cancellation stops waiting for custom tools that ignore their context and discards late results. Synthetic cancellation uses the standard context error and leaves accepted callback results and the turn stop cause unchanged. `Runtime.End` and session deletion cancel busy work instead of returning 409, withdraw queued inputs, and continue cleanup after caller timeout, including when a graceful release has started. Shutdown cancellation during an append preserves the session's lifecycle stop cause. Durable logs stay in the store; embedders own their deletion after the session's `Done` closes.
+- **Tool cancellation and session cleanup** — cancellation stops waiting for custom tools that ignore their context and discards late results. Synthetic cancellation uses the standard context error and leaves accepted callback results and the turn stop cause unchanged. `Runtime.End` and session deletion cancel busy work instead of returning 409, withdraw queued inputs, and continue cleanup after caller timeout, including when a graceful release has started. A pending lifecycle stop keeps its first cause across shutdown and revocation, including cancellation during an append. Durable logs stay in the store; embedders own their deletion after the session's `Done` closes.
 
 - **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an uncovered resource bypass skill verification, regardless of URI scheme; load the skill before reading its files. Tool-list refreshes preserve skill entries and their incomplete-list error.
 

@@ -453,12 +453,12 @@ func (a *Actor) loop() {
 	}
 }
 
-// stopWith marks the actor stopped. The first cause stays; nil leaves the
-// cause to finish, which reads the Sync rejection.
+// stopWith marks the actor stopped. A requested or settled cause stays.
+// With neither, nil leaves the cause to finish, which reads the Sync rejection.
 func (a *Actor) stopWith(cause error) {
 	a.stopped = true
 	if a.cause == nil {
-		a.cause = cause
+		a.cause = cmp.Or(a.endCause, cause)
 	}
 }
 
@@ -678,7 +678,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 			return lost
 		}
 		if baseErr := a.cfg.Base.Err(); baseErr != nil && errors.Is(err, baseErr) {
-			a.stopWith(cmp.Or[error](a.endCause, ErrReleased))
+			a.stopWith(ErrReleased)
 			return err
 		}
 		a.stopWith(fmt.Errorf("%w: %w", ErrNotOwned, err))

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness"
@@ -337,10 +338,51 @@ func TestContractRuntimeEndRefusesNewControlCommands(t *testing.T) {
 	}
 }
 
-func heldTransportRuntime(t *testing.T) (*harness.Runtime, heldCanceledTransport, func()) {
+func TestContractRuntimeEndCauseSurvivesShutdown(t *testing.T) {
+	skipShort(t)
+	for _, mode := range []string{"runtime_close", "ownership_lost"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) { rowEndCauseSurvivesShutdown(t, mode) })
+		})
+	}
+}
+
+func rowEndCauseSurvivesShutdown(t *testing.T, mode string) {
+	lost := make(chan struct{})
+	r, transport, release := heldTransportRuntime(t, leased{lost})
+	s := lifetimeSession(t, r)
+	stopPrompt(t, s, "a", "go")
+	<-transport.started
+	queued, err := s.Prompt(t.Context(), protocol.Input{ID: "queued", Delivery: protocol.DeliveryQueue, Parts: []protocol.Part{{Type: protocol.PartText, Text: "never run"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { ended <- r.End(t.Context(), s.ID()) }()
+	withdrawn, err := queued.Wait(t.Context())
+	if err != nil || !withdrawn.Withdrawn {
+		t.Fatalf("End did not withdraw the queue: %+v, %v", withdrawn, err)
+	}
+	<-transport.canceled
+	if mode == "ownership_lost" {
+		close(lost)
+	} else {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Close = %v, want context canceled", err)
+		}
+	}
+	synctest.Wait()
+	release()
+	checkCause(t, s, harness.ErrSessionEnded)
+	<-ended
+}
+
+func heldTransportRuntime(t *testing.T, owner harness.Owner) (*harness.Runtime, heldCanceledTransport, func()) {
 	t.Helper()
 	transport := heldCanceledTransport{make(chan struct{}), make(chan struct{}), make(chan struct{})}
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: func(string) string { return "k" },
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Owner: owner, Getenv: func(string) string { return "k" },
 		ModelTransport: func(string) http.RoundTripper { return transport },
 		Config: config.Config{GoalEvaluatorModel: "bifrost/gpt-test", ContextWindowTokens: 100000,
 			Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: "http://127.0.0.1:1", APIKeyEnv: "KEY"}}}})
@@ -354,7 +396,7 @@ func heldTransportRuntime(t *testing.T) (*harness.Runtime, heldCanceledTransport
 }
 
 func rowEndRefusesNewControlCommands(t *testing.T, releaseFirst bool) {
-	r, transport, release := heldTransportRuntime(t)
+	r, transport, release := heldTransportRuntime(t, nil)
 	s := lifetimeSession(t, r)
 	turn := stopPrompt(t, s, "a", "go")
 	queued, err := s.Prompt(t.Context(), protocol.Input{ID: "queued", Delivery: protocol.DeliveryQueue, Parts: []protocol.Part{{Type: protocol.PartText, Text: "never run"}}})
