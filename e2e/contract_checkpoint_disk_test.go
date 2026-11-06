@@ -20,7 +20,7 @@ import (
 	"github.com/majorcontext/harness/store"
 )
 
-type diskCheckpoint struct{ first, child string }
+type diskCheckpoint struct{ first, child, bin string }
 
 type diskCheckpoints interface {
 	LoadCheckpoint(context.Context, string) (uint64, []byte, error)
@@ -28,11 +28,19 @@ type diskCheckpoints interface {
 }
 
 func TestContractDiskCheckpoint(t *testing.T) {
-	runScenarios(t, []scenario{{
-		name:    "disk_checkpoint_stopped_reads_reuse_and_repair",
-		model:   delegation("general-purpose", childDone),
-		actions: append(append([]action{}, spawned...), restart{}, diskCheckpoint{first: "a", child: "kid"}),
-	}})
+	skipShort(t)
+	t.Parallel()
+	bin := diskCheckpointBinary(t)
+	table := []scenario{{
+		name:       "disk_checkpoint_stopped_reads_reuse_and_repair",
+		concurrent: true,
+		model:      delegation("general-purpose", childDone),
+		actions:    append(append([]action{}, spawned...), restart{}, diskCheckpoint{first: "a", child: "kid", bin: bin}),
+	}}
+	for _, h := range []host{serveHost, runtimeHost} {
+		onHost(t, h, table, func(sc scenario) string { return sc.name },
+			func(t *testing.T, sc scenario) observation { return runScenario(t, sc, h) })
+	}
 }
 
 func diskCheckpointBinary(t *testing.T) string {
@@ -143,7 +151,6 @@ func checkpointRead(t *testing.T, p *serveProc, id string) []byte {
 
 func (a diskCheckpoint) run(t *testing.T, r *run) {
 	t.Helper()
-	bin := diskCheckpointBinary(t)
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS(r.drv.storeDir())); err != nil {
 		t.Fatal(err)
@@ -157,7 +164,7 @@ func (a diskCheckpoint) run(t *testing.T, r *run) {
 		writeCheckpointFile(t, filepath.Join(dir, id, "log.jsonl"), bytes.ReplaceAll(log, []byte(child), []byte(id)))
 	}
 	trace := filepath.Join(t.TempDir(), "trace")
-	p := startCheckpointServe(t, bin, dir, trace)
+	p := startCheckpointServe(t, a.bin, dir, trace)
 	first := r.id(t, a.first)
 	for _, session := range append([]string{first, child}, checkpointChildIDs()...) {
 		if err := os.Remove(filepath.Join(dir, session, "checkpoint")); err != nil && !os.IsNotExist(err) {

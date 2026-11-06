@@ -137,17 +137,11 @@ func writeDiskCheckpoint(dir, path string, seq uint64, data []byte) error {
 	if err == nil {
 		_, err = f.Write(data)
 	}
-	if err == nil {
-		err = f.Sync()
-	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil {
 		err = os.Rename(f.Name(), path)
-	}
-	if err == nil {
-		err = syncDir(dir)
 	}
 	return err
 }
