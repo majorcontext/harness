@@ -30,6 +30,16 @@ Codex and Claude Code discovery stays unchanged. `harness.New` performs no file
 I/O, and Claude Code login requires its CLI to inspect. Login failures remain
 first-use errors. Explicit keyless project entries keep their existing behavior.
 
+## Anthropic prompt caching
+
+The native `anthropic` provider accepts `cache_ttl`: `"5m"` or `"1h"` (default `"1h"`). It applies to each cache marker. Set `cache_final_message` to false to omit the automatic marker on the final message block. The system marker remains on the session's selected `SystemCacheBreakpoint`, or the last system block by default. An absent value or true keeps both markers.
+
+```json
+{"providers": {"anthropic": {"cache_ttl": "5m", "cache_final_message": false}}}
+```
+
+A project value overrides the user value, including false; an absent key keeps the user value. Both keys are valid only on the native Anthropic entry (the `anthropic` key with no `type`). A non-boolean `cache_final_message` is invalid. This control does not change the cache policy of Claude Code or other adapters. Go embedders use `config.Provider.CacheTTL` and `CacheFinalMessage`; see [embedding](embedding.md#per-session-system-blocks).
+
 ## Default model
 
 `model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose the first match:

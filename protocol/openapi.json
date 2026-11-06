@@ -1687,6 +1687,9 @@
           "cache_ttl": {
             "type": "string"
           },
+          "cache_final_message": {
+            "type": "boolean"
+          },
           "models": {
             "items": {
               "type": "string"
