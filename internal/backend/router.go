@@ -153,7 +153,7 @@ func client(name string, p config.Provider, transport func(provider string) http
 			key, reason = env.key(p.KeyEnv(name))
 		}
 		return &anthropic.Client{APIKey: key, NoKeyReason: reason, NoKey: p.HasCredentialHeader(), BaseURL: p.BaseURL,
-			HTTPClient: traced(key != "" || p.HasCredentialHeader()), CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
+			HTTPClient: traced(key != "" || p.HasCredentialHeader()), CacheTTL: p.CacheTTL, CacheFinalMessage: p.CacheFinalMessage, ExtraHeaders: p.ExtraHeaders, RequestRetries: retries}
 	}
 	return nil
 }

@@ -12,6 +12,8 @@ First tagged release.
 
 - **Lossless embedded text examples** (`docs/embedding.md`, `examples/prompt`) — completed items replace incomplete previews by item ID. The embedding guide shows durable cursor recovery; slow consumers still drop ephemeral deltas without blocking the model.
 
+- **Anthropic cache controls** (`config.Provider`) — `CacheFinalMessage` (`cache_final_message`) can disable the automatic final-message cache marker while keeping the selected system marker. Nil or true keeps the default behavior. Embedding and config docs show the existing five-minute TTL option.
+
 - **Conditional tool stop** (`harness`) — `Options.StopAfter` lets an embedder end a turn based on a successful tool result, after result hooks and before retention. Every call in the step still finishes and is recorded. Existing named-tool stops stay independent; backends that own their loop ignore the predicate.
 
 - **Per-session system blocks and cache selection** (`protocol.CreateSession`) — `SystemBlocks` replaces the default prompt for one session and survives reopen. `SystemCacheBreakpoint` selects the Anthropic system block to cache; absent keeps the last-block default. The newest message marker and configured TTL stay unchanged.
