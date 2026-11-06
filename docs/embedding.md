@@ -105,6 +105,10 @@ The Go API keeps the built-in default model, `anthropic/claude-fable-5`, and doe
 not look for a subscription login. An embedder that wants the subscription
 default sets `Config.SubscriptionDefault`.
 
+## Stop after a tool
+
+Set `Options.StopAfterTools` to tool names that end a turn. If any named call succeeds, the runtime completes and records every call in that model step, then ends the turn without another model call. If all named calls fail, the model can try again. The option is off by default and applies to every session of the runtime. It has no effect on backends that own their loop. Set it again when opening a session on a new runtime.
+
 ## Continue the session
 
 Prompt the same session again with a new input ID:

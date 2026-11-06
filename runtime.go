@@ -102,6 +102,8 @@ type Options struct {
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
+	// StopAfterTools names tools whose successful calls end a turn after the step. Empty: off. Backends that own their loop ignore it.
+	StopAfterTools []string
 	// Skills supplies embedded skills for each session; see SkillSource.
 	Skills SkillSource
 	// WorkDir is the directory of a coding agent. Each session reads its AGENTS.md chain and skills when
@@ -234,7 +236,7 @@ func New(opts Options) (*Runtime, error) {
 	r.maxTokens = opts.Config.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.StreamMaxRetriesValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second, Log: r.log,
-		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent)}
+		Trace: tracing.New(opts.TracerProvider, opts.CaptureMessageContent), StopAfterTools: slices.Clone(opts.StopAfterTools)}
 	r.evaluator = modelRef(opts.Config, opts.Config.GoalEvaluatorModel)
 	r.prompt = func(e []prompt.Embedded) prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir, e, r.log) }
 	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
