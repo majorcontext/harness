@@ -67,6 +67,9 @@ func (h *mcpHandler) skillMethod(method string, params json.RawMessage) (any, *m
 	case "skills/list":
 		listed := slices.DeleteFunc(slices.Clone(h.spec.Skills), func(s MCPSkill) bool { return s.Unlisted })
 		start, end, next := h.page(params, len(listed))
+		if h.spec.PageSize > 0 && h.spec.SkillsListFailPage > 0 && start/h.spec.PageSize+1 == h.spec.SkillsListFailPage {
+			return nil, &mcp.RPCError{Code: -32603, Message: "skill page unavailable"}
+		}
 		var out []mcp.Skill
 		for _, s := range listed[start:end] {
 			out = append(out, s.entry(cmpFiles(s.Listed, s.Files)))

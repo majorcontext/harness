@@ -92,11 +92,9 @@ func (c ServerCapabilities) SkillsSupport() (skills, directoryRead bool) {
 	return true, read
 }
 
-// ListAllSkills reads every page of skills/list until a page has no cursor or
-// repeats one; the deadline of ctx bounds a server that never stops. An entry
-// that does not decode is left out and its error joins the returned one, so
-// the caller keeps the valid entries.
-func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, error) {
+// ListAllSkills reads all pages of skills/list and reports whether no entry was lost.
+// The context deadline bounds pagination. Valid entries survive a failed request or an entry that does not decode.
+func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, bool, error) {
 	var out []Skill
 	var bad []error
 	seen := map[string]bool{}
@@ -104,7 +102,7 @@ func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, error) {
 	for {
 		var page ListSkillsResult
 		if err := c.request(ctx, methodSkillsList, listToolsParams{Cursor: cursor}, &page); err != nil {
-			return out, fmt.Errorf("mcp: skills/list: %w", err)
+			return out, false, fmt.Errorf("mcp: skills/list: %w", err)
 		}
 		for _, raw := range page.Skills {
 			var s Skill
@@ -115,10 +113,10 @@ func (c *Client) ListAllSkills(ctx context.Context) ([]Skill, error) {
 			out = append(out, s)
 		}
 		if page.NextCursor == "" {
-			return out, errors.Join(bad...)
+			return out, len(bad) == 0, errors.Join(bad...)
 		}
 		if seen[page.NextCursor] {
-			return out, fmt.Errorf("mcp: skills/list: server returned non-advancing cursor %q", page.NextCursor)
+			return out, false, fmt.Errorf("mcp: skills/list: server returned non-advancing cursor %q", page.NextCursor)
 		}
 		seen[page.NextCursor], cursor = true, page.NextCursor
 	}

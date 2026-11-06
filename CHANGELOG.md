@@ -8,6 +8,10 @@ Harness is pre-1.0. The runtime API, config schema, and plugin protocol may chan
 
 First tagged release.
 
+### Fixed
+
+- **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an unknown `skill:` resource bypass skill verification; load the skill before reading its files.
+
 ### Added
 
 - **Per-session system blocks and cache selection** (`protocol.CreateSession`) — `SystemBlocks` replaces the default prompt for one session and survives reopen. `SystemCacheBreakpoint` selects the Anthropic system block to cache; absent keeps the last-block default. The newest message marker and configured TTL stay unchanged.

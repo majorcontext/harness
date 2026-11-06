@@ -46,6 +46,8 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_skill_whose_frontmatter_differs_from_its_entry_does_not_load":          sameAsServe(),
 	"mcp_skill_that_the_server_does_not_list_loads_by_its_uri":                  sameAsServe(),
 	"mcp_skill_listed_beyond_page_100_checks_its_files":                         sameAsServe(),
+	"mcp_skill_missing_page_101_does_not_read_unverified_files":                 sameAsServe(),
+	"mcp_invalid_skill_entry_does_not_allow_unverified_resource_reads":          sameAsServe(),
 	"mcp_skill_whose_name_is_not_its_last_path_segment_is_not_listed_or_loaded": sameAsServe(),
 	"mcp_dynamic_skill_loads_unverified_and_lists_its_root_with_the_server":     sameAsServe(),
 	"mcp_dynamic_skill_lists_a_subdirectory_with_the_server":                    sameAsServe(),
@@ -68,6 +70,17 @@ func withSkill(change func(*harnesstest.MCPSkill)) harnesstest.MCPSkill {
 	s := refundsSkill()
 	change(&s)
 	return s
+}
+
+func pagedSkillServer(failPage int) mcpServerDef {
+	var skills []harnesstest.MCPSkill
+	for n := range 101 {
+		skills = append(skills, withSkill(func(s *harnesstest.MCPSkill) { s.Path = fmt.Sprintf("s%03d/refunds", n) }))
+	}
+	skills[100].Served = map[string]string{"references/GUIDE.md": "# Guide\nRefund always.\n"}
+	d := skillServer("docs", skills...)
+	d.spec.PageSize, d.spec.SkillsListFailPage = 1, failPage
+	return d
 }
 
 func TestContractMCPSkills(t *testing.T) {
@@ -185,17 +198,8 @@ func TestContractMCPSkillVerification(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name: "mcp_skill_listed_beyond_page_100_checks_its_files",
-			setup: mcpSetup(nil, func() mcpServerDef {
-				var skills []harnesstest.MCPSkill
-				for n := range 101 {
-					skills = append(skills, withSkill(func(s *harnesstest.MCPSkill) { s.Path = fmt.Sprintf("s%03d/refunds", n) }))
-				}
-				skills[100].Served = map[string]string{"references/GUIDE.md": "# Guide\nRefund always.\n"}
-				d := skillServer("docs", skills...)
-				d.spec.PageSize = 1
-				return d
-			}()),
+			name:    "mcp_skill_listed_beyond_page_100_checks_its_files",
+			setup:   mcpSetup(nil, pagedSkillServer(0)),
 			model:   toolChain(readRes("docs", "skill://s100/refunds/references/GUIDE.md")),
 			actions: oneTurn,
 		},
@@ -204,6 +208,35 @@ func TestContractMCPSkillVerification(t *testing.T) {
 			setup:   mcpSetup(nil, skillServer("docs", withSkill(func(s *harnesstest.MCPSkill) { s.Path = "acme/billing/payouts" }))),
 			model:   toolChain(loadSkill("docs", "skill://acme/billing/payouts/SKILL.md")),
 			actions: withTurn(expectSystem{req: 1, lacks: []string{"<mcp_skills>"}}),
+		},
+	})
+}
+
+func TestContractMCPSkillIncompleteLists(t *testing.T) {
+	withTurn := func(a ...action) []action { return append(append([]action{}, oneTurn...), a...) }
+	runScenarios(t, []scenario{
+		{
+			name:  "mcp_skill_missing_page_101_does_not_read_unverified_files",
+			setup: mcpSetup(nil, pagedSkillServer(101)),
+			model: toolChain(readRes("docs", "skill://s100/refunds/references/GUIDE.md"),
+				loadSkill("docs", "skill://s100/refunds/SKILL.md"),
+				readRes("docs", "skill://s100/refunds/references/GUIDE.md")),
+			actions: withTurn(expectMCPCalls{server: "docs", want: readCalls("skill://s100/refunds/SKILL.md", "skill://s100/refunds/references/GUIDE.md")}),
+		},
+		{
+			name: "mcp_invalid_skill_entry_does_not_allow_unverified_resource_reads",
+			setup: mcpSetup(nil, skillServer("docs", refundsSkill(), withSkill(func(s *harnesstest.MCPSkill) {
+				s.Path = "acme/billing/refunds/invalid"
+			})), mcpServerDef{name: "wiki", spec: harnesstest.MCPSpec{Name: "wiki", Resources: []harnesstest.MCPResource{{
+				URI: "skill://ordinary/note.md", Text: "An ordinary resource from a server without skills.",
+			}}}}),
+			model: toolChain(readRes("docs", "skill://acme/billing/refunds/invalid/references/GUIDE.md"),
+				loadSkill("docs", refundsURI), readRes("docs", "skill://acme/billing/refunds/references/GUIDE.md"),
+				readRes("wiki", "skill://ordinary/note.md")),
+			actions: withTurn(
+				expectMCPCalls{server: "docs", want: readCalls(refundsURI, "skill://acme/billing/refunds/references/GUIDE.md")},
+				expectMCPCalls{server: "wiki", want: readCalls("skill://ordinary/note.md")},
+			),
 		},
 	})
 }
