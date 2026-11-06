@@ -64,10 +64,15 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if e.Kind == protocol.KindItemDelta {
-			var f protocol.ItemFrame
-			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
-				fmt.Print(f.Text)
+		if e.Kind == "item.completed" {
+			var item protocol.ItemCompleted
+			if err := json.Unmarshal(e.Data, &item); err != nil {
+				log.Fatal(err)
+			}
+			for _, p := range item.Message.Parts {
+				if p.Type == protocol.PartText {
+					fmt.Print(p.Text)
+				}
 			}
 		}
 	}
@@ -104,6 +109,73 @@ access. A failed turn does not end `Events` with an error, so check
 The Go API keeps the built-in default model, `anthropic/claude-fable-5`, and does
 not look for a subscription login. An embedder that wants the subscription
 default sets `Config.SubscriptionDefault`.
+
+## Stream text without loss
+
+The prompt example prints completed text only. For live text, use `item.delta`
+as a preview, not as the final answer. A slow event consumer can fill its
+bounded buffer. The runtime then drops ephemeral frames without slowing the
+model. It never drops durable records. `item.completed` contains the full
+message, including text absent from the preview.
+
+Keep display state by `item_id`. Reset a preview on `item.started`, remove it
+on `item.discarded`, and **replace**, not append, its text on `item.completed`.
+Completion can arrive without a start or delta. Deltas can have gaps in the
+middle, so appending a missing suffix is not a general repair.
+
+This example uses `strings` in addition to the imports above. `items` represents
+an application's display state. Render the changed entry after each event:
+
+```go
+items := map[string]string{}
+var cursor uint64
+for e, err := range s.Events(ctx, cursor) {
+    if err != nil {
+        log.Fatal(err)
+    }
+    switch e.Kind {
+    case protocol.KindItemStarted, protocol.KindItemDelta, protocol.KindItemDiscarded:
+        var f protocol.ItemFrame
+        if err := json.Unmarshal(e.Data, &f); err != nil {
+            log.Fatal(err)
+        }
+        switch e.Kind {
+        case protocol.KindItemStarted:
+            items[f.ItemID] = ""
+        case protocol.KindItemDelta:
+            if f.Type == "text" {
+                items[f.ItemID] += f.Text
+            }
+        case protocol.KindItemDiscarded:
+            delete(items, f.ItemID)
+        }
+    case "item.completed":
+        var item protocol.ItemCompleted
+        if err := json.Unmarshal(e.Data, &item); err != nil {
+            log.Fatal(err)
+        }
+        var full strings.Builder
+        for _, p := range item.Message.Parts {
+            if p.Type == protocol.PartText {
+                full.WriteString(p.Text)
+            }
+        }
+        items[item.ItemID] = full.String()
+    }
+    if !e.Ephemeral {
+        cursor = e.Seq
+    }
+}
+```
+
+Save the durable cursor **after** applying the record. Resume with
+`s.Events(ctx, cursor)`. Never advance it from an ephemeral frame: its `Seq`
+only places that preview after a durable record. To survive a process restart,
+save completed item state and the cursor together, or rebuild them by replaying
+from zero. `harness.ReadEvents(ctx, st, s.ID(), cursor)` reads only durable
+records through the stored head; it does not follow a running turn. A replayed
+completion replaces the same item by ID and does not duplicate its text.
+The lossless guarantee covers completed items, not uncompleted previews.
 
 ## Per-session system blocks
 

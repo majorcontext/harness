@@ -43,6 +43,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	sent := map[string]string{}
 	for e, err := range t.Events(ctx) {
 		if err != nil {
 			log.Fatal(err)
@@ -52,7 +53,14 @@ func main() {
 			var f protocol.ItemFrame
 			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
 				fmt.Print(f.Text)
+				sent[f.ItemID] += f.Text
 			}
+		case "item.completed":
+			var item protocol.ItemCompleted
+			if err := json.Unmarshal(e.Data, &item); err != nil {
+				log.Fatal(err)
+			}
+			printCompleted(item, sent)
 		}
 	}
 	fmt.Println()
@@ -63,4 +71,20 @@ func main() {
 	if res.StopReason == protocol.StopFailed {
 		log.Fatal(res.Error)
 	}
+}
+
+func printCompleted(item protocol.ItemCompleted, sent map[string]string) {
+	var text strings.Builder
+	for _, p := range item.Message.Parts {
+		if p.Type == protocol.PartText {
+			text.WriteString(p.Text)
+		}
+	}
+	full, preview := text.String(), sent[item.ItemID]
+	if strings.HasPrefix(full, preview) {
+		fmt.Print(full[len(preview):])
+	} else {
+		fmt.Printf("\n[complete item]\n%s", full)
+	}
+	delete(sent, item.ItemID)
 }
