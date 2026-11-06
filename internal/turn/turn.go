@@ -72,11 +72,12 @@ type Tool interface {
 
 // Request is one turn to run.
 type Request struct {
-	SessionID string
-	TurnID    string
-	Model     string
-	Purpose   Purpose // Purpose names the operation that made this request.
-	Settings  protocol.Settings
+	SessionID   string
+	TurnID      string
+	ResumeItems []protocol.LogMessage
+	Model       string
+	Purpose     Purpose // Purpose names the operation that made this request.
+	Settings    protocol.Settings
 	// Instructions is the system prompt of the call.
 	Instructions string
 	// SystemBlocks preserves the system segments when set, in place of Instructions.
@@ -212,6 +213,22 @@ type Attacher interface {
 	Attach(mediaType string, data []byte) (protocol.LogPart, error)
 }
 
+// StopToolCall is a tool call and its result.
+type StopToolCall struct {
+	Call   protocol.ToolCall
+	Result protocol.ToolResult
+}
+
+// StopContext is the completed output of a turn through the current result.
+// TurnText joins recorded assistant text parts in order without a separator.
+// ToolCalls holds completed calls in result-recording order, including failed questions and the current result.
+type StopContext struct {
+	SessionID string
+	TurnID    string
+	TurnText  string
+	ToolCalls []StopToolCall
+}
+
 // Limits bounds how a turn recovers from a failed model call.
 type Limits struct {
 	// Retries bounds the new attempts of a model call after an ErrRetryable error.
@@ -228,7 +245,9 @@ type Limits struct {
 	// StopAfterTools names calls whose successful result completes the turn.
 	StopAfterTools []string
 	// StopAfter inspects successful results before Join hooks.
-	StopAfter func(protocol.ToolCall, protocol.ToolResult) bool
+	StopAfter        func(protocol.ToolCall, protocol.ToolResult) bool
+	StopAfterErrors  bool
+	StopAfterContext func(protocol.ToolCall, protocol.ToolResult, StopContext) bool
 }
 
 // Turn is what a running turn reports through, bound to its turn. Started
@@ -284,6 +303,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		req.History = append(req.History, m)
 		return nil
 	}
+	stopContext := replayStopContext(req)
 	for first, steps := true, 0; ; first = false {
 		if step.Err() != nil {
 			return context.Cause(step)
@@ -300,7 +320,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if err := adopt(b, caps, to, &req); err != nil {
 			return err
 		}
-		s := &sink{Turn: to}
+		s := newSink(to, lim, &stopContext)
 		call, ts, err := nextCall(step, b, caps, req, src)
 		if err != nil {
 			return err
@@ -329,7 +349,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return nil
 		}
 		req.History = append(req.History, s.items...)
-		if stop, err := runStepTools(ctx, bt, t, to, calls, lim, record); stop || err != nil {
+		if stop, err := runStepTools(ctx, bt, t, to, calls, lim, &stopContext, record); stop || err != nil {
 			return err
 		}
 		if req.MaxSteps > 0 && steps >= req.MaxSteps {
@@ -343,7 +363,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	}
 }
 
-func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []protocol.ToolCall, lim Limits, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
+func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []protocol.ToolCall, lim Limits, sc *StopContext, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
 	asks, calls := splitAsks(t, calls)
 	stop := false
 	store := func(c protocol.ToolCall, r protocol.ToolResult) error {
@@ -355,17 +375,59 @@ func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []pro
 	}
 	if err := bt.run(ctx, calls, func(i int, r protocol.ToolResult) error {
 		c := calls[i]
-		if !r.IsError && lim.StopAfter != nil && lim.StopAfter(c, r) {
-			stop = true
+		if lim.StopAfterContext != nil {
+			sc.ToolCalls = append(sc.ToolCalls, cloneStopToolCall(StopToolCall{Call: c, Result: r}))
 		}
-		return store(c, t.join(ctx, c, r))
+		if !r.IsError || lim.StopAfterErrors {
+			if lim.StopAfter != nil && lim.StopAfter(c, r) {
+				stop = true
+			}
+			if lim.StopAfterContext != nil {
+				snapshot := *sc
+				snapshot.ToolCalls = make([]StopToolCall, len(sc.ToolCalls))
+				for i, call := range sc.ToolCalls {
+					snapshot.ToolCalls[i] = cloneStopToolCall(call)
+				}
+				if lim.StopAfterContext(c, r, snapshot) {
+					stop = true
+				}
+			}
+		}
+		joined := t.join(ctx, c, r)
+		if err := store(c, joined); err != nil {
+			return err
+		}
+		if lim.StopAfterContext != nil {
+			joined.Blobs = nil
+			sc.ToolCalls[len(sc.ToolCalls)-1].Result = joined
+		}
+		return nil
 	}); err != nil {
 		return false, err
 	}
-	if opened, err := openAsk(ctx, bt.step, t, to, asks, store); opened || err != nil {
+	storeAsk := func(c protocol.ToolCall, r protocol.ToolResult) error {
+		if err := store(c, r); err != nil {
+			return err
+		}
+		if lim.StopAfterContext != nil {
+			r.Blobs = nil
+			sc.ToolCalls = append(sc.ToolCalls, cloneStopToolCall(StopToolCall{Call: c, Result: r}))
+		}
+		return nil
+	}
+	if opened, err := openAsk(ctx, bt.step, t, to, asks, storeAsk); opened || err != nil {
 		return opened, err
 	}
 	return stop, nil
+}
+
+func cloneStopToolCall(c StopToolCall) StopToolCall {
+	c.Call.Arguments = slices.Clone(c.Call.Arguments)
+	c.Result.Blobs = slices.Clone(c.Result.Blobs)
+	for i := range c.Result.Blobs {
+		c.Result.Blobs[i].Data = slices.Clone(c.Result.Blobs[i].Data)
+	}
+	return c
 }
 
 // callModel runs one model call. It calls b again, at most lim.Retries
@@ -491,7 +553,8 @@ func sleep(ctx context.Context, d time.Duration) error {
 // sink collects the items of one model call and reports the rest to its Turn.
 type sink struct {
 	Turn
-	items []protocol.LogMessage
+	items       []protocol.LogMessage
+	stopContext *StopContext
 	// output tracks text and reasoning deltas when this call disables recovery after output.
 	output *bool
 	// item is the item that the deltas since the last Item build, or "".
@@ -500,6 +563,14 @@ type sink struct {
 	rec *recorder
 	// early starts each tool call when the stream delivers it. nil: none starts early.
 	early *batch
+}
+
+func newSink(to Turn, lim Limits, sc *StopContext) *sink {
+	s := &sink{Turn: to}
+	if lim.StopAfterContext != nil {
+		s.stopContext = sc
+	}
+	return s
 }
 
 // CallSink is a Sink that takes each complete tool call of the model stream
@@ -562,6 +633,13 @@ func (s *sink) Item(m protocol.LogMessage) error {
 		return err
 	}
 	s.items = append(s.items, m)
+	if s.stopContext != nil && m.Role == protocol.RoleAssistant {
+		for _, part := range m.Parts {
+			if part.Type == protocol.LogPartText {
+				s.stopContext.TurnText += part.Text
+			}
+		}
+	}
 	return nil
 }
 

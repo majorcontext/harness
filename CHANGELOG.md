@@ -16,6 +16,8 @@ First tagged release.
 
 ### Added
 
+- **Contextual tool stop** (`harness`) — `Options.StopAfterContext` inspects the current turn’s recorded text and tool results. `Options.StopAfterErrors` optionally includes failed results in predicate evaluation; named-tool stops and default behavior remain unchanged.
+
 - **Lossless prompt streams** (`harness`) — `Session.PromptStream` subscribes before admitting a new queued input. Its owned stream keeps every delta and item lifecycle frame in order, even if reading begins after the turn ends. Slow readers use unbounded queue memory without blocking the actor; close an unread stream to release it. Existing event streams keep best-effort live delivery, with completed-item reconciliation as a backstop. `Options.DisableRetryAfterOutput` lets append-only clients fail rather than resend a model call after its first output delta; later model calls retain their own pre-output retry budget, and the default policy stays unchanged.
 
 - **Anthropic cache controls** (`config.Provider`) — `CacheFinalMessage` (`cache_final_message`) can disable the automatic final-message cache marker while keeping the selected system marker. Nil or true keeps the default behavior. Embedding and config docs show the existing five-minute TTL option.
