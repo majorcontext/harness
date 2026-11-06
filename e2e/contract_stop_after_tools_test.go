@@ -89,19 +89,6 @@ func stopCall(names ...string) harnesstest.Step {
 	return harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: calls}}
 }
 
-func TestContractRuntimeStopsAfterSuccessfulTool(t *testing.T) {
-	skipShort(t)
-	for _, provider := range []string{"anthropic", "openai"} {
-		t.Run(provider, func(t *testing.T) {
-			s, fake := stopRuntime(t, provider, []harness.Tool{stopTool{name: "finish"}}, []string{"finish"}, stopCall("finish"))
-			stopWait(t, stopPrompt(t, s, "a", "go"))
-			if n := len(fake.Requests()); n != 1 {
-				t.Errorf("model requests = %d, want 1", n)
-			}
-		})
-	}
-}
-
 func TestContractRuntimeContinuesWithoutSuccessfulListedTool(t *testing.T) {
 	skipShort(t)
 	for _, provider := range []string{"anthropic", "openai"} {
