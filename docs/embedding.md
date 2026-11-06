@@ -298,7 +298,18 @@ opts.StopAfter = func(call protocol.ToolCall, result protocol.ToolResult) bool {
 }
 ```
 
-The predicate gets the original model call and the full successful result after `After` hooks, before `Join` hooks and retention. It is not called for error results, tool errors, denied calls, calls that did not run, or an open question. Calls are serial in model call order within a turn, even after one returns true, but may overlap across sessions. Shared callback state must be concurrency-safe. Do not mutate the arguments, block, or panic; a panic is not recovered at this boundary. The predicate has no error return. Cancellation and recording errors still take precedence over a successful stop.
+The predicate gets the original model call and the full successful result after `After` hooks, before `Join` hooks and retention. By default, it is not called for error results, tool errors, denied calls, calls that did not run, or an open question. Calls are serial in model call order within a turn, even after one returns true, but may overlap across sessions. Shared callback state must be concurrency-safe. Do not mutate the arguments, block, or panic; a panic is not recovered at this boundary. The predicate has no error return. Cancellation and recording errors still take precedence over a successful stop.
+
+To inspect turn output as well, set `Options.StopAfterContext`. It receives the call, result, and a `StopContext` with the session and turn IDs, `TurnText`, and `ToolCalls` through the current result. `TurnText` joins recorded assistant text parts in order without a separator, across all model steps of this turn. `ToolCalls` holds completed calls and results, including failures. Ordinary results follow model call order; completed question results follow the ordinary results of their step. Its current entry has the full post-`After`, pre-`Join` result. Earlier entries use recorded results after `Join` and retention, without blob bytes; text may be truncated. The runtime rebuilds them from the log when a suspended turn resumes. The snapshot is independent of stream consumption and excludes pending questions and answers from other turns. Set `Options.StopAfterErrors` to call either predicate for failed ordinary results as well; the result contains the actual error. The default skips failures. Named-tool stops still require success. Both predicates run independently and follow the same callback rules.
+
+For example, stop after `suggestReplies` even when it fails if the turn has already produced text:
+
+```go
+opts.StopAfterErrors = true
+opts.StopAfterContext = func(call protocol.ToolCall, _ protocol.ToolResult, ctx harness.StopContext) bool {
+    return call.Name == "suggestReplies" && ctx.TurnText != ""
+}
+```
 
 Every call in the step finishes and its result is recorded before the turn completes. The stop takes precedence over `MaxSteps`; a waiting steer input runs in the next turn. The predicate is Go-only, off when nil, not persisted, and ignored by backends that own their loop. Supply it again when opening on a new runtime.
 
