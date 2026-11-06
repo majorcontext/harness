@@ -70,8 +70,23 @@ func (l *Lister) Page(ctx context.Context, src Source, q protocol.ListSessions) 
 		return protocol.SessionPage{}, err
 	}
 	page := protocol.SessionPage{Sessions: []protocol.Session{}}
-	for _, id := range ids {
-		v, err := src.Describe(ctx, id)
+	type result struct {
+		view protocol.Session
+		err  error
+	}
+	results := make([]result, len(ids))
+	var wg sync.WaitGroup
+	workers := min(8, len(ids))
+	for worker := range workers {
+		wg.Go(func() {
+			for i := worker; i < len(ids); i += workers {
+				results[i].view, results[i].err = src.Describe(ctx, ids[i])
+			}
+		})
+	}
+	wg.Wait()
+	for i, id := range ids {
+		v, err := results[i].view, results[i].err
 		if errors.Is(err, session.ErrUnreplayable) {
 			src.Log.Warn("harness: session skipped in the list", "session", id, "err", err)
 			continue
