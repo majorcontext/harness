@@ -156,6 +156,10 @@ func mergeProviders(out, base, over *Config) {
 }
 
 func copyProvider(v Provider) Provider {
+	if v.CacheFinalMessage != nil {
+		value := *v.CacheFinalMessage
+		v.CacheFinalMessage = &value
+	}
 	if len(v.ExtraHeaders) > 0 {
 		hm := make(map[string]string, len(v.ExtraHeaders))
 		for hk, hv := range v.ExtraHeaders {
@@ -197,6 +201,10 @@ func overlayProvider(ex, v Provider) Provider {
 	}
 	if v.Family != "" {
 		ex.Family = v.Family
+	}
+	if v.CacheFinalMessage != nil {
+		value := *v.CacheFinalMessage
+		ex.CacheFinalMessage = &value
 	}
 	if v.CacheTTL != "" {
 		ex.CacheTTL = v.CacheTTL

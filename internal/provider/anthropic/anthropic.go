@@ -49,6 +49,8 @@ type Client struct {
 	// DefaultCacheTTL — see that constant for why the default is 1h. Any
 	// other value fails Stream, like a missing API key.
 	CacheTTL string
+	// CacheFinalMessage adds the final-message cache marker; nil defaults to true.
+	CacheFinalMessage *bool
 	// ExtraHeaders are sent verbatim on every request. A gateway that
 	// attributes spend by header needs them here: this adapter is the only
 	// path to an Anthropic-shaped upstream, so without them that traffic
@@ -78,7 +80,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if err != nil {
 		return nil, err
 	}
-	wire, err := transcodeRequest(req, ttl)
+	wire, err := transcodeRequest(req, ttl, c.CacheFinalMessage == nil || *c.CacheFinalMessage)
 	if err != nil {
 		return nil, err
 	}
