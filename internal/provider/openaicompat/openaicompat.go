@@ -574,7 +574,11 @@ func (s *stream) emitToolCalls() {
 	}
 	s.emitted = true
 	for _, idx := range s.toolOrder {
-		s.queue = append(s.queue, provider.Event{Type: provider.EventToolCall, ToolCall: s.toolCalls[idx].toolCall()})
+		call := s.toolCalls[idx].toolCall()
+		if call.CallID != "" && call.Name != "" {
+			s.queue = append(s.queue, provider.Event{Type: provider.EventToolCallStarted, ToolCall: &message.ToolCall{CallID: call.CallID, Name: call.Name}})
+		}
+		s.queue = append(s.queue, provider.Event{Type: provider.EventToolCall, ToolCall: call})
 	}
 }
 

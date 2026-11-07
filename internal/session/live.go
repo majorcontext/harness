@@ -90,17 +90,17 @@ func (a *Actor) drain(s *liveSubscriber) (*View, []protocol.Event) {
 
 // remember keeps e when it belongs to the item that streams. A new item
 // replaces the kept frames, and a discard drops them. It needs l.mu.
-func (l *live) remember(e protocol.Event, f protocol.ItemFrame) {
+func (l *live) remember(e protocol.Event, itemID string) {
 	if l.stopped {
 		return
 	}
 	switch e.Kind {
 	case protocol.KindItemDiscarded:
 		l.forget()
-	case protocol.KindItemStarted, protocol.KindItemDelta:
-		if f.ItemID != l.itemID {
+	case protocol.KindItemStarted, protocol.KindItemDelta, protocol.KindToolBlockStarted, protocol.KindToolBlockAvailable:
+		if itemID != l.itemID {
 			l.forget()
-			l.itemID = f.ItemID
+			l.itemID = itemID
 		}
 		if l.full || l.itemSize+len(e.Data) > liveItemBytes {
 			l.full = true
@@ -153,8 +153,11 @@ func (a *Actor) frame(kind string, data any) {
 		return
 	}
 	e := protocol.Event{Seq: a.View().Session.HeadSeq, Time: time.Now(), Kind: kind, Data: d, Ephemeral: true}
-	if f, ok := data.(protocol.ItemFrame); ok {
-		a.live.remember(e, f)
+	switch f := data.(type) {
+	case protocol.ItemFrame:
+		a.live.remember(e, f.ItemID)
+	case protocol.ToolBlockFrame:
+		a.live.remember(e, f.ItemID)
 	}
 	a.live.send(e)
 }

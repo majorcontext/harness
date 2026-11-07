@@ -618,7 +618,8 @@ type sink struct {
 	// output tracks text and reasoning deltas when this call disables recovery after output.
 	output *bool
 	// item is the item that the deltas since the last Item build, or "".
-	item string
+	item       string
+	toolBlocks map[string]bool
 	// rec reports the model call in flight.
 	rec *recorder
 	// early starts each tool call when the stream delivers it. nil: none starts early.
@@ -676,6 +677,7 @@ func (s *sink) Delta(_ string, d Delta) {
 // Discard removes the live item and starts no new one. Nothing happens while
 // no item is live.
 func (s *sink) Discard(string) {
+	s.toolBlocks = nil
 	if s.item != "" {
 		s.Turn.Discard(s.item)
 		s.item = ""
@@ -688,6 +690,7 @@ func (s *sink) Item(m protocol.LogMessage) error {
 	id := ""
 	if m.Role == protocol.RoleAssistant {
 		id, s.item = s.item, ""
+		s.toolBlocks = nil
 	}
 	if err := s.ItemAs(id, m); err != nil {
 		return err

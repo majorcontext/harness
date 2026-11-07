@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 
@@ -84,6 +85,18 @@ func (t *turnRun) Delta(itemID string, d turn.Delta) {
 // Discard tells subscribers to remove the live item itemID.
 func (t *turnRun) Discard(itemID string) {
 	t.a.frame(protocol.KindItemDiscarded, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id})
+}
+
+func (t *turnRun) ToolBlock(itemID string, c protocol.ToolCall, available bool) {
+	kind := protocol.KindToolBlockStarted
+	f := protocol.ToolBlockFrame{ItemID: itemID, TurnID: t.r.id, CallID: c.ID, Name: c.Name}
+	if available {
+		kind = protocol.KindToolBlockAvailable
+		if json.Valid(c.Arguments) {
+			f.Input = c.Arguments
+		}
+	}
+	t.a.frame(kind, f)
 }
 
 // Alive has nothing to report: the stall watchdog is in the turn loop.

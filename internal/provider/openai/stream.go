@@ -461,6 +461,28 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		return s.reasoningDelta(ev.OutputIndex, ev.SummaryIndex, ev.Delta)
 
+	case "response.output_item.added":
+		var ev struct {
+			OutputIndex int `json:"output_index"`
+			Item        struct {
+				Type   string `json:"type"`
+				CallID string `json:"call_id"`
+				Name   string `json:"name"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: bad response.output_item.added: %w", err)
+		}
+		if ev.Item.Type == "function_call" {
+			if _, err := s.itemAt(ev.OutputIndex); err != nil {
+				return err
+			}
+			if ev.Item.CallID != "" && ev.Item.Name != "" {
+				s.visibleOutput = true
+				s.queue = append(s.queue, provider.Event{Type: provider.EventToolCallStarted, ToolCall: &message.ToolCall{CallID: ev.Item.CallID, Name: ev.Item.Name}})
+			}
+		}
+
 	case "response.output_item.done":
 		var ev struct {
 			OutputIndex int             `json:"output_index"`

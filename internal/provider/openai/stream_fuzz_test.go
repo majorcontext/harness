@@ -72,7 +72,7 @@ func checkFuzzEvent(t *testing.T, ev provider.Event) {
 	case provider.EventActivity:
 		// Deliberately payload-free (see provider.EventActivity): a handled
 		// wire event that queued nothing consumer-visible.
-	case provider.EventToolCall:
+	case provider.EventToolCall, provider.EventToolCallStarted:
 		if ev.ToolCall == nil {
 			t.Fatalf("tool_call event with nil ToolCall: %+v", ev)
 		}

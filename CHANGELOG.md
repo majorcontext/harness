@@ -16,6 +16,8 @@ First tagged release.
 
 ### Added
 
+- **Ordered tool blocks** (`protocol`) — model API streams announce tool calls when their identity is known and when their full input is available, interleaved with text. `PromptStream` retains these frames for lossless consumption.
+
 - **Durable step boundaries** (`protocol`) — `step.started` and `step.ended` identify logical model steps by turn and zero-based index, with the normalized finish reason on completion. Backends that cannot expose steps omit them.
 
 - **Contextual tool stop** (`harness`) — `Options.StopAfterContext` inspects the current turn’s recorded text and tool results. `Options.StopAfterErrors` optionally includes failed results in predicate evaluation; named-tool stops and default behavior remain unchanged.
