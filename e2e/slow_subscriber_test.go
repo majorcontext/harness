@@ -26,15 +26,15 @@ func TestContractSlowEmbeddedSubscriber(t *testing.T) {
 		{"a_slow_embedded_subscriber_reconciles_dropped_text_from_completed_items", false},
 		{"a_slow_embedded_subscriber_receives_every_text_delta_in_order", true},
 	} {
-		text, chunkRunes := strings.Repeat("answer ", 512), 7
+		answer := harnesstest.Reply{Text: strings.Repeat("answer ", 257), TextChunkRunes: 7}
 		if row.lossless {
-			text, chunkRunes = promptStreamText(), 512
+			text := promptStreamText()
+			prefix := promptStreamPrefixDeltas * promptStreamDeltaRunes
+			answer = harnesstest.Reply{Text: text[:prefix], Tail: text[prefix:], TextChunkRunes: promptStreamDeltaRunes, Block: true}
 		}
 		rows = append(rows, scenario{
-			name: row.name,
-			model: []harnesstest.Step{{Name: "answer", Reply: harnesstest.Reply{
-				Text: text, TextChunkRunes: chunkRunes,
-			}}},
+			name:    row.name,
+			model:   []harnesstest.Step{{Name: "answer", Reply: answer}},
 			actions: []action{create{as: "a"}, slowEmbeddedSubscriber{as: "a", lossless: row.lossless}},
 		})
 	}
@@ -48,11 +48,18 @@ type slowEmbeddedSubscriber struct {
 
 type slowTextFeed struct {
 	cursor    uint64
-	prefix    map[string]string
+	prefix    map[string]*strings.Builder
 	text      map[string]string
 	durable   []protocol.Event
 	completed int
 	dropped   bool
+}
+
+func (f *slowTextFeed) preview(id string) *strings.Builder {
+	if f.prefix[id] == nil {
+		f.prefix[id] = new(strings.Builder)
+	}
+	return f.prefix[id]
 }
 
 func (f *slowTextFeed) apply(t *testing.T, e protocol.Event) bool {
@@ -62,12 +69,11 @@ func (f *slowTextFeed) apply(t *testing.T, e protocol.Event) bool {
 	switch e.Kind {
 	case protocol.KindItemStarted:
 		item := decodeEvent[protocol.ItemFrame](t, e)
-		f.prefix[item.ItemID], f.text[item.ItemID] = "", ""
+		f.prefix[item.ItemID] = new(strings.Builder)
 	case protocol.KindItemDelta:
 		item := decodeEvent[protocol.ItemFrame](t, e)
 		if item.Type == "text" {
-			f.prefix[item.ItemID] += item.Text
-			f.text[item.ItemID] += item.Text
+			f.preview(item.ItemID).WriteString(item.Text)
 		}
 	case "item.completed":
 		item := decodeEvent[protocol.ItemCompleted](t, e)
@@ -77,7 +83,7 @@ func (f *slowTextFeed) apply(t *testing.T, e protocol.Event) bool {
 				full.WriteString(p.Text)
 			}
 		}
-		f.dropped = f.dropped || f.prefix[item.ItemID] != full.String()
+		f.dropped = f.dropped || f.preview(item.ItemID).String() != full.String()
 		f.text[item.ItemID] = full.String()
 		f.completed++
 	}
@@ -98,7 +104,7 @@ func (a slowEmbeddedSubscriber) run(t *testing.T, r *run) {
 		t.Fatal(err)
 	}
 	ready, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	feed := slowTextFeed{prefix: map[string]string{}, text: map[string]string{}}
+	feed := slowTextFeed{prefix: map[string]*strings.Builder{}, text: map[string]string{}}
 	go func() {
 		defer close(done)
 		for e, err := range s.Events(ctx, 0) {
@@ -129,8 +135,8 @@ func (a slowEmbeddedSubscriber) run(t *testing.T, r *run) {
 		t.Fatalf("overflow=%v, completed=%d, items=%d", feed.dropped, feed.completed, len(feed.text))
 	}
 	for id, text := range feed.text {
-		if text != strings.Repeat("answer ", 512) || len(feed.prefix[id]) == 0 {
-			t.Fatalf("item %s: reconciled bytes=%d, delta bytes=%d", id, len(text), len(feed.prefix[id]))
+		if text != strings.Repeat("answer ", 257) || feed.preview(id).Len() == 0 {
+			t.Fatalf("item %s: reconciled bytes=%d, delta bytes=%d", id, len(text), feed.preview(id).Len())
 		}
 	}
 	var replay []protocol.Event
