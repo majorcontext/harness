@@ -508,6 +508,8 @@ The Go types of `protocol` own the payload of each kind: the field names, the JS
 | `input.promoted` | `protocol.InputPromoted` |
 | `input.withdrawn` | `protocol.InputWithdrawn` |
 | `turn.started` | `protocol.TurnStarted` |
+| `step.started` | `protocol.StepStarted` |
+| `step.ended` | `protocol.StepEnded` |
 | `item.completed` | `protocol.ItemCompleted`: its `message` has the role `user`, `assistant`, or `tool` |
 | `turn.suspended` | `protocol.TurnSuspended` |
 | `turn.resumed` | `protocol.TurnResumed` |
@@ -525,6 +527,8 @@ The Go types of `protocol` own the payload of each kind: the field names, the JS
 | `backend.state` | `protocol.BackendState` |
 | `tool_result.retained` | `protocol.ToolResultRetained` |
 | `pin.recorded` | `protocol.PinRecorded`: `notice` (the kind of the pin), `text`, and `at`, the number of history messages that the pin follows. The engine banner has no record |
+
+A model step has one durable `step.started` and one durable `step.ended`, each with `turn_id` and a zero-based `index` that advances within the turn. The index continues across a suspended turn's resume. Retries, overflow recovery, and pause continuations are part of the same logical step and do not add pairs. The start precedes every item or tool event of the step. Tools may start while the model streams; the boundary does not change their scheduling. The end follows the step's tools and their recorded results, and precedes `turn.ended`. A call that ends the turn and remains pending, such as an `ask_user_question` or browser-answered tool call, is exempt from the result requirement. The end event’s `finish_reason` is the normalized provider stop reason (`end_turn`, `tool_use`, `max_tokens`, `refusal`, `incomplete`, `paused`, or `other`), or an empty string on failure or cancellation. A backend that owns its loop and cannot expose steps emits neither event. On resume, recovery closes a persisted interrupted start by appending its end with an empty finish reason after the interrupted tools' results; it never changes or removes records.
 
 Ephemeral frames go to subscribers and never to the store: `item.started`, `item.delta`, `item.discarded`, `status`. Each has `ephemeral: true` and the last durable seq, and an item frame carries its `item_id`, so a client can place it.
 

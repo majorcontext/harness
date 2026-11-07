@@ -207,7 +207,7 @@
       "body": {
         "command": "accepted",
         "input_id": "in3",
-        "seq": 14
+        "seq": 18
       }
     },
     "command_records.a": {
@@ -226,7 +226,7 @@
       "body": {
         "command": "interrupted",
         "input_id": "in3",
-        "seq": 14
+        "seq": 18
       }
     }
   }

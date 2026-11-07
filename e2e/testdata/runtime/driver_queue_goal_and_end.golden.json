@@ -69,7 +69,7 @@
       "status": 201,
       "body": {
         "input_id": "in3",
-        "seq": 7
+        "seq": 8
       }
     },
     "update_goal.a": {
@@ -86,7 +86,7 @@
           "state": "active",
           "turns": 0
         },
-        "head_seq": 10,
+        "head_seq": 11,
         "id": "ses:a",
         "model": "anthropic/claude-fable-5",
         "origin": "",

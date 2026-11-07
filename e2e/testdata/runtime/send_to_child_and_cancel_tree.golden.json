@@ -260,7 +260,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 17,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -290,7 +290,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 9,
         "id": "ses:kid",
         "last_turn": {
           "cause": "stopped",
@@ -323,7 +323,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
+        "head_seq": 16,
         "id": "ses:kid",
         "last_turn": {
           "stop_reason": "completed",
@@ -348,14 +348,14 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 5
+        "seq": 6
       }
     },
     "send.kid#2": {
       "status": 201,
       "body": {
         "input_id": "in3",
-        "seq": 8
+        "seq": 10
       }
     }
   }

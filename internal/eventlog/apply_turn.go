@@ -46,6 +46,29 @@ func (s *State) applyStarted(e protocol.TurnStarted) error {
 	return nil
 }
 
+func (s *State) applyStepStarted(e protocol.StepStarted) error {
+	if err := s.runningTurn(e.TurnID); err != nil {
+		return err
+	}
+	if s.turn.StepOpen || e.Index != s.turn.NextStep {
+		return illegal("turn %s cannot start step %d", e.TurnID, e.Index)
+	}
+	s.turn.StepOpen = true
+	return nil
+}
+
+func (s *State) applyStepEnded(e protocol.StepEnded) error {
+	if err := s.runningTurn(e.TurnID); err != nil {
+		return err
+	}
+	if !s.turn.StepOpen || e.Index != s.turn.NextStep {
+		return illegal("turn %s cannot end step %d", e.TurnID, e.Index)
+	}
+	s.turn.StepOpen = false
+	s.turn.NextStep++
+	return nil
+}
+
 func (s *State) applyItem(e protocol.ItemCompleted) error {
 	if err := s.runningTurn(e.TurnID); err != nil {
 		return err

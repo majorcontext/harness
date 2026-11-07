@@ -113,6 +113,8 @@ type Request struct {
 	AllowedTools []string
 	// MaxSteps caps the model requests of the turn: the loop of a backend that does not own it ends with ErrStepLimit before one more, and a backend that owns it passes the cap on. Zero: no cap.
 	MaxSteps int
+	// StepIndex is the next model step index of this turn.
+	StepIndex int
 	// Steered receives a value when a steer input waits for Sink.Steer. nil: no steer input.
 	Steered <-chan struct{}
 	// Ask opens the request of a call to ask_user_question; false: the result is its error.
@@ -271,6 +273,11 @@ type Turn interface {
 	Ended(err error)
 }
 
+type stepRecorder interface {
+	StepStarted(index int) error
+	StepEnded(index int, reason string) error
+}
+
 // Run runs req on b and reports its items and its end to to. Only the tools
 // that src gives each model call reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
@@ -284,37 +291,23 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context.
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
-	calls := new(atomic.Int64)
-	for _, c := range []*context.Context{&ctx, &step} {
-		*c = context.WithValue(context.WithValue(*c, turnIDKey{}, req.TurnID), seqKey{}, calls)
-	}
+	ctx, step = withCallSequence(ctx, step, req.TurnID)
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle, lim.Retries = 0, 0
 	}
-	record := func(c protocol.ToolCall, r protocol.ToolResult) error {
-		m, err := result(to, c, r)
-		if err != nil {
-			return err
-		}
-		if err := to.Item(m); err != nil {
-			return err
-		}
-		req.History = append(req.History, m)
-		return nil
-	}
+	record := recordResult(to, &req)
 	stopContext := replayStopContext(req)
+	stepsOut, boundaries := to.(stepRecorder)
+	boundaries = boundaries && !caps.OwnsLoop && req.Purpose == PurposeTurn
+	openStep, index := false, req.StepIndex
 	for first, steps := true, 0; ; first = false {
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
 		if !first && !caps.OwnsContext {
-			h, ok, err := to.AutoCompact(step)
-			if err != nil {
+			if err := autoCompact(step, to, &req); err != nil {
 				return err
-			}
-			if ok {
-				req.History = h
 			}
 		}
 		if err := adopt(b, caps, to, &req); err != nil {
@@ -326,31 +319,47 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			return err
 		}
 		if first {
-			if err := answerAsks(ctx, runner{hooks: ts.Hooks, session: req.SessionID}, to, &req, record); err != nil {
+			if err := answerFirst(ctx, ts, to, &req, &call, record); err != nil {
 				return err
 			}
-			call.History = req.History
+		}
+		if boundaries && !openStep {
+			if err := stepsOut.StepStarted(index); err != nil {
+				return err
+			}
+			openStep = true
 		}
 		t := describe(&call, ts, to, caps.OwnsLoop, lim.Trace.Scope(ctx))
 		bt := s.startEarly(ctx, step, t, caps.OwnsLoop)
 		err = callModel(step, b, call, s, lim, caps.OwnsLoop)
-		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && s.fresh() {
-			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
-				req.History = h
-				continue
-			}
+		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && s.fresh() && compactOverflow(step, to, &req) {
+			continue
 		}
 		if err != nil {
 			return err
 		}
 		steps++
 		calls := toolCalls(s.items)
-		if caps.OwnsLoop || len(calls) == 0 {
+		if caps.OwnsLoop {
 			return nil
 		}
-		req.History = append(req.History, s.items...)
-		if stop, err := runStepTools(ctx, bt, t, to, calls, lim, &stopContext, record); stop || err != nil {
-			return err
+		var stop bool
+		if len(calls) > 0 {
+			req.History = append(req.History, s.items...)
+			stop, err = runStepTools(ctx, bt, t, to, calls, lim, &stopContext, record)
+			if err != nil {
+				return err
+			}
+		}
+		if boundaries {
+			if err := stepsOut.StepEnded(index, s.finishReason); err != nil {
+				return err
+			}
+			openStep = false
+			index++
+		}
+		if stop || len(calls) == 0 {
+			return nil
 		}
 		if req.MaxSteps > 0 && steps >= req.MaxSteps {
 			return ErrStepLimit
@@ -361,6 +370,56 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		}
 		req.History = append(req.History, in...)
 	}
+}
+
+func withCallSequence(ctx, step context.Context, turnID string) (context.Context, context.Context) {
+	calls := new(atomic.Int64)
+	for _, c := range []*context.Context{&ctx, &step} {
+		*c = context.WithValue(context.WithValue(*c, turnIDKey{}, turnID), seqKey{}, calls)
+	}
+	return ctx, step
+}
+
+func recordResult(to Turn, req *Request) func(protocol.ToolCall, protocol.ToolResult) error {
+	return func(c protocol.ToolCall, r protocol.ToolResult) error {
+		m, err := result(to, c, r)
+		if err != nil {
+			return err
+		}
+		if err := to.Item(m); err != nil {
+			return err
+		}
+		req.History = append(req.History, m)
+		return nil
+	}
+}
+
+func autoCompact(ctx context.Context, to Turn, req *Request) error {
+	h, ok, err := to.AutoCompact(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
+		req.History = h
+	}
+	return nil
+}
+
+func compactOverflow(ctx context.Context, to Turn, req *Request) bool {
+	h, ok, err := to.CompactTurn(ctx)
+	if err != nil || !ok {
+		return false
+	}
+	req.History = h
+	return true
+}
+
+func answerFirst(ctx context.Context, ts Toolset, to Turn, req, call *Request, record func(protocol.ToolCall, protocol.ToolResult) error) error {
+	if err := answerAsks(ctx, runner{hooks: ts.Hooks, session: req.SessionID}, to, req, record); err != nil {
+		return err
+	}
+	call.History = req.History
+	return nil
 }
 
 func runStepTools(ctx context.Context, bt *batch, t runner, to Sink, calls []protocol.ToolCall, lim Limits, sc *StopContext, record func(protocol.ToolCall, protocol.ToolResult) error) (bool, error) {
@@ -553,8 +612,9 @@ func sleep(ctx context.Context, d time.Duration) error {
 // sink collects the items of one model call and reports the rest to its Turn.
 type sink struct {
 	Turn
-	items       []protocol.LogMessage
-	stopContext *StopContext
+	items        []protocol.LogMessage
+	finishReason string
+	stopContext  *StopContext
 	// output tracks text and reasoning deltas when this call disables recovery after output.
 	output *bool
 	// item is the item that the deltas since the last Item build, or "".

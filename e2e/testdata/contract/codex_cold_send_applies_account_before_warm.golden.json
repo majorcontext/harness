@@ -821,7 +821,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "medium",
-        "head_seq": 7,
+        "head_seq": 9,
         "id": "ses:kid",
         "last_turn": {
           "stop_reason": "completed",
@@ -866,7 +866,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "medium",
-        "head_seq": 14,
+        "head_seq": 18,
         "id": "ses:kid",
         "last_turn": {
           "stop_reason": "completed",

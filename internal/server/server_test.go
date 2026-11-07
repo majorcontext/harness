@@ -149,7 +149,7 @@ func TestLiveFramesCarryNoSSEID(t *testing.T) {
 	var got protocol.Admitted
 	want(t, "submit status", call(t, "POST", s1+"/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, &got), http.StatusCreated)
 	want(t, "turn frames", live.until(t, "turn.ended"),
-		[]string{"3 input.admitted", "4 turn.started", "5 session.titled", "~5 item.started", "~5 item.delta text hello", "6 context.measured", "7 item.completed", "8 turn.ended"})
+		[]string{"3 input.admitted", "4 turn.started", "5 session.titled", "6 step.started", "~6 item.started", "~6 item.delta text hello", "7 context.measured", "8 item.completed", "9 step.ended", "10 turn.ended"})
 }
 
 func TestErrorsOverHTTP(t *testing.T) {

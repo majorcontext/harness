@@ -152,6 +152,8 @@ const (
 	KindInputPromoted      = "input.promoted"
 	KindInputWithdrawn     = "input.withdrawn"
 	KindTurnStarted        = "turn.started"
+	KindStepStarted        = "step.started"
+	KindStepEnded          = "step.ended"
 	KindItemCompleted      = "item.completed"
 	KindTurnSuspended      = "turn.suspended"
 	KindTurnResumed        = "turn.resumed"
@@ -311,6 +313,19 @@ type InputWithdrawn struct {
 type TurnStarted struct {
 	TurnID   string   `json:"turn_id"`
 	InputIDs []string `json:"input_ids"`
+}
+
+// StepStarted starts one logical model step of a turn.
+type StepStarted struct {
+	TurnID string `json:"turn_id"`
+	Index  int    `json:"index"`
+}
+
+// StepEnded ends a logical model step after its results are recorded.
+type StepEnded struct {
+	TurnID       string `json:"turn_id"`
+	Index        int    `json:"index"`
+	FinishReason string `json:"finish_reason"`
 }
 
 // ItemCompleted records one finished message of a running turn.
@@ -510,6 +525,12 @@ func (InputWithdrawn) Kind() string { return KindInputWithdrawn }
 
 // Kind returns KindTurnStarted.
 func (TurnStarted) Kind() string { return KindTurnStarted }
+
+// Kind returns KindStepStarted.
+func (StepStarted) Kind() string { return KindStepStarted }
+
+// Kind returns KindStepEnded.
+func (StepEnded) Kind() string { return KindStepEnded }
 
 // Kind returns KindItemCompleted.
 func (ItemCompleted) Kind() string { return KindItemCompleted }

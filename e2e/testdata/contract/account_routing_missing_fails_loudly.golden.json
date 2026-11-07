@@ -24,7 +24,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 9,
         "id": "ses:a",
         "last_turn": {
           "error": "[permanent] account routing is not configured for vendor \"codex\"; set account_routing in the config",

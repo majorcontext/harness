@@ -203,7 +203,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -227,7 +227,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 6
+        "seq": 7
       }
     }
   }

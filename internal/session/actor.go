@@ -339,7 +339,11 @@ func open(ctx context.Context, cfg Config, changes protocol.SettingsChanged) (*A
 	t, ok := s.Turn()
 	switch {
 	case ok && t.Suspended:
-		err = a.appendCtx(ctx, protocol.TurnResumed{TurnID: t.ID, Count: t.Resumes + 1})
+		events := []protocol.Payload{protocol.TurnResumed{TurnID: t.ID, Count: t.Resumes + 1}}
+		if t.StepOpen {
+			events = append(events, protocol.StepEnded{TurnID: t.ID, Index: t.NextStep})
+		}
+		err = a.appendCtx(ctx, events...)
 		if err == nil {
 			a.start(t.ID, t.InputIDs)
 		}
