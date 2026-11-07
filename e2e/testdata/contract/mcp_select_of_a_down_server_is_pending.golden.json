@@ -33,7 +33,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (connection refused; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -72,7 +72,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (connection refused; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
