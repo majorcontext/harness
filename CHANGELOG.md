@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Tool input errors** — live tool availability frames include a bounded, masked normalization error while retaining the raw input.
+
 - **Step finish reasons** — a step that ends on an output limit or a refusal reports the normalized provider finish reason.
 
 - **Retry after tool block start** — `Options.DisableRetryAfterOutput` stops recovery resends after a tool block starts, even when the stream ends before the tool input is complete.

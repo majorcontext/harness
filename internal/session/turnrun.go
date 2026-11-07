@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -87,11 +88,17 @@ func (t *turnRun) Discard(itemID string) {
 	t.a.frame(protocol.KindItemDiscarded, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id})
 }
 
-func (t *turnRun) ToolBlock(itemID string, c protocol.ToolCall, available bool) {
+func (t *turnRun) ToolBlock(itemID string, c protocol.ToolCall, available bool, failure error) {
 	kind := protocol.KindToolBlockStarted
 	f := protocol.ToolBlockFrame{ItemID: itemID, TurnID: t.r.id, CallID: c.ID, Name: c.Name}
 	if available {
 		kind = protocol.KindToolBlockAvailable
+		if failure != nil {
+			f.Error = plugin.SanitizeSessionError(toolresult.Mask(failure.Error()))
+			if f.Error == "" {
+				f.Error = "tool input normalization failed"
+			}
+		}
 		if json.Valid(c.Arguments) {
 			f.Input = c.Arguments
 		}

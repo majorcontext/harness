@@ -353,6 +353,7 @@ type ToolBlockFrame struct {
 	CallID string          `json:"call_id"`
 	Name   string          `json:"name"`
 	Input  json.RawMessage `json:"input,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
 // StatusFrame is the data of a status frame. A retrying turn waits until
