@@ -211,7 +211,7 @@ func TestTranscodeAssistantText(t *testing.T) {
 func TestTranscodeToolCallAndResult(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},
-		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "call_abc", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "call_abc", Name: "bash", Arguments: json.RawMessage(`{ "command": "echo <&>" }`)}}},
 		message.Message{Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "call_abc", Content: message.Parts{
 				&message.Text{Text: "file.go"},
@@ -226,7 +226,7 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 	}
 	call := probeItem(t, out.Input[1])
 	if call.Type != "function_call" || call.CallID != "call_abc" || call.Name != "bash" ||
-		call.Arguments != `{"command":"ls"}` {
+		call.Arguments != `{ "command": "echo <&>" }` {
 		t.Errorf("function_call = %+v", call)
 	}
 	res := probeItem(t, out.Input[2])

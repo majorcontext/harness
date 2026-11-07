@@ -2,6 +2,8 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -198,6 +200,48 @@ func (c chain) Join(ctx context.Context, call protocol.ToolCall, r protocol.Tool
 		}
 	}
 	return r
+}
+
+type inputNormalizer interface {
+	NormalizeInput(context.Context, json.RawMessage) (json.RawMessage, error)
+}
+
+type inputForwarder interface {
+	ForwardInput(protocol.ToolCall, json.RawMessage) (protocol.ToolCall, error)
+}
+
+func (t runner) normalize(ctx context.Context, c protocol.ToolCall) (out protocol.ToolCall, err error) {
+	out = c
+	defer func() {
+		if recover() != nil {
+			out = c
+			err = errors.New(toolPanicked)
+		}
+	}()
+	tools, target := t.target(c)
+	tool := findIn(tools, target.Name)
+	if tool == nil && t.resolver != nil {
+		tool = t.resolver.ResolveTool(ctx, target.Name)
+	}
+	n, ok := tool.(inputNormalizer)
+	if !ok {
+		return c, nil
+	}
+	input, err := n.NormalizeInput(ctx, slices.Clone(target.Arguments))
+	if err != nil {
+		return c, err
+	}
+	if !json.Valid(input) {
+		return c, errors.New("tool input normalization returned invalid JSON")
+	}
+	if target.Name != c.Name {
+		if f, ok := findIn(t.runnable, c.Name).(inputForwarder); ok {
+			return f.ForwardInput(c, input)
+		}
+		return c, errors.New("tool input cannot be forwarded")
+	}
+	c.Arguments = slices.Clone(input)
+	return c, nil
 }
 
 // runner runs the calls of one model call between the hooks of its Toolset.

@@ -382,34 +382,28 @@ func TestWebSocketTerminalEmptyResponseIDDoesNotReuseCreatedIDForLineage(t *test
 }
 
 func TestWebSocketToolRoundContinuesResponseLineage(t *testing.T) {
-	server := newWSLineageServer(t)
-	server.scripts <- wsLineageScript{beforeWait: []string{
-		`{"type":"response.created","response":{"id":"resp_tool"}}`,
-		`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"one\"}"}}`,
-		`{"type":"response.completed","response":{"id":"resp_tool"}}`,
-	}}
-	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_after_tool", "done")}
-	client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
-
-	streamLineageTurn(t, client, lineageRequest("tool", userMessage("one")))
-	assistant := message.Message{ID: "resp_tool", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"one"}`)}}}
-	result := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Text{Text: "result"}}}}}
-	streamLineageTurn(t, client, lineageRequest("tool", userMessage("one"), assistant, result))
-
-	<-server.frames
-	second := decodeResponseCreate(t, <-server.frames)
-	if second.PreviousResponseID != "resp_tool" {
-		t.Fatalf("previous_response_id = %q, want resp_tool", second.PreviousResponseID)
-	}
-	if len(second.Input) != 1 {
-		t.Fatalf("second input has %d items, want only tool result: %s", len(second.Input), second.Input)
-	}
-	var item map[string]any
-	if err := json.Unmarshal(second.Input[0], &item); err != nil {
-		t.Fatal(err)
-	}
-	if item["type"] != "function_call_output" || item["output"] != "result" {
-		t.Fatalf("second input = %s, want function_call_output suffix", second.Input)
+	for _, args := range []string{`{"q":"one"}`, `{"q":" one "}`} {
+		t.Run(args, func(t *testing.T) {
+			server := newWSLineageServer(t)
+			server.scripts <- wsLineageScript{beforeWait: []string{
+				`{"type":"response.created","response":{"id":"resp_tool"}}`,
+				`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\" one \"}"}}`,
+				`{"type":"response.completed","response":{"id":"resp_tool"}}`,
+			}}
+			server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_after_tool", "done")}
+			client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+			streamLineageTurn(t, client, lineageRequest("tool", userMessage("one")))
+			assistant := message.Message{ID: "resp_tool", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "call_1", Name: "lookup", Arguments: json.RawMessage(args)}}}
+			result := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Text{Text: "result"}}}}}
+			streamLineageTurn(t, client, lineageRequest("tool", userMessage("one"), assistant, result))
+			<-server.frames
+			frame := <-server.frames
+			want := `{"type":"response.create","model":"gpt-5","input":[{"type":"function_call_output","call_id":"call_1","output":"result"}],"max_output_tokens":100,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"summary":"auto"},"prompt_cache_key":"tool","previous_response_id":"resp_tool"}`
+			if args == `{"q":"one"}` {
+				want = `{"type":"response.create","model":"gpt-5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"one"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"one\"}"},{"type":"function_call_output","call_id":"call_1","output":"result"}],"max_output_tokens":100,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"summary":"auto"},"prompt_cache_key":"tool"}`
+			}
+			assertJSONEqual(t, frame, []byte(want))
+		})
 	}
 }
 

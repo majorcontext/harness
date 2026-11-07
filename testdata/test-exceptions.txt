@@ -1,3 +1,8 @@
+e2e/contract_runtime_tool_normalize_test.go Options.Tools installs an embedder tool only in the Go API; the serve binary has no tool injection seam
+e2e/contract_runtime_normalizer_cancel_test.go cancellation of a Go embedder normalizer requires an in-process tool
+e2e/contract_runtime_normalizer_hooks_test.go normalization hooks require an in-process embedder tool and plugin
+e2e/contract_tool_normalization_rewrite_test.go normalization and in-process plugin rewrites require Go API options
+e2e/contract_tool_input_stream_test.go PromptStream and embedder tools are Go API only; the serve host cannot install a normalizing tool
 allowedtools_test.go WithAllowedTools is Go-only; no HTTP route can replace a session tool allowlist
 banner_test.go Options.Version empty is Go API: serve always passes a version, so no row runs without the banner
 codex_test.go ModelTransport is a Go API option with no serve equivalent; it supplies the key and dials the websocket
@@ -27,6 +32,7 @@ plugin/part_test.go a Part round trip is pure JSON code that no contract row iso
 plugin/serve_test.go no contract fixture has a hook that panics, and a context that ends when the connection closes is not observable from a scenario row; the client headers need a pipe peer
 internal/plugin/typescript_conformance_test.go the TypeScript SDK manifest needs a real node process running the SDK file, which no scenario row starts
 examples/guardrail/internal/guard/guard_test.go an example's matcher table; no contract row runs examples
+internal/turn/final_item_normalize_test.go a final-item-only backend that skips streaming tool calls cannot be supplied by a contract scenario
 internal/turn/turn_test.go the window between the before hook and the context check of runTool cannot be scheduled from a contract row; the test needs a hook that cancels the turn context inside it; the one-at-a-time Join of Call and Ask needs a backend that runs both from many goroutines at once
 internal/workspace/workspace_test.go rows run in parallel, so each row needs its own git repository, and the serial rows need t.Chdir or t.Setenv; no contract row can start that many git repositories
 internal/imageclamp/imageclamp_test.go each test encodes large PNG fixtures, and the race detector makes each encode slow; a per-size fixture cache in a package-level variable shares one encode across the tests
