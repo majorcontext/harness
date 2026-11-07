@@ -14,7 +14,7 @@ const MaxParallel = 8
 // each earlier call ends before it starts, and it ends before a later call
 // starts. A tool that changes what the next call sees, such as the model,
 // the goal, or the MCP servers, is Alone. A forwarded call is Alone only when its tool is.
-// A tool whose spec is not ReadOnly runs the same way.
+// A tool that is neither ReadOnly nor Parallel runs the same way.
 type Alone interface {
 	Alone()
 }
@@ -24,6 +24,13 @@ type Alone interface {
 // calls with another key.
 type Keyed interface {
 	Key(c protocol.ToolCall) string
+}
+
+// Parallel is a Tool that changes state but whose calls may run beside the
+// other read-only and Parallel calls of their model call, as a ReadOnly call
+// does. Alone wins over Parallel. A forwarded call is Parallel only when its tool is.
+type Parallel interface {
+	Parallel()
 }
 
 const toolPanicked = "tool call failed: the tool panicked"
@@ -46,9 +53,9 @@ type flight struct {
 // batch runs the tool calls of one model call. A call starts when it is
 // submitted, which is when the model stream delivers it, or at the end of the
 // step for a call that the stream did not deliver. Calls are ordered by
-// submission: a ReadOnly call waits only for the last call that is not
-// ReadOnly or Alone, and runs beside other ReadOnly calls, at most MaxParallel
-// at once. Any other call waits for every earlier call and holds the batch
+// submission: a ReadOnly or Parallel call waits only for the last call that is
+// neither, and runs beside other such calls, at most MaxParallel at once. Any
+// other call waits for every earlier call and holds the batch
 // alone until it ends.
 type batch struct {
 	ctx, step context.Context
@@ -57,8 +64,10 @@ type batch struct {
 	slots     chan struct{}
 	wg        sync.WaitGroup
 
-	mu      sync.Mutex
-	flights map[string]*flight
+	mu            sync.Mutex
+	flights       map[string]*flight
+	failures      map[string]error
+	emptyFailures []error
 	// held is set once a call must wait for the end of the step: no later call starts early.
 	held bool
 	// excl ends with the last exclusive call; reads are the read-only calls since.
@@ -70,11 +79,11 @@ type batch struct {
 func newBatch(ctx, step context.Context, t runner) *batch {
 	wctx, stop := context.WithCancelCause(ctx)
 	return &batch{ctx: wctx, step: step, stop: stop, t: t, slots: make(chan struct{}, MaxParallel),
-		flights: map[string]*flight{}, tail: map[string]chan struct{}{}}
+		flights: map[string]*flight{}, failures: map[string]error{}, tail: map[string]chan struct{}{}}
 }
 
-// readOnly reports whether c may run beside other read-only calls.
-func (t runner) readOnly(c protocol.ToolCall) (ro bool) {
+// overlaps reports whether c may run beside other read-only and Parallel calls.
+func (t runner) overlaps(c protocol.ToolCall) (ro bool) {
 	defer func() {
 		if recover() != nil {
 			ro = false
@@ -85,7 +94,11 @@ func (t runner) readOnly(c protocol.ToolCall) (ro bool) {
 	}
 	tools, c := t.target(c)
 	tool := findIn(tools, c.Name)
-	return tool != nil && tool.Spec().ReadOnly
+	if tool == nil {
+		return false
+	}
+	_, parallel := tool.(Parallel)
+	return parallel || tool.Spec().ReadOnly
 }
 
 // Late is a Tool whose call starts only when its model call has ended, because
@@ -129,6 +142,11 @@ func (b *batch) Call(c protocol.ToolCall) {
 // submit starts c. The caller holds b.mu.
 func (b *batch) submit(c protocol.ToolCall) *flight {
 	f := &flight{call: c, done: make(chan struct{})}
+	failure := b.failures[c.ID]
+	if c.ID == "" && len(b.emptyFailures) > 0 {
+		failure = b.emptyFailures[0]
+		b.emptyFailures = b.emptyFailures[1:]
+	}
 	if c.ID != "" {
 		b.flights[c.ID] = f
 	}
@@ -136,7 +154,7 @@ func (b *batch) submit(c protocol.ToolCall) *flight {
 	if b.excl != nil {
 		wait = append(wait, b.excl)
 	}
-	ro := b.t.readOnly(c)
+	ro := b.t.overlaps(c)
 	if ro {
 		b.reads = append(b.reads, f.done)
 	} else {
@@ -164,14 +182,14 @@ func (b *batch) submit(c protocol.ToolCall) *flight {
 			b.slots <- struct{}{}
 			defer func() { <-b.slots }()
 		}
-		b.exec(f)
+		b.exec(f, failure)
 	})
 	return f
 }
 
 // exec runs f unless the turn ended, and turns a panic into an error
 // result, so that every call has one result.
-func (b *batch) exec(f *flight) {
+func (b *batch) exec(f *flight, failure error) {
 	if b.step.Err() != nil || b.ctx.Err() != nil {
 		return
 	}
@@ -180,6 +198,23 @@ func (b *batch) exec(f *flight) {
 			f.out = outcome{protocol.ToolResult{Text: toolPanicked, IsError: true}, true}
 		}
 	}()
+	if failure != nil {
+		res := protocol.ToolResult{Text: failure.Error(), IsError: true}
+		if h := b.t.hooks; h != nil {
+			_, c := b.t.target(f.call)
+			c, deny := h.Before(b.ctx, c)
+			if deny != "" {
+				res.Text = deny
+			} else {
+				if err := b.ctx.Err(); err != nil {
+					res.Text = err.Error()
+				}
+				res = h.After(b.ctx, c, res)
+			}
+		}
+		f.out = outcome{res, true}
+		return
+	}
 	f.out = outcome{b.t.run(b.ctx, f.call), true}
 }
 

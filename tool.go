@@ -24,6 +24,12 @@ type Tool interface {
 	Run(ctx context.Context, call Call) (protocol.ToolResult, error)
 }
 
+// InputNormalizer is a tool that normalizes its input before execution.
+// NormalizeInput must be fast and pure, with no I/O.
+type InputNormalizer interface {
+	NormalizeInput(context.Context, json.RawMessage) (json.RawMessage, error)
+}
+
 // Call is one tool call and the session that made it.
 type Call struct {
 	// ID is the call ID of the model, stable across a resumed turn.
@@ -49,6 +55,15 @@ type KeyedTool interface {
 	Key(c Call) string
 }
 
+// ParallelTool is a Tool that changes state but whose calls may run beside the other calls of
+// their model call, the way a read-only call does. Calls with the same non-empty key (KeyedTool)
+// still run one at a time, in call order. Use it for a tool that writes only what its key names.
+// A tool that is also an AloneTool runs alone.
+type ParallelTool interface {
+	Tool
+	Parallel()
+}
+
 // embedded is an embedder Tool as the runtime holds it, before a session binds it.
 type embedded struct{ Tool }
 
@@ -56,18 +71,25 @@ func (e embedded) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 	return runEmbedded(ctx, e.Tool, Call{ID: c.ID, Name: c.Name, Arguments: c.Arguments})
 }
 
-// bind returns the tool for one turn of session, with the Alone and Key of the embedder tool.
+// bind returns the tool for one turn of session, with the scheduling of the embedder tool.
+// An AloneTool is Alone, which wins over Parallel; a ParallelTool is Parallel.
 func (e embedded) bind(session, root, turnID string) turn.Tool {
 	b := bound{t: e.Tool, session: session, root: root, turn: turnID}
-	_, alone := e.Tool.(AloneTool)
-	_, keyed := e.Tool.(KeyedTool)
-	switch {
-	case alone && keyed:
-		return boundAloneKeyed{boundKeyed{b}}
-	case alone:
+	_, normalizes := e.Tool.(InputNormalizer)
+	if _, ok := e.Tool.(AloneTool); ok {
+		if normalizes {
+			return normalizingAlone{boundAlone{b}}
+		}
 		return boundAlone{b}
-	case keyed:
-		return boundKeyed{b}
+	}
+	if _, ok := e.Tool.(ParallelTool); ok {
+		if normalizes {
+			return normalizingParallel{boundParallel{b}}
+		}
+		return boundParallel{b}
+	}
+	if normalizes {
+		return normalizingBound{b}
 	}
 	return b
 }
@@ -120,17 +142,68 @@ func runEmbedded(ctx context.Context, tool Tool, call Call) (protocol.ToolResult
 	}
 }
 
+// Key is the key of the embedder tool, or empty when it is not a KeyedTool.
+func (b bound) Key(c protocol.ToolCall) string {
+	if k, ok := b.t.(KeyedTool); ok {
+		return k.Key(b.call(c))
+	}
+	return ""
+}
+
 type boundAlone struct{ bound }
 
 func (boundAlone) Alone() {}
 
-type boundKeyed struct{ bound }
+type boundParallel struct{ bound }
 
-func (b boundKeyed) Key(c protocol.ToolCall) string { return b.t.(KeyedTool).Key(b.call(c)) }
+func (boundParallel) Parallel() {}
 
-type boundAloneKeyed struct{ boundKeyed }
+type normalizingBound struct{ bound }
+type normalizingAlone struct{ boundAlone }
+type normalizingParallel struct{ boundParallel }
 
-func (boundAloneKeyed) Alone() {}
+func (b normalizingBound) NormalizeInput(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return normalizeEmbedded(ctx, b.t.(InputNormalizer), input)
+}
+func (b normalizingAlone) NormalizeInput(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return normalizeEmbedded(ctx, b.t.(InputNormalizer), input)
+}
+func (b normalizingParallel) NormalizeInput(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return normalizeEmbedded(ctx, b.t.(InputNormalizer), input)
+}
+
+func normalizeEmbedded(ctx context.Context, tool InputNormalizer, input json.RawMessage) (json.RawMessage, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	type outcome struct {
+		input json.RawMessage
+		err   error
+	}
+	input = append(json.RawMessage(nil), input...)
+	done := make(chan outcome, 1)
+	go func() {
+		var out outcome
+		defer func() {
+			if recover() != nil {
+				out = outcome{err: errors.New("tool call failed: the tool panicked")}
+			}
+			done <- out
+		}()
+		out.input, out.err = tool.NormalizeInput(ctx, input)
+	}()
+	select {
+	case out := <-done:
+		return out.input, out.err
+	case <-ctx.Done():
+		select {
+		case out := <-done:
+			return out.input, out.err
+		default:
+			return nil, ctx.Err()
+		}
+	}
+}
 
 // boundTools is a Source of the runtime tools that binds each embedder tool to the session and the turn of the model call.
 type boundTools struct {

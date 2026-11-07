@@ -129,11 +129,21 @@
           {
             "id": "7",
             "seq": 7,
-            "type": "item.completed"
+            "type": "context.measured"
           },
           {
             "id": "8",
             "seq": 8,
+            "type": "item.completed"
+          },
+          {
+            "id": "9",
+            "seq": 9,
+            "type": "step.ended"
+          },
+          {
+            "id": "10",
+            "seq": 10,
             "type": "turn.ended"
           }
         ]
@@ -146,16 +156,26 @@
           {
             "id": "7",
             "seq": 7,
-            "type": "item.completed"
+            "type": "context.measured"
           },
           {
             "id": "8",
             "seq": 8,
-            "type": "turn.ended"
+            "type": "item.completed"
           },
           {
             "id": "9",
             "seq": 9,
+            "type": "step.ended"
+          },
+          {
+            "id": "10",
+            "seq": 10,
+            "type": "turn.ended"
+          },
+          {
+            "id": "11",
+            "seq": 11,
             "type": "owner.acquired"
           }
         ]

@@ -160,8 +160,11 @@ func (a *Actor) start(id string, inputIDs []string) {
 	r.span = span
 	a.lastTurn = turnSpan{id, span.SpanContext()}
 	req := a.callRequest(id)
-	if current, ok := a.state.Turn(); ok && current.Resumes > 0 {
-		req.ResumeItems = a.state.TurnItems()
+	if current, ok := a.state.Turn(); ok {
+		req.StepIndex = current.NextStep
+		if current.Resumes > 0 {
+			req.ResumeItems = a.state.TurnItems()
+		}
 	}
 	if a.compactInput != "" && slices.Contains(inputIDs, a.compactInput) {
 		req.Purpose, a.compactInput = turn.PurposeCompaction, ""
@@ -275,31 +278,38 @@ func (a *Actor) ended(r *running, runErr error) {
 	next := false
 	switch {
 	case runErr == nil:
-		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopCompleted}, cutOff)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopCompleted}, cutOff, "")
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
-		err = a.append(append(a.closeOpen(turnID, cutOff, false), protocol.TurnSuspended{TurnID: turnID, Cause: protocol.CauseHandoff})...)
+		events := a.closeOpen(turnID, cutOff, false)
+		events = a.closeStep(events, turnID, "")
+		err = a.append(append(events, protocol.TurnSuspended{TurnID: turnID, Cause: protocol.CauseHandoff})...)
 	case errors.Is(cause, errTaskTurn):
-		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped, TaskCancel: true}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped, TaskCancel: true}, interrupted, "")
 		next = true
 	case errors.Is(cause, errStopTurn):
-		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped}, interrupted, "")
 		next = true
 	case errors.Is(cause, errEndTurn):
-		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseEnded}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseEnded}, interrupted, "")
 		next = true
 	case errors.Is(cause, errGoalCleared):
-		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseGoalCleared}, interrupted)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseGoalCleared}, interrupted, "")
 		next = true
 	case errors.Is(runErr, turn.ErrStepLimit):
-		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopStepLimit}, cutOff)
+		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopStepLimit}, cutOff, "")
 		next = true
 	default:
 		failed := failedEnd(turnID, runErr)
 		if r.span != nil {
 			tracing.Fail(r.span, cmp.Or(string(failed.ErrorClass), string(failed.Cause), "_OTHER"))
 		}
-		err = a.endTurn(a.cfg.Base, failed, cutOff, a.goalStop(runErr, r.kind)...)
+		var finish *turn.FinishError
+		reason := ""
+		if errors.As(runErr, &finish) {
+			reason = finish.Reason
+		}
+		err = a.endTurn(a.cfg.Base, failed, cutOff, reason, a.goalStop(runErr, r.kind)...)
 		next = !errors.Is(runErr, turn.ErrExhausted)
 	}
 	var after func() error
@@ -352,9 +362,10 @@ func (a *Actor) ownsLoop() bool {
 	return a.cfg.Backend.Capabilities(a.state.Model()).OwnsLoop
 }
 
-func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text string, after ...protocol.Payload) error {
+func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text, reason string, after ...protocol.Payload) error {
 	awaiting := ended.StopReason == protocol.StopCompleted && len(a.state.Requests()) > 0
 	events := a.closeOpen(ended.TurnID, text, awaiting)
+	events = a.closeStep(events, ended.TurnID, reason)
 	if awaiting {
 		ended.StopReason = protocol.StopAwaitingInput
 	}
@@ -372,6 +383,13 @@ func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text stri
 		return nil
 	}
 	return a.appendCtx(ctx, append(events, after...)...)
+}
+
+func (a *Actor) closeStep(events []protocol.Payload, turnID, reason string) []protocol.Payload {
+	if t, ok := a.state.Turn(); ok && t.ID == turnID && t.StepOpen {
+		return append(events, protocol.StepEnded{TurnID: turnID, Index: t.NextStep, FinishReason: reason})
+	}
+	return events
 }
 
 func providerExhaustionDetails(err error) (protocol.Cause, *provider.Error) {

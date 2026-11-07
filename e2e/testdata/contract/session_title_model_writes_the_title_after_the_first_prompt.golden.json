@@ -86,7 +86,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 11,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -159,6 +159,15 @@
           },
           {
             "d": {
+              "index": 0,
+              "turn_id": "turn#1"
+            },
+            "k": "step.started",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
@@ -169,7 +178,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 5,
+            "seq": 6,
             "t": "\u003ctime\u003e"
           },
           {
@@ -187,7 +196,17 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 6,
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "finish_reason": "end_turn",
+              "index": 0,
+              "turn_id": "turn#1"
+            },
+            "k": "step.ended",
+            "seq": 8,
             "t": "\u003ctime\u003e"
           },
           {
@@ -196,7 +215,7 @@
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
-            "seq": 7,
+            "seq": 9,
             "t": "\u003ctime\u003e"
           },
           {
@@ -205,7 +224,7 @@
               "title": "Fix the flaky login test"
             },
             "k": "session.titled",
-            "seq": 8,
+            "seq": 10,
             "t": "\u003ctime\u003e"
           },
           {
@@ -219,7 +238,7 @@
               "window": 0
             },
             "k": "context.measured",
-            "seq": 9,
+            "seq": 11,
             "t": "\u003ctime\u003e"
           }
         ]

@@ -392,7 +392,7 @@
           "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 17,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -423,7 +423,7 @@
           "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 19,
+        "head_seq": 25,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -454,7 +454,7 @@
           "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 24,
+        "head_seq": 32,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

@@ -7,9 +7,11 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -98,8 +100,8 @@ func TestEmbedderTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			converse(t, sess, "run")
-			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "context.measured", "item.completed assistant call_1",
-				"item.completed tool call_1 "+tc.want, "context.measured", "item.completed assistant done", "turn.ended completed")
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "step.started", "context.measured", "item.completed assistant call_1",
+				"item.completed tool call_1 "+tc.want, "step.ended", "step.started", "context.measured", "item.completed assistant done", "step.ended", "turn.ended completed")
 			reqs := s.Requests()
 			for i, req := range reqs {
 				if !slices.Equal(req.Tools, tc.tools) {
@@ -116,6 +118,81 @@ func TestEmbedderTools(t *testing.T) {
 			}
 			if got := slices.Concat(echo.Calls(), secret.Calls(), fail.Calls()); !slices.Equal(got, tc.ran) {
 				t.Errorf("tool runs = %q, want %q", got, tc.ran)
+			}
+		})
+	}
+}
+
+// parallelProbe is a probe that is a ParallelTool.
+type parallelProbe struct{ *probe }
+
+func (parallelProbe) Parallel() {}
+
+func TestEmbedderParallelToolsRunBesideEachOtherInOneModelCall(t *testing.T) {
+	a, b := newProbe("a", true), newProbe("b", true)
+	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{},
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "call_1", Name: "a", Input: map[string]any{}}, {ID: "call_2", Name: "b", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult("b"), Reply: harnesstest.Reply{Text: "done"}})
+	r, _, _ := codexRuntime(t, s, false, false, "", parallelProbe{a}, parallelProbe{b})
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	both := make(chan bool, 1)
+	go func() {
+		defer close(a.release)
+		defer close(b.release)
+		for _, p := range []*probe{a, b} {
+			select {
+			case <-p.started:
+			case <-ctx.Done():
+				both <- false
+				return
+			}
+		}
+		both <- true
+	}()
+	converse(t, sess, "run")
+	if !<-both {
+		t.Fatal("the second ParallelTool call did not start while the first ran; bind dropped the Parallel marker")
+	}
+}
+
+// keyedParallelProbe is a parallelProbe that is also a KeyedTool.
+type keyedParallelProbe struct{ parallelProbe }
+
+func (keyedParallelProbe) Key(c harness.Call) string { return "k:" + c.Session }
+
+type aloneKeyedParallelProbe struct{ keyedParallelProbe }
+
+func (aloneKeyedParallelProbe) Alone() {}
+
+func TestBoundEmbedderToolKeepsEveryMarkerItHas(t *testing.T) {
+	call := protocol.ToolCall{ID: "1", Name: "a"}
+	for _, tc := range []struct {
+		name            string
+		tool            harness.Tool
+		alone, parallel bool
+		key             string
+	}{
+		{"a plain tool", newProbe("a", false), false, false, ""},
+		{"a parallel tool", parallelProbe{newProbe("a", false)}, false, true, ""},
+		{"a parallel keyed tool keeps its key", keyedParallelProbe{parallelProbe{newProbe("a", false)}}, false, true, "k:s"},
+		{"an alone parallel keyed tool keeps its key and is alone, not parallel", aloneKeyedParallelProbe{keyedParallelProbe{parallelProbe{newProbe("a", false)}}}, true, false, "k:s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound := harness.BindTool(tc.tool)
+			_, alone := bound.(turn.Alone)
+			_, parallel := bound.(turn.Parallel)
+			key := ""
+			if k, ok := bound.(turn.Keyed); ok {
+				key = k.Key(call)
+			}
+			if alone != tc.alone || parallel != tc.parallel || key != tc.key {
+				t.Errorf("alone=%v parallel=%v key=%q, want alone=%v parallel=%v key=%q", alone, parallel, key, tc.alone, tc.parallel, tc.key)
 			}
 		})
 	}

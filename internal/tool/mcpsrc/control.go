@@ -88,6 +88,20 @@ func (control) Forward(call protocol.ToolCall) (protocol.ToolCall, bool) {
 	return protocol.ToolCall{ID: call.ID, Name: in.Tool, Arguments: in.Arguments}, true
 }
 
+func (control) ForwardInput(call protocol.ToolCall, input json.RawMessage) (protocol.ToolCall, error) {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return call, err
+	}
+	args["arguments"] = input
+	data, err := json.Marshal(args)
+	if err != nil {
+		return call, err
+	}
+	call.Arguments = data
+	return call, nil
+}
+
 // Alone makes the mcp tool run with no other call of its model call in flight.
 func (control) Alone() {}
 

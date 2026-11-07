@@ -374,7 +374,7 @@ func codexPluginRows(t *testing.T) []codexScenario {
 					{ID: "call_p1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"}},
 				}}},
 				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: codexText("waiting")},
-				{Name: "child_bash", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+				{Name: "child_bash", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
 					{ID: "call_c1", Name: "bash", Input: map[string]any{"command": "echo one"}},
 				}}},
 				{Name: "child_ls", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
@@ -386,6 +386,9 @@ func codexPluginRows(t *testing.T) []codexScenario {
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 3},
+				waitIdle{as: "a"},
+				release{step: "child_bash"},
 				awaitRequests{n: 6},
 				waitIdle{as: "a"},
 				recordChains{},

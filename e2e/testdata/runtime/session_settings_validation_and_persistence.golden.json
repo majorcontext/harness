@@ -171,7 +171,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 13,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -202,7 +202,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 16,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -353,7 +353,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 16,
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -443,7 +443,7 @@
           "window": 200000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 17,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

@@ -500,7 +500,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 31,
+        "head_seq": 43,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

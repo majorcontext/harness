@@ -6,10 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -21,6 +23,32 @@ import (
 type turnRun struct {
 	a *Actor
 	r *running
+}
+
+func (t *turnRun) StepStarted(index int) error {
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
+		if t.a.run != t.r {
+			reply(struct{}{}, ErrTurnMismatch)
+			return
+		}
+		reply(struct{}{}, t.a.append(protocol.StepStarted{TurnID: t.r.id, Index: index}))
+	})
+	return err
+}
+
+func (t *turnRun) StepEnded(index int, reason string) error {
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
+		if t.a.run != t.r {
+			reply(struct{}{}, ErrTurnMismatch)
+			return
+		}
+		if err := context.Cause(t.r.step); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
+		reply(struct{}{}, t.a.append(protocol.StepEnded{TurnID: t.r.id, Index: index, FinishReason: reason}))
+	})
+	return err
 }
 
 // Item records m under a new ID.
@@ -58,6 +86,24 @@ func (t *turnRun) Delta(itemID string, d turn.Delta) {
 // Discard tells subscribers to remove the live item itemID.
 func (t *turnRun) Discard(itemID string) {
 	t.a.frame(protocol.KindItemDiscarded, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id})
+}
+
+func (t *turnRun) ToolBlock(itemID string, c protocol.ToolCall, available bool, failure error) {
+	kind := protocol.KindToolBlockStarted
+	f := protocol.ToolBlockFrame{ItemID: itemID, TurnID: t.r.id, CallID: c.ID, Name: c.Name}
+	if available {
+		kind = protocol.KindToolBlockAvailable
+		if failure != nil {
+			f.Error = plugin.SanitizeSessionError(toolresult.Mask(failure.Error()))
+			if f.Error == "" {
+				f.Error = "tool input normalization failed"
+			}
+		}
+		if json.Valid(c.Arguments) {
+			f.Input = c.Arguments
+		}
+	}
+	t.a.frame(kind, f)
 }
 
 // Alive has nothing to report: the stall watchdog is in the turn loop.

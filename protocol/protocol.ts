@@ -635,6 +635,17 @@ export interface StatusFrame {
   next_at?: string;
 }
 
+export interface StepEnded {
+  turn_id: string;
+  index: number;
+  finish_reason: string;
+}
+
+export interface StepStarted {
+  turn_id: string;
+  index: number;
+}
+
 export interface SubscriptionOverage {
   in_use: boolean;
   status: string;
@@ -668,6 +679,15 @@ export interface SyncBatch {
   from_seq: number;
   records: string[];
   blobs?: Record<string, string>;
+}
+
+export interface ToolBlockFrame {
+  item_id: string;
+  turn_id: string;
+  call_id: string;
+  name: string;
+  input?: unknown;
+  error?: string;
 }
 
 export interface ToolResultRetained {

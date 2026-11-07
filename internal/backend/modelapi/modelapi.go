@@ -140,8 +140,16 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartText, Text: ev.Text})
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: protocol.LogPartReasoning, Text: ev.Text})
+		case provider.EventToolCallStarted:
+			out.Alive()
+			if bs, ok := out.(turn.ToolBlockSink); ok && ev.ToolCall != nil {
+				bs.ToolBlockStarted(toolCall(ev.ToolCall))
+			}
 		case provider.EventToolCall:
 			out.Alive()
+			if bs, ok := out.(turn.ToolBlockSink); ok && ev.ToolCall != nil {
+				bs.ToolBlockAvailable(toolCall(ev.ToolCall))
+			}
 			if cs, ok := out.(turn.CallSink); ok && ev.ToolCall != nil {
 				cs.Call(toolCall(ev.ToolCall))
 			}
@@ -151,7 +159,11 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 			tel.Call = callMetrics(sentAt, firstAt, time.Now(), ev, cut)
 			out.Telemetry(tel)
 			if cut != nil {
-				return classify(cut)
+				err := classify(cut)
+				if ev.StopReason == provider.StopMaxTokens || ev.StopReason == provider.StopRefusal {
+					return &turn.FinishError{Reason: string(ev.StopReason), Err: err}
+				}
+				return err
 			}
 			m := fromMessage(ev.Message)
 			if len(m.Parts) > 0 {

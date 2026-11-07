@@ -81,6 +81,7 @@ func callOf(req Request, id callIdent, retry int, ownsLoop bool) callInfo {
 // Telemetry logs the turn_metrics line of a completed model call, then passes t on.
 func (s *sink) Telemetry(t Telemetry) {
 	if t.Call != nil {
+		s.finishReason = t.Call.StopReason
 		s.rec.record(t)
 	}
 	s.Turn.Telemetry(t)

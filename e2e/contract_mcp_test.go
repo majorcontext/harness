@@ -776,7 +776,7 @@ func TestContractMCPRefusals(t *testing.T) {
 			name:    "mcp_select_of_a_down_server_is_pending",
 			setup:   mcpSetup(lazy, weather),
 			model:   toolChain(mcpAction("action", "select", "tools", []string{"mcp__weather__forecast"})),
-			actions: append([]action{stopMCPServer{server: "weather"}}, oneTurn...),
+			actions: append([]action{refuseMCPServer{server: "weather"}}, oneTurn...),
 		},
 		{
 			name:  "mcp_search_ranks_the_tools",

@@ -110,6 +110,13 @@ func clearGoal(t *testing.T, a *Actor) {
 	}
 }
 
+func linesWithoutSteps(t *testing.T, log *memLog, skip uint64) []string {
+	t.Helper()
+	return slices.DeleteFunc(lines(t, log, skip), func(line string) bool {
+		return line == "step.started" || line == "step.ended"
+	})
+}
+
 func TestGoal(t *testing.T) {
 	setGoal := func(t *testing.T, a *Actor) {
 		if err := a.SetGoal(context.Background(), "say done", 0); err != nil {
@@ -143,7 +150,7 @@ func TestGoal(t *testing.T) {
 				a := goalActor(t, log, tc.b, true, new(atomic.Int32))
 				tc.act(t, a, tc.b)
 				settled(a)
-				if got := lines(t, log, 2); !slices.Equal(got, tc.want) {
+				if got := linesWithoutSteps(t, log, 2); !slices.Equal(got, tc.want) {
 					t.Errorf("log =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
 				}
 				if resumed := slices.Contains(tc.want, "goal.changed active"); resumed != (time.Since(start) >= goalRetry) {
@@ -188,7 +195,7 @@ func TestOpenRunsAPausedGoalAtItsRetryTime(t *testing.T) {
 		settled(goalActor(t, log, b, false, new(atomic.Int32)))
 		want := []string{"turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "owner.acquired", "goal.changed active", "input.admitted", "turn.started",
 			"item.completed assistant re Continue working toward the goal.", "turn.ended completed", "goal.evaluated met", "goal.changed achieved"}
-		got := lines(t, log, 0)
+		got := linesWithoutSteps(t, log, 0)
 		if got = got[max(0, len(got)-len(want)):]; !slices.Equal(got, want) {
 			t.Errorf("log ends\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}

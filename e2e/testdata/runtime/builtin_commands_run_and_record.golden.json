@@ -386,7 +386,7 @@
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
-        "head_seq": 11,
+        "head_seq": 13,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

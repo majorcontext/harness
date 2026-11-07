@@ -28,6 +28,14 @@ func TestContractTurns(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
+			name: "non_normalizing_tool_preserves_raw_arguments",
+			model: []harnesstest.Step{
+				{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_1", Name: "bash", RawInput: `{"command":"printf '  unchanged  '","description":"  raw argument  "}`}}}},
+				{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: text("ran")},
+			},
+			actions: oneTurn,
+		},
+		{
 			name: "two_tool_calls_one_turn",
 			model: []harnesstest.Step{
 				{Name: "calls", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{bash("toolu_1", "echo a"), bash("toolu_2", "echo b")}}},
