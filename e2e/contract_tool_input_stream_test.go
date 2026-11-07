@@ -3,7 +3,6 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -16,14 +15,10 @@ type normalizingStreamTool struct {
 	stopTool
 	ran  chan json.RawMessage
 	seen chan json.RawMessage
-	fail bool
 }
 
 func (n normalizingStreamTool) NormalizeInput(_ context.Context, input json.RawMessage) (json.RawMessage, error) {
 	n.seen <- input
-	if n.fail {
-		return nil, errors.New("normalization failed")
-	}
 	var args map[string]any
 	if err := json.Unmarshal(input, &args); err != nil {
 		return nil, err

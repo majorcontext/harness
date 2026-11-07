@@ -37,52 +37,18 @@ func (normalizingProbe) NormalizeInput(_ context.Context, input json.RawMessage)
 	return json.Marshal(v)
 }
 
-func TestContractRuntimeToolInputNormalization(t *testing.T) {
-	skipShort(t)
-	for _, row := range []struct {
-		name  string
-		tool  harness.Tool
-		input string
-		want  string
-	}{
-		{"normalizes", normalizingProbe{inputProbe{"probe"}}, "  trimmed  ", "trimmed"},
-		{"rejects", normalizingProbe{inputProbe{"probe"}}, "reject", "input rejected"},
-		{"unchanged", inputProbe{"probe"}, "  unchanged  ", "  unchanged  "},
-	} {
-		t.Run(row.name, func(t *testing.T) {
-			call := harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "probe", Input: map[string]any{"value": row.input}}}}}
-			done := harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult("probe"), Reply: harnesstest.Reply{Text: "done"}}
-			s, fake := stopRuntime(t, "openai", []harness.Tool{row.tool}, nil, call, done)
-			stopWait(t, stopPrompt(t, s, "a", "go"))
-			reqs := fake.Requests()
-			if len(reqs) != 2 {
-				t.Fatalf("model requests = %d, want 2", len(reqs))
-			}
-			var result string
-			for _, m := range reqs[1].Messages {
-				for _, p := range m.Parts {
-					if p.Kind == "tool_result" {
-						result = p.Text
-					}
-				}
-			}
-			if row.name == "rejects" {
-				if !strings.Contains(result, row.want) {
-					t.Errorf("tool result = %q, want error %q", result, row.want)
-				}
-				return
-			}
-			var got map[string]string
-			if err := json.Unmarshal([]byte(result), &got); err != nil || got["value"] != row.want {
-				t.Errorf("tool result = %q, want value %q (decode: %v)", result, row.want, err)
-			}
-		})
-	}
+type recordingInputProbe struct {
+	inputProbe
+	ran chan json.RawMessage
+}
+
+func (p recordingInputProbe) Run(_ context.Context, call harness.Call) (protocol.ToolResult, error) {
+	p.ran <- call.Arguments
+	return protocol.ToolResult{Text: "executed"}, nil
 }
 
 type durableInputProbe struct {
-	inputProbe
-	ran  chan json.RawMessage
+	recordingInputProbe
 	fail bool
 }
 
@@ -93,29 +59,33 @@ func (p durableInputProbe) NormalizeInput(_ context.Context, _ json.RawMessage) 
 	return json.RawMessage(`{ "value" : "normalized <>&" }`), nil
 }
 
-func (p durableInputProbe) Run(_ context.Context, call harness.Call) (protocol.ToolResult, error) {
-	p.ran <- call.Arguments
-	return protocol.ToolResult{Text: "executed"}, nil
-}
-
 func TestContractRuntimeNormalizedInputIsDurableAndReplayed(t *testing.T) {
 	skipShort(t)
 	for _, row := range []struct {
 		name, provider, input, want string
-		fail                        bool
+		fail, unchanged             bool
 	}{
-		{"normalized", "openai", `{"value":"original"}`, `{ "value" : "normalized <>&" }`, false},
-		{"rejected", "anthropic", `{ "value" : "raw <>&" }`, `{ "value" : "raw <>&" }`, true},
+		{"normalized", "openai", `{"value":"original"}`, `{ "value" : "normalized <>&" }`, false, false},
+		{"rejected", "anthropic", `{ "value" : "raw <>&" }`, `{ "value" : "raw <>&" }`, true, false},
+		{"unchanged", "openai", `{"value":"  unchanged  "}`, `{"value": "  unchanged  "}`, false, true},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			tool := durableInputProbe{inputProbe: inputProbe{"probe"}, ran: make(chan json.RawMessage, 1), fail: row.fail}
-			call := harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "probe", Input: map[string]any{"value": "original"}, RawInput: row.input}}}}
+			probe := recordingInputProbe{inputProbe: inputProbe{"probe"}, ran: make(chan json.RawMessage, 1)}
+			var tool harness.Tool = durableInputProbe{recordingInputProbe: probe, fail: row.fail}
+			if row.unchanged {
+				tool = probe
+			}
+			var input map[string]any
+			if err := json.Unmarshal([]byte(row.input), &input); err != nil {
+				t.Fatal(err)
+			}
+			call := harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "probe", Input: input, RawInput: row.input}}}}
 			done := harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult("probe"), Reply: harnesstest.Reply{Text: "done"}}
 			s, fake := stopRuntime(t, row.provider, []harness.Tool{tool}, nil, call, done)
 			stopWait(t, stopPrompt(t, s, "a", "go"))
 			checkDurableInput(t, s, row.want)
 			select {
-			case got := <-tool.ran:
+			case got := <-probe.ran:
 				if row.fail || string(got) != row.want {
 					t.Errorf("executed input = %q, failure = %v, want %q", got, row.fail, row.want)
 				}
