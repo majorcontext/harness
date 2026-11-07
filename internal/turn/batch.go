@@ -14,7 +14,7 @@ const MaxParallel = 8
 // each earlier call ends before it starts, and it ends before a later call
 // starts. A tool that changes what the next call sees, such as the model,
 // the goal, or the MCP servers, is Alone. A forwarded call is Alone only when its tool is.
-// A tool whose spec is not ReadOnly runs the same way.
+// A tool that is neither ReadOnly nor Parallel runs the same way.
 type Alone interface {
 	Alone()
 }
@@ -24,6 +24,13 @@ type Alone interface {
 // calls with another key.
 type Keyed interface {
 	Key(c protocol.ToolCall) string
+}
+
+// Parallel is a Tool that changes state but whose calls may run beside the
+// other read-only and Parallel calls of their model call, as a ReadOnly call
+// does. Alone wins over Parallel. A forwarded call is Parallel only when its tool is.
+type Parallel interface {
+	Parallel()
 }
 
 const toolPanicked = "tool call failed: the tool panicked"
@@ -46,9 +53,9 @@ type flight struct {
 // batch runs the tool calls of one model call. A call starts when it is
 // submitted, which is when the model stream delivers it, or at the end of the
 // step for a call that the stream did not deliver. Calls are ordered by
-// submission: a ReadOnly call waits only for the last call that is not
-// ReadOnly or Alone, and runs beside other ReadOnly calls, at most MaxParallel
-// at once. Any other call waits for every earlier call and holds the batch
+// submission: a ReadOnly or Parallel call waits only for the last call that is
+// neither, and runs beside other such calls, at most MaxParallel at once. Any
+// other call waits for every earlier call and holds the batch
 // alone until it ends.
 type batch struct {
 	ctx, step context.Context
@@ -73,8 +80,8 @@ func newBatch(ctx, step context.Context, t runner) *batch {
 		flights: map[string]*flight{}, tail: map[string]chan struct{}{}}
 }
 
-// readOnly reports whether c may run beside other read-only calls.
-func (t runner) readOnly(c protocol.ToolCall) (ro bool) {
+// overlaps reports whether c may run beside other read-only and Parallel calls.
+func (t runner) overlaps(c protocol.ToolCall) (ro bool) {
 	defer func() {
 		if recover() != nil {
 			ro = false
@@ -85,7 +92,11 @@ func (t runner) readOnly(c protocol.ToolCall) (ro bool) {
 	}
 	tools, c := t.target(c)
 	tool := findIn(tools, c.Name)
-	return tool != nil && tool.Spec().ReadOnly
+	if tool == nil {
+		return false
+	}
+	_, parallel := tool.(Parallel)
+	return parallel || tool.Spec().ReadOnly
 }
 
 // Late is a Tool whose call starts only when its model call has ended, because
@@ -136,7 +147,7 @@ func (b *batch) submit(c protocol.ToolCall) *flight {
 	if b.excl != nil {
 		wait = append(wait, b.excl)
 	}
-	ro := b.t.readOnly(c)
+	ro := b.t.overlaps(c)
 	if ro {
 		b.reads = append(b.reads, f.done)
 	} else {

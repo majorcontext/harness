@@ -49,6 +49,15 @@ type KeyedTool interface {
 	Key(c Call) string
 }
 
+// ParallelTool is a Tool that changes state but whose calls may run beside the other calls of
+// their model call, the way a read-only call does. Calls with the same non-empty key (KeyedTool)
+// still run one at a time, in call order. Use it for a tool that writes only what its key names.
+// A tool that is also an AloneTool runs alone.
+type ParallelTool interface {
+	Tool
+	Parallel()
+}
+
 // embedded is an embedder Tool as the runtime holds it, before a session binds it.
 type embedded struct{ Tool }
 
@@ -56,20 +65,20 @@ func (e embedded) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 	return runEmbedded(ctx, e.Tool, Call{ID: c.ID, Name: c.Name, Arguments: c.Arguments})
 }
 
-// bind returns the tool for one turn of session, with the Alone and Key of the embedder tool.
+// bind returns the tool for one turn of session, with the scheduling of the embedder tool.
 func (e embedded) bind(session, root, turnID string) turn.Tool {
 	b := bound{t: e.Tool, session: session, root: root, turn: turnID}
-	_, alone := e.Tool.(AloneTool)
-	_, keyed := e.Tool.(KeyedTool)
-	switch {
-	case alone && keyed:
-		return boundAloneKeyed{boundKeyed{b}}
-	case alone:
-		return boundAlone{b}
-	case keyed:
-		return boundKeyed{b}
+	var t turn.Tool = b
+	if _, ok := e.Tool.(KeyedTool); ok {
+		t = withKey{t, b}
 	}
-	return b
+	if _, ok := e.Tool.(AloneTool); ok {
+		t = withAlone{t}
+	}
+	if _, ok := e.Tool.(ParallelTool); ok {
+		t = withParallel{t}
+	}
+	return t
 }
 
 type bound struct {
@@ -120,17 +129,21 @@ func runEmbedded(ctx context.Context, tool Tool, call Call) (protocol.ToolResult
 	}
 }
 
-type boundAlone struct{ bound }
+// withAlone, withKey, and withParallel each add one scheduling method to the tool that they wrap.
+type withAlone struct{ turn.Tool }
 
-func (boundAlone) Alone() {}
+func (withAlone) Alone() {}
 
-type boundKeyed struct{ bound }
+type withKey struct {
+	turn.Tool
+	b bound
+}
 
-func (b boundKeyed) Key(c protocol.ToolCall) string { return b.t.(KeyedTool).Key(b.call(c)) }
+func (w withKey) Key(c protocol.ToolCall) string { return w.b.t.(KeyedTool).Key(w.b.call(c)) }
 
-type boundAloneKeyed struct{ boundKeyed }
+type withParallel struct{ turn.Tool }
 
-func (boundAloneKeyed) Alone() {}
+func (withParallel) Parallel() {}
 
 // boundTools is a Source of the runtime tools that binds each embedder tool to the session and the turn of the model call.
 type boundTools struct {

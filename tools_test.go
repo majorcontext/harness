@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
@@ -118,6 +119,44 @@ func TestEmbedderTools(t *testing.T) {
 				t.Errorf("tool runs = %q, want %q", got, tc.ran)
 			}
 		})
+	}
+}
+
+// parallelProbe is a probe that is a ParallelTool.
+type parallelProbe struct{ *probe }
+
+func (parallelProbe) Parallel() {}
+
+func TestEmbedderParallelToolsRunBesideEachOtherInOneModelCall(t *testing.T) {
+	a, b := newProbe("a", true), newProbe("b", true)
+	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{},
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "call_1", Name: "a", Input: map[string]any{}}, {ID: "call_2", Name: "b", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult("b"), Reply: harnesstest.Reply{Text: "done"}})
+	r, _, _ := codexRuntime(t, s, false, false, "", parallelProbe{a}, parallelProbe{b})
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	both := make(chan bool, 1)
+	go func() {
+		defer close(a.release)
+		defer close(b.release)
+		for _, p := range []*probe{a, b} {
+			select {
+			case <-p.started:
+			case <-ctx.Done():
+				both <- false
+				return
+			}
+		}
+		both <- true
+	}()
+	converse(t, sess, "run")
+	if !<-both {
+		t.Fatal("the second ParallelTool call did not start while the first ran; bind dropped the Parallel marker")
 	}
 }
 
