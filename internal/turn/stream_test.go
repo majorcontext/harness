@@ -269,3 +269,129 @@ func TestRunHoldsEveryCallAfterALateToolUntilTheModelCallEnds(t *testing.T) {
 		}
 	})
 }
+
+// parallelGate is a gate that is a Parallel tool. The key is its Key.
+type parallelGate struct {
+	*gate
+	key string
+}
+
+func (parallelGate) Parallel() {}
+
+func (g parallelGate) Key(protocol.ToolCall) string { return g.key }
+
+type aloneParallelGate struct{ parallelGate }
+
+func (aloneParallelGate) Alone() {}
+
+func TestRunOverlapsParallelCallsWithDifferentKeys(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, b := newGate("a", false), newGate("b", false)
+		m := &streamModel{calls: []protocol.ToolCall{call("1", "a"), call("2", "b")}}
+		m.hold = func() {
+			synctest.Wait()
+			if len(a.started()) != 1 || len(b.started()) != 1 {
+				t.Errorf("started a=%v b=%v, want both beside each other", a.started(), b.started())
+			}
+			close(a.open)
+			close(b.open)
+		}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, prompt(), toolList{parallelGate{gate: a, key: "x"}, parallelGate{gate: b, key: "y"}}, &recorder{}, turn.Limits{})
+	})
+}
+
+func TestRunOrdersParallelCallsWithTheSameKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, b := newGate("a", false), newGate("b", false)
+		m := &streamModel{calls: []protocol.ToolCall{call("1", "a"), call("2", "b")}}
+		m.hold = func() {
+			synctest.Wait()
+			if len(a.started()) != 1 || len(b.started()) != 0 {
+				t.Errorf("started a=%v b=%v, want only a while a runs", a.started(), b.started())
+			}
+			close(a.open)
+			synctest.Wait()
+			if got := b.started(); !slices.Equal(got, []string{"2"}) {
+				t.Errorf("b started %v after a ended, want [2]", got)
+			}
+			close(b.open)
+		}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, prompt(), toolList{parallelGate{gate: a, key: "k"}, parallelGate{gate: b, key: "k"}}, &recorder{}, turn.Limits{})
+	})
+}
+
+func TestRunHoldsAParallelCallBetweenExclusiveCalls(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		w1, p, w2 := newGate("w1", false), newGate("p", false), newGate("w2", false)
+		m := &streamModel{calls: []protocol.ToolCall{call("1", "w1"), call("2", "p"), call("3", "w2")}}
+		m.hold = func() {
+			synctest.Wait()
+			if len(w1.started()) != 1 || len(p.started()) != 0 || len(w2.started()) != 0 {
+				t.Errorf("started w1=%v p=%v w2=%v, want only w1", w1.started(), p.started(), w2.started())
+			}
+			close(w1.open)
+			synctest.Wait()
+			if len(p.started()) != 1 || len(w2.started()) != 0 {
+				t.Errorf("started p=%v w2=%v, want p but not w2", p.started(), w2.started())
+			}
+			close(p.open)
+			synctest.Wait()
+			if len(w2.started()) != 1 {
+				t.Errorf("w2 started %v after p ended, want one start", w2.started())
+			}
+			close(w2.open)
+		}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, prompt(), toolList{w1, parallelGate{gate: p}, w2}, &recorder{}, turn.Limits{})
+	})
+}
+
+func TestRunRunsAToolThatIsAloneAndParallelAlone(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p1, ap, p2 := newGate("p1", false), newGate("ap", false), newGate("p2", false)
+		m := &streamModel{calls: []protocol.ToolCall{call("1", "p1"), call("2", "ap"), call("3", "p2")}}
+		m.hold = func() {
+			synctest.Wait()
+			if len(p1.started()) != 1 || len(ap.started()) != 0 || len(p2.started()) != 0 {
+				t.Errorf("started p1=%v ap=%v p2=%v, want only p1", p1.started(), ap.started(), p2.started())
+			}
+			close(p1.open)
+			synctest.Wait()
+			if len(ap.started()) != 1 || len(p2.started()) != 0 {
+				t.Errorf("started ap=%v p2=%v, want ap alone", ap.started(), p2.started())
+			}
+			close(ap.open)
+			synctest.Wait()
+			if len(p2.started()) != 1 {
+				t.Errorf("p2 started %v after ap ended, want one start", p2.started())
+			}
+			close(p2.open)
+		}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, prompt(), toolList{parallelGate{gate: p1}, aloneParallelGate{parallelGate{gate: ap}}, parallelGate{gate: p2}}, &recorder{}, turn.Limits{})
+	})
+}
+
+func TestRunFinishesAParallelCallOfTheStepThatAStopToolEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stop, other := newGate("stop", false), newGate("other", false)
+		m := &streamModel{calls: []protocol.ToolCall{call("1", "stop"), call("2", "other")}}
+		m.hold = func() {
+			synctest.Wait()
+			close(stop.open)
+			synctest.Wait()
+			close(other.open)
+		}
+		r := &recorder{}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, prompt(), toolList{parallelGate{gate: stop}, parallelGate{gate: other}}, r, turn.Limits{StopAfterTools: []string{"stop"}})
+		if !slices.Equal(other.ends, []string{"2"}) {
+			t.Errorf("other ended %v, want [2]: the stop tool must not cut a parallel call short", other.ends)
+		}
+		if len(r.items) != 3 {
+			t.Errorf("recorded %d items, want the assistant message and both results, and no second model call", len(r.items))
+		}
+	})
+}

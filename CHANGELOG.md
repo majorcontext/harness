@@ -16,6 +16,7 @@ First tagged release.
 
 ### Added
 
+- **Parallel embedder tools** (`harness`) — a `ParallelTool` changes state, but its calls run beside the other read-only and parallel calls of their model call, up to 8 at once. A later call that is not read-only or parallel waits for them. Calls with the same non-empty `KeyedTool` key still run one at a time, in call order, and an `AloneTool` that is also a `ParallelTool` runs alone. `Spec().ReadOnly` keeps its meaning.
 - **Durable step boundaries** (`protocol`) — `step.started` and `step.ended` identify logical model steps by turn and zero-based index, with the normalized finish reason on completion. Backends that cannot expose steps omit them.
 
 - **Contextual tool stop** (`harness`) — `Options.StopAfterContext` inspects the current turn’s recorded text and tool results. `Options.StopAfterErrors` optionally includes failed results in predicate evaluation; named-tool stops and default behavior remain unchanged.
