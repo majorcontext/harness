@@ -31,6 +31,10 @@ type Reply struct {
 	TextChunkRunes int
 	Text           string
 	ToolCalls      []ToolCall // emitted as tool_use blocks after Text
+	// TruncateToolStart ends the Anthropic stream after the first tool block starts.
+	TruncateToolStart bool
+	// TextAfterTools emits a text block after the tool calls on the Anthropic wire.
+	TextAfterTools string
 	// Calls, when set, replaces ToolCalls with the calls that it returns for
 	// the request, so a reply can name an ID that only the conversation holds.
 	Calls      func(Request) []ToolCall
@@ -94,6 +98,7 @@ const ContextOverflowMessage = "prompt is too long: 205102 tokens > 200000 maxim
 type ToolCall struct {
 	ID, Name string
 	Input    map[string]any
+	RawInput string
 }
 
 // Usage is the token usage a Reply reports. Cached is the part of Input that the

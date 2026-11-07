@@ -235,7 +235,7 @@ type StopContext struct {
 type Limits struct {
 	// Retries bounds the new attempts of a model call after an ErrRetryable error.
 	Retries int
-	// DisableRetryAfterOutput stops recovery calls after a text or reasoning delta of each model call.
+	// DisableRetryAfterOutput stops recovery calls after a text or reasoning delta or tool block start of each model call.
 	DisableRetryAfterOutput bool
 	// Idle stops a model call that reports nothing to its Sink for this
 	// long. Zero or less: no limit.
@@ -515,48 +515,6 @@ func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits,
 	return err
 }
 
-// watch calls b once. With a positive idle, a call that reports nothing to
-// s for idle ends with errStalled.
-func watch(ctx context.Context, b Backend, req Request, s Sink, idle time.Duration) error {
-	if idle <= 0 {
-		return b.Run(ctx, req, s)
-	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	t := time.AfterFunc(idle, func() { cancel(errStalled) })
-	defer t.Stop()
-	err := b.Run(ctx, req, watched{s, func() { t.Reset(idle) }})
-	if err != nil && errors.Is(context.Cause(ctx), errStalled) {
-		err = errStalled
-	}
-	return err
-}
-
-// watched is a Sink that calls alive on each delta, item, and Alive.
-type watched struct {
-	Sink
-	alive func()
-}
-
-func (w watched) Item(m protocol.LogMessage) error {
-	w.alive()
-	return w.Sink.Item(m)
-}
-
-func (w watched) Delta(itemID string, d Delta) {
-	w.alive()
-	w.Sink.Delta(itemID, d)
-}
-
-func (w watched) Alive() { w.alive() }
-
-func (w watched) Call(c protocol.ToolCall) {
-	w.alive()
-	if cs, ok := w.Sink.(CallSink); ok {
-		cs.Call(c)
-	}
-}
-
 func (s *sink) wait(ctx context.Context, attempt int, cause error) error {
 	d := retryDelay(attempt+1, cause)
 	s.Status(protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
@@ -618,11 +576,14 @@ type sink struct {
 	// output tracks text and reasoning deltas when this call disables recovery after output.
 	output *bool
 	// item is the item that the deltas since the last Item build, or "".
-	item string
+	item       string
+	toolBlocks map[string]bool
 	// rec reports the model call in flight.
 	rec *recorder
 	// early starts each tool call when the stream delivers it. nil: none starts early.
-	early *batch
+	early        *batch
+	normalizeCtx context.Context
+	normalized   map[string]normalizedCall
 }
 
 func newSink(to Turn, lim Limits, sc *StopContext) *sink {
@@ -643,7 +604,16 @@ type CallSink interface {
 
 // Call starts c at once, unless its turn must wait. The item that carries c still comes at the end of the model call.
 func (s *sink) Call(c protocol.ToolCall) {
+	if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+		return
+	}
 	if s.early != nil {
+		if c.ID != "" {
+			c = s.normalize(c).call
+		}
+		if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+			return
+		}
 		s.early.Call(c)
 	}
 }
@@ -676,6 +646,12 @@ func (s *sink) Delta(_ string, d Delta) {
 // Discard removes the live item and starts no new one. Nothing happens while
 // no item is live.
 func (s *sink) Discard(string) {
+	s.toolBlocks = nil
+	s.normalized = nil
+	if s.early != nil {
+		s.early.failures = make(map[string]error)
+		s.early.emptyFailures = nil
+	}
 	if s.item != "" {
 		s.Turn.Discard(s.item)
 		s.item = ""
@@ -685,9 +661,33 @@ func (s *sink) Discard(string) {
 // Item records m. An assistant message completes the live item and takes its
 // ID; any other message takes a new ID and leaves the live item.
 func (s *sink) Item(m protocol.LogMessage) error {
+	if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+		return s.normalizeCtx.Err()
+	}
 	id := ""
 	if m.Role == protocol.RoleAssistant {
+		if s.early != nil {
+			for i := range m.Parts {
+				p := &m.Parts[i]
+				if p.Type != protocol.LogPartToolCall {
+					continue
+				}
+				args := p.Arguments
+				if p.ArgumentsText != "" {
+					args = []byte(p.ArgumentsText)
+				}
+				n := s.normalize(protocol.ToolCall{ID: p.CallID, Name: p.Name, Arguments: args})
+				if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+					return s.normalizeCtx.Err()
+				}
+				if n.changed {
+					p.Arguments = n.call.Arguments
+					p.ArgumentsText = string(n.call.Arguments)
+				}
+			}
+		}
 		id, s.item = s.item, ""
+		s.toolBlocks = nil
 	}
 	if err := s.ItemAs(id, m); err != nil {
 		return err

@@ -6,10 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -84,6 +86,24 @@ func (t *turnRun) Delta(itemID string, d turn.Delta) {
 // Discard tells subscribers to remove the live item itemID.
 func (t *turnRun) Discard(itemID string) {
 	t.a.frame(protocol.KindItemDiscarded, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id})
+}
+
+func (t *turnRun) ToolBlock(itemID string, c protocol.ToolCall, available bool, failure error) {
+	kind := protocol.KindToolBlockStarted
+	f := protocol.ToolBlockFrame{ItemID: itemID, TurnID: t.r.id, CallID: c.ID, Name: c.Name}
+	if available {
+		kind = protocol.KindToolBlockAvailable
+		if failure != nil {
+			f.Error = plugin.SanitizeSessionError(toolresult.Mask(failure.Error()))
+			if f.Error == "" {
+				f.Error = "tool input normalization failed"
+			}
+		}
+		if json.Valid(c.Arguments) {
+			f.Input = c.Arguments
+		}
+	}
+	t.a.frame(kind, f)
 }
 
 // Alive has nothing to report: the stall watchdog is in the turn loop.

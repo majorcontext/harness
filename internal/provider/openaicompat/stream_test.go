@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -47,9 +48,8 @@ var streamFixture = strings.Join([]string{
 	sseData(`{"id":"chatcmpl_1","model":"some/model","choices":[{"index":0,"delta":{"role":"assistant"}}]}`),
 	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"reasoning_content":"pondering"}}]}`),
 	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"Run"}}]}`),
-	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"ning ls"}}]}`),
-	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":""}}]}}]}`),
-	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"comm"}}]}}]}`),
+	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"ning","tool_calls":[{"index":0,"id":"old","function":{"name":"old","arguments":""}}]}}]}`),
+	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":" ls","tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":"{\"comm"}}]}}]}`),
 	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\":\"ls\"}"}}]}}]}`),
 	sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
 	sseData(`{"id":"chatcmpl_1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":42}}`),
@@ -85,6 +85,7 @@ func TestStreamAssembly(t *testing.T) {
 	}
 	defer s.Close()
 	events := collect(t, s)
+	var ordered []provider.EventType
 
 	if gotAuth != "Bearer test-key" {
 		t.Errorf("auth header = %q", gotAuth)
@@ -104,6 +105,12 @@ func TestStreamAssembly(t *testing.T) {
 	var done *provider.Event
 	for i := range events {
 		ev := events[i]
+		if ev.Type == provider.EventToolCallStarted && (ev.ToolCall == nil || ev.ToolCall.CallID != "call_77" || ev.ToolCall.Name != "bash") {
+			t.Fatalf("started = %+v", ev.ToolCall)
+		}
+		if ev.Type == provider.EventTextDelta || ev.Type == provider.EventToolCall || ev.Type == provider.EventToolCallStarted {
+			ordered = append(ordered, ev.Type)
+		}
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text += ev.Text
@@ -122,6 +129,9 @@ func TestStreamAssembly(t *testing.T) {
 		}
 	}
 
+	if !slices.Equal(ordered, []provider.EventType{provider.EventTextDelta, provider.EventTextDelta, provider.EventTextDelta, provider.EventToolCallStarted, provider.EventToolCall}) {
+		t.Fatalf("event order = %v", ordered)
+	}
 	if text != "Running ls" {
 		t.Errorf("text = %q", text)
 	}

@@ -2398,6 +2398,33 @@
           "records"
         ]
       },
+      "ToolBlockFrame": {
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "input": true,
+          "error": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_id",
+          "turn_id",
+          "call_id",
+          "name"
+        ]
+      },
       "ToolResultRetained": {
         "properties": {
           "handle": {

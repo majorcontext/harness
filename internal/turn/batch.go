@@ -64,8 +64,10 @@ type batch struct {
 	slots     chan struct{}
 	wg        sync.WaitGroup
 
-	mu      sync.Mutex
-	flights map[string]*flight
+	mu            sync.Mutex
+	flights       map[string]*flight
+	failures      map[string]error
+	emptyFailures []error
 	// held is set once a call must wait for the end of the step: no later call starts early.
 	held bool
 	// excl ends with the last exclusive call; reads are the read-only calls since.
@@ -77,7 +79,7 @@ type batch struct {
 func newBatch(ctx, step context.Context, t runner) *batch {
 	wctx, stop := context.WithCancelCause(ctx)
 	return &batch{ctx: wctx, step: step, stop: stop, t: t, slots: make(chan struct{}, MaxParallel),
-		flights: map[string]*flight{}, tail: map[string]chan struct{}{}}
+		flights: map[string]*flight{}, failures: map[string]error{}, tail: map[string]chan struct{}{}}
 }
 
 // overlaps reports whether c may run beside other read-only and Parallel calls.
@@ -140,6 +142,11 @@ func (b *batch) Call(c protocol.ToolCall) {
 // submit starts c. The caller holds b.mu.
 func (b *batch) submit(c protocol.ToolCall) *flight {
 	f := &flight{call: c, done: make(chan struct{})}
+	failure := b.failures[c.ID]
+	if c.ID == "" && len(b.emptyFailures) > 0 {
+		failure = b.emptyFailures[0]
+		b.emptyFailures = b.emptyFailures[1:]
+	}
 	if c.ID != "" {
 		b.flights[c.ID] = f
 	}
@@ -175,14 +182,14 @@ func (b *batch) submit(c protocol.ToolCall) *flight {
 			b.slots <- struct{}{}
 			defer func() { <-b.slots }()
 		}
-		b.exec(f)
+		b.exec(f, failure)
 	})
 	return f
 }
 
 // exec runs f unless the turn ended, and turns a panic into an error
 // result, so that every call has one result.
-func (b *batch) exec(f *flight) {
+func (b *batch) exec(f *flight, failure error) {
 	if b.step.Err() != nil || b.ctx.Err() != nil {
 		return
 	}
@@ -191,6 +198,23 @@ func (b *batch) exec(f *flight) {
 			f.out = outcome{protocol.ToolResult{Text: toolPanicked, IsError: true}, true}
 		}
 	}()
+	if failure != nil {
+		res := protocol.ToolResult{Text: failure.Error(), IsError: true}
+		if h := b.t.hooks; h != nil {
+			_, c := b.t.target(f.call)
+			c, deny := h.Before(b.ctx, c)
+			if deny != "" {
+				res.Text = deny
+			} else {
+				if err := b.ctx.Err(); err != nil {
+					res.Text = err.Error()
+				}
+				res = h.After(b.ctx, c, res)
+			}
+		}
+		f.out = outcome{res, true}
+		return
+	}
 	f.out = outcome{b.t.run(b.ctx, f.call), true}
 }
 

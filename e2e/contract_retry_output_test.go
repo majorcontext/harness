@@ -14,6 +14,7 @@ import (
 
 var retryOutputRows = map[string]runtimeRow{
 	"retry_policy_keeps_retries_after_tool_only":                runtimeOnly("embedded-retry-policy"),
+	"retry_policy_stops_retries_after_truncated_tool_start":     runtimeOnly("embedded-retry-policy"),
 	"retry_policy_allows_pause_continuation_after_output":       runtimeOnly("embedded-retry-policy"),
 	"retry_policy_stops_http_retries_during_pause_continuation": runtimeOnly("embedded-retry-policy"),
 	"retry_policy_honors_cancellation_after_visible_text":       runtimeOnly("embedded-retry-policy"),
@@ -74,6 +75,13 @@ func TestContractRetryAfterOutput(t *testing.T) {
 		}
 		rows = append(rows, row)
 	}
+	rows = append(rows, scenario{name: "retry_policy_stops_retries_after_truncated_tool_start", driver: retryOutputDriver,
+		model: []harnesstest.Step{
+			{Name: "cut", Reply: harnesstest.Reply{TruncateToolStart: true, ToolCalls: []harnesstest.ToolCall{{ID: "toolu_cut", Name: "no_such_tool", Input: map[string]any{}}}}},
+			{Name: "unexpected_retry", Repeat: true, Reply: harnesstest.Reply{Text: "wrong"}},
+		},
+		actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, retryOutputCalls{want: 1}, recordLastTurn{as: "a"}},
+	})
 	rows = append(rows, retryOutputLifecycleRows()...)
 	rows = append(rows, retryOutputPauseRows()...)
 	runScenarios(t, rows)

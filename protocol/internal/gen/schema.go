@@ -32,7 +32,7 @@ const (
 // wireTypes are the types of the wire that no route names: the data of an
 // ephemeral frame, the replication call of Sync, the payload of each durable
 // event, and the progress of a log.
-var wireTypes = append([]any{protocol.ItemFrame{}, protocol.StatusFrame{}, protocol.SyncBatch{}, protocol.SyncAck{}, protocol.Progress{}}, payloadTypes()...)
+var wireTypes = append([]any{protocol.ItemFrame{}, protocol.ToolBlockFrame{}, protocol.StatusFrame{}, protocol.SyncBatch{}, protocol.SyncAck{}, protocol.Progress{}}, payloadTypes()...)
 
 func payloadTypes() []any {
 	var out []any

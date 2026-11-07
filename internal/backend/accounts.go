@@ -12,6 +12,7 @@ import (
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/protocol"
 )
 
 const maxAccountBackends = 16
@@ -173,7 +174,12 @@ func (a *accountBackend) Run(ctx context.Context, req turn.Request, out turn.Sin
 	}
 	defer lease.release()
 	if account != "" {
-		out = accountSink{Sink: out, account: account}
+		wrapped := accountSink{Sink: out, account: account}
+		if calls, ok := out.(turn.CallSink); ok {
+			out = accountCallSink{accountSink: wrapped, calls: calls}
+		} else {
+			out = wrapped
+		}
 	}
 	return lease.backend.Run(ctx, req, out)
 }
@@ -182,6 +188,25 @@ func (a *accountBackend) Run(ctx context.Context, req turn.Request, out turn.Sin
 type accountSink struct {
 	turn.Sink
 	account string
+}
+
+type accountCallSink struct {
+	accountSink
+	calls turn.CallSink
+}
+
+func (s accountCallSink) Call(c protocol.ToolCall) { s.calls.Call(c) }
+
+func (s accountSink) ToolBlockStarted(c protocol.ToolCall) {
+	if out, ok := s.Sink.(turn.ToolBlockSink); ok {
+		out.ToolBlockStarted(c)
+	}
+}
+
+func (s accountSink) ToolBlockAvailable(c protocol.ToolCall) {
+	if out, ok := s.Sink.(turn.ToolBlockSink); ok {
+		out.ToolBlockAvailable(c)
+	}
 }
 
 func (s accountSink) Telemetry(t turn.Telemetry) {

@@ -26,6 +26,7 @@ type mcpServerDef struct {
 	name                   string
 	spec                   harnesstest.MCPSpec
 	stdio, sse             bool
+	keepAlive              bool
 	failInit               int
 	down                   bool
 	holdRetry              bool // the first initialize fails and every later one blocks, so no background retry ends
@@ -54,6 +55,9 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 			} else {
 				d.spec.NoListChanged = d.noListChanged
 				srv := harnesstest.NewMCPServer(t, d.spec)
+				if d.keepAlive {
+					srv.UseKeepAlive()
+				}
 				srv.RequireAuthorization(mcpToken)
 				srv.FailInitialize(d.failInit)
 				srv.SetAvailable(!d.down)

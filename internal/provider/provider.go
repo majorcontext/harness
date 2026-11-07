@@ -117,6 +117,8 @@ const (
 	EventTextDelta EventType = "text_delta"
 	// EventReasoningDelta carries a chunk of reasoning summary in Text.
 	EventReasoningDelta EventType = "reasoning_delta"
+	// EventToolCallStarted carries the ID and name of a tool call.
+	EventToolCallStarted EventType = "tool_call_started"
 	// EventToolCall carries a complete tool call (arguments fully buffered).
 	EventToolCall EventType = "tool_call"
 	// EventDone carries the fully assembled canonical assistant message,

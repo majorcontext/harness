@@ -161,9 +161,9 @@ than showing their text as part of the final answer.
 
 For an append-only client, also set `Options.DisableRetryAfterOutput: true`,
 as the example does. Its default is false. In each harness-loop model call,
-the first output delta disables recovery resends of **that call**, including
+the first output disables recovery resends of **that call**, including
 output-limit, truncated-stream, and context-overflow recovery. Text and reasoning
-deltas count as output; partial tool-argument bytes do not. A failed call that
+deltas and tool block starts count as output; partial tool-argument bytes do not. A failed call that
 already streamed output
 fails the turn rather than discarding that output and trying the call again.
 Before its first output, a call keeps its normal retry budget. A later ordinary

@@ -348,7 +348,7 @@ func open(ctx context.Context, cfg Config, changes protocol.SettingsChanged) (*A
 			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
-		err = a.endTurn(ctx, protocol.TurnEnded{TurnID: t.ID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseCrashed}, cutOff)
+		err = a.endTurn(ctx, protocol.TurnEnded{TurnID: t.ID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseCrashed}, cutOff, "")
 		if err == nil {
 			err = a.settle(true)
 		}

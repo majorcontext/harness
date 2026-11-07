@@ -10,13 +10,26 @@ First tagged release.
 
 ### Fixed
 
+- **Account-selected tool calls** — eligible tools can start while the model response is still streaming when an account is selected.
+
+- **Tool input errors** — live tool availability frames include a bounded, masked normalization error while retaining the raw input.
+
+- **Step finish reasons** — a step that ends on an output limit or a refusal reports the normalized provider finish reason.
+
+- **Retry after tool block start** — `Options.DisableRetryAfterOutput` stops recovery resends after a tool block starts, even when the stream ends before the tool input is complete.
+
 - **Tool cancellation and session cleanup** — cancellation stops waiting for custom tools that ignore their context and discards late results. Synthetic cancellation uses the standard context error and leaves accepted callback results and the turn stop cause unchanged. `Runtime.End` and session deletion cancel busy work instead of returning 409, withdraw queued inputs, and continue cleanup after caller timeout, including when a graceful release has started. A pending lifecycle stop keeps its first cause across shutdown and revocation, including cancellation during an append. Durable logs stay in the store; embedders own their deletion after the session's `Done` closes.
 
 - **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an uncovered resource bypass skill verification, regardless of URI scheme; load the skill before reading its files. Tool-list refreshes preserve skill entries and their incomplete-list error.
 
 ### Added
 
+- **Tool input normalization** — tools can opt in to normalize input once in harness-owned loops. Successful normalization supplies the canonical call input to execution, events, forwarding, and later model requests. A normalization error retains the raw input, records a tool error, and prevents execution. Plugin `Before` hooks see the normalized input; their rewrites affect execution only.
+
+- **Ordered tool blocks** (`protocol`) — model API streams announce tool calls when their identity is known and when their full input is available, interleaved with text. `PromptStream` retains these frames for lossless consumption.
+
 - **Parallel embedder tools** (`harness`) — a `ParallelTool` changes state, but its calls run beside the other read-only and parallel calls of their model call, up to 8 at once. A later call that is not read-only or parallel waits for them. Calls with the same non-empty `KeyedTool` key still run one at a time, in call order, and an `AloneTool` that is also a `ParallelTool` runs alone. `Spec().ReadOnly` keeps its meaning.
+
 - **Durable step boundaries** (`protocol`) — `step.started` and `step.ended` identify logical model steps by turn and zero-based index, with the normalized finish reason on completion. Backends that cannot expose steps omit them.
 
 - **Contextual tool stop** (`harness`) — `Options.StopAfterContext` inspects the current turn’s recorded text and tool results. `Options.StopAfterErrors` optionally includes failed results in predicate evaluation; named-tool stops and default behavior remain unchanged.

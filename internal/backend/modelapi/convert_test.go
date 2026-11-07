@@ -2,6 +2,7 @@ package modelapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"reflect"
@@ -34,6 +35,30 @@ func TestRequestMapsABlobPartToItsBytes(t *testing.T) {
 	history[0].Parts[1].BlobKey = "gone"
 	if _, err := (&Backend{log: slog.Default()}).request(context.Background(), turn.Request{Model: "codex/gpt-5", History: history, Blob: read}); err == nil {
 		t.Error("request with a missing blob = nil, want the read error")
+	}
+}
+
+func TestToolArgumentsRoundTrip(t *testing.T) {
+	for _, raw := range []string{`{"a":1}`, `{ "a": "<&>" }`} {
+		m := fromMessage(&message.Message{Parts: message.Parts{&message.ToolCall{CallID: "c1", Name: "x", Arguments: json.RawMessage(raw)}}})
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var persisted protocol.LogMessage
+		if err := json.Unmarshal(data, &persisted); err != nil {
+			t.Fatal(err)
+		}
+		if got := persisted.Parts[0].ArgumentsText; (got != "") != (raw != `{"a":1}`) {
+			t.Errorf("arguments_text = %q for %q", got, raw)
+		}
+		got, err := (&Backend{}).toMessage(context.Background(), turn.Request{}, persisted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if args := string(got.Parts[0].(*message.ToolCall).Arguments); args != raw {
+			t.Errorf("arguments = %q, want %q", args, raw)
+		}
 	}
 }
 
