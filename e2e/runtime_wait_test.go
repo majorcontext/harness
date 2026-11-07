@@ -101,6 +101,17 @@ func (d *runtimeDriver) AwaitChildSettled(t *testing.T, parent, child string) {
 	})
 }
 
+func (d *runtimeDriver) AwaitChildReport(t *testing.T, parent string) {
+	t.Helper()
+	d.stream(t, parent, 0, false, func(_ string, ev protocol.Event) bool {
+		if ev.Kind != "input.admitted" {
+			return false
+		}
+		in := decodeEvent[protocol.InputAdmitted](t, ev)
+		return in.Source == "child"
+	})
+}
+
 func (d *runtimeDriver) AwaitGoalExhausted(t *testing.T) {
 	t.Helper()
 	for _, id := range d.sessionIDs(t) {

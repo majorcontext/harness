@@ -318,6 +318,12 @@ func (a awaitSettled) run(t *testing.T, r *run) {
 	r.drv.AwaitChildSettled(t, r.id(t, a.parent), r.id(t, a.as))
 }
 
+type awaitChildReport struct{ parent string }
+
+func (a awaitChildReport) run(t *testing.T, r *run) {
+	r.drv.AwaitChildReport(t, r.id(t, a.parent))
+}
+
 func (a compact) run(t *testing.T, r *run) {
 	r.record(t, "compact", a.as, r.drv.Compact(t, r.id(t, a.as)))
 }

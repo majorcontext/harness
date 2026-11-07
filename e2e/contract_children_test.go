@@ -206,6 +206,7 @@ func TestContractChildCrashReport(t *testing.T) {
 				restart{kill: true},
 				// serve listens before it opens the sessions, so the read waits for the recovery of the crashed child.
 				awaitSettled{as: "kid", parent: "a"},
+				awaitChildReport{parent: "a"},
 				getSession{as: "a"},
 				getSession{as: "kid"},
 				release{step: "next"},

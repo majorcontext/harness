@@ -83,6 +83,7 @@ type driver interface {
 	Child(t *testing.T, parentID string, nth int) string
 	// AwaitChildSettled returns once the log of the parent records that the child settled.
 	AwaitChildSettled(t *testing.T, parentID, childID string)
+	AwaitChildReport(t *testing.T, parentID string)
 	Command(t *testing.T, id, text string, repeatable bool) callResult
 	Commands(t *testing.T) callResult
 	Processes(t *testing.T) callResult
