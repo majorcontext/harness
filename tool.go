@@ -24,6 +24,12 @@ type Tool interface {
 	Run(ctx context.Context, call Call) (protocol.ToolResult, error)
 }
 
+// InputNormalizer is a tool that normalizes its input before execution.
+// NormalizeInput must be fast and pure, with no I/O.
+type InputNormalizer interface {
+	NormalizeInput(context.Context, json.RawMessage) (json.RawMessage, error)
+}
+
 // Call is one tool call and the session that made it.
 type Call struct {
 	// ID is the call ID of the model, stable across a resumed turn.
@@ -69,11 +75,21 @@ func (e embedded) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 // An AloneTool is Alone, which wins over Parallel; a ParallelTool is Parallel.
 func (e embedded) bind(session, root, turnID string) turn.Tool {
 	b := bound{t: e.Tool, session: session, root: root, turn: turnID}
+	_, normalizes := e.Tool.(InputNormalizer)
 	if _, ok := e.Tool.(AloneTool); ok {
+		if normalizes {
+			return normalizingAlone{boundAlone{b}}
+		}
 		return boundAlone{b}
 	}
 	if _, ok := e.Tool.(ParallelTool); ok {
+		if normalizes {
+			return normalizingParallel{boundParallel{b}}
+		}
 		return boundParallel{b}
+	}
+	if normalizes {
+		return normalizingBound{b}
 	}
 	return b
 }
@@ -141,6 +157,53 @@ func (boundAlone) Alone() {}
 type boundParallel struct{ bound }
 
 func (boundParallel) Parallel() {}
+
+type normalizingBound struct{ bound }
+type normalizingAlone struct{ boundAlone }
+type normalizingParallel struct{ boundParallel }
+
+func (b normalizingBound) NormalizeInput(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return normalizeEmbedded(ctx, b.t.(InputNormalizer), input)
+}
+func (b normalizingAlone) NormalizeInput(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return normalizeEmbedded(ctx, b.t.(InputNormalizer), input)
+}
+func (b normalizingParallel) NormalizeInput(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return normalizeEmbedded(ctx, b.t.(InputNormalizer), input)
+}
+
+func normalizeEmbedded(ctx context.Context, tool InputNormalizer, input json.RawMessage) (json.RawMessage, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	type outcome struct {
+		input json.RawMessage
+		err   error
+	}
+	input = append(json.RawMessage(nil), input...)
+	done := make(chan outcome, 1)
+	go func() {
+		var out outcome
+		defer func() {
+			if recover() != nil {
+				out = outcome{err: errors.New("tool call failed: the tool panicked")}
+			}
+			done <- out
+		}()
+		out.input, out.err = tool.NormalizeInput(ctx, input)
+	}()
+	select {
+	case out := <-done:
+		return out.input, out.err
+	case <-ctx.Done():
+		select {
+		case out := <-done:
+			return out.input, out.err
+		default:
+			return nil, ctx.Err()
+		}
+	}
+}
 
 // boundTools is a Source of the runtime tools that binds each embedder tool to the session and the turn of the model call.
 type boundTools struct {

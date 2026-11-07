@@ -20,6 +20,8 @@ First tagged release.
 
 ### Added
 
+- **Tool input normalization** — tools can opt in to normalize input once in harness-owned loops. Successful normalization supplies the canonical call input to execution, events, forwarding, and later model requests. A normalization error retains the raw input, records a tool error, and prevents execution. Plugin `Before` hooks see the normalized input; their rewrites affect execution only.
+
 - **Ordered tool blocks** (`protocol`) — model API streams announce tool calls when their identity is known and when their full input is available, interleaved with text. `PromptStream` retains these frames for lossless consumption.
 
 - **Parallel embedder tools** (`harness`) — a `ParallelTool` changes state, but its calls run beside the other read-only and parallel calls of their model call, up to 8 at once. A later call that is not read-only or parallel waits for them. Calls with the same non-empty `KeyedTool` key still run one at a time, in call order, and an `AloneTool` that is also a `ParallelTool` runs alone. `Spec().ReadOnly` keeps its meaning.

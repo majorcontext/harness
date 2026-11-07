@@ -1,6 +1,9 @@
 package turn
 
-import "github.com/majorcontext/harness/protocol"
+import (
+	"bytes"
+	"github.com/majorcontext/harness/protocol"
+)
 
 // ToolBlockSink receives tool block lifecycle notifications.
 type ToolBlockSink interface {
@@ -27,6 +30,9 @@ func (w watched) ToolBlockAvailable(c protocol.ToolCall) {
 }
 
 func (s *sink) ToolBlockStarted(c protocol.ToolCall) {
+	if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+		return
+	}
 	if c.ID == "" || c.Name == "" {
 		return
 	}
@@ -49,12 +55,54 @@ func (s *sink) ToolBlockStarted(c protocol.ToolCall) {
 }
 
 func (s *sink) ToolBlockAvailable(c protocol.ToolCall) {
+	if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+		return
+	}
 	if c.ID == "" || c.Name == "" {
 		return
 	}
 	s.ToolBlockStarted(c)
+	c = s.normalize(c).call
+	if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
+		return
+	}
 	if out, ok := s.Turn.(toolBlockTurn); ok {
 		out.ToolBlock(s.item, c, true)
 	}
 	delete(s.toolBlocks, c.ID)
+}
+
+type normalizedCall struct {
+	call    protocol.ToolCall
+	changed bool
+}
+
+func (s *sink) normalize(c protocol.ToolCall) normalizedCall {
+	if s.early == nil {
+		return normalizedCall{call: c}
+	}
+	if n, ok := s.normalized[c.ID]; ok && c.ID != "" {
+		return n
+	}
+	ctx := s.normalizeCtx
+	if ctx == nil {
+		ctx = s.early.ctx
+	}
+	out, err := s.early.t.normalize(ctx, c)
+	n := normalizedCall{call: out, changed: err == nil && !bytes.Equal(c.Arguments, out.Arguments)}
+	if ctx.Err() != nil {
+		return n
+	}
+	if s.normalized == nil {
+		s.normalized = make(map[string]normalizedCall)
+	}
+	if c.ID != "" {
+		s.normalized[c.ID] = n
+		if err != nil {
+			s.early.failures[c.ID] = err
+		}
+	} else {
+		s.early.emptyFailures = append(s.early.emptyFailures, err)
+	}
+	return n
 }
