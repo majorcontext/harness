@@ -31,6 +31,8 @@ type Reply struct {
 	TextChunkRunes int
 	Text           string
 	ToolCalls      []ToolCall // emitted as tool_use blocks after Text
+	// TruncateToolStart ends the Anthropic stream after the first tool block starts.
+	TruncateToolStart bool
 	// TextAfterTools emits a text block after the tool calls on the Anthropic wire.
 	TextAfterTools string
 	// Calls, when set, replaces ToolCalls with the calls that it returns for

@@ -235,7 +235,7 @@ type StopContext struct {
 type Limits struct {
 	// Retries bounds the new attempts of a model call after an ErrRetryable error.
 	Retries int
-	// DisableRetryAfterOutput stops recovery calls after a text or reasoning delta of each model call.
+	// DisableRetryAfterOutput stops recovery calls after a text or reasoning delta or tool block start of each model call.
 	DisableRetryAfterOutput bool
 	// Idle stops a model call that reports nothing to its Sink for this
 	// long. Zero or less: no limit.

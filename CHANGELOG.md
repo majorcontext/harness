@@ -10,6 +10,10 @@ First tagged release.
 
 ### Fixed
 
+- **Step finish reasons** — a step that ends on an output limit or a refusal reports the normalized provider finish reason.
+
+- **Retry after tool block start** — `Options.DisableRetryAfterOutput` stops recovery resends after a tool block starts, even when the stream ends before the tool input is complete.
+
 - **Tool cancellation and session cleanup** — cancellation stops waiting for custom tools that ignore their context and discards late results. Synthetic cancellation uses the standard context error and leaves accepted callback results and the turn stop cause unchanged. `Runtime.End` and session deletion cancel busy work instead of returning 409, withdraw queued inputs, and continue cleanup after caller timeout, including when a graceful release has started. A pending lifecycle stop keeps its first cause across shutdown and revocation, including cancellation during an append. Durable logs stay in the store; embedders own their deletion after the session's `Done` closes.
 
 - **MCP skill integrity** — skill pagination has a separate deadline from connection setup. An incomplete skill list cannot make an uncovered resource bypass skill verification, regardless of URI scheme; load the skill before reading its files. Tool-list refreshes preserve skill entries and their incomplete-list error.

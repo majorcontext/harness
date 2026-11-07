@@ -102,7 +102,7 @@ type Options struct {
 	// file, search, or bash name needs AllowedTools to be a list. With a goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, load_mcp_skill, or start with mcp__.
 	Tools []Tool
-	// DisableRetryAfterOutput stops retries of each model call after its first non-empty text or reasoning delta. False keeps the retry policy unchanged.
+	// DisableRetryAfterOutput stops retries of each model call after its first non-empty text or reasoning delta or tool block start. False keeps the retry policy unchanged.
 	DisableRetryAfterOutput bool
 	// StopAfterTools names tools whose successful calls end a turn after the step. Empty: off. Backends that own their loop ignore it.
 	StopAfterTools []string

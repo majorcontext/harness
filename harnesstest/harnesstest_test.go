@@ -450,15 +450,22 @@ func TestContextOverflowReplyIsClassified(t *testing.T) {
 	}
 }
 
-func TestMaxTokensStopReason(t *testing.T) {
-	s := NewAnthropic(t, Step{Reply: Reply{Text: "cut", StopReason: "max_tokens", Usage: Usage{Input: 900, Output: 1}}})
-	st, err := ask(t, s, "hi")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := done(t, drain(t, st))
-	if d.StopReason != provider.StopMaxTokens || d.Usage.InputTokens != 900 {
-		t.Errorf("stop %q input %d, want max_tokens and 900", d.StopReason, d.Usage.InputTokens)
+func TestStopReasons(t *testing.T) {
+	for _, tc := range []struct {
+		wire string
+		want provider.StopReason
+	}{{"max_tokens", provider.StopMaxTokens}, {"refusal", provider.StopRefusal}} {
+		t.Run(tc.wire, func(t *testing.T) {
+			s := NewAnthropic(t, Step{Reply: Reply{Text: "cut", StopReason: tc.wire, Usage: Usage{Input: 900, Output: 1}}})
+			st, err := ask(t, s, "hi")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := done(t, drain(t, st))
+			if d.StopReason != tc.want || d.Usage.InputTokens != 900 {
+				t.Errorf("stop %q input %d, want %s and 900", d.StopReason, d.Usage.InputTokens, tc.want)
+			}
+		})
 	}
 }
 
