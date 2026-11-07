@@ -201,8 +201,13 @@ func TestContractMCPSkillVerification(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
-			name:    "mcp_skill_listed_beyond_page_100_checks_its_files",
-			setup:   mcpSetup(nil, pagedSkillServer(0)),
+			name: "mcp_skill_listed_beyond_page_100_checks_its_files",
+			setup: mcpSetup(nil, func() mcpServerDef {
+				d := pagedSkillServer(0)
+				d.keepAlive = true
+				d.spec.Skills[100].Served["references/GUIDE.md"] = "# Guide\nRefund within 90 days.\n"
+				return d
+			}()),
 			model:   toolChain(readRes("docs", "skill://s100/refunds/references/GUIDE.md")),
 			actions: oneTurn,
 		},

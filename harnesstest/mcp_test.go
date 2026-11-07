@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"reflect"
 	"strings"
@@ -109,6 +111,35 @@ func TestMCPServerClosedAddressRefusesConnections(t *testing.T) {
 	}
 	srv.Close()
 	checkMCPReleased(t, u.Host)
+}
+
+func TestMCPServerKeepAliveReusesAndClosesConnections(t *testing.T) {
+	srv := NewMCPServer(t, mcpTestSpec())
+	srv.UseKeepAlive()
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
+	var reused bool
+	for range 2 {
+		req, err := http.NewRequest(http.MethodGet, srv.URL(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+	if !reused {
+		t.Fatal("second request did not reuse the connection")
+	}
+	srv.Close()
+	if _, err := client.Get(srv.URL()); err == nil {
+		t.Fatal("request succeeded after Close")
+	}
 }
 
 func checkMCPRefused(t *testing.T, addr string) {

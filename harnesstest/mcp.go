@@ -431,7 +431,7 @@ type MCPServer struct {
 
 // NewMCPServer starts a server that serves spec until t ends.
 // On Linux, a closed fixture's address stays reserved until the test ends.
-// Each response closes its connection so clients cannot reuse a pooled connection after Close.
+// Each response closes its connection by default so clients cannot reuse a pooled connection after Close.
 func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	t.Helper()
 	s := &MCPServer{h: &mcpHandler{spec: spec}, gates: map[string]chan struct{}{}, rootsReply: make(chan json.RawMessage, 1),
@@ -452,6 +452,9 @@ func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	})
 	return s
 }
+
+// UseKeepAlive lets a client reuse connections until the server closes.
+func (s *MCPServer) UseKeepAlive() { s.srv.Config.SetKeepAlivesEnabled(true) }
 
 // URL is the MCP endpoint.
 func (s *MCPServer) URL() string { return s.srv.URL }
