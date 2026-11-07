@@ -10,16 +10,24 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
 
 type accountProxyCapture struct {
-	mu    sync.Mutex
-	users []string
+	mu       sync.Mutex
+	users    []string
+	started  time.Time
+	requests int
+	failures []string
 }
 
 func newAccountProxy(t *testing.T, modelURL string) (string, *accountProxyCapture) {
+	return accountProxy(t, modelURL, false)
+}
+
+func accountProxy(t *testing.T, modelURL string, diagnostics bool) (string, *accountProxyCapture) {
 	t.Helper()
 	target, err := url.Parse(modelURL)
 	if err != nil {
@@ -30,6 +38,9 @@ func newAccountProxy(t *testing.T, modelURL string) (string, *accountProxyCaptur
 		r.Out.Header.Del("Proxy-Authorization")
 	}}
 	capture := new(accountProxyCapture)
+	if diagnostics {
+		reverse.Transport = accountProxyTransport{base: http.DefaultTransport, capture: capture}
+	}
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		value := strings.TrimPrefix(r.Header.Get("Proxy-Authorization"), "Basic ")
 		if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
@@ -40,7 +51,12 @@ func newAccountProxy(t *testing.T, modelURL string) (string, *accountProxyCaptur
 		}
 		reverse.ServeHTTP(w, r)
 	}))
-	t.Cleanup(proxy.Close)
+	t.Cleanup(func() {
+		proxy.Close()
+		for _, line := range capture.diagnosticLines(t.Failed()) {
+			t.Log(line)
+		}
+	})
 	return (&url.URL{Scheme: "http", User: url.UserPassword("subject|box", "test-password"), Host: strings.TrimPrefix(proxy.URL, "http://")}).String(), capture
 }
 
@@ -51,7 +67,7 @@ type accountProxyDriver struct {
 
 func newAccountProxyDriver(t *testing.T, h host, modelURL string) driver {
 	t.Helper()
-	proxyURL, capture := newAccountProxy(t, modelURL)
+	proxyURL, capture := accountProxy(t, modelURL, true)
 	entry := map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://subscription-api.test", "vendor": "codex"}
 	configPath := writeGoalConfigWith(t, "http://subscription-api.test", map[string]any{
 		"providers":       map[string]any{"anthropic": entry},
