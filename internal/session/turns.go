@@ -160,6 +160,9 @@ func (a *Actor) start(id string, inputIDs []string) {
 	r.span = span
 	a.lastTurn = turnSpan{id, span.SpanContext()}
 	req := a.callRequest(id)
+	if current, ok := a.state.Turn(); ok && current.Resumes > 0 {
+		req.ResumeItems = a.state.TurnItems()
+	}
 	if a.compactInput != "" && slices.Contains(inputIDs, a.compactInput) {
 		req.Purpose, a.compactInput = turn.PurposeCompaction, ""
 	}

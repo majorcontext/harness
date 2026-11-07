@@ -150,10 +150,12 @@ type State struct {
 	// turnBy is the provider of the model when the newest turn started, turnN
 	// counts the turns that started, and turnItems counts the items of the
 	// current turn. unran lists the turns that ended with no item of their own.
-	turnBy    string
-	turnN     int
-	turnItems int
-	unran     []int
+	turnBy         string
+	turnN          int
+	turnItems      int
+	unran          []int
+	trackTurnItems bool
+	turnOutput     []protocol.LogMessage
 }
 
 func (s *State) clone() *State {
@@ -172,7 +174,20 @@ func (s *State) clone() *State {
 	c.retained = slices.Clip(s.retained)
 	c.pins = slices.Clip(s.pins)
 	c.unran = slices.Clip(s.unran)
+	c.turnOutput = slices.Clip(s.turnOutput)
 	return &c
+}
+
+// TrackTurnItems enables the current turn's uncompacted output during replay.
+func (s *State) TrackTurnItems() { s.trackTurnItems = true }
+
+// TurnItems returns the current turn's recorded items in log order.
+func (s *State) TurnItems() []protocol.LogMessage {
+	out := make([]protocol.LogMessage, len(s.turnOutput))
+	for i, m := range s.turnOutput {
+		out[i] = protocol.LogMessage{Role: m.Role, Parts: cloneParts(m.Parts)}
+	}
+	return out
 }
 
 // Head returns the seq of the last applied record, or 0.
@@ -438,6 +453,14 @@ func (s *State) apply(env Envelope) error {
 		return err
 	}
 	s.remember(env)
+	if s.trackTurnItems {
+		switch e := env.Event.(type) {
+		case protocol.TurnStarted, protocol.TurnEnded:
+			s.turnOutput = nil
+		case protocol.ItemCompleted:
+			s.turnOutput = append(s.turnOutput, e.Message)
+		}
+	}
 	s.prog = next
 	s.updatedAt = env.Time
 	return nil

@@ -322,6 +322,9 @@ func open(ctx context.Context, cfg Config, changes protocol.SettingsChanged) (*A
 		return nil, err
 	}
 	s := &eventlog.State{}
+	if cfg.Limits.StopAfterContext != nil {
+		s.TrackTurnItems()
+	}
 	if err := replay(ctx, cfg.Store, s, head); err != nil {
 		return nil, err
 	}
