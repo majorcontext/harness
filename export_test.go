@@ -29,3 +29,6 @@ func PanicIn(t testing.TB, o command.Op) {
 	ops[o] = func(context.Context, *Session, map[string]any) (any, error) { panic("test panic") }
 	t.Cleanup(func() { ops[o] = prior })
 }
+
+// BindTool returns tool bound to a session and turn, as the runtime binds an embedder tool.
+func BindTool(tool Tool) turn.Tool { return embedded{tool}.bind("s", "s", "t") }

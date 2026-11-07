@@ -66,19 +66,16 @@ func (e embedded) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolRe
 }
 
 // bind returns the tool for one turn of session, with the scheduling of the embedder tool.
+// An AloneTool is Alone, which wins over Parallel; a ParallelTool is Parallel.
 func (e embedded) bind(session, root, turnID string) turn.Tool {
 	b := bound{t: e.Tool, session: session, root: root, turn: turnID}
-	var t turn.Tool = b
-	if _, ok := e.Tool.(KeyedTool); ok {
-		t = withKey{t, b}
-	}
 	if _, ok := e.Tool.(AloneTool); ok {
-		t = withAlone{t}
+		return boundAlone{b}
 	}
 	if _, ok := e.Tool.(ParallelTool); ok {
-		t = withParallel{t}
+		return boundParallel{b}
 	}
-	return t
+	return b
 }
 
 type bound struct {
@@ -129,21 +126,21 @@ func runEmbedded(ctx context.Context, tool Tool, call Call) (protocol.ToolResult
 	}
 }
 
-// withAlone, withKey, and withParallel each add one scheduling method to the tool that they wrap.
-type withAlone struct{ turn.Tool }
-
-func (withAlone) Alone() {}
-
-type withKey struct {
-	turn.Tool
-	b bound
+// Key is the key of the embedder tool, or empty when it is not a KeyedTool.
+func (b bound) Key(c protocol.ToolCall) string {
+	if k, ok := b.t.(KeyedTool); ok {
+		return k.Key(b.call(c))
+	}
+	return ""
 }
 
-func (w withKey) Key(c protocol.ToolCall) string { return w.b.t.(KeyedTool).Key(w.b.call(c)) }
+type boundAlone struct{ bound }
 
-type withParallel struct{ turn.Tool }
+func (boundAlone) Alone() {}
 
-func (withParallel) Parallel() {}
+type boundParallel struct{ bound }
+
+func (boundParallel) Parallel() {}
 
 // boundTools is a Source of the runtime tools that binds each embedder tool to the session and the turn of the model call.
 type boundTools struct {

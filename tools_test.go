@@ -11,6 +11,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -157,6 +158,43 @@ func TestEmbedderParallelToolsRunBesideEachOtherInOneModelCall(t *testing.T) {
 	converse(t, sess, "run")
 	if !<-both {
 		t.Fatal("the second ParallelTool call did not start while the first ran; bind dropped the Parallel marker")
+	}
+}
+
+// keyedParallelProbe is a parallelProbe that is also a KeyedTool.
+type keyedParallelProbe struct{ parallelProbe }
+
+func (keyedParallelProbe) Key(c harness.Call) string { return "k:" + c.Session }
+
+type aloneKeyedParallelProbe struct{ keyedParallelProbe }
+
+func (aloneKeyedParallelProbe) Alone() {}
+
+func TestBoundEmbedderToolKeepsEveryMarkerItHas(t *testing.T) {
+	call := protocol.ToolCall{ID: "1", Name: "a"}
+	for _, tc := range []struct {
+		name            string
+		tool            harness.Tool
+		alone, parallel bool
+		key             string
+	}{
+		{"a plain tool", newProbe("a", false), false, false, ""},
+		{"a parallel tool", parallelProbe{newProbe("a", false)}, false, true, ""},
+		{"a parallel keyed tool keeps its key", keyedParallelProbe{parallelProbe{newProbe("a", false)}}, false, true, "k:s"},
+		{"an alone parallel keyed tool keeps its key and is alone, not parallel", aloneKeyedParallelProbe{keyedParallelProbe{parallelProbe{newProbe("a", false)}}}, true, false, "k:s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound := harness.BindTool(tc.tool)
+			_, alone := bound.(turn.Alone)
+			_, parallel := bound.(turn.Parallel)
+			key := ""
+			if k, ok := bound.(turn.Keyed); ok {
+				key = k.Key(call)
+			}
+			if alone != tc.alone || parallel != tc.parallel || key != tc.key {
+				t.Errorf("alone=%v parallel=%v key=%q, want alone=%v parallel=%v key=%q", alone, parallel, key, tc.alone, tc.parallel, tc.key)
+			}
+		})
 	}
 }
 
