@@ -1,3 +1,4 @@
+e2e/account_proxy_diagnostics_test.go failure-only proxy diagnostics need synthetic read errors and a simulated failed test that no successful contract golden can observe
 e2e/contract_runtime_tool_normalize_test.go Options.Tools installs an embedder tool only in the Go API; the serve binary has no tool injection seam
 e2e/contract_runtime_normalizer_cancel_test.go cancellation of a Go embedder normalizer requires an in-process tool
 e2e/contract_runtime_normalizer_hooks_test.go normalization hooks require an in-process embedder tool and plugin
