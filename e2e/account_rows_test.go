@@ -1,6 +1,8 @@
 package e2e
 
 var accountRows = map[string]runtimeRow{
+	"account_early_tool":                                        sameAsServe(),
+	"unqualified_early_tool":                                    sameAsServe(),
 	"account_tool_block_sse":                                    sameAsServe(),
 	"account_routing_missing_fails_loudly":                      sameAsServe(),
 	"task_accounts_clear_and_replay":                            sameAsServe(),

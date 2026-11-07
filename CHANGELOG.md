@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Account-selected tool calls** — eligible tools can start while the model response is still streaming when an account is selected.
+
 - **Tool input errors** — live tool availability frames include a bounded, masked normalization error while retaining the raw input.
 
 - **Step finish reasons** — a step that ends on an output limit or a refusal reports the normalized provider finish reason.
