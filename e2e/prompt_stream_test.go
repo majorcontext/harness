@@ -12,11 +12,17 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+const (
+	promptStreamPrefixDeltas = 257
+	promptStreamDeltaRunes   = 8
+)
+
 func promptStreamText() string {
 	var text strings.Builder
-	for i := range 600 {
-		fmt.Fprintf(&text, "%04d:%s", i, strings.Repeat("x", 507))
+	for i := range promptStreamPrefixDeltas {
+		fmt.Fprintf(&text, "%07d|", i)
 	}
+	text.WriteString(strings.Repeat("x", 256<<10))
 	return text.String()
 }
 
@@ -31,10 +37,15 @@ func (a slowEmbeddedSubscriber) losslessRun(t *testing.T, r *run, d *runtimeDriv
 		t.Fatal(err)
 	}
 	defer stream.Close()
+	defer r.fake.Release("answer")
+	if !r.fake.AwaitBlocked("answer", waitBound) {
+		t.Fatal("model did not reach the held prefix")
+	}
+	r.fake.Release("answer")
 	if _, err := stream.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	feed := slowTextFeed{cursor: stream.Admitted().Seq - 1, prefix: map[string]string{}, text: map[string]string{}}
+	feed := slowTextFeed{cursor: stream.Admitted().Seq - 1, prefix: map[string]*strings.Builder{}, text: map[string]string{}}
 	var head uint64
 	started, deltas := 0, 0
 	for e, err := range stream.Events(t.Context()) {
@@ -56,12 +67,12 @@ func (a slowEmbeddedSubscriber) losslessRun(t *testing.T, r *run, d *runtimeDriv
 		}
 		feed.apply(t, e)
 	}
-	if feed.dropped || feed.completed != 1 || started != 1 || deltas != 600 {
+	if feed.dropped || feed.completed != 1 || started != 1 || deltas != promptStreamPrefixDeltas+1 || deltas <= 256 {
 		t.Fatalf("loss=%v, completed=%d, started=%d, deltas=%d", feed.dropped, feed.completed, started, deltas)
 	}
 	for id, text := range feed.text {
-		if text != promptStreamText() || feed.prefix[id] != text {
-			t.Fatalf("item %s: delta bytes=%d, completed bytes=%d", id, len(feed.prefix[id]), len(text))
+		if text != promptStreamText() || feed.preview(id).String() != text || len(text) <= 256<<10 {
+			t.Fatalf("item %s: delta bytes=%d, completed bytes=%d", id, feed.preview(id).Len(), len(text))
 		}
 	}
 }
