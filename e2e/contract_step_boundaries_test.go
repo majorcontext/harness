@@ -11,6 +11,15 @@ import (
 )
 
 var stepBoundaryRows = map[string]runtimeRow{
+	"tool_block_missing_id":              sameAsServe(),
+	"tool_block_missing_name":            sameAsServe(),
+	"tool_block_invalid_input":           sameAsServe(),
+	"tool_block_text_then_tool_sse":      sameAsServe(),
+	"tool_block_two_tools_sse":           sameAsServe(),
+	"tool_block_tool_then_text_sse":      sameAsServe(),
+	"tool_block_interleaved_sse":         sameAsServe(),
+	"tool_block_text_then_tool":          runtimeOnly("embedded-subscriber-held"),
+	"tool_block_two_tools":               runtimeOnly("embedded-subscriber-held"),
 	"step_boundaries_text_and_next_turn": sameAsServe(),
 	"step_boundaries_tool_only":          sameAsServe(),
 	"step_boundaries_mixed":              sameAsServe(),

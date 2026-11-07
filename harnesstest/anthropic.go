@@ -277,11 +277,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		idx++
 	}
 	for _, tc := range rep.ToolCalls {
-		input := tc.Input
-		if input == nil {
-			input = map[string]any{}
-		}
-		args, _ := json.Marshal(input)
+		args := toolInput(tc)
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": obj{}}})
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "input_json_delta", "partial_json": string(args)}})
 		if gate {
@@ -293,11 +289,28 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
 	}
+	if rep.TextAfterTools != "" {
+		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": textBlockStart(nil)})
+		textDelta(e, idx, rep.TextAfterTools, rep.TextChunkRunes)
+		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
+	}
 	if rep.EndBlock && !s.block(r.Context(), name+":end") {
 		return
 	}
 	e.event("message_delta", obj{"type": "message_delta", "delta": obj{"stop_reason": stop}, "usage": usageDelta(usage, rep.WebSearch)})
 	e.event("message_stop", obj{"type": "message_stop"})
+}
+
+func toolInput(tc ToolCall) []byte {
+	if tc.RawInput != "" {
+		return []byte(tc.RawInput)
+	}
+	input := tc.Input
+	if input == nil {
+		input = map[string]any{}
+	}
+	args, _ := json.Marshal(input)
+	return args
 }
 
 func textDelta(e sseWriter, idx int, text string, chunkRunes int) {

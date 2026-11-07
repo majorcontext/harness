@@ -681,6 +681,14 @@ export interface SyncBatch {
   blobs?: Record<string, string>;
 }
 
+export interface ToolBlockFrame {
+  item_id: string;
+  turn_id: string;
+  call_id: string;
+  name: string;
+  input?: unknown;
+}
+
 export interface ToolResultRetained {
   handle: string;
   tool: string;

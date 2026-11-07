@@ -91,6 +91,7 @@ func TestStreamAssembly(t *testing.T) {
 
 	var text, reasoning string
 	var toolCalls []*message.ToolCall
+	var started *message.ToolCall
 	var done *provider.Event
 	for i := range events {
 		ev := events[i]
@@ -105,7 +106,12 @@ func TestStreamAssembly(t *testing.T) {
 			if ev.ID != "msg_01" {
 				t.Errorf("reasoning delta ID = %q, want %q (message_start's own id)", ev.ID, "msg_01")
 			}
+		case provider.EventToolCallStarted:
+			started = ev.ToolCall
 		case provider.EventToolCall:
+			if started == nil || ev.ToolCall == nil || started.CallID != ev.ToolCall.CallID || started.Name != ev.ToolCall.Name {
+				t.Fatalf("tool start = %+v, completed = %+v", started, ev.ToolCall)
+			}
 			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:
 			done = &events[i]

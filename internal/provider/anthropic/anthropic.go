@@ -541,6 +541,9 @@ func (s *stream) handle(name string, data []byte) error {
 		case "tool_use", "server_tool_use":
 			b.toolID = ev.ContentBlock.ID
 			b.toolName = ev.ContentBlock.Name
+			if b.kind == "tool_use" && b.toolID != "" && b.toolName != "" {
+				s.queue = append(s.queue, provider.Event{Type: provider.EventToolCallStarted, ToolCall: &message.ToolCall{CallID: b.toolID, Name: b.toolName}})
+			}
 		case "web_search_tool_result":
 			b.toolID, b.result = ev.ContentBlock.ToolUseID, ev.ContentBlock.Content
 		case "thinking":

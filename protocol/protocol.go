@@ -326,10 +326,12 @@ type Event struct {
 
 // Ephemeral frame kinds.
 const (
-	KindItemStarted   = "item.started"
-	KindItemDelta     = "item.delta"
-	KindItemDiscarded = "item.discarded"
-	KindStatus        = "status"
+	KindItemStarted        = "item.started"
+	KindItemDelta          = "item.delta"
+	KindItemDiscarded      = "item.discarded"
+	KindToolBlockStarted   = "tool_block.started"
+	KindToolBlockAvailable = "tool_block.available"
+	KindStatus             = "status"
 )
 
 // ItemFrame is the data of an item.started, item.delta, or item.discarded
@@ -342,6 +344,15 @@ type ItemFrame struct {
 	// Type is "text" or "reasoning" in an item.delta frame.
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
+}
+
+// ToolBlockFrame is the data of a tool block lifecycle frame.
+type ToolBlockFrame struct {
+	ItemID string          `json:"item_id"`
+	TurnID string          `json:"turn_id"`
+	CallID string          `json:"call_id"`
+	Name   string          `json:"name"`
+	Input  json.RawMessage `json:"input,omitempty"`
 }
 
 // StatusFrame is the data of a status frame. A retrying turn waits until

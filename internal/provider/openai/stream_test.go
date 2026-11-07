@@ -425,3 +425,41 @@ func TestStreamReasoningSummaryPartsStayApart(t *testing.T) {
 		t.Errorf("part = %+v, want reasoning %q", parts[0], want)
 	}
 }
+
+func TestStreamToolCallStartsInWireOrder(t *testing.T) {
+	fixture := strings.Join([]string{
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"first","arguments":""}}`),
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","name":"missing_id"}}`),
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":4,"item":{"type":"function_call","call_id":"missing_name"}}`),
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_1"}}`),
+		sse("response.output_text.delta", `{"type":"response.output_text.delta","output_index":1,"delta":"between"}`),
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_2","call_id":"call_2","name":"second","arguments":""}}`),
+		sse("response.output_item.done", `{"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc_2","call_id":"call_2","name":"second","arguments":"{}"}}`),
+		sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"first","arguments":"{\"x\":1}"}}`),
+		sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1"}}`),
+	}, "")
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, fixture) })
+	s, err := c.Stream(context.Background(), &provider.Request{Model: modelref.ModelRef{Provider: Family, Model: "gpt-5"}, Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hello"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	var got []string
+	for _, ev := range collect(t, s) {
+		switch ev.Type {
+		case provider.EventToolCallStarted:
+			if ev.ToolCall == nil {
+				t.Fatal("start missing tool call")
+			}
+			got = append(got, "start:"+ev.ToolCall.CallID+":"+ev.ToolCall.Name)
+		case provider.EventTextDelta:
+			got = append(got, "text:"+ev.Text)
+		case provider.EventToolCall:
+			got = append(got, "done:"+ev.ToolCall.CallID+":"+string(ev.ToolCall.Arguments))
+		}
+	}
+	want := []string{"start:call_1:first", "text:between", "start:call_2:second", "done:call_2:{}", `done:call_1:{"x":1}`}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
