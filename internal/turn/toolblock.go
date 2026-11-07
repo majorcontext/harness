@@ -37,6 +37,9 @@ func (s *sink) ToolBlockStarted(c protocol.ToolCall) {
 		return
 	}
 	s.toolBlocks[c.ID] = true
+	if s.output != nil {
+		*s.output = true
+	}
 	if s.item == "" {
 		s.item = s.Started()
 	}

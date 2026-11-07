@@ -304,7 +304,12 @@ func (a *Actor) ended(r *running, runErr error) {
 		if r.span != nil {
 			tracing.Fail(r.span, cmp.Or(string(failed.ErrorClass), string(failed.Cause), "_OTHER"))
 		}
-		err = a.endTurn(a.cfg.Base, failed, cutOff, a.goalStop(runErr, r.kind)...)
+		var finish *turn.FinishError
+		reason := ""
+		if errors.As(runErr, &finish) {
+			reason = finish.Reason
+		}
+		err = a.endTurnReason(a.cfg.Base, failed, cutOff, reason, a.goalStop(runErr, r.kind)...)
 		next = !errors.Is(runErr, turn.ErrExhausted)
 	}
 	var after func() error
@@ -358,9 +363,13 @@ func (a *Actor) ownsLoop() bool {
 }
 
 func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text string, after ...protocol.Payload) error {
+	return a.endTurnReason(ctx, ended, text, "", after...)
+}
+
+func (a *Actor) endTurnReason(ctx context.Context, ended protocol.TurnEnded, text, reason string, after ...protocol.Payload) error {
 	awaiting := ended.StopReason == protocol.StopCompleted && len(a.state.Requests()) > 0
 	events := a.closeOpen(ended.TurnID, text, awaiting)
-	events = a.closeStep(events, ended.TurnID)
+	events = a.closeStepReason(events, ended.TurnID, reason)
 	if awaiting {
 		ended.StopReason = protocol.StopAwaitingInput
 	}
@@ -381,8 +390,12 @@ func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text stri
 }
 
 func (a *Actor) closeStep(events []protocol.Payload, turnID string) []protocol.Payload {
+	return a.closeStepReason(events, turnID, "")
+}
+
+func (a *Actor) closeStepReason(events []protocol.Payload, turnID, reason string) []protocol.Payload {
 	if t, ok := a.state.Turn(); ok && t.ID == turnID && t.StepOpen {
-		return append(events, protocol.StepEnded{TurnID: turnID, Index: t.NextStep})
+		return append(events, protocol.StepEnded{TurnID: turnID, Index: t.NextStep, FinishReason: reason})
 	}
 	return events
 }

@@ -279,6 +279,9 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name stri
 	for _, tc := range rep.ToolCalls {
 		args := toolInput(tc)
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": obj{}}})
+		if rep.TruncateToolStart {
+			return
+		}
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "input_json_delta", "partial_json": string(args)}})
 		if gate {
 			gate = false
