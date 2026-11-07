@@ -12,29 +12,8 @@ type invalidToolBlockFrames struct{ available bool }
 
 func (a invalidToolBlockFrames) run(t *testing.T, r *run) {
 	t.Helper()
-	d := r.drv.(*runtimeDriver)
-	ready := make(chan struct{})
-	done := make(chan []protocol.Event, 1)
-	go func() {
-		var events []protocol.Event
-		d.stream(t, r.id(t, "a"), 0, false, func(_ string, e protocol.Event) bool {
-			select {
-			case <-ready:
-			default:
-				close(ready)
-			}
-			events = append(events, e)
-			if e.Kind == "turn.ended" {
-				done <- events
-				return true
-			}
-			return false
-		})
-	}()
-	<-ready
-	r.drv.Submit(t, r.id(t, "a"), "go")
 	var kinds []string
-	for _, e := range <-done {
+	for _, e := range collectToolBlockSSE(t, r) {
 		if e.Kind != "tool_block.started" && e.Kind != "tool_block.available" {
 			continue
 		}

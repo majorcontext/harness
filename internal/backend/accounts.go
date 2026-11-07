@@ -12,6 +12,7 @@ import (
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/protocol"
 )
 
 const maxAccountBackends = 16
@@ -182,6 +183,18 @@ func (a *accountBackend) Run(ctx context.Context, req turn.Request, out turn.Sin
 type accountSink struct {
 	turn.Sink
 	account string
+}
+
+func (s accountSink) ToolBlockStarted(c protocol.ToolCall) {
+	if out, ok := s.Sink.(turn.ToolBlockSink); ok {
+		out.ToolBlockStarted(c)
+	}
+}
+
+func (s accountSink) ToolBlockAvailable(c protocol.ToolCall) {
+	if out, ok := s.Sink.(turn.ToolBlockSink); ok {
+		out.ToolBlockAvailable(c)
+	}
 }
 
 func (s accountSink) Telemetry(t turn.Telemetry) {

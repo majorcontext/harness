@@ -113,6 +113,11 @@ type toolBlockSSE struct{ toolBlockStream }
 
 func (a toolBlockSSE) run(t *testing.T, r *run) {
 	t.Helper()
+	a.check(t, collectToolBlockSSE(t, r))
+}
+
+func collectToolBlockSSE(t *testing.T, r *run) []protocol.Event {
+	t.Helper()
 	d := r.drv.(*runtimeDriver)
 	ready := make(chan struct{})
 	done := make(chan []protocol.Event, 1)
@@ -134,5 +139,5 @@ func (a toolBlockSSE) run(t *testing.T, r *run) {
 	}()
 	<-ready
 	r.drv.Submit(t, r.id(t, "a"), "go")
-	a.check(t, <-done)
+	return <-done
 }
