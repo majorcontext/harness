@@ -136,7 +136,7 @@ func TestModelStreams(t *testing.T) {
 		head := uint64(len(lines(t, log, 0)))
 		converse(t, a, "charlie")
 		want := []string{"input.admitted", "turn.started", "session.titled", "item.completed assistant written", "turn.ended completed"}
-		if got := lines(t, log, head); !slices.Equal(got, want) {
+		if got := linesWithoutSteps(t, log, head); !slices.Equal(got, want) {
 			t.Errorf("log =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
 	})

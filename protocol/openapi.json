@@ -2242,6 +2242,40 @@
           "turn_id"
         ]
       },
+      "StepEnded": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "finish_reason": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "index",
+          "finish_reason"
+        ]
+      },
+      "StepStarted": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "index"
+        ]
+      },
       "SubscriptionOverage": {
         "properties": {
           "in_use": {

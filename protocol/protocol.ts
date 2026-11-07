@@ -635,6 +635,17 @@ export interface StatusFrame {
   next_at?: string;
 }
 
+export interface StepEnded {
+  turn_id: string;
+  index: number;
+  finish_reason: string;
+}
+
+export interface StepStarted {
+  turn_id: string;
+  index: number;
+}
+
 export interface SubscriptionOverage {
   in_use: boolean;
   status: string;

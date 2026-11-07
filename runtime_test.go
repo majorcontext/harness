@@ -292,13 +292,13 @@ func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer closeRuntime(t, r)
 		converse(t, create(t, r), "hi")
-		wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "item.completed assistant c1", "item.completed tool c1 "+cutOff,
-			"turn.ended failed flaky")
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "step.started", "item.completed assistant c1", "item.completed tool c1 "+cutOff,
+			"step.ended", "turn.ended failed flaky")
 		if got := b.runs.Load(); got != 1 {
 			t.Errorf("runs = %d, want 1", got)
 		}
-		closeRuntime(t, r)
 	})
 }
 

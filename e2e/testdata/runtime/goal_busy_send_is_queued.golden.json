@@ -163,7 +163,7 @@
           "state": "active",
           "turns": 0
         },
-        "head_seq": 7,
+        "head_seq": 8,
         "id": "ses:a",
         "model": "anthropic/claude-fable-5",
         "origin": "",
@@ -201,7 +201,7 @@
           "turns": 1,
           "verdict": "met"
         },
-        "head_seq": 16,
+        "head_seq": 20,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -225,7 +225,7 @@
       "status": 201,
       "body": {
         "input_id": "in1",
-        "seq": 7
+        "seq": 8
       }
     }
   }

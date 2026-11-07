@@ -88,16 +88,26 @@
           {
             "id": "6",
             "seq": 6,
-            "type": "context.measured"
+            "type": "step.started"
           },
           {
             "id": "7",
             "seq": 7,
-            "type": "item.completed"
+            "type": "context.measured"
           },
           {
             "id": "8",
             "seq": 8,
+            "type": "item.completed"
+          },
+          {
+            "id": "9",
+            "seq": 9,
+            "type": "step.ended"
+          },
+          {
+            "id": "10",
+            "seq": 10,
             "type": "turn.ended"
           }
         ]
@@ -125,16 +135,26 @@
           {
             "id": "6",
             "seq": 6,
-            "type": "context.measured"
+            "type": "step.started"
           },
           {
             "id": "7",
             "seq": 7,
-            "type": "item.completed"
+            "type": "context.measured"
           },
           {
             "id": "8",
             "seq": 8,
+            "type": "item.completed"
+          },
+          {
+            "id": "9",
+            "seq": 9,
+            "type": "step.ended"
+          },
+          {
+            "id": "10",
+            "seq": 10,
             "type": "turn.ended"
           }
         ]

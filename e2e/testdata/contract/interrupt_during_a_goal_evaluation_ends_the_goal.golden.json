@@ -175,7 +175,7 @@
           "state": "cleared",
           "turns": 0
         },
-        "head_seq": 15,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

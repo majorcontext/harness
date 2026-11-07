@@ -63,7 +63,7 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 		want     []string
 	}{
 		{"a tool call after the handoff is refused", false, say("partial"), []protocol.LogMessage{callTool("c2")},
-			[]string{"item.completed assistant partial"}},
+			[]string{"step.started", "item.completed assistant partial", "step.ended"}},
 		{"a tool call that a loop-owning backend ran after the handoff is cut off", true, say("partial"),
 			[]protocol.LogMessage{callTool("c2")},
 			[]string{"item.completed assistant partial", "item.completed assistant c2", "item.completed tool c2 " + cutOff}},
@@ -80,6 +80,7 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 				run.emit(tc.last)
 				closeRuntime(t, r1)
 				r2 := runtime(t, openStore(), f2)
+				defer closeRuntime(t, r2)
 				open(t, r2)
 				next := <-f2.runs
 				if next.req.TurnID != run.req.TurnID || next.req.Input[0].Parts[0].Text != "hi" {
@@ -90,7 +91,6 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 				want := append(append([]string{"input.admitted a", "turn.started a", "session.titled"}, tc.want...), "turn.suspended handoff",
 					"owner.acquired 1", "turn.resumed 1", "item.completed assistant rest", "turn.ended completed")
 				wantLog(t, openStore(), 2, want...)
-				closeRuntime(t, r2)
 			})
 		})
 	}

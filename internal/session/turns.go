@@ -160,8 +160,11 @@ func (a *Actor) start(id string, inputIDs []string) {
 	r.span = span
 	a.lastTurn = turnSpan{id, span.SpanContext()}
 	req := a.callRequest(id)
-	if current, ok := a.state.Turn(); ok && current.Resumes > 0 {
-		req.ResumeItems = a.state.TurnItems()
+	if current, ok := a.state.Turn(); ok {
+		req.StepIndex = current.NextStep
+		if current.Resumes > 0 {
+			req.ResumeItems = a.state.TurnItems()
+		}
 	}
 	if a.compactInput != "" && slices.Contains(inputIDs, a.compactInput) {
 		req.Purpose, a.compactInput = turn.PurposeCompaction, ""
@@ -278,7 +281,9 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopCompleted}, cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
-		err = a.append(append(a.closeOpen(turnID, cutOff, false), protocol.TurnSuspended{TurnID: turnID, Cause: protocol.CauseHandoff})...)
+		events := a.closeOpen(turnID, cutOff, false)
+		events = a.closeStep(events, turnID)
+		err = a.append(append(events, protocol.TurnSuspended{TurnID: turnID, Cause: protocol.CauseHandoff})...)
 	case errors.Is(cause, errTaskTurn):
 		err = a.endTurn(a.cfg.Base, protocol.TurnEnded{TurnID: turnID, StopReason: protocol.StopInterrupted, Cause: protocol.CauseStopped, TaskCancel: true}, interrupted)
 		next = true
@@ -355,6 +360,7 @@ func (a *Actor) ownsLoop() bool {
 func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text string, after ...protocol.Payload) error {
 	awaiting := ended.StopReason == protocol.StopCompleted && len(a.state.Requests()) > 0
 	events := a.closeOpen(ended.TurnID, text, awaiting)
+	events = a.closeStep(events, ended.TurnID)
 	if awaiting {
 		ended.StopReason = protocol.StopAwaitingInput
 	}
@@ -372,6 +378,13 @@ func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text stri
 		return nil
 	}
 	return a.appendCtx(ctx, append(events, after...)...)
+}
+
+func (a *Actor) closeStep(events []protocol.Payload, turnID string) []protocol.Payload {
+	if t, ok := a.state.Turn(); ok && t.ID == turnID && t.StepOpen {
+		return append(events, protocol.StepEnded{TurnID: turnID, Index: t.NextStep})
+	}
+	return events
 }
 
 func providerExhaustionDetails(err error) (protocol.Cause, *provider.Error) {

@@ -451,7 +451,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 5,
+        "head_seq": 7,
         "id": "ses:grand",
         "last_turn": {
           "cause": "stopped",
@@ -484,7 +484,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
+        "head_seq": 16,
         "id": "ses:kid",
         "last_turn": {
           "stop_reason": "completed",

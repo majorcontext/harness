@@ -23,6 +23,32 @@ type turnRun struct {
 	r *running
 }
 
+func (t *turnRun) StepStarted(index int) error {
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
+		if t.a.run != t.r {
+			reply(struct{}{}, ErrTurnMismatch)
+			return
+		}
+		reply(struct{}{}, t.a.append(protocol.StepStarted{TurnID: t.r.id, Index: index}))
+	})
+	return err
+}
+
+func (t *turnRun) StepEnded(index int, reason string) error {
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
+		if t.a.run != t.r {
+			reply(struct{}{}, ErrTurnMismatch)
+			return
+		}
+		if err := context.Cause(t.r.step); err != nil {
+			reply(struct{}{}, err)
+			return
+		}
+		reply(struct{}{}, t.a.append(protocol.StepEnded{TurnID: t.r.id, Index: index, FinishReason: reason}))
+	})
+	return err
+}
+
 // Item records m under a new ID.
 func (t *turnRun) Item(m protocol.LogMessage) error { return t.ItemAs("", m) }
 

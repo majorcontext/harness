@@ -74,7 +74,7 @@ func everyKind() []protocol.Payload {
 		protocol.SettingsChanged{ServiceTier: new("flex")},
 		protocol.SessionTitled{Title: "Login fix", Source: protocol.TitleUser},
 		protocol.GoalSet{Condition: "tests pass", MaxTurns: 3},
-		admit("a"), start("t1", "a"), steer("s"), promote("s", "t1"),
+		admit("a"), start("t1", "a"), protocol.StepStarted{TurnID: "t1", Index: 0}, steer("s"), promote("s", "t1"),
 		protocol.ChildSpawned{ChildID: "k", Agent: "explore"},
 		call("t1", "i1", "c1"), ask("c1", "i1"),
 		protocol.RequestResolved{RequestID: "c1", Resolution: protocol.ResolutionAnswered, Answer: json.RawMessage(`"yes"`)}, result("t1", "i3", "c1"),
@@ -86,6 +86,7 @@ func everyKind() []protocol.Payload {
 		protocol.BackendState{Backend: "codex", BlobKey: "b1"},
 		protocol.ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
 		protocol.PinRecorded{Notice: "mcp", Text: "[mcp: unavailable]", At: 3},
+		protocol.StepEnded{TurnID: "t1", Index: 0, FinishReason: "tool_use"},
 		suspend("t1", protocol.CauseHandoff), resume("t1", 1),
 		protocol.CompactionApplied{FromSeq: 1, ToSeq: 12, Summary: "so far", ByBackend: true},
 		protocol.TurnEnded{TurnID: "t1", StopReason: protocol.StopCompleted, Error: "short", ErrorDetail: "short and longer"},
@@ -135,7 +136,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
 	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Title: "Login fix", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
-		HeadSeq: 29, CreatedAt: t0, UpdatedAt: t0.Add(28 * time.Second)}
+		HeadSeq: 31, CreatedAt: t0, UpdatedAt: t0.Add(30 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

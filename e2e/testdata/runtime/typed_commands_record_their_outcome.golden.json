@@ -474,7 +474,7 @@
       "body": {
         "command": "refused",
         "input_id": "in12",
-        "seq": 37
+        "seq": 46
       }
     },
     "command.a#11": {
@@ -482,7 +482,7 @@
       "body": {
         "command": "accepted",
         "input_id": "in13",
-        "seq": 38
+        "seq": 47
       }
     },
     "command.a#2": {
@@ -536,14 +536,14 @@
       "status": 201,
       "body": {
         "input_id": "in8",
-        "seq": 19
+        "seq": 21
       }
     },
     "command.a#9": {
       "status": 201,
       "body": {
         "input_id": "in9",
-        "seq": 24
+        "seq": 28
       }
     },
     "command_records.a": {

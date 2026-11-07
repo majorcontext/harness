@@ -437,7 +437,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 16,
+        "head_seq": 21,
         "id": "ses:a",
         "last_turn": {
           "cause": "crashed",
@@ -472,7 +472,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 23,
+        "head_seq": 31,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -502,7 +502,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 9,
         "id": "ses:kid",
         "last_turn": {
           "cause": "crashed",
@@ -534,7 +534,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 9,
         "id": "ses:kid",
         "last_turn": {
           "cause": "crashed",

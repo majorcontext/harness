@@ -24,6 +24,8 @@ var payloads = map[string]func() Payload{
 	KindInputPromoted:      func() Payload { return new(InputPromoted) },
 	KindInputWithdrawn:     func() Payload { return new(InputWithdrawn) },
 	KindTurnStarted:        func() Payload { return new(TurnStarted) },
+	KindStepStarted:        func() Payload { return new(StepStarted) },
+	KindStepEnded:          func() Payload { return new(StepEnded) },
 	KindItemCompleted:      func() Payload { return new(ItemCompleted) },
 	KindTurnSuspended:      func() Payload { return new(TurnSuspended) },
 	KindTurnResumed:        func() Payload { return new(TurnResumed) },

@@ -25,6 +25,8 @@ type Turn struct {
 	InputIDs  []string
 	Suspended bool
 	Resumes   int
+	NextStep  int
+	StepOpen  bool
 }
 
 // Goal is the session goal and the number of turns evaluated against it.
@@ -491,6 +493,10 @@ func (s *State) step(env Envelope) error {
 		return s.applyWithdrawn(e)
 	case protocol.TurnStarted:
 		return s.applyStarted(e)
+	case protocol.StepStarted:
+		return s.applyStepStarted(e)
+	case protocol.StepEnded:
+		return s.applyStepEnded(e)
 	case protocol.ItemCompleted:
 		return s.applyItem(e)
 	case protocol.TurnSuspended:
