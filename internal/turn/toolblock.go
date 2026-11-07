@@ -12,7 +12,7 @@ type ToolBlockSink interface {
 }
 
 type toolBlockTurn interface {
-	ToolBlock(itemID string, c protocol.ToolCall, available bool)
+	ToolBlock(itemID string, c protocol.ToolCall, available bool, failure error)
 }
 
 func (w watched) ToolBlockStarted(c protocol.ToolCall) {
@@ -50,7 +50,7 @@ func (s *sink) ToolBlockStarted(c protocol.ToolCall) {
 		s.item = s.Started()
 	}
 	if out, ok := s.Turn.(toolBlockTurn); ok {
-		out.ToolBlock(s.item, c, false)
+		out.ToolBlock(s.item, c, false, nil)
 	}
 }
 
@@ -62,12 +62,13 @@ func (s *sink) ToolBlockAvailable(c protocol.ToolCall) {
 		return
 	}
 	s.ToolBlockStarted(c)
-	c = s.normalize(c).call
+	n := s.normalize(c)
+	c = n.call
 	if s.normalizeCtx != nil && s.normalizeCtx.Err() != nil {
 		return
 	}
 	if out, ok := s.Turn.(toolBlockTurn); ok {
-		out.ToolBlock(s.item, c, true)
+		out.ToolBlock(s.item, c, true, n.err)
 	}
 	delete(s.toolBlocks, c.ID)
 }
@@ -75,6 +76,7 @@ func (s *sink) ToolBlockAvailable(c protocol.ToolCall) {
 type normalizedCall struct {
 	call    protocol.ToolCall
 	changed bool
+	err     error
 }
 
 func (s *sink) normalize(c protocol.ToolCall) normalizedCall {
@@ -89,7 +91,7 @@ func (s *sink) normalize(c protocol.ToolCall) normalizedCall {
 		ctx = s.early.ctx
 	}
 	out, err := s.early.t.normalize(ctx, c)
-	n := normalizedCall{call: out, changed: err == nil && !bytes.Equal(c.Arguments, out.Arguments)}
+	n := normalizedCall{call: out, changed: err == nil && !bytes.Equal(c.Arguments, out.Arguments), err: err}
 	if ctx.Err() != nil {
 		return n
 	}

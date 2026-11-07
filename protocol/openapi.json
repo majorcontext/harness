@@ -2412,7 +2412,10 @@
           "name": {
             "type": "string"
           },
-          "input": true
+          "input": true,
+          "error": {
+            "type": "string"
+          }
         },
         "type": "object",
         "required": [

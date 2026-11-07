@@ -687,6 +687,7 @@ export interface ToolBlockFrame {
   call_id: string;
   name: string;
   input?: unknown;
+  error?: string;
 }
 
 export interface ToolResultRetained {
