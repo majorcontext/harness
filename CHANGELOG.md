@@ -24,7 +24,7 @@ First tagged release.
 
 ### Added
 
-- **Sender attribution** — the model reads who sent each input that names a `source_label`: the self-closing tag `<sender name="<label>" source="<source>"/>` leads a turn's input and follows the number of a steer item (`source` is absent when empty; `name` and `source` are XML-escaped). Readers and the event log are unchanged; an input of source `command` names no sender.
+- **Sender attribution** — the model reads who sent each input that names a `source_label`: the self-closing tag `<harness-sender name="<label>" source="<source>"/>` leads a turn's input and follows the number of a steer item (`source` is absent when empty; `name` and `source` are XML-escaped). Readers and the event log are unchanged; an input of source `command` names no sender.
 
 - **Tool input normalization** — tools can opt in to normalize input once in harness-owned loops. Successful normalization supplies the canonical call input to execution, events, forwarding, and later model requests. A normalization error retains the raw input, records a tool error, and prevents execution. Plugin `Before` hooks see the normalized input; their rewrites affect execution only.
 

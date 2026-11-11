@@ -174,7 +174,7 @@ func sender(source, label string) string {
 	if source == protocol.SourceCommand || label == "" {
 		return ""
 	}
-	tag := `<sender name="` + escapeAttr(label) + `"`
+	tag := `<harness-sender name="` + escapeAttr(label) + `"`
 	if source != "" {
 		tag += ` source="` + escapeAttr(source) + `"`
 	}

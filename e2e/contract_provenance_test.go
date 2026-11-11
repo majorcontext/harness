@@ -72,7 +72,7 @@ func TestContractInputProvenanceReachesTheModel(t *testing.T) {
 			if len(reqs) != 2 {
 				t.Fatalf("model requests = %d, want 2", len(reqs))
 			}
-			if got, want := reqs[1].Messages[0].Parts[0].Text, `<sender name="Ann &#34;A&#34; &lt;b&gt;" source="typed"/>`+"\nhello"; got != want {
+			if got, want := reqs[1].Messages[0].Parts[0].Text, `<harness-sender name="Ann &#34;A&#34; &lt;b&gt;" source="typed"/>`+"\nhello"; got != want {
 				t.Errorf("first input as the model reads it = %q, want %q", got, want)
 			}
 			if got := reqs[1].LastUserText(); got != "plain" {
@@ -125,11 +125,11 @@ func TestContractInputProvenanceSteerBatch(t *testing.T) {
 			if m.Source != "" || m.SourceID != "" || m.SourceLabel != "" {
 				t.Errorf("a joined message carries its provenance only in its entries: %+v", m)
 			}
-			if strings.Contains(m.Parts[0].Text, "<sender") {
+			if strings.Contains(m.Parts[0].Text, "<harness-sender") {
 				t.Errorf("reader steer text names senders: %q", m.Parts[0].Text)
 			}
 			reqs := fake.Requests()
-			if got, want := reqs[len(reqs)-1].LastUserText(), "OPERATOR MESSAGES (address these, then continue the task):\n1. <sender name=\"Ann\" source=\"slack\"/> alpha\n2. <sender name=\"Nightly\" source=\"api\"/> beta\n"; got != want {
+			if got, want := reqs[len(reqs)-1].LastUserText(), "OPERATOR MESSAGES (address these, then continue the task):\n1. <harness-sender name=\"Ann\" source=\"slack\"/> alpha\n2. <harness-sender name=\"Nightly\" source=\"api\"/> beta\n"; got != want {
 				t.Errorf("steer block the model reads = %q, want %q", got, want)
 			}
 		})

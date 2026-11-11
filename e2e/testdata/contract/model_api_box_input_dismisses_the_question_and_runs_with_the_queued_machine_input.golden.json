@@ -207,7 +207,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003csender name=\"builder (box of ann)\" source=\"box\"/\u003e\nuse SQLite"
+              "text": "\u003charness-sender name=\"builder (box of ann)\" source=\"box\"/\u003e\nuse SQLite"
             }
           ]
         }
