@@ -207,7 +207,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "use SQLite"
+              "text": "[message from builder (box of ann)]\nuse SQLite"
             }
           ]
         }

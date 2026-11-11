@@ -177,7 +177,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 	}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
-		req.Input = append(req.Input, protocol.LogMessage{Role: protocol.RoleUser, Parts: ev.Parts})
+		req.Input = append(req.Input, eventlog.ModelInput(ev))
 	}
 	a.run = r
 	src := a.source(r)
@@ -236,7 +236,7 @@ func (a *Actor) steer(r *running) ([]protocol.LogMessage, error) {
 		return nil, nil
 	}
 	var ops, reports []protocol.Payload
-	var steered [][]protocol.LogPart
+	var steered []protocol.InputAdmitted
 	for _, in := range a.state.Queue() {
 		if in.Delivery != protocol.DeliverySteer {
 			continue
@@ -250,7 +250,7 @@ func (a *Actor) steer(r *running) ([]protocol.LogMessage, error) {
 		} else {
 			ops = append(ops, e)
 		}
-		steered = append(steered, in.Parts)
+		steered = append(steered, in)
 	}
 	events := append(ops, reports...)
 	if len(events) == 0 {

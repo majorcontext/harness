@@ -24,6 +24,8 @@ First tagged release.
 
 ### Added
 
+- **Sender attribution** — the model reads who sent each input that names a `source_label`: `[message from <label>]` leads a turn's input, and `[from <label>]` follows the number of a steer item. Readers and the event log are unchanged; an input of source `command` names no sender.
+
 - **Tool input normalization** — tools can opt in to normalize input once in harness-owned loops. Successful normalization supplies the canonical call input to execution, events, forwarding, and later model requests. A normalization error retains the raw input, records a tool error, and prevents execution. Plugin `Before` hooks see the normalized input; their rewrites affect execution only.
 
 - **Ordered tool blocks** (`protocol`) — model API streams announce tool calls when their identity is known and when their full input is available, interleaved with text. `PromptStream` retains these frames for lossless consumption.
