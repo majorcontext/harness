@@ -207,7 +207,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "[message from builder (box of ann)]\nuse SQLite"
+              "text": "\u003csender name=\"builder (box of ann)\" source=\"box\"/\u003e\nuse SQLite"
             }
           ]
         }
