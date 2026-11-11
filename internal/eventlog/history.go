@@ -61,18 +61,19 @@ func IsReport(parts []protocol.LogPart) bool {
 // address the inputs and then to continue its task, and then the pinned
 // segment that holds the task lines of the reports. A report is not in the
 // block; its task line is pinned.
-func SteerMessages(inputs [][]protocol.LogPart) []protocol.LogMessage {
-	var ops, reports [][]protocol.LogPart
-	for _, parts := range inputs {
-		if IsReport(parts) {
-			reports = append(reports, parts)
+func SteerMessages(inputs []protocol.InputAdmitted) []protocol.LogMessage {
+	var ops []protocol.InputAdmitted
+	var reports [][]protocol.LogPart
+	for _, in := range inputs {
+		if IsReport(in.Parts) {
+			reports = append(reports, in.Parts)
 		} else {
-			ops = append(ops, parts)
+			ops = append(ops, in)
 		}
 	}
 	var out []protocol.LogMessage
 	if len(ops) > 0 {
-		out = append(out, SteerMessage(ops))
+		out = append(out, modelSteer(ops))
 	}
 	if len(reports) > 0 {
 		out = append(out, pinMessage(reports))
@@ -83,13 +84,31 @@ func SteerMessages(inputs [][]protocol.LogPart) []protocol.LogMessage {
 // SteerMessage is the message for the inputs that join a running turn, with
 // no report among them.
 func SteerMessage(inputs [][]protocol.LogPart) protocol.LogMessage {
+	return steerMessage(inputs, make([]string, len(inputs)))
+}
+
+// modelSteer is the steer message that the model reads: each item names its
+// sender.
+func modelSteer(inputs []protocol.InputAdmitted) protocol.LogMessage {
+	froms := make([]string, len(inputs))
+	for i, in := range inputs {
+		froms[i] = sender(in.Source, in.SourceLabel)
+	}
+	return steerMessage(partsOf(inputs), froms)
+}
+
+func steerMessage(inputs [][]protocol.LogPart, froms []string) protocol.LogMessage {
 	var b strings.Builder
 	var blobs []protocol.LogPart
 	for n, parts := range inputs {
 		if n == 0 {
 			b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
 		}
-		fmt.Fprintf(&b, "%d. %s\n", n+1, textOf(parts))
+		if froms[n] != "" {
+			fmt.Fprintf(&b, "%d. [from %s] %s\n", n+1, froms[n], textOf(parts))
+		} else {
+			fmt.Fprintf(&b, "%d. %s\n", n+1, textOf(parts))
+		}
 		for _, p := range parts {
 			if p.Type == protocol.LogPartBlob {
 				blobs = append(blobs, p)
@@ -146,6 +165,49 @@ func inputMessage(in protocol.InputAdmitted) protocol.LogMessage {
 	return protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)}
 }
 
+// sender returns the name that the model reads for who sent an input, or ""
+// when the input names no sender. An expanded slash command names the
+// command, not a person.
+func sender(source, label string) string {
+	if source == protocol.SourceCommand {
+		return ""
+	}
+	return label
+}
+
+// ModelInput returns the message that the model reads for an input that
+// starts a turn: its parts, led by the sender when it has one.
+func ModelInput(in protocol.InputAdmitted) protocol.LogMessage {
+	return attributed(protocol.LogMessage{Role: protocol.RoleUser, Parts: in.Parts}, sender(in.Source, in.SourceLabel))
+}
+
+func attributed(m protocol.LogMessage, from string) protocol.LogMessage {
+	if from == "" {
+		return m
+	}
+	tag := "[message from " + from + "]"
+	parts := slices.Clone(m.Parts)
+	if i := slices.IndexFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartText }); i >= 0 {
+		parts[i].Text = tag + "\n" + parts[i].Text
+	} else {
+		parts = slices.Insert(parts, 0, protocol.LogPart{Type: protocol.LogPartText, Text: tag})
+	}
+	m.Parts = parts
+	return m
+}
+
+// modelMessage is the message of e that the model reads. A readers' view
+// keeps the message as recorded, because the readers see the sender apart.
+func modelMessage(e entry) protocol.LogMessage {
+	switch {
+	case e.pinned:
+		return e.msg
+	case e.promoted != nil:
+		return modelSteer(e.promoted)
+	}
+	return attributed(e.msg, sender(e.from.source, e.from.label))
+}
+
 // History returns the summary of the newest compaction as a user message, then
 // each later message in log order, with no pinned segment. Readers see more:
 // see Transcript.
@@ -178,11 +240,16 @@ func (s *State) messages(pinned bool) []protocol.LogMessage {
 		if e.pinned && !pinned || e.readerOnly {
 			continue
 		}
-		out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
+		m := e.msg
+		if pinned {
+			m = modelMessage(e)
+		}
+		out = append(out, protocol.LogMessage{Role: m.Role, Parts: cloneParts(m.Parts)})
 	}
 	if pinned {
 		for _, e := range s.stranded {
-			out = append(out, protocol.LogMessage{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
+			m := modelMessage(e)
+			out = append(out, protocol.LogMessage{Role: m.Role, Parts: cloneParts(m.Parts)})
 		}
 	}
 	return out

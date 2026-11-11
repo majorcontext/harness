@@ -57,6 +57,44 @@ func TestContractInputProvenanceReadBack(t *testing.T) {
 	})
 }
 
+func TestContractInputProvenanceReachesTheModel(t *testing.T) {
+	skipShort(t)
+	onHosts(t, func(t *testing.T, h host) {
+		t.Run("a_labelled_input_names_its_sender_to_the_model_and_not_to_the_readers", func(t *testing.T) {
+			t.Parallel()
+			d, fake := startOn(t, h, runtimeWorkdir(t, nil), nil, replyText("ok"), replyText("again"))
+			id := d.Create(t)
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in1", "hello", "typed", "", "Ann"), nil)
+			d.WaitIdle(t, id)
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in2", "plain", "slack", "", ""), nil)
+			d.WaitIdle(t, id)
+			reqs := fake.Requests()
+			if len(reqs) != 2 {
+				t.Fatalf("model requests = %d, want 2", len(reqs))
+			}
+			if got, want := reqs[1].Messages[0].Parts[0].Text, "[message from Ann]\nhello"; got != want {
+				t.Errorf("first input as the model reads it = %q, want %q", got, want)
+			}
+			if got := reqs[1].LastUserText(); got != "plain" {
+				t.Errorf("an input with no label = %q, want its text alone", got)
+			}
+			if m := userMessageWithText(t, provPage(t, d, id), "hello"); m.Parts[0].Text != "hello" || m.SourceLabel != "Ann" {
+				t.Errorf("reader message = %+v, want the text alone and the label apart", m)
+			}
+		})
+		t.Run("a_slash_command_expansion_names_no_sender_to_the_model", func(t *testing.T) {
+			t.Parallel()
+			d, fake := startOn(t, h, runtimeWorkdir(t, nil), nil, replyText("ok"))
+			id := d.Create(t)
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in1", "expanded", protocol.SourceCommand, "", "review"), nil)
+			d.WaitIdle(t, id)
+			if got := fake.Requests()[0].LastUserText(); !strings.HasPrefix(got, "expanded\n<") {
+				t.Errorf("command input as the model reads it = %q, want its text alone", got)
+			}
+		})
+	})
+}
+
 func TestContractInputProvenanceSteerBatch(t *testing.T) {
 	skipShort(t)
 	onHosts(t, func(t *testing.T, h host) {
@@ -86,6 +124,13 @@ func TestContractInputProvenanceSteerBatch(t *testing.T) {
 			}
 			if m.Source != "" || m.SourceID != "" || m.SourceLabel != "" {
 				t.Errorf("a joined message carries its provenance only in its entries: %+v", m)
+			}
+			if strings.Contains(m.Parts[0].Text, "[from") {
+				t.Errorf("reader steer text names senders: %q", m.Parts[0].Text)
+			}
+			reqs := fake.Requests()
+			if got, want := reqs[len(reqs)-1].LastUserText(), "OPERATOR MESSAGES (address these, then continue the task):\n1. [from Ann] alpha\n2. [from Nightly] beta\n"; got != want {
+				t.Errorf("steer block the model reads = %q, want %q", got, want)
 			}
 		})
 	})
