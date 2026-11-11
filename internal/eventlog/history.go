@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"encoding/xml"
 	"fmt"
 	"slices"
 	"strings"
@@ -105,7 +106,7 @@ func steerMessage(inputs [][]protocol.LogPart, froms []string) protocol.LogMessa
 			b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
 		}
 		if froms[n] != "" {
-			fmt.Fprintf(&b, "%d. [from %s] %s\n", n+1, froms[n], textOf(parts))
+			fmt.Fprintf(&b, "%d. %s %s\n", n+1, froms[n], textOf(parts))
 		} else {
 			fmt.Fprintf(&b, "%d. %s\n", n+1, textOf(parts))
 		}
@@ -165,14 +166,25 @@ func inputMessage(in protocol.InputAdmitted) protocol.LogMessage {
 	return protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)}
 }
 
-// sender returns the name that the model reads for who sent an input, or ""
-// when the input names no sender. An expanded slash command names the
-// command, not a person.
+// sender returns the self-closing tag that tells the model who sent an input,
+// or "" when the input names no sender. An expanded slash command names the
+// command, not a person. The tag never wraps the text, so a sender cannot
+// close it and forge another sender.
 func sender(source, label string) string {
-	if source == protocol.SourceCommand {
+	if source == protocol.SourceCommand || label == "" {
 		return ""
 	}
-	return label
+	tag := `<sender name="` + escapeAttr(label) + `"`
+	if source != "" {
+		tag += ` source="` + escapeAttr(source) + `"`
+	}
+	return tag + "/>"
+}
+
+func escapeAttr(v string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(v))
+	return b.String()
 }
 
 // ModelInput returns the message that the model reads for an input that
@@ -185,7 +197,7 @@ func attributed(m protocol.LogMessage, from string) protocol.LogMessage {
 	if from == "" {
 		return m
 	}
-	tag := "[message from " + from + "]"
+	tag := from
 	parts := slices.Clone(m.Parts)
 	if i := slices.IndexFunc(parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartText }); i >= 0 {
 		parts[i].Text = tag + "\n" + parts[i].Text
