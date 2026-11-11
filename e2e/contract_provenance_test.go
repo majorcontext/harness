@@ -62,9 +62,9 @@ func TestContractInputProvenanceReachesTheModel(t *testing.T) {
 	onHosts(t, func(t *testing.T, h host) {
 		t.Run("a_labelled_input_names_its_sender_to_the_model_and_not_to_the_readers", func(t *testing.T) {
 			t.Parallel()
-			d, fake := startOn(t, h, runtimeWorkdir(t, nil), nil, replyText("ok"), replyText("again"), replyText("third"))
+			d, fake := startOn(t, h, runtimeWorkdir(t, nil), nil, replyText("ok"), replyText("again"))
 			id := d.Create(t)
-			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in1", "hello", "typed", "", "Ann"), nil)
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in1", "hello", "typed", "", `Ann "A" <b>`), nil)
 			d.WaitIdle(t, id)
 			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in2", "plain", "slack", "", ""), nil)
 			d.WaitIdle(t, id)
@@ -72,19 +72,13 @@ func TestContractInputProvenanceReachesTheModel(t *testing.T) {
 			if len(reqs) != 2 {
 				t.Fatalf("model requests = %d, want 2", len(reqs))
 			}
-			if got, want := reqs[1].Messages[0].Parts[0].Text, `<sender name="Ann" source="typed"/>`+"\nhello"; got != want {
+			if got, want := reqs[1].Messages[0].Parts[0].Text, `<sender name="Ann &#34;A&#34; &lt;b&gt;" source="typed"/>`+"\nhello"; got != want {
 				t.Errorf("first input as the model reads it = %q, want %q", got, want)
 			}
 			if got := reqs[1].LastUserText(); got != "plain" {
 				t.Errorf("an input with no label = %q, want its text alone", got)
 			}
-			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", provInput("in3", "quoted", "api", "", `A "B" <c>`), nil)
-			d.WaitIdle(t, id)
-			reqs = fake.Requests()
-			if got, want := reqs[2].LastUserText(), `<sender name="A &#34;B&#34; &lt;c&gt;" source="api"/>`+"\nquoted"; got != want {
-				t.Errorf("a label with markup characters = %q, want %q", got, want)
-			}
-			if m := userMessageWithText(t, provPage(t, d, id), "hello"); m.Parts[0].Text != "hello" || m.SourceLabel != "Ann" {
+			if m := userMessageWithText(t, provPage(t, d, id), "hello"); m.Parts[0].Text != "hello" || m.SourceLabel != `Ann "A" <b>` {
 				t.Errorf("reader message = %+v, want the text alone and the label apart", m)
 			}
 		})
