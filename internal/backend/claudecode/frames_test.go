@@ -13,7 +13,7 @@ func TestUserLineSendsAnEngineContextPartAsRawText(t *testing.T) {
 		{Type: protocol.LogPartText, Text: "OPERATOR MESSAGES (address these, then continue the task):\n1. go on\n"},
 		{Type: protocol.LogPartEngineContext, Text: "[tasks:\n- kid (agent=explore) done: found it (usage: 1 in / 2 out)\n]"},
 	}}
-	line, err := userLine(m, nil)
+	line, err := userLine(m, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -501,7 +501,7 @@ func (r *run) prompt(req turn.Request) (input, error) {
 	} else if !r.continues {
 		m.Parts = startParts(req.Input)
 	}
-	return userLine(m, r.read)
+	return userLine(m, r.workDir, r.read)
 }
 
 // startParts returns the parts of the line that starts a turn. The task lines

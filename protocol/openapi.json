@@ -1375,6 +1375,9 @@
           "media_type": {
             "type": "string"
           },
+          "name": {
+            "type": "string"
+          },
           "data": {
             "type": "string",
             "contentEncoding": "base64"

@@ -395,6 +395,7 @@ export interface Part {
   type: string;
   text?: string;
   media_type?: string;
+  name?: string;
   data?: string;
 }
 

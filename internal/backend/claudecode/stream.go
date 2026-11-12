@@ -44,7 +44,8 @@ type run struct {
 	// askMsg maps each question call that waits for its response to end to the ID of the response.
 	askMsg map[string]string
 	// read returns the bytes of an attachment of the turn.
-	read func(key string) ([]byte, error)
+	workDir string
+	read    func(key string) ([]byte, error)
 	// continues reports a run of a turn whose input the CLI already took;
 	// taken reports that this run gave the CLI the input.
 	continues bool
@@ -116,6 +117,7 @@ func (r *run) cleanup() {
 // drive sends the prompt and handles frames until the result, the end of
 // stdout, or the end of ctx.
 func (r *run) drive(ctx context.Context, req turn.Request) error {
+	r.workDir = req.WorkDir
 	r.read = func(key string) ([]byte, error) { return req.Blob(ctx, key) }
 	line, err := r.prompt(req)
 	if err != nil {
@@ -581,7 +583,7 @@ func (r *run) steered() error {
 			break
 		}
 		var line input
-		if line, err = userLine(m, r.read); err == nil {
+		if line, err = userLine(m, r.workDir, r.read); err == nil {
 			err = r.proc.Send(line)
 			r.owed = r.owed || err == nil
 		}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/majorcontext/harness/protocol"
 
+	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -56,6 +57,14 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.L
 			}
 			out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError, Content: content})
 		case protocol.LogPartBlob:
+			if !admit.IsNative(p.MediaType) {
+				note, err := turn.AttachmentNote(req.WorkDir, p, func(key string) ([]byte, error) { return readBlob(ctx, req, key) })
+				if err != nil {
+					return message.Message{}, fmt.Errorf("modelapi: %w", err)
+				}
+				out.Parts = append(out.Parts, &message.Text{Text: note})
+				continue
+			}
 			data, err := readBlob(ctx, req, p.BlobKey)
 			if err != nil {
 				return message.Message{}, fmt.Errorf("modelapi: attachment %s: %w", p.BlobKey, err)

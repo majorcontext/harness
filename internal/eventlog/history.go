@@ -133,9 +133,21 @@ func textOf(parts []protocol.LogPart) string {
 func partsOf(inputs []protocol.InputAdmitted) [][]protocol.LogPart {
 	out := make([][]protocol.LogPart, len(inputs))
 	for i, in := range inputs {
-		out[i] = in.Parts
+		out[i] = withInputID(in)
 	}
 	return out
+}
+
+// withInputID returns the parts of in with its ID on each blob part, so the
+// model view can name where the runtime puts an attachment.
+func withInputID(in protocol.InputAdmitted) []protocol.LogPart {
+	parts := slices.Clone(in.Parts)
+	for i := range parts {
+		if parts[i].Type == protocol.LogPartBlob {
+			parts[i].InputID = in.InputID
+		}
+	}
+	return parts
 }
 
 func pinMessage(reports [][]protocol.LogPart) protocol.LogMessage {
@@ -163,7 +175,7 @@ func withoutTaskReports(parts []protocol.LogPart) []protocol.LogPart {
 }
 
 func inputMessage(in protocol.InputAdmitted) protocol.LogMessage {
-	return protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(in.Parts)}
+	return protocol.LogMessage{Role: protocol.RoleUser, Parts: withoutTaskReports(withInputID(in))}
 }
 
 // sender returns the self-closing tag that tells the model who sent an input,
@@ -190,7 +202,7 @@ func escapeAttr(v string) string {
 // ModelInput returns the message that the model reads for an input that
 // starts a turn: its parts, led by the sender when it has one.
 func ModelInput(in protocol.InputAdmitted) protocol.LogMessage {
-	return attributed(protocol.LogMessage{Role: protocol.RoleUser, Parts: in.Parts}, sender(in.Source, in.SourceLabel))
+	return attributed(protocol.LogMessage{Role: protocol.RoleUser, Parts: withInputID(in)}, sender(in.Source, in.SourceLabel))
 }
 
 func attributed(m protocol.LogMessage, from string) protocol.LogMessage {

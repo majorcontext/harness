@@ -44,7 +44,7 @@ func TestInputChecksTheEnvelopeAndEachPart(t *testing.T) {
 		{"no parts", protocol.Input{ID: "a"}, "has no parts"},
 		{"an unknown delivery", protocol.Input{ID: "a", Delivery: "later", Parts: []protocol.Part{text("x")}}, `has delivery "later"`},
 		{"an unknown part type", protocol.Input{ID: "a", Parts: []protocol.Part{{Type: "video"}}}, `has part type "video"`},
-		{"a media type that no provider takes", protocol.Input{ID: "a", Parts: []protocol.Part{blob("text/plain", []byte("x"))}}, "unsupported attachment media type"},
+		{"a file with no name", protocol.Input{ID: "a", Parts: []protocol.Part{blob("text/plain", []byte("x"))}}, "has no name"},
 		{"a blob with no data", protocol.Input{ID: "a", Parts: []protocol.Part{blob("image/png", nil)}}, "has no data"},
 		{"bytes that are not the image they claim", protocol.Input{ID: "a", Parts: []protocol.Part{blob("image/jpeg", png())}}, "does not decode as image/jpeg"},
 		{"a PDF with no header", protocol.Input{ID: "a", Parts: []protocol.Part{blob("application/pdf", []byte("nope"))}}, "does not begin with a %PDF- header"},

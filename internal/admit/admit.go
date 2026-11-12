@@ -13,7 +13,7 @@ import (
 	_ "image/gif"  // register the GIF decoder for image.DecodeConfig
 	_ "image/jpeg" // register the JPEG decoder for image.DecodeConfig
 	_ "image/png"  // register the PNG decoder for image.DecodeConfig
-	"slices"
+	"mime"
 	"strings"
 	"unicode/utf8"
 
@@ -49,6 +49,13 @@ var attachmentTypes = map[string]func(mediaType string, data []byte) error{
 	"image/gif":       verifyImage,
 	"image/webp":      verifyImage,
 	"application/pdf": verifyPDF,
+}
+
+// IsNative reports whether providers take mediaType as an attachment. Any
+// other type is a file that the runtime puts on disk for the model to read.
+func IsNative(mediaType string) bool {
+	_, ok := attachmentTypes[mediaType]
+	return ok
 }
 
 // Input returns the record of in and the blobs of its attachments. Its error
@@ -161,25 +168,28 @@ func cleanSourceLabel(label string) (string, error) {
 // attachment checks one blob part and returns the part that the log holds.
 // The key is the hash of the bytes, so one attachment sent twice is one blob.
 func attachment(p protocol.Part) (protocol.LogPart, error) {
-	verify, ok := attachmentTypes[p.MediaType]
-	switch {
-	case !ok:
-		types := make([]string, 0, len(attachmentTypes))
-		for t := range attachmentTypes {
-			types = append(types, t)
+	verify, native := attachmentTypes[p.MediaType]
+	if !native {
+		if _, _, err := mime.ParseMediaType(p.MediaType); err != nil {
+			return protocol.LogPart{}, fmt.Errorf("attachment media type %q is not valid: %v", p.MediaType, err)
 		}
-		slices.Sort(types)
-		return protocol.LogPart{}, fmt.Errorf("unsupported attachment media type %q: use one of %s", p.MediaType, strings.Join(types, ", "))
+		if strings.TrimSpace(p.Name) == "" {
+			return protocol.LogPart{}, fmt.Errorf("attachment %s has no name: a file that is not png, jpeg, gif, webp, or pdf needs one", p.MediaType)
+		}
+	}
+	switch {
 	case len(p.Data) == 0:
 		return protocol.LogPart{}, fmt.Errorf("attachment %s has no data", p.MediaType)
 	case len(p.Data) > MaxAttachmentBytes:
 		return protocol.LogPart{}, fmt.Errorf("attachment is %d bytes, which exceeds the %d-byte limit", len(p.Data), MaxAttachmentBytes)
 	}
-	if err := verify(p.MediaType, p.Data); err != nil {
-		return protocol.LogPart{}, fmt.Errorf("attachment %w", err)
+	if native {
+		if err := verify(p.MediaType, p.Data); err != nil {
+			return protocol.LogPart{}, fmt.Errorf("attachment %w", err)
+		}
 	}
 	sum := sha256.Sum256(p.Data)
-	return protocol.LogPart{Type: protocol.LogPartBlob, MediaType: p.MediaType, BlobKey: "attachment-" + hex.EncodeToString(sum[:]), Bytes: len(p.Data)}, nil
+	return protocol.LogPart{Type: protocol.LogPartBlob, MediaType: p.MediaType, Name: p.Name, BlobKey: "attachment-" + hex.EncodeToString(sum[:]), Bytes: len(p.Data)}, nil
 }
 
 // verifyImage proves that data decodes as the image type that it claims. It

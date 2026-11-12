@@ -1,9 +1,13 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -91,4 +95,41 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestContractFileAttachments(t *testing.T) {
+	skipShort(t)
+	csv := []byte("a,b\n1,2\n")
+	file := func(name string) []protocol.Part {
+		return []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "text/csv", Name: name, Data: csv}}
+	}
+	onHosts(t, func(t *testing.T, h host) {
+		dir := runtimeWorkdir(t, nil)
+		tag := func(name, rel string) string {
+			return `<harness-attachment name="` + name + `" path="` + filepath.Join(dir, ".harness/attachments", rel) + `" media_type="text/csv" bytes="8"/>`
+		}
+		d, _ := startOn(t, h, dir, nil,
+			harnesstest.Step{Name: "csv", Match: anyPartContains(tag("report.csv", "in_csv/report.csv")), Reply: harnesstest.Reply{Text: "read"}},
+			harnesstest.Step{Name: "hostile", Match: anyPartContains(tag("../../etc/passwd", "in_evil/etcpasswd")), Reply: harnesstest.Reply{Text: "read"}})
+		id := d.Create(t)
+		for _, row := range []struct{ input, name, rel string }{{"in_csv", "report.csv", "in_csv/report.csv"}, {"in_evil", "../../etc/passwd", "in_evil/etcpasswd"}} {
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: row.input, Parts: file(row.name)}, nil)
+			d.WaitIdle(t, id)
+			got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", row.rel))
+			if err != nil || !bytes.Equal(got, csv) {
+				t.Errorf("attachment %s = %q, %v, want the CSV bytes inside the attachments directory", row.rel, got, err)
+			}
+		}
+		res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_noname", Parts: file("")})
+		if res.Status != http.StatusBadRequest {
+			t.Errorf("a file with no name = %d, want 400 invalid_request", res.Status)
+		}
+	})
+}
+
+// anyPartContains matches a request whose last message has a part with substr.
+func anyPartContains(substr string) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		return len(r.Messages) > 0 && slices.ContainsFunc(r.Messages[len(r.Messages)-1].Parts, func(p harnesstest.Part) bool { return strings.Contains(p.Text, substr) })
+	}
 }

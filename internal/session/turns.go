@@ -131,7 +131,7 @@ func (a *Actor) modelRequest() turn.Request {
 		blocks = nil
 	}
 	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Compacted: a.state.CompactionCount() > 0, Purpose: turn.PurposeTurn, Settings: a.state.Settings(), Instructions: instructions, SystemBlocks: blocks, SystemCacheBreakpoint: a.cfg.SystemCacheBreakpoint, SystemOverride: a.cfg.SystemOverride, Skills: a.cfg.Skills, Sent: a.cfg.Sent,
-		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxSteps: a.state.MaxSteps(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob, Params: a.cfg.Params}
+		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxSteps: a.state.MaxSteps(), MaxTokens: a.cfg.MaxTokens, WorkDir: a.state.WorkDir(), Blob: a.blob, Params: a.cfg.Params}
 }
 
 // banner renders the engine status line from the version and the created time
