@@ -15,11 +15,7 @@ import (
 // AttachmentDir is the directory under WorkDir that holds file attachments.
 const AttachmentDir = ".harness/attachments"
 
-// AttachmentNote puts the file p, which no provider takes, at
-// <workDir>/AttachmentDir/<sha256 of its bytes>/<name> and returns the tag
-// that names that path. The directory comes from the blob key, so different
-// bytes never share one. read runs only when the file is missing or its size
-// differs from p.Bytes.
+// AttachmentNote puts the file p at <workDir>/AttachmentDir/<sha256>/<name>, reading its blob only when that file is missing or the wrong size, and returns its tag.
 func AttachmentNote(workDir string, p protocol.LogPart, read func(key string) ([]byte, error)) (string, error) {
 	if workDir == "" {
 		return "", fmt.Errorf("attachment %s: the session has no work directory to hold it", p.BlobKey)
@@ -42,8 +38,6 @@ func AttachmentNote(workDir string, p protocol.LogPart, read func(key string) ([
 		`" bytes="` + strconv.Itoa(p.Bytes) + `"/>`, nil
 }
 
-// safeSegment returns name without a path separator, "..", NUL, or control
-// character, or "attachment" when nothing is left.
 func safeSegment(name string) string {
 	name = strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r < 0x20 || r == 0x7f {

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -14,8 +15,10 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // onePixelPNG is a 1x1 PNG.
@@ -144,5 +147,44 @@ func TestContractFileAttachments(t *testing.T) {
 func anyPartContains(substr string) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool {
 		return len(r.Messages) > 0 && slices.ContainsFunc(r.Messages[len(r.Messages)-1].Parts, func(p harnesstest.Part) bool { return strings.Contains(p.Text, substr) })
+	}
+}
+
+func TestContractFileImageReachesATextOnlyModelAsATag(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	dir := runtimeWorkdir(t, nil)
+	heic := []byte("heic bytes")
+	sum := sha256.Sum256(heic)
+	tag := `<harness-attachment name="photo.heic" path="` + filepath.Join(dir, ".harness/attachments", hex.EncodeToString(sum[:]), "photo.heic") + `" media_type="image/heic" bytes="10"/>`
+	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "tag", Match: anyPartContains(tag), Reply: harnesstest.Reply{Text: "ok"}})
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: os.Getenv, WorkDir: dir, Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"openai": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	const noImages = "openai/o3-mini"
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: noImages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "see"}, {Type: protocol.PartBlob, MediaType: "image/heic", Name: "photo.heic", Data: heic}}}
+	if err := harness.CheckInput(noImages, in); err != nil {
+		t.Errorf("CheckInput of a named image/heic for a model without image input = %v, want nil", err)
+	}
+	if _, err := s.Prompt(t.Context(), in); err != nil {
+		t.Fatalf("Prompt = %v, want nil: a file is not an image input", err)
+	}
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil || e.Kind == "turn.ended" {
+			break
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", hex.EncodeToString(sum[:]), "photo.heic")); err != nil || !bytes.Equal(got, heic) {
+		t.Errorf("file = %q, %v, want the HEIC bytes", got, err)
+	}
+	if reqs := fake.Requests(); len(reqs) != 1 {
+		t.Errorf("requests = %d, want 1 that carries the tag", len(reqs))
 	}
 }
