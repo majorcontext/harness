@@ -2,7 +2,9 @@ package e2e
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"os"
@@ -99,39 +101,39 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 
 func TestContractFileAttachments(t *testing.T) {
 	skipShort(t)
-	csv := []byte("a,b\n1,2\n")
-	file := func(name string) []protocol.Part {
-		return []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "text/csv", Name: name, Data: csv}}
+	rows := []struct {
+		input, name, safe string
+		data              []byte
+	}{
+		{"in_csv", "report.csv", "report.csv", []byte("a,b\n1,2\n")},
+		{"in_evil", "../../etc/passwd", "etcpasswd", []byte("a,b\n1,2\n")},
+		{"a/b", "data.csv", "data.csv", []byte("c,d\n3,4\n")},
+		{"ab", "data.csv", "data.csv", []byte("e,f\n5,6\n")},
+	}
+	file := func(name string, data []byte) []protocol.Part {
+		return []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "text/csv", Name: name, Data: data}}
 	}
 	onHosts(t, func(t *testing.T, h host) {
 		dir := runtimeWorkdir(t, nil)
-		tag := func(name, rel string) string {
-			return `<harness-attachment name="` + name + `" path="` + filepath.Join(dir, ".harness/attachments", rel) + `" media_type="text/csv" bytes="8"/>`
+		pathOf := func(data []byte, safe string) string {
+			sum := sha256.Sum256(data)
+			return filepath.Join(dir, ".harness/attachments", hex.EncodeToString(sum[:]), safe)
 		}
-		d, _ := startOn(t, h, dir, nil,
-			harnesstest.Step{Name: "csv", Match: anyPartContains(tag("report.csv", "in_csv/report.csv")), Reply: harnesstest.Reply{Text: "read"}},
-			harnesstest.Step{Name: "same_name", Match: func(r harnesstest.Request) bool {
-				return anyPartContains(tag("data.csv", "in_dup/data.csv"))(r) && anyPartContains(tag("data.csv", "in_dup/data-2.csv"))(r)
-			}, Reply: harnesstest.Reply{Text: "read"}},
-			harnesstest.Step{Name: "hostile", Match: anyPartContains(tag("../../etc/passwd", "in_evil/etcpasswd")), Reply: harnesstest.Reply{Text: "read"}})
+		var steps []harnesstest.Step
+		for _, row := range rows {
+			tag := `<harness-attachment name="` + row.name + `" path="` + pathOf(row.data, row.safe) + `" media_type="text/csv" bytes="8"/>`
+			steps = append(steps, harnesstest.Step{Name: row.input, Match: anyPartContains(tag), Reply: harnesstest.Reply{Text: "read"}})
+		}
+		d, _ := startOn(t, h, dir, nil, steps...)
 		id := d.Create(t)
-		for _, row := range []struct{ input, name, rel string }{{"in_csv", "report.csv", "in_csv/report.csv"}, {"in_evil", "../../etc/passwd", "in_evil/etcpasswd"}} {
-			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: row.input, Parts: file(row.name)}, nil)
+		for _, row := range rows {
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: row.input, Parts: file(row.name, row.data)}, nil)
 			d.WaitIdle(t, id)
-			got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", row.rel))
-			if err != nil || !bytes.Equal(got, csv) {
-				t.Errorf("attachment %s = %q, %v, want the CSV bytes inside the attachments directory", row.rel, got, err)
+			if got, err := os.ReadFile(pathOf(row.data, row.safe)); err != nil || !bytes.Equal(got, row.data) {
+				t.Errorf("attachment of %s = %q, %v, want its own bytes inside the attachments directory", row.input, got, err)
 			}
 		}
-		second := []byte("c,d\n3,4\n")
-		d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_dup", Parts: append(file("data.csv"), protocol.Part{Type: protocol.PartBlob, MediaType: "text/csv", Name: "data.csv", Data: second})}, nil)
-		d.WaitIdle(t, id)
-		for rel, want := range map[string][]byte{"in_dup/data.csv": csv, "in_dup/data-2.csv": second} {
-			if got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", rel)); err != nil || !bytes.Equal(got, want) {
-				t.Errorf("attachment %s = %q, %v, want its own bytes %q", rel, got, err, want)
-			}
-		}
-		res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_noname", Parts: file("")})
+		res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_noname", Parts: file("", rows[0].data)})
 		if res.Status != http.StatusBadRequest {
 			t.Errorf("a file with no name = %d, want 400 invalid_request", res.Status)
 		}

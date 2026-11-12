@@ -220,7 +220,6 @@ type LogPart struct {
 	BlobKey   string    `json:"blob_key,omitempty"`
 	Bytes     int       `json:"bytes,omitempty"`
 	Blobs     []LogPart `json:"blobs,omitempty"`
-	InputID   string    `json:"-"` // the input of an attachment in a model view; never recorded
 	// ProviderData holds the opaque, provider-tagged payload of a reasoning,
 	// web_search, text, or tool_call part, which the provider replays on the next request.
 	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`
