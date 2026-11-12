@@ -346,13 +346,13 @@ type blockSource struct {
 func userLine(m protocol.LogMessage, workDir string, read func(key string) ([]byte, error)) (input, error) {
 	var texts []string
 	var attachments []contentBlock
-	for _, p := range m.Parts {
+	for i, p := range m.Parts {
 		switch p.Type {
 		case protocol.LogPartText, protocol.LogPartEngineContext:
 			texts = append(texts, p.Text)
 		case protocol.LogPartBlob:
 			if !admit.IsNative(p.MediaType) {
-				note, err := turn.AttachmentNote(workDir, p, read)
+				note, err := turn.AttachmentNote(workDir, m.Parts, i, read)
 				if err != nil {
 					return input{}, fmt.Errorf("claudecode: %w", err)
 				}

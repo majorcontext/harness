@@ -19,7 +19,7 @@ import (
 // A tool result whose image the store lacks keeps its text, so one lost blob does not fail every later turn.
 func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.LogMessage) (message.Message, error) {
 	out := message.Message{Role: message.Role(m.Role)}
-	for _, p := range m.Parts {
+	for i, p := range m.Parts {
 		switch p.Type {
 		case protocol.LogPartText:
 			out.Parts = append(out.Parts, &message.Text{Text: p.Text, Citations: citations(p.Citations), ProviderData: p.ProviderData})
@@ -58,7 +58,7 @@ func (be *Backend) toMessage(ctx context.Context, req turn.Request, m protocol.L
 			out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError, Content: content})
 		case protocol.LogPartBlob:
 			if !admit.IsNative(p.MediaType) {
-				note, err := turn.AttachmentNote(req.WorkDir, p, func(key string) ([]byte, error) { return readBlob(ctx, req, key) })
+				note, err := turn.AttachmentNote(req.WorkDir, m.Parts, i, func(key string) ([]byte, error) { return readBlob(ctx, req, key) })
 				if err != nil {
 					return message.Message{}, fmt.Errorf("modelapi: %w", err)
 				}

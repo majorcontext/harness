@@ -9,35 +9,63 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/protocol"
 )
 
 // AttachmentDir is the directory under WorkDir that holds the attachments of the session.
 const AttachmentDir = ".harness/attachments"
 
-// AttachmentNote writes the bytes of a file attachment, which no provider
-// takes, to AttachmentDir under workDir and returns the self-closing tag that
-// tells the model where the file is. read returns the bytes of a blob key.
+// AttachmentNote writes the bytes of the file attachment parts[i], which no
+// provider takes, to AttachmentDir under workDir and returns the self-closing
+// tag that tells the model where the file is. read returns the bytes of a
+// blob key; it is called only when the file is missing or has another size.
 // A write that fails fails the turn, so the model is never told of a file
 // that is not there.
-func AttachmentNote(workDir string, p protocol.LogPart, read func(key string) ([]byte, error)) (string, error) {
+func AttachmentNote(workDir string, parts []protocol.LogPart, i int, read func(key string) ([]byte, error)) (string, error) {
+	p := parts[i]
 	if workDir == "" {
 		return "", fmt.Errorf("attachment %s: the session has no work directory to hold it", p.BlobKey)
-	}
-	data, err := read(p.BlobKey)
-	if err != nil {
-		return "", fmt.Errorf("attachment %s: %w", p.BlobKey, err)
 	}
 	dir, err := filepath.Abs(filepath.Join(workDir, AttachmentDir, safeSegment(p.InputID)))
 	if err != nil {
 		return "", fmt.Errorf("attachment %s: %w", p.BlobKey, err)
 	}
-	path := filepath.Join(dir, safeSegment(p.Name))
-	if err := writeFile(dir, path, data); err != nil {
-		return "", fmt.Errorf("attachment %s: write %s: %w", p.BlobKey, path, err)
+	path := filepath.Join(dir, uniqueName(parts, i))
+	if st, err := os.Stat(path); err != nil || !st.Mode().IsRegular() || st.Size() != int64(p.Bytes) {
+		data, err := read(p.BlobKey)
+		if err != nil {
+			return "", fmt.Errorf("attachment %s: %w", p.BlobKey, err)
+		}
+		if err := writeFile(dir, path, data); err != nil {
+			return "", fmt.Errorf("attachment %s: write %s: %w", p.BlobKey, path, err)
+		}
 	}
 	return `<harness-attachment name="` + escapeAttr(p.Name) + `" path="` + escapeAttr(path) + `" media_type="` + escapeAttr(p.MediaType) +
-		`" bytes="` + strconv.Itoa(len(data)) + `"/>`, nil
+		`" bytes="` + strconv.Itoa(p.Bytes) + `"/>`, nil
+}
+
+// uniqueName returns the file name of parts[i]. A later file of the same input
+// whose safe name is taken gets -2, -3, and so on before the extension, in part
+// order, so one history always gives the same names.
+func uniqueName(parts []protocol.LogPart, i int) string {
+	taken := map[string]bool{}
+	for j := 0; ; j++ {
+		p := parts[j]
+		if p.Type != protocol.LogPartBlob || admit.IsNative(p.MediaType) || p.InputID != parts[i].InputID {
+			continue
+		}
+		name := safeSegment(p.Name)
+		ext := filepath.Ext(name)
+		stem := strings.TrimSuffix(name, ext)
+		for n := 2; taken[name]; n++ {
+			name = stem + "-" + strconv.Itoa(n) + ext
+		}
+		taken[name] = true
+		if j == i {
+			return name
+		}
+	}
 }
 
 // safeSegment returns name without a path separator, "..", NUL, or control
@@ -56,9 +84,6 @@ func safeSegment(name string) string {
 }
 
 func writeFile(dir, path string, data []byte) error {
-	if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() && st.Size() == int64(len(data)) {
-		return nil
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

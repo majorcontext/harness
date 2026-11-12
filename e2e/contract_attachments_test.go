@@ -110,6 +110,9 @@ func TestContractFileAttachments(t *testing.T) {
 		}
 		d, _ := startOn(t, h, dir, nil,
 			harnesstest.Step{Name: "csv", Match: anyPartContains(tag("report.csv", "in_csv/report.csv")), Reply: harnesstest.Reply{Text: "read"}},
+			harnesstest.Step{Name: "same_name", Match: func(r harnesstest.Request) bool {
+				return anyPartContains(tag("data.csv", "in_dup/data.csv"))(r) && anyPartContains(tag("data.csv", "in_dup/data-2.csv"))(r)
+			}, Reply: harnesstest.Reply{Text: "read"}},
 			harnesstest.Step{Name: "hostile", Match: anyPartContains(tag("../../etc/passwd", "in_evil/etcpasswd")), Reply: harnesstest.Reply{Text: "read"}})
 		id := d.Create(t)
 		for _, row := range []struct{ input, name, rel string }{{"in_csv", "report.csv", "in_csv/report.csv"}, {"in_evil", "../../etc/passwd", "in_evil/etcpasswd"}} {
@@ -118,6 +121,14 @@ func TestContractFileAttachments(t *testing.T) {
 			got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", row.rel))
 			if err != nil || !bytes.Equal(got, csv) {
 				t.Errorf("attachment %s = %q, %v, want the CSV bytes inside the attachments directory", row.rel, got, err)
+			}
+		}
+		second := []byte("c,d\n3,4\n")
+		d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_dup", Parts: append(file("data.csv"), protocol.Part{Type: protocol.PartBlob, MediaType: "text/csv", Name: "data.csv", Data: second})}, nil)
+		d.WaitIdle(t, id)
+		for rel, want := range map[string][]byte{"in_dup/data.csv": csv, "in_dup/data-2.csv": second} {
+			if got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", rel)); err != nil || !bytes.Equal(got, want) {
+				t.Errorf("attachment %s = %q, %v, want its own bytes %q", rel, got, err, want)
 			}
 		}
 		res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_noname", Parts: file("")})
