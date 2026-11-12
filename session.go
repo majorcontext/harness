@@ -156,11 +156,11 @@ func CheckInput(model string, in protocol.Input) error {
 	return checkImageModel(model, in)
 }
 
-// checkImageModel refuses an image attachment for a model that the model
+// checkImageModel refuses a native image attachment for a model that the model
 // facts list without image input. A model that the facts lack passes.
 func checkImageModel(model string, in protocol.Input) error {
 	if !slices.ContainsFunc(in.Parts, func(p protocol.Part) bool {
-		return p.Type == protocol.PartBlob && strings.HasPrefix(p.MediaType, "image/")
+		return p.Type == protocol.PartBlob && admit.IsNative(p.MediaType) && strings.HasPrefix(p.MediaType, "image/")
 	}) {
 		return nil
 	}

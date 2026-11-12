@@ -243,9 +243,9 @@
           "code": -32602,
           "data": {
             "code": "invalid_request",
-            "reason": "unsupported attachment media type \"application/zip\": use one of application/pdf, image/gif, image/jpeg, image/png, image/webp"
+            "reason": "attachment application/zip has no name: a file that is not png, jpeg, gif, webp, or pdf needs one"
           },
-          "message": "unsupported attachment media type \"application/zip\": use one of application/pdf, image/gif, image/jpeg, image/png, image/webp"
+          "message": "attachment application/zip has no name: a file that is not png, jpeg, gif, webp, or pdf needs one"
         },
         "id": 4,
         "jsonrpc": "2.0"

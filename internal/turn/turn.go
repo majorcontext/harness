@@ -132,6 +132,8 @@ type Request struct {
 	BannerAt int
 	// Pins is a copy of the engine context that the model reads inside the conversation.
 	Pins []Pin
+	// WorkDir is the directory that holds the attachments that no provider takes. Empty: the session has none.
+	WorkDir string
 	// Blob reads the bytes of a blob part.
 	Blob func(ctx context.Context, key string) ([]byte, error)
 	// Params changes the model, the output cap, and the sampling of each

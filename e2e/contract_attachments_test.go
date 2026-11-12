@@ -1,15 +1,24 @@
 package e2e
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/store"
 )
 
 // onePixelPNG is a 1x1 PNG.
@@ -91,4 +100,91 @@ func TestContractCheckInputEqualsSubmit(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestContractFileAttachments(t *testing.T) {
+	skipShort(t)
+	rows := []struct {
+		input, name, safe string
+		data              []byte
+	}{
+		{"in_csv", "report.csv", "report.csv", []byte("a,b\n1,2\n")},
+		{"in_evil", "../../etc/passwd", "etcpasswd", []byte("a,b\n1,2\n")},
+		{"a/b", "data.csv", "data.csv", []byte("c,d\n3,4\n")},
+		{"ab", "data.csv", "data.csv", []byte("e,f\n5,6\n")},
+	}
+	file := func(name string, data []byte) []protocol.Part {
+		return []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "text/csv", Name: name, Data: data}}
+	}
+	onHosts(t, func(t *testing.T, h host) {
+		dir := runtimeWorkdir(t, nil)
+		pathOf := func(data []byte, safe string) string {
+			sum := sha256.Sum256(data)
+			return filepath.Join(dir, ".harness/attachments", hex.EncodeToString(sum[:]), safe)
+		}
+		var steps []harnesstest.Step
+		for _, row := range rows {
+			tag := `<harness-attachment name="` + row.name + `" path="` + pathOf(row.data, row.safe) + `" media_type="text/csv" bytes="8"/>`
+			steps = append(steps, harnesstest.Step{Name: row.input, Match: anyPartContains(tag), Reply: harnesstest.Reply{Text: "read"}})
+		}
+		d, _ := startOn(t, h, dir, nil, steps...)
+		id := d.Create(t)
+		for _, row := range rows {
+			d.expect(t, http.StatusCreated, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: row.input, Parts: file(row.name, row.data)}, nil)
+			d.WaitIdle(t, id)
+			if got, err := os.ReadFile(pathOf(row.data, row.safe)); err != nil || !bytes.Equal(got, row.data) {
+				t.Errorf("attachment of %s = %q, %v, want its own bytes inside the attachments directory", row.input, got, err)
+			}
+		}
+		res := d.call(t, http.MethodPost, "/sessions/"+id+"/inputs", protocol.Input{ID: "in_noname", Parts: file("", rows[0].data)})
+		if res.Status != http.StatusBadRequest {
+			t.Errorf("a file with no name = %d, want 400 invalid_request", res.Status)
+		}
+	})
+}
+
+// anyPartContains matches a request whose last message has a part with substr.
+func anyPartContains(substr string) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		return len(r.Messages) > 0 && slices.ContainsFunc(r.Messages[len(r.Messages)-1].Parts, func(p harnesstest.Part) bool { return strings.Contains(p.Text, substr) })
+	}
+}
+
+func TestContractFileImageReachesATextOnlyModelAsATag(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_TOOL_KEY", "k")
+	dir := runtimeWorkdir(t, nil)
+	heic := []byte("heic bytes")
+	sum := sha256.Sum256(heic)
+	tag := `<harness-attachment name="photo.heic" path="` + filepath.Join(dir, ".harness/attachments", hex.EncodeToString(sum[:]), "photo.heic") + `" media_type="image/heic" bytes="10"/>`
+	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "tag", Match: anyPartContains(tag), Reply: harnesstest.Reply{Text: "ok"}})
+	r, err := harness.New(harness.Options{Store: store.NewMemStore(), Getenv: os.Getenv, WorkDir: dir, Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"openai": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_TOOL_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	const noImages = "openai/o3-mini"
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: noImages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "see"}, {Type: protocol.PartBlob, MediaType: "image/heic", Name: "photo.heic", Data: heic}}}
+	if err := harness.CheckInput(noImages, in); err != nil {
+		t.Errorf("CheckInput of a named image/heic for a model without image input = %v, want nil", err)
+	}
+	if _, err := s.Prompt(t.Context(), in); err != nil {
+		t.Fatalf("Prompt = %v, want nil: a file is not an image input", err)
+	}
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil || e.Kind == "turn.ended" {
+			break
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, ".harness/attachments", hex.EncodeToString(sum[:]), "photo.heic")); err != nil || !bytes.Equal(got, heic) {
+		t.Errorf("file = %q, %v, want the HEIC bytes", got, err)
+	}
+	if reqs := fake.Requests(); len(reqs) != 1 {
+		t.Errorf("requests = %d, want 1 that carries the tag", len(reqs))
+	}
 }

@@ -184,11 +184,13 @@ type GoalView struct {
 	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
-// Part is one piece of input content. A blob part carries one attachment in Data.
+// Part is one piece of input content. A blob part carries one attachment in Data
+// and the original file name in Name, which a type outside png, jpeg, gif, webp, and pdf needs.
 type Part struct {
 	Type      string `json:"type"`
 	Text      string `json:"text,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
+	Name      string `json:"name,omitempty"`
 	Data      []byte `json:"data,omitempty"`
 }
 

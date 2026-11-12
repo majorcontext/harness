@@ -295,6 +295,9 @@ func (s *State) AllowedTools() []string { return slices.Clone(s.allowed) }
 // MaxSteps returns the cap of model requests for each turn, or 0 for none.
 func (s *State) MaxSteps() int { return s.maxSteps }
 
+// WorkDir returns the work directory that the session was created with, or "".
+func (s *State) WorkDir() string { return s.workDir }
+
 // Agent returns the profile of a child session, or "".
 func (s *State) Agent() string { return s.agent }
 

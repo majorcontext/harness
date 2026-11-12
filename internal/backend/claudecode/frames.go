@@ -8,7 +8,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/provider"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -340,8 +342,8 @@ type blockSource struct {
 }
 
 // userLine is the stdin line of one user message. read returns the bytes of
-// an attachment.
-func userLine(m protocol.LogMessage, read func(key string) ([]byte, error)) (input, error) {
+// an attachment, and workDir holds the files that the model reads from disk.
+func userLine(m protocol.LogMessage, workDir string, read func(key string) ([]byte, error)) (input, error) {
 	var texts []string
 	var attachments []contentBlock
 	for _, p := range m.Parts {
@@ -349,6 +351,14 @@ func userLine(m protocol.LogMessage, read func(key string) ([]byte, error)) (inp
 		case protocol.LogPartText, protocol.LogPartEngineContext:
 			texts = append(texts, p.Text)
 		case protocol.LogPartBlob:
+			if !admit.IsNative(p.MediaType) {
+				note, err := turn.AttachmentNote(workDir, p, read)
+				if err != nil {
+					return input{}, fmt.Errorf("claudecode: %w", err)
+				}
+				texts = append(texts, note)
+				continue
+			}
 			data, err := read(p.BlobKey)
 			if err != nil {
 				return input{}, fmt.Errorf("claudecode: attachment %s: %w", p.BlobKey, err)
