@@ -36,36 +36,44 @@ type Source struct {
 	Log *slog.Logger
 }
 
-// Lister remembers the creation time of each session, which never changes, so
-// a page reads the first record only of a session that it has not seen. The
-// zero value is ready; it is safe for concurrent use.
-type Lister struct {
-	mu sync.Mutex
-	at map[string]time.Time
+// birth is what the first record of a session fixes: its creation time and
+// its parent.
+type birth struct {
+	at     time.Time
+	parent string
 }
 
-func (l *Lister) get(id string) (time.Time, bool) {
+// Lister remembers the creation time and parent of each session, which never
+// change, so a page reads the first record only of a session that it has not
+// seen. The zero value is ready; it is safe for concurrent use.
+type Lister struct {
+	mu    sync.Mutex
+	birth map[string]birth
+}
+
+func (l *Lister) get(id string) (birth, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	at, ok := l.at[id]
-	return at, ok
+	b, ok := l.birth[id]
+	return b, ok
 }
 
-func (l *Lister) keep(at map[string]time.Time) {
+func (l *Lister) keep(all map[string]birth) {
 	l.mu.Lock()
-	l.at = at
+	l.birth = all
 	l.mu.Unlock()
 }
 
 // Page returns a page of sessions in creation order. describe reads the view
 // of one session; a session that does not replay is skipped with a WARN log
-// line.
+// line. A non-empty q.Parent keeps only the children of that session, and no
+// other session is described.
 func (l *Lister) Page(ctx context.Context, src Source, q protocol.ListSessions) (protocol.SessionPage, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = defaultLimit
 	}
-	ids, err := l.byCreation(ctx, src, q.After, limit)
+	ids, err := l.byCreation(ctx, src, q.After, q.Parent, limit)
 	if err != nil {
 		return protocol.SessionPage{}, err
 	}
@@ -103,16 +111,16 @@ func (l *Lister) Page(ctx context.Context, src Source, q protocol.ListSessions) 
 }
 
 // byCreation returns up to limit session IDs that follow after in creation
-// order. The creation time of a session is the time of its first record;
-// equal times order by ID. A session whose first record does not decode is
+// order, only the children of parent when it is not empty. The creation time
+// of a session is the time of its first record; equal times order by ID. A session whose first record does not decode is
 // skipped with a WARN log line. An after that names no session fails.
-func (l *Lister) byCreation(ctx context.Context, src Source, after string, limit int) ([]string, error) {
+func (l *Lister) byCreation(ctx context.Context, src Source, after, parent string, limit int) ([]string, error) {
 	type created struct {
 		id string
-		at time.Time
+		birth
 	}
 	var all []created
-	seen := map[string]time.Time{}
+	seen := map[string]birth{}
 	cursor := ""
 	for {
 		ids, err := src.Sessions(ctx, cursor, idPage)
@@ -120,7 +128,7 @@ func (l *Lister) byCreation(ctx context.Context, src Source, after string, limit
 			return nil, err
 		}
 		for _, id := range ids {
-			at, ok := l.get(id)
+			b, ok := l.get(id)
 			if !ok {
 				data, err := src.First(ctx, id)
 				if err != nil {
@@ -134,10 +142,13 @@ func (l *Lister) byCreation(ctx context.Context, src Source, after string, limit
 					src.Log.Warn("harness: session skipped in the list", "session", id, "err", err)
 					continue
 				}
-				at = env.Time
+				b.at = env.Time
+				if c, ok := env.Event.(protocol.SessionCreated); ok {
+					b.parent = c.ParentID
+				}
 			}
-			seen[id] = at
-			all = append(all, created{id, at})
+			seen[id] = b
+			all = append(all, created{id, b})
 		}
 		if len(ids) < idPage {
 			break
@@ -156,13 +167,14 @@ func (l *Lister) byCreation(ctx context.Context, src Source, after string, limit
 		}
 		start = i + 1
 	}
-	rest := all[start:]
-	if len(rest) > limit {
-		rest = rest[:limit]
-	}
 	var out []string
-	for _, c := range rest {
-		out = append(out, c.id)
+	for _, c := range all[start:] {
+		if len(out) == limit {
+			break
+		}
+		if parent == "" || c.parent == parent {
+			out = append(out, c.id)
+		}
 	}
 	return out, nil
 }

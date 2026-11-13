@@ -801,7 +801,7 @@ One `sync.WaitGroup` per runtime tracks its runtime-owned work; detached embedde
 
 ```
 POST   /sessions                              create; client id optional
-GET    /sessions?after=&limit=                list in creation order
+GET    /sessions?after=&parent=&limit=        list in creation order; parent lists only its children
 GET    /sessions/{id}                         view
 PATCH  /sessions/{id}                         model, effort, service_tier, accounts, title
 DELETE /sessions/{id}                         end; 204; the log stays

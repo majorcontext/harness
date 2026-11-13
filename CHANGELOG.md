@@ -24,6 +24,8 @@ First tagged release.
 
 ### Added
 
+- **Child session list** — `GET /sessions?parent=<id>` lists only the children of a session, and the list describes no other session, so the cost follows the number of children and not the number of sessions. `protocol.ListSessions` has a `Parent` field.
+
 - **File attachments** — an input accepts a blob of any media type with a `name`. The runtime writes a file that no provider takes to `.harness/attachments/<sha256>/` and tells the model its path in a `<harness-attachment/>` tag.
 
 - **Sender attribution** — the model reads who sent each input that names a `source_label`: the self-closing tag `<harness-sender name="<label>" source="<source>"/>` leads a turn's input and follows the number of a steer item (`source` is absent when empty; `name` and `source` are XML-escaped). Readers and the event log are unchanged; an input of source `command` names no sender.

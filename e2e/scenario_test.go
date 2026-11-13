@@ -274,8 +274,9 @@ type command struct {
 }
 
 // Observations. A zero beforeSeq, from, or limit is left out of the request.
-// listSessions lists every session in creation order.
-type listSessions struct{}
+// listSessions lists every session in creation order. A non-empty parent
+// lists only the children of that alias.
+type listSessions struct{ parent string }
 type getSession struct{ as string }
 type sessionStatus struct{}
 type commands struct{}
@@ -434,8 +435,12 @@ func (a command) run(t *testing.T, r *run) {
 func (commands) run(t *testing.T, r *run) {
 	r.record(t, "commands", "", r.drv.Commands(t))
 }
-func (listSessions) run(t *testing.T, r *run) {
-	r.record(t, "list_sessions", "", r.drv.ListSessions(t))
+func (a listSessions) run(t *testing.T, r *run) {
+	parent := ""
+	if a.parent != "" {
+		parent = r.id(t, a.parent)
+	}
+	r.record(t, "list_sessions", "", r.drv.ListSessions(t, parent))
 }
 func (a getSession) run(t *testing.T, r *run) {
 	r.record(t, "get_session", a.as, r.drv.GetSession(t, r.id(t, a.as)))

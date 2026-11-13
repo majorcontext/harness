@@ -750,7 +750,7 @@ export interface WorkspaceChanges {
 
 export interface Operations {
   createSession: { query: Record<string, never>; request: CreateSession; response: Session };
-  listSessions: { query: { after?: string; limit?: number }; request: void; response: SessionPage };
+  listSessions: { query: { after?: string; parent?: string; limit?: number }; request: void; response: SessionPage };
   getSession: { query: Record<string, never>; request: void; response: Session };
   endSession: { query: Record<string, never>; request: void; response: void };
   updateSession: { query: Record<string, never>; request: SettingsPatch; response: Session };
