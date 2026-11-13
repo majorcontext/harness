@@ -40,15 +40,16 @@ type Param struct {
 }
 
 var (
-	afterParam = Param{Name: "after"}
-	limitParam = Param{Name: "limit", Integer: true}
+	afterParam  = Param{Name: "after"}
+	parentParam = Param{Name: "parent"}
+	limitParam  = Param{Name: "limit", Integer: true}
 )
 
 // Table lists every route of the handler. The handler registers its mux from
 // this table, and the generator writes the OpenAPI document from it.
 var Table = []Route{
 	{Name: "createSession", Method: "POST", Path: "/sessions", Request: protocol.CreateSession{}, Response: protocol.Session{}, Status: 201},
-	{Name: "listSessions", Method: "GET", Path: "/sessions", Query: []Param{afterParam, limitParam}, Response: protocol.SessionPage{}, Status: 200, Read: true},
+	{Name: "listSessions", Method: "GET", Path: "/sessions", Query: []Param{afterParam, parentParam, limitParam}, Response: protocol.SessionPage{}, Status: 200, Read: true},
 	{Name: "getSession", Method: "GET", Path: "/sessions/{id}", Response: protocol.Session{}, Status: 200, Read: true, Ops: []command.Op{command.OpStatus}},
 	{Name: "endSession", Method: "DELETE", Path: "/sessions/{id}", Status: 204},
 	{Name: "updateSession", Method: "PATCH", Path: "/sessions/{id}", Request: protocol.SettingsPatch{}, Response: protocol.Session{}, Status: 200,

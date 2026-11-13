@@ -629,9 +629,13 @@ func (d *runtimeDriver) GetSession(t *testing.T, id string) callResult {
 	return d.call(t, http.MethodGet, "/sessions/"+id, nil)
 }
 
-func (d *runtimeDriver) ListSessions(t *testing.T) callResult {
+func (d *runtimeDriver) ListSessions(t *testing.T, parent string) callResult {
 	t.Helper()
-	return d.call(t, http.MethodGet, "/sessions", nil)
+	path := "/sessions"
+	if parent != "" {
+		path += "?parent=" + url.QueryEscape(parent)
+	}
+	return d.call(t, http.MethodGet, path, nil)
 }
 
 func (d *runtimeDriver) SessionStatus(t *testing.T) callResult {

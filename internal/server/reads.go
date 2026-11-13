@@ -143,7 +143,7 @@ func (h *readHandler) list(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	page, err := h.reads.List(r.Context(), protocol.ListSessions{After: r.URL.Query().Get("after"), Limit: n})
+	page, err := h.reads.List(r.Context(), protocol.ListSessions{After: r.URL.Query().Get("after"), Parent: r.URL.Query().Get("parent"), Limit: n})
 	if err != nil {
 		return err
 	}

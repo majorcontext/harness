@@ -72,7 +72,7 @@ type driver interface {
 	DeleteQueued(t *testing.T, id string) callResult
 	UpdateGoal(t *testing.T, id, condition string) callResult
 	ClearGoal(t *testing.T, id string) callResult
-	ListSessions(t *testing.T) callResult
+	ListSessions(t *testing.T, parent string) callResult
 	GetSession(t *testing.T, id string) callResult
 	SessionStatus(t *testing.T) callResult
 	MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult

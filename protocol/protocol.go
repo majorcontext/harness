@@ -368,10 +368,11 @@ type StatusFrame struct {
 	NextAt  time.Time `json:"next_at,omitzero"`
 }
 
-// ListSessions selects a page of sessions in creation order.
+// ListSessions selects a page of sessions in creation order. A non-empty Parent lists only the children of that session.
 type ListSessions struct {
-	After string `json:"after,omitempty"`
-	Limit int    `json:"limit,omitempty"`
+	After  string `json:"after,omitempty"`
+	Parent string `json:"parent,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
 }
 
 // SessionPage is one page of sessions. Next is the After of the next page, or empty.

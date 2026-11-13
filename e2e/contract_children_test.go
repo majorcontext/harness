@@ -35,6 +35,8 @@ func TestContractChildren(t *testing.T) {
 				release{step: "child"},
 				awaitRequests{n: 4},
 				waitIdle{as: "a"},
+				create{as: "other"},
+				listSessions{parent: "a"},
 			},
 		},
 		{

@@ -565,7 +565,7 @@ var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptSt
 	"status_and_list_cold_after_restart":                                       reGolden(specView, specListOrder, specStatusRoute, specRestartOpens),
 	"steer_joins_the_turn_at_the_tool_boundary":                                sameAsServe(),
 	"stream_stall":                                      reGolden(specView),
-	"task_child_result_reaches_parent":                  reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_child_result_reaches_parent":                  reGolden(specTaskInputs, specChildReport, specChildNoGoal, "parent lists only its children"),
 	"task_spawn_runs_the_child_on_its_model_and_effort": reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"text_reply":                                        sameAsServe(),
 	"tool_error_reaches_model":                          sameAsServe(),
