@@ -3,7 +3,7 @@ module github.com/majorcontext/harness/examples/embed-server
 go 1.27.4
 
 require (
-	github.com/andybalholm/brotli v1.2.6
+	github.com/andybalholm/brotli v1.2.7
 	github.com/majorcontext/gatekeeper v0.28.0
 )
 
