@@ -83,6 +83,11 @@ func (v *View) lightMessages(ctx context.Context, before uint64, limit int) (pro
 	return s.MessagePage(before, limit), nil
 }
 
+// pageSourceGap is the widest run of unwanted records that readPageSources
+// reads through rather than starting a new Read: each Read of a disk store
+// pays a fixed open and index scan, which costs more than skipping records.
+const pageSourceGap = 256
+
 func readPageSources(ctx context.Context, st Store, id string, seqs []uint64) ([]eventlog.Record, error) {
 	seqs = slices.Clone(seqs)
 	slices.Sort(seqs)
@@ -101,9 +106,13 @@ func readPageSources(ctx context.Context, st Store, id string, seqs []uint64) ([
 			return nil, err
 		}
 	} else {
+		want := make(map[uint64]bool, len(seqs))
+		for _, q := range seqs {
+			want[q] = true
+		}
 		for i := 0; i < len(seqs); {
 			j := i + 1
-			for j < len(seqs) && seqs[j] == seqs[j-1]+1 {
+			for j < len(seqs) && seqs[j]-seqs[j-1] <= pageSourceGap {
 				j++
 			}
 			for after := seqs[i] - 1; after < seqs[j-1]; {
@@ -114,7 +123,11 @@ func readPageSources(ctx context.Context, st Store, id string, seqs []uint64) ([
 				if len(r) == 0 || r[0].Seq != after+1 || r[len(r)-1].Seq <= after {
 					return nil, fmt.Errorf("%w: missing page source record %d", ErrUnreplayable, after+1)
 				}
-				records = append(records, r...)
+				for _, rec := range r {
+					if want[rec.Seq] {
+						records = append(records, rec)
+					}
+				}
 				after = r[len(r)-1].Seq
 			}
 			i = j
