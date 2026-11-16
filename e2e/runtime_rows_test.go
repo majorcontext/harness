@@ -561,7 +561,7 @@ var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptSt
 	"session_settings_validation_and_persistence":                              reGolden(specNoProvider, specErrors, specUpdate, specView, specRestartOpens),
 	"sse_resume_after_kill":                                                    reGolden(specCursor, specBoxGlobal, specRestartOpens),
 	"sse_resume_cursor":                                                        reGolden(specCursor, specBoxGlobal),
-	"list_sessions_in_creation_order":                                          reGolden(specView, specListOrder, specRestartOpens),
+	"list_sessions_in_creation_order":                                          reGolden(specView, specListOrder, specRestartOpens, "newest first with order=newest"),
 	"status_and_list_cold_after_restart":                                       reGolden(specView, specListOrder, specStatusRoute, specRestartOpens),
 	"steer_joins_the_turn_at_the_tool_boundary":                                sameAsServe(),
 	"stream_stall":                                      reGolden(specView),

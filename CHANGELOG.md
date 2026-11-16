@@ -24,6 +24,8 @@ First tagged release.
 
 ### Added
 
+- **Newest-first session list** — `GET /sessions?order=newest` lists sessions newest first, and `protocol.ListSessions` has a `Newest` field. It combines with `parent`, so a client reads the newest children of a session in one request. `after` names the last session of the previous page in the same order, and the list builds a view only for the sessions that it returns.
+
 - **Child session list** — `GET /sessions?parent=<id>` lists only the children of a session, and the list describes no other session, so the cost follows the number of children and not the number of sessions. `protocol.ListSessions` has a `Parent` field.
 
 - **File attachments** — an input accepts a blob of any media type with a `name`. The runtime writes a file that no provider takes to `.harness/attachments/<sha256>/` and tells the model its path in a `<harness-attachment/>` tag.

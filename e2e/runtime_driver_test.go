@@ -629,11 +629,11 @@ func (d *runtimeDriver) GetSession(t *testing.T, id string) callResult {
 	return d.call(t, http.MethodGet, "/sessions/"+id, nil)
 }
 
-func (d *runtimeDriver) ListSessions(t *testing.T, parent string) callResult {
+func (d *runtimeDriver) ListSessions(t *testing.T, query url.Values) callResult {
 	t.Helper()
 	path := "/sessions"
-	if parent != "" {
-		path += "?parent=" + url.QueryEscape(parent)
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 	return d.call(t, http.MethodGet, path, nil)
 }

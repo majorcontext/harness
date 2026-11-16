@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -275,8 +277,13 @@ type command struct {
 
 // Observations. A zero beforeSeq, from, or limit is left out of the request.
 // listSessions lists every session in creation order. A non-empty parent
-// lists only the children of that alias.
-type listSessions struct{ parent string }
+// lists only the children of that alias; newest reverses the order, and after
+// names the last alias of the previous page.
+type listSessions struct {
+	parent, after string
+	newest        bool
+	limit         int
+}
 type getSession struct{ as string }
 type sessionStatus struct{}
 type commands struct{}
@@ -436,11 +443,20 @@ func (commands) run(t *testing.T, r *run) {
 	r.record(t, "commands", "", r.drv.Commands(t))
 }
 func (a listSessions) run(t *testing.T, r *run) {
-	parent := ""
+	q := url.Values{}
 	if a.parent != "" {
-		parent = r.id(t, a.parent)
+		q.Set("parent", r.id(t, a.parent))
 	}
-	r.record(t, "list_sessions", "", r.drv.ListSessions(t, parent))
+	if a.after != "" {
+		q.Set("after", r.id(t, a.after))
+	}
+	if a.newest {
+		q.Set("order", "newest")
+	}
+	if a.limit > 0 {
+		q.Set("limit", strconv.Itoa(a.limit))
+	}
+	r.record(t, "list_sessions", "", r.drv.ListSessions(t, q))
 }
 func (a getSession) run(t *testing.T, r *run) {
 	r.record(t, "get_session", a.as, r.drv.GetSession(t, r.id(t, a.as)))

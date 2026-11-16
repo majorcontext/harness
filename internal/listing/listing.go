@@ -1,4 +1,4 @@
-// Package listing pages the sessions of a store in creation order.
+// Package listing pages the sessions of a store in creation order or newest first.
 package listing
 
 import (
@@ -64,7 +64,8 @@ func (l *Lister) keep(all map[string]birth) {
 	l.mu.Unlock()
 }
 
-// Page returns a page of sessions in creation order. describe reads the view
+// Page returns a page of sessions in creation order, or newest first when
+// q.Newest is true; q.After then names the last session of the previous page. describe reads the view
 // of one session; a session that does not replay is skipped with a WARN log
 // line. A non-empty q.Parent keeps only the children of that session, and no
 // other session is described.
@@ -73,7 +74,7 @@ func (l *Lister) Page(ctx context.Context, src Source, q protocol.ListSessions) 
 	if limit <= 0 {
 		limit = defaultLimit
 	}
-	ids, err := l.byCreation(ctx, src, q.After, q.Parent, limit)
+	ids, err := l.byCreation(ctx, src, q, limit)
 	if err != nil {
 		return protocol.SessionPage{}, err
 	}
@@ -110,11 +111,12 @@ func (l *Lister) Page(ctx context.Context, src Source, q protocol.ListSessions) 
 	return page, nil
 }
 
-// byCreation returns up to limit session IDs that follow after in creation
-// order, only the children of parent when it is not empty. The creation time
-// of a session is the time of its first record; equal times order by ID. A session whose first record does not decode is
-// skipped with a WARN log line. An after that names no session fails.
-func (l *Lister) byCreation(ctx context.Context, src Source, after, parent string, limit int) ([]string, error) {
+// byCreation returns up to limit session IDs that follow q.After in creation
+// order, or in the reverse order when q.Newest is true, only the children of
+// q.Parent when it is not empty. The creation time of a session is the time of
+// its first record; equal times order by ID. A session whose first record does
+// not decode is skipped with a WARN log line. An After that names no session fails.
+func (l *Lister) byCreation(ctx context.Context, src Source, q protocol.ListSessions, limit int) ([]string, error) {
 	type created struct {
 		id string
 		birth
@@ -159,8 +161,11 @@ func (l *Lister) byCreation(ctx context.Context, src Source, after, parent strin
 	slices.SortFunc(all, func(a, b created) int {
 		return cmp.Or(a.at.Compare(b.at), cmp.Compare(a.id, b.id))
 	})
+	if q.Newest {
+		slices.Reverse(all)
+	}
 	start := 0
-	if after != "" {
+	if after := q.After; after != "" {
 		i := slices.IndexFunc(all, func(c created) bool { return c.id == after })
 		if i < 0 {
 			return nil, fmt.Errorf("%w: after names no session", src.Invalid)
@@ -172,7 +177,7 @@ func (l *Lister) byCreation(ctx context.Context, src Source, after, parent strin
 		if len(out) == limit {
 			break
 		}
-		if parent == "" || c.parent == parent {
+		if q.Parent == "" || c.parent == q.Parent {
 			out = append(out, c.id)
 		}
 	}

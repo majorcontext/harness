@@ -143,7 +143,11 @@ func (h *readHandler) list(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	page, err := h.reads.List(r.Context(), protocol.ListSessions{After: r.URL.Query().Get("after"), Parent: r.URL.Query().Get("parent"), Limit: n})
+	order := r.URL.Query().Get("order")
+	if order != "" && order != "newest" {
+		return fmt.Errorf("%w: order must be newest", errInvalid)
+	}
+	page, err := h.reads.List(r.Context(), protocol.ListSessions{After: r.URL.Query().Get("after"), Parent: r.URL.Query().Get("parent"), Newest: order == "newest", Limit: n})
 	if err != nil {
 		return err
 	}
