@@ -194,6 +194,8 @@ func TestContractReplayReadsC(t *testing.T) {
 				create{as: "a", staysActive: true}, create{as: "b", staysActive: true}, create{as: "c", staysActive: true},
 				create{as: "d", staysActive: true}, create{as: "e", staysActive: true}, create{as: "f", staysActive: true},
 				listSessions{},
+				listSessions{newest: true, limit: 4},
+				listSessions{newest: true, limit: 4, after: "c"},
 				restart{},
 				listSessions{},
 			},
