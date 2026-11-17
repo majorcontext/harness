@@ -904,6 +904,21 @@
       "body": [
         {
           "context_window": 1000000,
+          "description": "Claude model for demanding reasoning and long-horizon agentic work",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "anthropic/claude-fable-5-2",
+          "name": "Claude Fable 5.2",
+          "provider": "anthropic",
+          "provider_name": "Anthropic"
+        },
+        {
+          "context_window": 1000000,
           "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
           "efforts": [
             "off",
@@ -1100,21 +1115,6 @@
           ],
           "id": "anthropic/claude-haiku-4-5",
           "name": "Claude Haiku 4.5",
-          "provider": "anthropic",
-          "provider_name": "Anthropic"
-        },
-        {
-          "context_window": 1000000,
-          "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
-          "efforts": [
-            "off",
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "id": "anthropic/claude-sonnet-4-5",
-          "name": "Claude Sonnet 4.5",
           "provider": "anthropic",
           "provider_name": "Anthropic"
         },
@@ -1196,6 +1196,21 @@
       "body": [
         {
           "context_window": 1000000,
+          "description": "Claude model for demanding reasoning and long-horizon agentic work",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "anthropic/claude-fable-5-2",
+          "name": "Claude Fable 5.2",
+          "provider": "anthropic",
+          "provider_name": "Anthropic"
+        },
+        {
+          "context_window": 1000000,
           "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
           "efforts": [
             "off",
@@ -1392,21 +1407,6 @@
           ],
           "id": "anthropic/claude-haiku-4-5",
           "name": "Claude Haiku 4.5",
-          "provider": "anthropic",
-          "provider_name": "Anthropic"
-        },
-        {
-          "context_window": 1000000,
-          "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
-          "efforts": [
-            "off",
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "id": "anthropic/claude-sonnet-4-5",
-          "name": "Claude Sonnet 4.5",
           "provider": "anthropic",
           "provider_name": "Anthropic"
         },
