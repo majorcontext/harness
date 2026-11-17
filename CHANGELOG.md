@@ -24,6 +24,8 @@ First tagged release.
 
 ### Added
 
+- **GPT-6.2 on the codex route** — the static `codex` catalog lists `gpt-6.2-sol` and `gpt-6.2-astra`, with their models.dev window and efforts. The ChatGPT model-list request sends `client_version` 0.169.0, so the backend no longer hides models that need Codex CLI 0.166.0 or later.
+
 - **Effort of an input** — `protocol.Input` has an `Effort` field. A turn whose inputs all set an effort runs its model calls at the highest of them, and any other turn uses the effort of the session. The session setting does not change and the log gets no `settings.changed` event.
 
 - **Newest-first session list** — `GET /sessions?order=newest` lists sessions newest first, and `protocol.ListSessions` has a `Newest` field. It combines with `parent`, so a client reads the newest children of a session in one request. `after` names the last session of the previous page in the same order, and the list builds a view only for the sessions that it returns.
