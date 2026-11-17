@@ -283,6 +283,34 @@
         },
         {
           "context_window": 1000000,
+          "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6.2-astra",
+          "name": "GPT-6.2 Astra",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "id": "codex/gpt-6.2-sol",
+          "name": "GPT-6.2 Sol",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
           "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
           "efforts": [
             "off",
