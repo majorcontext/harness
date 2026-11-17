@@ -338,7 +338,6 @@ func goldenNames(t *testing.T, dir string) []string {
 // only, that a deleted row has no golden, and that each citation holds.
 func TestRuntimeRows(t *testing.T) {
 	skipShort(t)
-	t.Parallel()
 	spec, err := os.ReadFile(filepath.Join("..", "docs", "architecture.md"))
 	if err != nil {
 		t.Fatal(err)
