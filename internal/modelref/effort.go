@@ -51,25 +51,6 @@ func (e Effort) Cap(top Effort) Effort {
 	return e
 }
 
-// Highest returns the higher of e and other, with off below every reasoning
-// level and an unset level below off.
-func (e Effort) Highest(other Effort) Effort {
-	if other.order() > e.order() {
-		return other
-	}
-	return e
-}
-
-func (e Effort) order() int {
-	switch {
-	case e == EffortUnset:
-		return -2
-	case e == EffortOff:
-		return -1
-	}
-	return e.rank()
-}
-
 // Fit returns the level that a request sends for e on a model that lists
 // levels: ClampTo, or at most high when levels is empty.
 func (e Effort) Fit(levels []string) Effort {

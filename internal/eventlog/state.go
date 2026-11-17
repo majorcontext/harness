@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -46,7 +45,7 @@ func (t *Turn) foldEffort(effort string) {
 		t.EffortUnset = true
 		return
 	}
-	t.Effort = string(modelref.Effort(t.Effort).Highest(modelref.Effort(effort)))
+	t.Effort = protocol.HigherEffort(t.Effort, effort)
 }
 
 // Goal is the session goal and the number of turns evaluated against it.

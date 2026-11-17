@@ -35,6 +35,17 @@ type CreateSession struct {
 	SystemCacheBreakpoint *int `json:"system_cache_breakpoint,omitempty"`
 }
 
+// effortOrder lists the effort levels, lowest first.
+var effortOrder = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// HigherEffort returns the higher of two effort levels. An unset level is below every other.
+func HigherEffort(a, b string) string {
+	if slices.Index(effortOrder, b) > slices.Index(effortOrder, a) {
+		return b
+	}
+	return a
+}
+
 // ToolSpec describes a tool to the model.
 type ToolSpec struct {
 	Name        string          `json:"name"`
