@@ -39,7 +39,10 @@ func (s *State) applyStarted(e protocol.TurnStarted) error {
 		s.takeInput(id, inputPromoted)
 		s.setInputTurn(id, e.TurnID)
 	}
-	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
+	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs, EffortUnset: len(e.InputIDs) == 0}
+	for _, id := range e.InputIDs {
+		s.turn.foldEffort(s.inputs[id].event.Effort)
+	}
 	s.turnAt, s.turnBy, s.turnItems = len(s.history), ProviderOf(s.model), 0
 	s.turnN++
 	s.turnIDs[e.TurnID] = true

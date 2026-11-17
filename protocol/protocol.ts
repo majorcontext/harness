@@ -215,6 +215,7 @@ export interface Input {
   id: string;
   parts: Part[];
   delivery?: "queue" | "steer";
+  effort?: string;
   source?: string;
   source_id?: string;
   source_label?: string;
@@ -226,6 +227,7 @@ export interface Input {
 export interface InputAdmitted {
   input_id: string;
   delivery: "queue" | "steer";
+  effort?: string;
   source: string;
   source_id?: string;
   source_label?: string;

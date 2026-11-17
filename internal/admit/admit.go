@@ -19,6 +19,7 @@ import (
 
 	_ "golang.org/x/image/webp" // register the WebP decoder for image.DecodeConfig
 
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -61,7 +62,7 @@ func IsNative(mediaType string) bool {
 // Input returns the record of in and the blobs of its attachments. Its error
 // names the part that is not valid.
 func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
-	ev := protocol.InputAdmitted{InputID: in.ID, Delivery: protocol.Delivery(in.Delivery), Source: in.Source, SourceID: in.SourceID,
+	ev := protocol.InputAdmitted{InputID: in.ID, Delivery: protocol.Delivery(in.Delivery), Effort: in.Effort, Source: in.Source, SourceID: in.SourceID,
 		Traceparent: in.Traceparent, Tracestate: in.Tracestate}
 	if ev.Delivery == "" {
 		ev.Delivery = protocol.DeliverySteer
@@ -76,6 +77,9 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 		return ev, nil, fmt.Errorf("input has no parts")
 	case ev.Delivery != protocol.DeliveryQueue && ev.Delivery != protocol.DeliverySteer:
 		return ev, nil, fmt.Errorf("input has delivery %q", in.Delivery)
+	}
+	if _, err := modelref.ParseEffort(in.Effort); err != nil {
+		return ev, nil, err
 	}
 	label, err := Provenance(in.SourceID, in.SourceLabel)
 	if err != nil {
