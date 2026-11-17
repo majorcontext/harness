@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/majorcontext/harness/internal/modelref"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -27,6 +28,25 @@ type Turn struct {
 	Resumes   int
 	NextStep  int
 	StepOpen  bool
+	// Effort is the highest effort that an input of the turn sets. EffortUnset is true when an input of the turn sets none, or the turn has no input.
+	Effort      string
+	EffortUnset bool
+}
+
+// InputEffort returns the effort that the turn requests instead of the session effort, or "" for the session effort.
+func (t Turn) InputEffort() string {
+	if t.EffortUnset {
+		return ""
+	}
+	return t.Effort
+}
+
+func (t *Turn) foldEffort(effort string) {
+	if effort == "" {
+		t.EffortUnset = true
+		return
+	}
+	t.Effort = string(modelref.Effort(t.Effort).Highest(modelref.Effort(effort)))
 }
 
 // Goal is the session goal and the number of turns evaluated against it.
@@ -277,6 +297,15 @@ func (s *State) goalState() protocol.GoalState {
 
 // LastEnded returns the turn.ended record of the newest ended turn.
 func (s *State) LastEnded() protocol.TurnEnded { return s.lastEnded }
+
+// TurnSettings returns Settings with the effort of the running turn when its inputs set one.
+func (s *State) TurnSettings() protocol.Settings {
+	settings := s.Settings()
+	if e := s.turn.InputEffort(); e != "" {
+		settings.Effort = e
+	}
+	return settings
+}
 
 // Model returns the session model.
 func (s *State) Model() string { return s.model }

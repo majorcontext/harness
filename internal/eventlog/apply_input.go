@@ -48,6 +48,7 @@ func (s *State) applyPromoted(e protocol.InputPromoted) error {
 	if s.inputs[e.InputID].event.Delivery != protocol.DeliverySteer {
 		return illegal("input %s waits for the next turn", e.InputID)
 	}
+	s.turn.foldEffort(s.inputs[e.InputID].event.Effort)
 	s.takeInput(e.InputID, inputPromoted)
 	s.setInputTurn(e.InputID, e.TurnID)
 	return nil

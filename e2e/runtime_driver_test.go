@@ -428,6 +428,13 @@ func (d *runtimeDriver) PostInput(t *testing.T, id, text string) callResult {
 	return d.Send(t, id, text)
 }
 
+func (d *runtimeDriver) PostInputEffort(t *testing.T, id, text, delivery, effort string) callResult {
+	t.Helper()
+	path, body := d.input(id, text, delivery, "")
+	body["effort"] = effort
+	return d.call(t, http.MethodPost, path, body)
+}
+
 func (d *runtimeDriver) Repeat(t *testing.T, id, text string, typed bool) callResult {
 	t.Helper()
 	delivery, source, inputID := "", "", d.lastInput[id]

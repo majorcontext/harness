@@ -211,6 +211,7 @@ func (a restart) run(t *testing.T, r *run) { r.drv.Restart(t, a.kill) }
 type compact struct{ as string }
 type setModel struct{ as, model string }
 type setThinking struct{ as, level string }
+type postInputEffort struct{ as, text, delivery, effort string }
 type setServiceTier struct{ as, tier string }
 type setAccounts struct {
 	as       string
@@ -397,6 +398,9 @@ func (a tryCreateEffort) run(t *testing.T, r *run) {
 }
 func (a postInput) run(t *testing.T, r *run) {
 	r.record(t, "input", a.as, r.drv.PostInput(t, r.id(t, a.as), a.text))
+}
+func (a postInputEffort) run(t *testing.T, r *run) {
+	r.record(t, "input", a.as, r.drv.PostInputEffort(t, r.id(t, a.as), a.text, a.delivery, a.effort))
 }
 func (a repeatInput) run(t *testing.T, r *run) {
 	r.record(t, "repeat_input", a.as, r.drv.Repeat(t, r.id(t, a.as), a.text, a.typed))

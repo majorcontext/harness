@@ -135,7 +135,7 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 	}
 	h, _ := callRun(context.Background(), t.a, func(reply func(held, error)) {
 		if t.a.run == t.r {
-			reply(held{t.a.state.Model(), t.a.state.Settings()}, nil)
+			reply(held{t.a.state.Model(), t.a.state.TurnSettings()}, nil)
 			return
 		}
 		reply(held{}, nil)

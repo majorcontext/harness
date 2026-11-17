@@ -199,7 +199,9 @@ type Input struct {
 	ID       string   `json:"id"`
 	Parts    []Part   `json:"parts"`
 	Delivery Delivery `json:"delivery,omitempty"`
-	Source   string   `json:"source,omitempty"`
+	// Effort is the effort of the turn that runs this input. A turn whose inputs all set one uses the highest; any other turn uses the effort of the session.
+	Effort string `json:"effort,omitempty"`
+	Source string `json:"source,omitempty"`
 	// SourceID names the instance of Source, at most 128 printable ASCII bytes. SourceLabel is a name for a reader, valid UTF-8, cut at 256 bytes.
 	SourceID    string `json:"source_id,omitempty"`
 	SourceLabel string `json:"source_label,omitempty"`

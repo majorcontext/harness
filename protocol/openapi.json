@@ -756,6 +756,9 @@
               "steer"
             ]
           },
+          "effort": {
+            "type": "string"
+          },
           "source": {
             "type": "string"
           },
@@ -793,6 +796,9 @@
               "queue",
               "steer"
             ]
+          },
+          "effort": {
+            "type": "string"
           },
           "source": {
             "type": "string"

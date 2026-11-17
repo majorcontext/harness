@@ -290,6 +290,7 @@ type SessionTitled struct {
 type InputAdmitted struct {
 	InputID     string    `json:"input_id"`
 	Delivery    Delivery  `json:"delivery"`
+	Effort      string    `json:"effort,omitempty"`
 	Source      string    `json:"source"`
 	SourceID    string    `json:"source_id,omitempty"`
 	SourceLabel string    `json:"source_label,omitempty"`
