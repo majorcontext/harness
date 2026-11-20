@@ -148,6 +148,7 @@ var bifrostVertexContextWindows = map[string]int{
 	"gemini-4-argon":                     1048576,
 	"gemini-4-carbon":                    1048576,
 	"gemini-4-hydrogen":                  1048576,
+	"gemini-4-neon":                      1048576,
 	"gemini-flash-latest":                1048576,
 	"gemini-flash-lite-latest":           1048576,
 }
