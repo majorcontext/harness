@@ -55,7 +55,7 @@ func (s *Source) skillRead(ctx context.Context, c *mcp.Client, server, uri strin
 	default:
 		var b []byte
 		var rc mcp.ResourceContents
-		if b, rc, err = readContents(ctx, c, server, uri); err == nil {
+		if b, rc, err = s.readContents(ctx, c, server, uri); err == nil {
 			err = verify(e, uri, b)
 		}
 		if err == nil && rc.Blob != nil {
@@ -127,7 +127,7 @@ func (s *Source) listDirectory(ctx context.Context, c *mcp.Client, server string
 		for cursor := ""; ; {
 			page, err := c.ReadDirectory(ctx, uri, cursor)
 			if err != nil {
-				return protocol.ToolResult{}, true, hide(server, err)
+				return protocol.ToolResult{}, true, s.hide(server, err)
 			}
 			children = append(children, page.Resources...)
 			if page.NextCursor == "" || seen[page.NextCursor] || len(children) > maxSkillFiles {

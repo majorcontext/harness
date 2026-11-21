@@ -42,5 +42,5 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 	}
 	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin, Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools, MaxSteps: req.MaxSteps}
 	copySystem(req, &created)
-	return r.create(ctx, id, launch{created: &created, mcp: so.mcp})
+	return r.create(ctx, id, launch{created: &created, mcp: so.mcp, mcpAuthFailed: so.mcpAuthFailed})
 }

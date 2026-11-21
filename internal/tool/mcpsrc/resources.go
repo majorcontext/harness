@@ -96,7 +96,7 @@ func (s *Source) list(ctx context.Context, name string) ([]mcp.Resource, bool, e
 	for cursor := ""; ; {
 		page, err := c.ListResources(ctx, cursor)
 		if err != nil {
-			return nil, false, hide(name, err)
+			return nil, false, s.hide(name, err)
 		}
 		all = append(all, page.Resources...)
 		switch {
@@ -155,7 +155,7 @@ func (r reader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	}
 	res, err := c.ReadResource(ctx, in.URI)
 	if err != nil {
-		return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, hide(in.Server, err))
+		return protocol.ToolResult{}, fmt.Errorf("%s: %w", readName, r.s.hide(in.Server, err))
 	}
 	var lines []string
 	for _, c := range res.Contents {

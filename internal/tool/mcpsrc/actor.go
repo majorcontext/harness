@@ -447,6 +447,7 @@ func (m dialedMsg) handle(a *actor) {
 	e.waiters = nil
 	if m.err != nil {
 		e.reason = connectReason(m.err)
+		a.s.reportAuth(e.name, m.err)
 		if e.autoDial {
 			a.failed(e, m.err)
 		}
@@ -460,7 +461,8 @@ func (m dialedMsg) handle(a *actor) {
 	}
 	e.sv, e.reason, e.parked, e.streak = m.sv, "", false, 0
 	if m.sv.skillsErr != nil {
-		a.s.log.Warn("mcp: skills left out of the list", "server", e.name, "err", hide(e.name, m.sv.skillsErr))
+		a.s.reportAuth(e.name, m.sv.skillsErr)
+		a.s.log.Warn("mcp: skills left out of the list", append([]any{"server", e.name}, logAttrs("skills left out", m.sv.skillsErr)...)...)
 	}
 	a.remember(e.name, e.sv)
 	for _, w := range waiters {
@@ -479,7 +481,7 @@ func (a *actor) failed(e *entry, err error) {
 	if e.streak == 0 {
 		msg = "mcp: server did not connect"
 	}
-	a.s.log.Warn(msg, "server", e.name, "err", hide(e.name, err))
+	a.s.log.Warn(msg, append([]any{"server", e.name}, logAttrs(connectReason(err), err)...)...)
 	if e.streak++; e.streak > maxRetries {
 		e.parked = true
 		a.s.log.Warn("mcp: server parked; the mcp tool can connect it", "server", e.name)
@@ -551,7 +553,8 @@ func (m listedMsg) handle(a *actor) {
 		e.sv = sv
 		a.remember(e.name, e.sv)
 	} else if e.ctx.Err() == nil {
-		a.s.log.Warn("mcp: tool list did not refresh", "server", e.name, "err", hide(e.name, m.err))
+		a.s.reportAuth(e.name, m.err)
+		a.s.log.Warn("mcp: tool list did not refresh", append([]any{"server", e.name}, logAttrs(reason(m.err), m.err)...)...)
 	}
 	if e.readAgain {
 		e.readAgain = false

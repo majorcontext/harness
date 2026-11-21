@@ -100,7 +100,8 @@ func checkEntry(e mcp.Skill) error {
 func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, error) {
 	all, err := c.ListAllSkills(ctx)
 	var rpc *mcp.RPCError
-	if err != nil && !errors.As(err, &rpc) {
+	var he *mcp.HTTPStatusError
+	if err != nil && !errors.As(err, &rpc) && !errors.As(err, &he) {
 		err = fmt.Errorf("skills/list: %s", reason(err))
 	}
 	errs := []error{err}
@@ -250,21 +251,25 @@ func (s *Source) loadSkill(ctx context.Context, c *mcp.Client, server, uri strin
 	if !ok || reload {
 		e, err := c.GetSkill(ctx, uri)
 		if err != nil {
-			return mcp.Skill{}, nil, hide(server, err)
+			return mcp.Skill{}, nil, s.hide(server, err)
 		}
 		entry = e
 	}
 	if entry.URI != uri {
 		return mcp.Skill{}, nil, fmt.Errorf("the server answered the entry of %s for %s", entry.URI, uri)
 	}
-	body, err := fetchSkillMD(ctx, c, server, entry)
+	body, err := s.fetchSkillMD(ctx, c, server, entry)
 	if errors.Is(err, errVerify) {
 		fresh, gerr := c.GetSkill(ctx, uri)
-		if gerr != nil || fresh.URI != uri {
+		if gerr != nil {
+			s.reportAuth(server, gerr)
+			return mcp.Skill{}, nil, err
+		}
+		if fresh.URI != uri {
 			return mcp.Skill{}, nil, err
 		}
 		entry = fresh
-		body, err = fetchSkillMD(ctx, c, server, entry)
+		body, err = s.fetchSkillMD(ctx, c, server, entry)
 	}
 	return entry, body, err
 }
@@ -280,11 +285,11 @@ func listed(sv *server, uri string) (mcp.Skill, bool) {
 	return sv.skills[i], true
 }
 
-func fetchSkillMD(ctx context.Context, c *mcp.Client, server string, e mcp.Skill) ([]byte, error) {
+func (s *Source) fetchSkillMD(ctx context.Context, c *mcp.Client, server string, e mcp.Skill) ([]byte, error) {
 	if err := checkEntry(e); err != nil {
 		return nil, err
 	}
-	b, err := readBytes(ctx, c, server, e.URI)
+	b, err := s.readBytes(ctx, c, server, e.URI)
 	if err != nil {
 		return nil, err
 	}
@@ -340,16 +345,16 @@ func verify(e mcp.Skill, uri string, b []byte) error {
 	return nil
 }
 
-func readBytes(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, error) {
-	b, _, err := readContents(ctx, c, server, uri)
+func (s *Source) readBytes(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, error) {
+	b, _, err := s.readContents(ctx, c, server, uri)
 	return b, err
 }
 
 // readContents returns the raw bytes of one resource and the item that holds them.
-func readContents(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, mcp.ResourceContents, error) {
+func (s *Source) readContents(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, mcp.ResourceContents, error) {
 	res, err := c.ReadResource(ctx, uri)
 	if err != nil {
-		return nil, mcp.ResourceContents{}, hide(server, err)
+		return nil, mcp.ResourceContents{}, s.hide(server, err)
 	}
 	i := slices.IndexFunc(res.Contents, func(rc mcp.ResourceContents) bool { return rc.URI == uri })
 	if i < 0 && len(res.Contents) == 1 {
