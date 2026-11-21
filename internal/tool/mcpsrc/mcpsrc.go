@@ -220,7 +220,7 @@ func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerS
 
 // dial connects to the server of spec and reads its tools. changed receives the client when the server says that
 // its tool list changed.
-func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.Client, changed func(*mcp.Client)) (*server, error) {
+func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.Client, changed func(*mcp.Client), discard func(*mcp.Client)) (*server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
@@ -249,7 +249,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 		tools, err = c.ListAllTools(connectCtx)
 	}
 	if err != nil {
-		_ = c.Close()
+		discard(c)
 		return nil, err
 	}
 	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })

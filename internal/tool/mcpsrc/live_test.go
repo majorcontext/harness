@@ -527,3 +527,28 @@ func TestCloseWithDetachReturnsBeforeTheClientCloses(t *testing.T) {
 		}
 	})
 }
+
+func TestFailedConnectDetachesTheCloseOfItsClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		m.holdNext("tools/list")
+		var mu sync.Mutex
+		detached := 0
+		spec := memSpec()
+		spec.ConnectTimeoutS = 1
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": spec}, "", nil, nil, HoldRetries(true),
+			Detach(func(f func()) {
+				mu.Lock()
+				detached++
+				mu.Unlock()
+			}))
+		s.httpClient = &http.Client{Transport: m}
+		s.Toolset(context.Background(), nil, nil, "")
+		mu.Lock()
+		defer mu.Unlock()
+		if detached != 1 || m.count(http.MethodDelete) != 0 {
+			t.Errorf("detached closes = %d, DELETE requests = %d, want 1 and 0 when the connect times out", detached, m.count(http.MethodDelete))
+		}
+		s.Close()
+	})
+}
