@@ -64,7 +64,7 @@ func (t *Turn) Wait(ctx context.Context) (TurnResult, error) {
 // Steer admits in as a steer input that joins this turn. It fails with
 // ErrTurnMismatch when the turn does not run, also when no turn has taken the
 // input yet and when the input is a command.
-func (t *Turn) Steer(ctx context.Context, in protocol.Input) (*Turn, error) {
+func (t *Turn) Steer(ctx context.Context, in protocol.Input, opts ...PromptOption) (*Turn, error) {
 	if in.Delivery == protocol.DeliveryQueue || in.ExpectedTurnID != "" {
 		return nil, fmt.Errorf("%w: Steer sets the delivery and the expected turn", ErrInvalidRequest)
 	}
@@ -76,7 +76,7 @@ func (t *Turn) Steer(ctx context.Context, in protocol.Input) (*Turn, error) {
 		return nil, fmt.Errorf("%w: input %s has no running turn", ErrTurnMismatch, t.adm.InputID)
 	}
 	in.Delivery, in.ExpectedTurnID = protocol.DeliverySteer, turnID
-	return t.s.Prompt(ctx, in)
+	return t.s.Prompt(ctx, in, opts...)
 }
 
 // Cancel withdraws the input while it is queued, or interrupts the turn that

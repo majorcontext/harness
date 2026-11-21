@@ -84,8 +84,8 @@ func detach(s protocol.Session) protocol.Session {
 // Repeat set; the verdict is atomic with the admission. A typed slash command
 // records command.recorded instead of an input, and the receipt carries its
 // status; see docs/architecture.md, Inputs.
-func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error) {
-	adm, err := s.admitInput(ctx, in, nil)
+func (s *Session) Prompt(ctx context.Context, in protocol.Input, opts ...PromptOption) (*Turn, error) {
+	adm, err := s.admitInput(ctx, in, nil, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (s *Session) Prompt(ctx context.Context, in protocol.Input) (*Turn, error) 
 // runtime. It reads nothing until a method of the Turn runs.
 func (s *Session) Turn(a protocol.Admitted) *Turn { return &Turn{s: s, adm: a} }
 
-func (s *Session) admitInput(ctx context.Context, in protocol.Input, admitted func(protocol.Admitted)) (protocol.Admitted, error) {
+func (s *Session) admitInput(ctx context.Context, in protocol.Input, admitted func(protocol.Admitted), opts []PromptOption) (protocol.Admitted, error) {
 	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
 		return protocol.Admitted{}, invalidInput(in.ID, err)
 	}
@@ -130,13 +130,11 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input, admitted fu
 	}
 	var seq uint64
 	var repeat bool
-	if admitted == nil {
-		seq, repeat, err = s.a.Submit(ctx, ev, in.ExpectedTurnID)
-	} else {
-		seq, repeat, err = s.a.SubmitBound(ctx, ev, in.ExpectedTurnID, func(seq uint64) {
-			admitted(protocol.Admitted{InputID: in.ID, Seq: seq})
-		})
+	var bound func(uint64)
+	if admitted != nil {
+		bound = func(seq uint64) { admitted(protocol.Admitted{InputID: in.ID, Seq: seq}) }
 	}
+	seq, repeat, err = s.a.SubmitTurnContext(ctx, ev, in.ExpectedTurnID, bound, settingsOf(opts).turnContext)
 	if err != nil {
 		return protocol.Admitted{}, err
 	}

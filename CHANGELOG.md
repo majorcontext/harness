@@ -26,6 +26,8 @@ First tagged release.
 
 ### Added
 
+- **Turn context** — `harness.WithTurnContext(text)` is an option of `Session.Prompt`, `Session.PromptStream`, and `Turn.Steer`. The model reads the text as engine context after the input on each model call of that turn, and no event, history read, or later turn holds it. It is not persisted, and a backend that owns the loop ignores it.
+
 - **GPT-6.2 on the codex route** — the static `codex` catalog lists `gpt-6.2-sol` and `gpt-6.2-astra`, with their models.dev window and efforts. The ChatGPT model-list request sends `client_version` 0.169.0, so the backend no longer hides models that need Codex CLI 0.166.0 or later.
 
 - **Effort of an input** — `protocol.Input` has an `Effort` field. A turn whose inputs all set an effort runs its model calls at the highest of them, and any other turn uses the effort of the session. The session setting does not change and the log gets no `settings.changed` event.

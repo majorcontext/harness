@@ -181,7 +181,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		if len(recorded) > 0 {
 			_ = t.a.append(recorded...)
 		}
-		reply(pinned, nil)
+		reply(mergePins(pinned, t.r.placeContext(at)), nil)
 	})
 	return pins
 }
@@ -281,4 +281,19 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 		reply(h, err)
 	})
 	return h, err == nil, err
+}
+
+// mergePins returns the recorded pins with each turn pin inserted after the
+// last recorded pin that is not after its place, so the pins stay in place
+// order and a turn pin never moves between the calls of a turn.
+func mergePins(recorded, turnPins []turn.Pin) []turn.Pin {
+	out := slices.Clone(recorded)
+	for _, q := range turnPins {
+		i := len(out)
+		for i > 0 && out[i-1].At > q.At {
+			i--
+		}
+		out = slices.Insert(out, i, q)
+	}
+	return out
 }

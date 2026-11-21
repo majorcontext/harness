@@ -36,15 +36,19 @@ var (
 // Submit admits in and returns the seq of its input.admitted record. A
 // repeated input ID returns the original seq and repeat set.
 func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedTurn string) (seq uint64, repeat bool, err error) {
-	return a.submit(ctx, in, expectedTurn, nil)
+	return a.submit(ctx, in, expectedTurn, nil, "")
 }
 
-// SubmitBound calls admitted only for a new input, before it replies to admission.
-func (a *Actor) SubmitBound(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64)) (seq uint64, repeat bool, err error) {
-	return a.submit(ctx, in, expectedTurn, admitted)
+// SubmitTurnContext is Submit for an input with a turn context: text that the
+// model reads in the turn that takes the input, and that no log, event, or
+// later turn holds. It calls admitted, when not nil, only for a new input,
+// before it replies to admission. A repeated input keeps the text of its first
+// submit.
+func (a *Actor) SubmitTurnContext(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64), text string) (seq uint64, repeat bool, err error) {
+	return a.submit(ctx, in, expectedTurn, admitted, text)
 }
 
-func (a *Actor) submit(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64)) (seq uint64, repeat bool, err error) {
+func (a *Actor) submit(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64), text string) (seq uint64, repeat bool, err error) {
 	type receipt struct {
 		seq    uint64
 		repeat bool
@@ -62,7 +66,13 @@ func (a *Actor) submit(ctx context.Context, in protocol.InputAdmitted, expectedT
 			reply(receipt{seq, true}, nil)
 			return
 		}
+		if text != "" {
+			a.turnCtx[in.InputID] = text
+		}
 		seq, err := a.admit(in, expectedTurn, a.resumed()...)
+		if err != nil {
+			delete(a.turnCtx, in.InputID)
+		}
 		if err == nil && admitted != nil {
 			admitted(seq)
 		}
@@ -178,6 +188,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.ModelInput(ev))
+		r.takeContext(a, in)
 	}
 	a.run = r
 	src := a.source(r)
@@ -251,6 +262,7 @@ func (a *Actor) steer(r *running) ([]protocol.LogMessage, error) {
 			ops = append(ops, e)
 		}
 		steered = append(steered, in)
+		r.takeContext(a, in.InputID)
 	}
 	events := append(ops, reports...)
 	if len(events) == 0 {
