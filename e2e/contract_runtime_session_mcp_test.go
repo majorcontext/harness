@@ -693,6 +693,8 @@ func rowASessionServerThatAnswers403ToAToolCallReportsIt(t *testing.T) {
 	}
 	if strings.Contains(log.String(), sessionMCPBodySentinel) {
 		t.Errorf("the log holds the body: %s", log.String())
+	}
+}
 
 func rowAServerPatternAllowsEveryToolOfOneServer(t *testing.T) {
 	r, fake := sessionMCPRuntime(t, nil, nil, config.Config{},
