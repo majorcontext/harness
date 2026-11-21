@@ -382,10 +382,14 @@ type toolResolver struct {
 
 func (r toolResolver) ResolveTool(ctx context.Context, name string) turn.Tool {
 	server, _, valid := remoteName(name)
-	if !valid || !r.ok(name) || r.s.owner(server) == nil {
+	if !valid || !r.ok(name) {
 		return nil
 	}
-	if owner := r.s.owner(server); owner.loading(server) {
+	owner := r.s.owner(server)
+	if owner == nil {
+		return nil
+	}
+	if owner.loading(server) {
 		return loadingTool{r: r, server: server, name: name}
 	}
 	// The tools of a model call can be older than the live list: a backend that owns the loop keeps one
