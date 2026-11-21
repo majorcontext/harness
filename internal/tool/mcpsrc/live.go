@@ -84,12 +84,16 @@ func (s *Source) connectNow(ctx context.Context, name string) (bool, error) {
 	}
 }
 
-// Close closes every connection and stops every stdio server of s, and ends its goroutines. A nil Source has none.
+// Close ends the goroutines of s, waits for the calls of its auth callback in flight, and closes every connection and stops every stdio server of s. With Detach the close of the HTTP clients runs after Close returns. A nil Source has none.
 func (s *Source) Close() {
 	if s == nil {
 		return
 	}
 	s.closeOnce.Do(func() {
+		s.authMu.Lock()
+		s.authClosed = true
+		s.authMu.Unlock()
+		defer s.authCalls.Wait()
 		reply := make(chan struct{})
 		if s.send(closeMsg{reply}) {
 			<-reply

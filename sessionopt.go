@@ -84,7 +84,19 @@ func (r *Runtime) sessionSource(servers map[string]config.MCPServerSpec, authFai
 	if len(servers) == 0 {
 		return nil
 	}
-	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log, authFailed)
+	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log, authFailed, mcpsrc.Detach(r.detach))
+}
+
+// detach runs f on a goroutine that Close waits for. After Close started it runs f before it returns.
+func (r *Runtime) detach(f func()) {
+	if r.hold() != nil {
+		f()
+		return
+	}
+	go func() {
+		defer r.group.Done()
+		f()
+	}()
 }
 
 // checkSessionTools fails when a session that has MCP servers would share a tool name with an

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
@@ -27,6 +28,8 @@ type memServer struct {
 	gates  map[string][]*gate
 	counts map[string]int
 	fail   map[string]int
+	// deny holds the status that every request of a method answers.
+	deny map[string]int
 	// notify, when set, makes the next tools/list answer start with a list_changed notification and wait for notify.release
 	// before the list itself. After that answer is built, the server lists notifyTools.
 	notify      *gate
@@ -36,7 +39,7 @@ type memServer struct {
 }
 
 func newMemServer(tools ...string) *memServer {
-	return &memServer{tools: tools, gates: map[string][]*gate{}, counts: map[string]int{}, fail: map[string]int{}}
+	return &memServer{tools: tools, gates: map[string][]*gate{}, counts: map[string]int{}, fail: map[string]int{}, deny: map[string]int{}}
 }
 
 // holdNext holds the next request of method until the test releases the gate.
@@ -121,6 +124,10 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	m.mu.Lock()
 	m.counts[method]++
+	if code := m.deny[method]; code != 0 {
+		m.mu.Unlock()
+		return &http.Response{StatusCode: code, Header: http.Header{}, Request: r, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	}
 	if m.fail[method] > 0 {
 		m.fail[method]--
 		m.mu.Unlock()
@@ -186,6 +193,13 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	return resp, nil
+}
+
+// denyAll makes every request of method answer with status.
+func (m *memServer) denyAll(method string, status int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deny[method] = status
 }
 
 func memSource(m *memServer, specs map[string]config.MCPServerSpec) *Source {
@@ -458,6 +472,58 @@ func TestResourceReadEndsWhenItsServerGoes(t *testing.T) {
 			}
 		default:
 			t.Error("the read of a removed server is still in flight")
+		}
+	})
+}
+
+func TestCloseWaitsForTheAuthCallbackInFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		m.denyAll("initialize", http.StatusUnauthorized)
+		started := make(chan struct{}, 8)
+		release := make(chan struct{})
+		var ended atomic.Bool
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil,
+			func(string, int) {
+				started <- struct{}{}
+				<-release
+				ended.Store(true)
+			}, HoldRetries(true))
+		s.httpClient = &http.Client{Transport: m}
+		s.Toolset(context.Background(), nil, nil, "")
+		<-started
+		var closed atomic.Bool
+		go func() {
+			s.Close()
+			closed.Store(true)
+		}()
+		synctest.Wait()
+		if closed.Load() {
+			t.Fatal("Close returned while an auth callback was in flight")
+		}
+		close(release)
+		synctest.Wait()
+		if !closed.Load() || !ended.Load() {
+			t.Errorf("closed = %v, callback ended = %v, want both true", closed.Load(), ended.Load())
+		}
+	})
+}
+
+func TestCloseWithDetachReturnsBeforeTheClientCloses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		var detached []func()
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil, nil,
+			Detach(func(f func()) { detached = append(detached, f) }))
+		s.httpClient = &http.Client{Transport: m}
+		s.Toolset(context.Background(), nil, nil, "")
+		s.Close()
+		if len(detached) != 1 || m.count(http.MethodDelete) != 0 {
+			t.Fatalf("detached = %d, DELETE requests = %d, want 1 and 0 after Close", len(detached), m.count(http.MethodDelete))
+		}
+		detached[0]()
+		if got := m.count(http.MethodDelete); got != 1 {
+			t.Errorf("DELETE requests after the detached close = %d, want 1", got)
 		}
 	})
 }

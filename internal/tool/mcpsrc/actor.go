@@ -164,7 +164,7 @@ func (a *actor) remove(e *entry) {
 	switch {
 	case e.sv.up():
 		a.closing[e.name]++
-		a.closeClient(e.name, e.sv.client)
+		a.closeClient(e.name, e.sv.client, e.spec.URL != "")
 	case e.dialing:
 		a.closing[e.name]++
 	}
@@ -179,15 +179,35 @@ func (a *actor) remove(e *entry) {
 	e.refreshWaiters = nil
 }
 
-func (a *actor) closeClient(name string, c *mcp.Client) {
+func (a *actor) closeClient(name string, c *mcp.Client, remote bool) {
 	if a.closed {
-		_ = c.Close()
+		a.s.discard(remote, c)
 		return
 	}
 	a.spawn(func() {
 		_ = c.Close()
 		a.s.post(closedMsg{name})
 	})
+}
+
+// discard closes clients together. The close of a remote client can wait on its server, so it runs on the goroutine
+// that Detach gave when the Source has one; every other close ends before discard returns.
+func (s *Source) discard(remote bool, clients ...*mcp.Client) {
+	if len(clients) == 0 {
+		return
+	}
+	closeAll := func() {
+		var wg sync.WaitGroup
+		for _, c := range clients {
+			wg.Go(func() { _ = c.Close() })
+		}
+		wg.Wait()
+	}
+	if !remote || s.detach == nil {
+		closeAll()
+		return
+	}
+	s.detach(closeAll)
 }
 
 // post gives m to the actor from a worker. It drops m when the actor has ended.
@@ -432,10 +452,10 @@ func (m dialedMsg) handle(a *actor) {
 	if a.entries[e.name] != e || a.closed {
 		switch {
 		case a.closed && m.sv.up():
-			_ = m.sv.client.Close()
+			a.s.discard(e.spec.URL != "", m.sv.client)
 		case a.closed:
 		case m.sv.up():
-			a.closeClient(e.name, m.sv.client)
+			a.closeClient(e.name, m.sv.client, e.spec.URL != "")
 		default:
 			a.closedOne(e.name)
 		}
@@ -586,17 +606,20 @@ type closeMsg struct{ reply chan struct{} }
 func (m closeMsg) handle(a *actor) {
 	a.closed = true
 	a.s.cancel()
-	var wg sync.WaitGroup
+	var remote, local []*mcp.Client
 	for _, e := range a.entries {
-		if c := e.sv.clientOf(); c != nil {
-			wg.Go(func() { _ = c.Close() })
+		if c := e.sv.clientOf(); c != nil && e.spec.URL != "" {
+			remote = append(remote, c)
+		} else if c != nil {
+			local = append(local, c)
 		}
 		for _, w := range e.waiters {
 			w.reply <- connectResult{err: errRemoved}
 		}
 		e.sv, e.waiters = nil, nil
 	}
-	wg.Wait()
+	a.s.discard(false, local...)
+	a.s.discard(true, remote...)
 	clear(a.entries)
 	if !a.frozen {
 		a.frozen = true

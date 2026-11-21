@@ -100,8 +100,14 @@ type Source struct {
 	budget  int
 	// holdRetries stops the background retries; a session Source takes its parent's value.
 	holdRetries bool
-	// authFailed is the callback of a session Source; nil is none.
+	// authFailed is the callback of a session Source; nil is none. authCalls counts its running calls, and
+	// authClosed stops new ones once Close starts; authMu guards both.
 	authFailed func(server string, status int)
+	authMu     sync.Mutex
+	authClosed bool
+	authCalls  sync.WaitGroup
+	// detach runs the close of the clients when a Source closes; nil closes them before Close returns.
+	detach func(func())
 	// httpClient is the client of the HTTP servers; nil is the default client. A test sets it.
 	httpClient *http.Client
 
@@ -185,9 +191,9 @@ func New(cfg config.Config, workDir string, log *slog.Logger, opts ...Option) *S
 // NewSession returns the Source of one session: the servers in specs beside the servers of parent, which
 // may be nil. It connects only the servers in specs, and Close stops only them. It dials nothing. A name
 // in specs must not be a name of parent. authFailed, when set, runs on its own goroutine for each 401 or 403 of
-// a server in specs.
-func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, authFailed func(server string, status int)) *Source {
-	s := build(cfg, parent, specs, workDir, log, nil)
+// a server in specs; Close waits for the calls in flight, so authFailed must not call Close.
+func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, authFailed func(server string, status int), opts ...Option) *Source {
+	s := build(cfg, parent, specs, workDir, log, opts)
 	s.authFailed = authFailed
 	return s
 }
@@ -512,7 +518,12 @@ func (s *Source) reportAuth(server string, err error) {
 		(he.Status != http.StatusUnauthorized && he.Status != http.StatusForbidden) {
 		return
 	}
-	go s.authFailed(server, he.Status)
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.authClosed {
+		return
+	}
+	s.authCalls.Go(func() { s.authFailed(server, he.Status) })
 }
 
 // reason classifies a connect or transport error without its text.
