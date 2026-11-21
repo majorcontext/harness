@@ -10,7 +10,7 @@ First tagged release.
 
 ### Fixed
 
-- **MCP connect bound** — `connect_timeout_s` also bounds a read of the tool list that a `tools/list_changed` notification starts, so a slow server no longer holds the first model call for longer than the timeout.
+- **MCP connect bound** — `connect_timeout_s` also bounds a read of the tool list that a `tools/list_changed` notification starts, so a slow read no longer takes the fixed 15 s when a smaller timeout is set.
 
 - **MCP bounds** — the config keys `mcp_response_bytes` (default 1 MiB), `mcp_result_bytes` (default 256 KiB), and `mcp_turn_calls` (default none) bound the body of an HTTP MCP response, the result that the model reads (cut with a marker), and the MCP tool calls of one turn (a call over the bound is an error result).
 
