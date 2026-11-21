@@ -178,7 +178,6 @@ func reGolden(cites ...string) runtimeRow { return runtimeRow{kind: rowRegolden,
 func runtimeOnly(reason string) runtimeRow {
 	return runtimeRow{kind: rowRuntimeOnly, cites: []string{reason}}
 }
-
 func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cites: []string{spec}} }
 
 // pendingOn names the findings, phases, and reasons that a row waits for.
