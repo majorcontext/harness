@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -401,13 +402,33 @@ func checkScenarioSessionParity(t *testing.T, base harness.Store, id string) {
 	checkCheckpointPrefixes(t, fixed, id, want, wantClock)
 }
 
+// maxPrefixes bounds the prefixes of one log that checkCheckpointPrefixes replays. Each prefix replays the log
+// through its own sequence four times, so the check grows with the square of the log.
+const maxPrefixes = 32
+
+// prefixSeqs returns the sequences whose prefix the check replays: every sequence of a log of at most maxPrefixes
+// records, and otherwise maxPrefixes sequences that are evenly spread, the first and the head among them.
+func prefixSeqs(head uint64) []uint64 {
+	if head <= maxPrefixes {
+		return slices.Collect(func(yield func(uint64) bool) {
+			for seq := uint64(1); seq <= head && yield(seq); seq++ {
+			}
+		})
+	}
+	seqs := make([]uint64, 0, maxPrefixes)
+	for i := uint64(0); i < maxPrefixes; i++ {
+		seqs = append(seqs, 1+i*(head-1)/(maxPrefixes-1))
+	}
+	return seqs
+}
+
 func checkCheckpointPrefixes(t *testing.T, base harness.Store, id string, want *harness.View, wantClock viewClock) {
 	t.Helper()
 	ctx := t.Context()
 	head := want.Snapshot().HeadSeq
 	captures := syntheticCaptureBySeq(t, base, id, head)
 	headPages := cacheViewReads(t, want, captures[head])
-	for seq := uint64(1); seq <= head; seq++ {
+	for _, seq := range prefixSeqs(head) {
 		prefixBase := prefixStore{Store: base, head: seq}
 		wantPrefix, prefixClock, err := openParityView(ctx, prefixBase, id)
 		if err != nil {
