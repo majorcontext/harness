@@ -42,6 +42,9 @@ func (a *agent) newSession(ctx context.Context, params json.RawMessage) (any, er
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	if len(servers) > 0 {
+		_ = sess.AwaitMCP(ctx)
+	}
 	snap := sess.Snapshot()
 	h := a.newHeld(ctx, sess.ID(), cwd, rt)
 	h.start(a.base, sess, newPumpState(snap), snap.HeadSeq)

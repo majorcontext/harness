@@ -117,6 +117,34 @@ func (s *Source) Close() {
 // passes true.
 func AwaitFirstConnect(wait bool) Option { return func(s *Source) { s.awaitFirst = wait } }
 
+// Await waits until every server of s has ended its first attempt, and the first connect of its parent ended, and
+// reports false when ctx ends first. A turn never calls it.
+func (s *Source) Await(ctx context.Context) bool {
+	s.Start()
+	if s.parent != nil && !s.parent.wait(ctx) {
+		return false
+	}
+	for s.pending() {
+		select {
+		case <-s.snap.Load().changed:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return s.settle(ctx)
+}
+
+// pending reports whether a server of s has not ended its first attempt.
+func (s *Source) pending() bool {
+	sn := s.snap.Load()
+	for name := range sn.health {
+		if s.loading(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // loadingWait bounds the wait of a call to a tool of a server that has not ended its first attempt.
 const loadingWait = time.Second
 

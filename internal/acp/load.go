@@ -99,6 +99,9 @@ func (a *agent) openSession(ctx context.Context, params json.RawMessage, replay 
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	if len(servers) > 0 {
+		_ = sess.AwaitMCP(ctx)
+	}
 	var release func()
 	h.send, release = holdSends(h.send)
 	h.start(a.base, sess, st, snap.HeadSeq)

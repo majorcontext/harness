@@ -434,7 +434,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		sm.Close()
 		return nil, err
 	}
-	return &Session{a: a, r: r, id: id, root: root, depth: depth, recovered: make(chan struct{})}, nil
+	return &Session{a: a, r: r, id: id, root: root, depth: depth, recovered: make(chan struct{}), mcp: sm}, nil
 }
 
 func (r *Runtime) pluginSession(id string) *pluginsrc.Session {

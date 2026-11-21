@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"io"
 	"io/fs"
 	"iter"
@@ -34,6 +35,8 @@ type Session struct {
 	depth int
 	// recovered closes once Open has settled or opened each unsettled child.
 	recovered chan struct{}
+	// mcp is the Source of the session servers, nil for none.
+	mcp *mcpsrc.Source
 }
 
 // ID returns the session ID.
@@ -265,6 +268,16 @@ func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.E
 // Release suspends the running turn for the next owner, waits for Sync to
 // acknowledge every record, and releases the ownership.
 func (s *Session) Release(ctx context.Context) error { return s.a.Release(ctx) }
+
+// AwaitMCP waits until each server of WithSessionMCP has ended its first connect attempt, or ctx ends, and returns the
+// cause of ctx then. No turn calls it: a turn never waits for a session server. A host that wants the tools of its
+// servers in the first request calls it before the first prompt.
+func (s *Session) AwaitMCP(ctx context.Context) error {
+	if s.mcp != nil && !s.mcp.Await(ctx) {
+		return context.Cause(ctx)
+	}
+	return nil
+}
 
 // Messages returns the page of the conversation before seq before; 0 is the
 // newest page. A limit above protocol.MaxMessageLimit fails with ErrInvalidRequest.

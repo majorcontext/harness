@@ -58,6 +58,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_http_server_uses_the_client_of_its_spec", rowASessionHTTPServerUsesTheClientOfItsSpec},
 		{"a_release_does_not_wait_for_the_remote_delete_and_close_joins_it", rowAReleaseDoesNotWaitForTheRemoteDeleteAndCloseJoinsIt},
 		{"a_turn_over_the_mcp_call_bound_gets_a_tool_error", rowATurnOverTheMCPCallBoundGetsAToolError},
+		{"a_slow_session_server_never_holds_a_turn_or_changes_the_tools", rowASlowSessionServerNeverHoldsATurnOrChangesTheTools},
 		{"a_skill_of_a_session_server_stays_held_after_release_and_open", rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen},
 	}
 	for _, row := range rows {
