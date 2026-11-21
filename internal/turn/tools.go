@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -260,6 +261,9 @@ type runner struct {
 	// scope starts the span of each call; session is the conversation it belongs to.
 	scope   tracing.Scope
 	session string
+	// mcpCalls is the MCP call counter of the turn, put in the context of each call: a backend that owns the loop
+	// runs its calls under the context of its own transport, which holds none.
+	mcpCalls *atomic.Int64
 }
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
@@ -275,7 +279,11 @@ func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResul
 	if content {
 		span.SetAttributes(attribute.String("gen_ai.tool.call.arguments", tracing.Arguments(c.Arguments)))
 	}
-	res := runTool(WithSessionID(ctx, t.session), tools, t.hooks, t.resolver, c)
+	ctx = WithSessionID(ctx, t.session)
+	if t.mcpCalls != nil {
+		ctx = context.WithValue(ctx, mcpCallsKey{}, t.mcpCalls)
+	}
+	res := runTool(ctx, tools, t.hooks, t.resolver, c)
 	if res.IsError {
 		tracing.Fail(span, "tool_error")
 	} else if content {
@@ -382,7 +390,7 @@ func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) ru
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID}
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: call.mcpCalls}
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

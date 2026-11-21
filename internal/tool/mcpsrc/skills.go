@@ -26,8 +26,9 @@ import (
 
 // The per-skill limits of the Skills extension.
 const (
-	maxSkillFiles = 512
-	maxSkillBytes = 16 << 20
+	maxSkillFiles  = 512
+	maxSkillBytes  = 16 << 20
+	skillWireBytes = 6*maxSkillBytes + 1<<20
 )
 
 // The skill list in the MCP segment stops at listMax UTF-16 code units, with its fixed text, because a backend that
@@ -96,9 +97,9 @@ func checkEntry(e mcp.Skill) error {
 	return nil
 }
 
-// skillWire lifts the bound of the HTTP response for a skill request: the Skills extension limits the files of a
-// skill itself.
-func skillWire(ctx context.Context) context.Context { return mcp.WithMaxResponse(ctx, 0) }
+// skillWire sets the bound of the HTTP response of a skill request to the largest body that the Skills limits allow:
+// a file of maxSkillBytes, which JSON escapes in at most 6 bytes for each byte, and the rest of the envelope.
+func skillWire(ctx context.Context) context.Context { return mcp.WithMaxResponse(ctx, skillWireBytes) }
 
 // listSkills reads the skill entries of c and keeps the valid ones. The error names each entry that it left out.
 func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, error) {
