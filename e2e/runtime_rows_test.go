@@ -178,7 +178,6 @@ func reGolden(cites ...string) runtimeRow { return runtimeRow{kind: rowRegolden,
 func runtimeOnly(reason string) runtimeRow {
 	return runtimeRow{kind: rowRuntimeOnly, cites: []string{reason}}
 }
-
 func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cites: []string{spec}} }
 
 // pendingOn names the findings, phases, and reasons that a row waits for.
@@ -763,6 +762,7 @@ var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptSt
 	"claudecode_child_and_goal_sessions_ask_no_question":                                  sameAsServe(),
 	"codex_ws_restart_warms_the_websocket_again":                                          reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":                      sameAsServe(),
+	"task_profile_pattern_keeps_the_exact_tools_its_parent_allows":                        sameAsServe(),
 	"a_failed_summary_keeps_its_usage_in_the_session":                                     reGolden(specView, specOverflowFails),
 
 	"claudecode_history_bridge_after_a_mid_turn_model_change":                     reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),

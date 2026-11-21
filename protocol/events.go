@@ -252,7 +252,7 @@ type SessionCreated struct {
 	Origin   string   `json:"origin"`
 	// WorkDir is the work directory of the runtime that created the session.
 	WorkDir string `json:"work_dir,omitempty"`
-	// AllowedTools names the embedder, runtime, plugin, MCP, and backend tools; nil allows all.
+	// AllowedTools names the embedder, runtime, plugin, MCP, and backend tools, and `mcp__<server>__*` names every tool of one MCP server; nil allows all.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 	// MaxSteps caps the model requests of each turn; zero is no cap.
 	MaxSteps int `json:"max_steps,omitempty"`

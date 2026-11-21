@@ -25,7 +25,7 @@ type CreateSession struct {
 	Effort      string `json:"effort,omitempty"`
 	ServiceTier string `json:"service_tier,omitempty"`
 	Origin      string `json:"origin,omitempty"`
-	// AllowedTools lists embedder and backend tools: nil allows all, empty allows none; an unknown tool of an owned-loop backend fails Create.
+	// AllowedTools lists embedder and backend tools, and `mcp__<server>__*` allows every tool of one MCP server: nil allows all, empty allows none; an unknown tool of an owned-loop backend fails Create.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 	// MaxSteps caps the model requests of each turn. Zero is no cap; a negative value is invalid.
 	MaxSteps int `json:"max_steps,omitempty"`

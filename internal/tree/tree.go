@@ -230,7 +230,7 @@ func (t *Tree) unsettled(root string) int {
 	return n
 }
 
-// narrow returns the names of a profile that the parent allows. nil allows every name.
+// narrow returns the entries that both the profile and the parent allow: a name under a pattern of the other list stays. nil allows every name.
 func narrow(profile, parent []string) []string {
 	switch {
 	case profile == nil:
@@ -238,7 +238,26 @@ func narrow(profile, parent []string) []string {
 	case parent == nil:
 		return profile
 	}
-	return slices.DeleteFunc(slices.Clone(profile), func(n string) bool { return !slices.Contains(parent, n) })
+	var out []string
+	add := func(n string) {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	for _, p := range profile {
+		for _, q := range parent {
+			switch {
+			case protocol.ToolAllowed([]string{q}, p):
+				add(p)
+			case protocol.ToolAllowed([]string{p}, q):
+				add(q)
+			}
+		}
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // available drops each name that the child has no tool for, because a

@@ -299,7 +299,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	if len(v.mem) == 0 && (pl == nil || !pl.Present()) {
 		return turn.Toolset{}
 	}
-	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
+	ok := func(name string) bool { return protocol.ToolAllowed(allowed, name) }
 	autoDefer := v.baseBytes(ok) > s.budget
 	fill := budget{left: s.budget}
 	ctl := control{s: s, loaded: map[string]bool{}, v: v, ok: ok}

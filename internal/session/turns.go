@@ -159,7 +159,7 @@ func (a *Actor) banner() string {
 func (a *Actor) callRequest(id string) turn.Request {
 	req := a.modelRequest()
 	req.TurnID, req.Foreign = id, a.state.Foreign(req.Model)
-	req.SearchAllowed = a.cfg.WebSearch && (req.AllowedTools == nil || slices.Contains(req.AllowedTools, turn.WebSearchTool))
+	req.SearchAllowed = a.cfg.WebSearch && protocol.ToolAllowed(req.AllowedTools, turn.WebSearchTool)
 	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
 	return req
 }

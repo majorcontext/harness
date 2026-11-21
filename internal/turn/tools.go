@@ -435,7 +435,7 @@ func Restrict(tools []Tool, names []string) []Tool {
 	if names == nil {
 		return tools
 	}
-	return slices.DeleteFunc(slices.Clone(tools), func(t Tool) bool { return !slices.Contains(names, t.Spec().Name) })
+	return slices.DeleteFunc(slices.Clone(tools), func(t Tool) bool { return !protocol.ToolAllowed(names, t.Spec().Name) })
 }
 
 func toolCalls(items []protocol.LogMessage) []protocol.ToolCall {

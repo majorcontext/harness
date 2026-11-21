@@ -51,6 +51,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_model_change_keeps_a_session_tool_allowed", rowAModelChangeKeepsASessionToolAllowed},
 		{"an_embedder_tool_may_not_take_the_name_of_the_cli_tool_search", rowAnEmbedderToolMayNotTakeTheNameOfTheCLIToolSearch},
 		{"a_backend_that_owns_the_loop_allows_a_session_tool_by_name", rowABackendThatOwnsTheLoopAllowsASessionToolByName},
+		{"a_server_pattern_allows_every_tool_of_one_server", rowAServerPatternAllowsEveryToolOfOneServer},
 		{"a_session_server_may_not_take_the_name_of_a_runtime_server", rowASessionServerMayNotTakeTheNameOfARuntimeServer},
 		{"a_session_http_server_may_not_redirect_to_another_origin", rowASessionHTTPServerMayNotRedirectToAnotherOrigin},
 		{"a_session_http_server_uses_the_client_of_its_spec", rowASessionHTTPServerUsesTheClientOfItsSpec},
@@ -371,6 +372,13 @@ func rowABackendThatOwnsTheLoopAllowsASessionToolByName(t *testing.T) {
 	if _, err := r.Create(t.Context(), req, harness.WithSessionMCP(map[string]config.MCPServerSpec{"session": {URL: "http://127.0.0.1:1/s"}})); err != nil {
 		t.Errorf("Create with the session server = %v, want nil", err)
 	}
+	pattern := protocol.CreateSession{ID: "s2", Model: "claude-code/sonnet", AllowedTools: []string{"mcp__session__*"}}
+	if _, err := r.Create(t.Context(), pattern); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("Create of a server pattern without session servers = %v, want ErrInvalidRequest", err)
+	}
+	if _, err := r.Create(t.Context(), pattern, harness.WithSessionMCP(map[string]config.MCPServerSpec{"session": {URL: "http://127.0.0.1:1/s"}})); err != nil {
+		t.Errorf("Create of a server pattern with the session server = %v, want nil", err)
+	}
 }
 
 func rowRuntimeAndSessionServersAnswerInOneTurn(t *testing.T) {
@@ -685,5 +693,32 @@ func rowASessionServerThatAnswers403ToAToolCallReportsIt(t *testing.T) {
 	}
 	if strings.Contains(log.String(), sessionMCPBodySentinel) {
 		t.Errorf("the log holds the body: %s", log.String())
+	}
+}
+
+func rowAServerPatternAllowsEveryToolOfOneServer(t *testing.T) {
+	r, fake := sessionMCPRuntime(t, nil, nil, config.Config{},
+		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "mcp__weather__forecast", Input: map[string]any{"city": "Oslo"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	servers := weatherServer(t)
+	servers["docs"] = config.MCPServerSpec{Command: []string{mcpStubBin(t)}, Env: mcpDocs().StdioEnv()}
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test", AllowedTools: []string{"mcp__weather__*"}}, harness.WithSessionMCP(servers))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "a", "forecast")
+	reqs := fake.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(reqs))
+	}
+	edge := map[string]config.MCPServerSpec{"weather_": {Command: []string{mcpStubBin(t)}, Env: mcpDocs().StdioEnv()}}
+	if _, err := r.Create(t.Context(), protocol.CreateSession{ID: "s2", Model: "bifrost/gpt-test", AllowedTools: []string{"mcp__weather__*"}}, harness.WithSessionMCP(edge)); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("Create with a server named weather_ = %v, want ErrInvalidRequest", err)
+	}
+	if !requestHas(reqs[0], "mcp__weather__forecast") || requestHas(reqs[0], "mcp__docs__search") {
+		t.Errorf("tools of the first request = %v, want the weather tools and no docs tool", reqs[0].Tools)
+	}
+	if got := requestText(reqs[1]); !strings.Contains(got, "Oslo: 3C, snow") {
+		t.Errorf("the second request does not hold the tool result: %s", got)
 	}
 }

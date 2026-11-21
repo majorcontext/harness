@@ -42,5 +42,12 @@ func TestContractTaskProfileNarrowing(t *testing.T) {
 			awaitRequests{n: 10},
 			waitIdle{as: "a"},
 		},
+	}, {
+		name:       "task_profile_pattern_keeps_the_exact_tools_its_parent_allows",
+		concurrent: true,
+		setup:      mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
+		model:      delegation("forecaster", childDone),
+		actions: append([]action{profile("forecaster", "mcp__weather__*"), create{as: "a", allowed: []string{"task", "mcp__weather__forecast"}}},
+			spawned[1:]...),
 	}})
 }
