@@ -75,16 +75,48 @@ func (t *HTTPTransport) open(handler handlerFunc) (transport, error) {
 	if t.Endpoint == "" {
 		return nil, fmt.Errorf("mcp: http transport: no endpoint configured")
 	}
-	client := t.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := originBound(t.Client)
 	return &httpTransport{
 		endpoint: t.Endpoint,
 		headers:  t.Headers,
 		client:   client,
 		handler:  handler,
 	}, nil
+}
+
+// ErrRedirectRefused is the error of a request that the server answered with a redirect to another origin.
+var ErrRedirectRefused = errors.New("redirect to another origin refused")
+
+// originBound returns a shallow copy of c, or of the default client when c is nil, that refuses a redirect to
+// another origin. A client with its own CheckRedirect keeps it.
+func originBound(c *http.Client) *http.Client {
+	if c == nil {
+		c = http.DefaultClient
+	}
+	if c.CheckRedirect != nil {
+		return c
+	}
+	bound := *c
+	bound.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if o := via[0].URL; req.URL.Scheme != o.Scheme || req.URL.Host != o.Host {
+			return ErrRedirectRefused
+		}
+		return nil
+	}
+	return &bound
+}
+
+// doRequest sends req and strips the URL, which may hold a credential, from a transport error.
+func (t *httpTransport) doRequest(req *http.Request) (*http.Response, error) {
+	resp, err := t.client.Do(req)
+	var ue *url.Error
+	if err != nil && errors.As(err, &ue) {
+		err = ue.Err
+	}
+	return resp, err
 }
 
 type httpTransport struct {
@@ -163,7 +195,7 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 	if err != nil {
 		return err
 	}
-	resp, err := t.client.Do(req)
+	resp, err := t.doRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -245,12 +277,8 @@ func (t *httpTransport) postResponse(ctx context.Context, resp message) error {
 	if err != nil {
 		return err
 	}
-	hr, err := t.client.Do(req)
+	hr, err := t.doRequest(req)
 	if err != nil {
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err // the URL may hold a credential
-		}
 		return fmt.Errorf("mcp: http response post: %w", err)
 	}
 	defer func() { _ = hr.Body.Close() }()
@@ -286,7 +314,7 @@ func (t *httpTransport) notify(ctx context.Context, method string, params any) e
 	if err != nil {
 		return err
 	}
-	resp, err := t.client.Do(req)
+	resp, err := t.doRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -332,7 +360,7 @@ func (t *httpTransport) close() error {
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := t.client.Do(req)
+	resp, err := t.doRequest(req)
 	if err != nil {
 		return nil //nolint:nilerr // best-effort; server may not support DELETE, or may never respond (bounded by closeSessionDeleteTimeout above)
 	}

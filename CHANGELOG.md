@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **MCP HTTP redirects** — a Streamable HTTP MCP server can no longer redirect a request to another origin. The request is refused with the reason `redirect refused`, so the headers, the `Harness-Session-Id` header, and the body stay with the origin of the entry. `config.MCPServerSpec.HTTPClient` sets the client of one entry in Go; a client with its own `CheckRedirect` keeps its policy.
+
 - **Account-selected tool calls** — eligible tools can start while the model response is still streaming when an account is selected.
 
 - **Tool input errors** — live tool availability frames include a bounded, masked normalization error while retaining the raw input.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,6 +50,8 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"an_embedder_tool_may_not_take_the_name_of_the_cli_tool_search", rowAnEmbedderToolMayNotTakeTheNameOfTheCLIToolSearch},
 		{"a_backend_that_owns_the_loop_allows_a_session_tool_by_name", rowABackendThatOwnsTheLoopAllowsASessionToolByName},
 		{"a_session_server_may_not_take_the_name_of_a_runtime_server", rowASessionServerMayNotTakeTheNameOfARuntimeServer},
+		{"a_session_http_server_may_not_redirect_to_another_origin", rowASessionHTTPServerMayNotRedirectToAnotherOrigin},
+		{"a_session_http_server_uses_the_client_of_its_spec", rowASessionHTTPServerUsesTheClientOfItsSpec},
 		{"a_skill_of_a_session_server_stays_held_after_release_and_open", rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen},
 	}
 	for _, row := range rows {
@@ -539,4 +542,49 @@ func rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen(t *testing.T) {
 	if got := requestText(reqs[len(reqs)-1]); !strings.Contains(got, "is not in the entry of the skill "+refundsURI) {
 		t.Errorf("the read of a file that the held entry does not list after Release and Open = %s, want the held-entry refusal", got)
 	}
+}
+
+type countingTransport struct{ n chan struct{} }
+
+func (c countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	c.n <- struct{}{}
+	return nil, errors.New("refused by the test client")
+}
+
+func rowASessionHTTPServerMayNotRedirectToAnotherOrigin(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Api-Key"))
+		mu.Unlock()
+	}))
+	t.Cleanup(b.Close)
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, b.URL+"/stolen", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(a.Close)
+	log := newSyncLog()
+	r, fake := sessionMCPRuntime(t, slog.New(log), nil, config.Config{}, replyText("ok"))
+	s := sessionMCPCreate(t, r, map[string]config.MCPServerSpec{"remote": {URL: a.URL + "/mcp", Headers: map[string]string{"X-Api-Key": sessionMCPSecretHeader}}})
+	sessionMCPTurn(t, s, "a", "go")
+	<-log.parked
+	sessionMCPTurn(t, s, "b", "again")
+	reqs := fake.Requests()
+	if got := requestText(reqs[len(reqs)-1]); !strings.Contains(got, "[mcp: unavailable") || !strings.Contains(got, "redirect refused") {
+		t.Errorf("the last request does not name the refused redirect: %s", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 0 {
+		t.Errorf("the other origin got requests: %v", seen)
+	}
+}
+
+func rowASessionHTTPServerUsesTheClientOfItsSpec(t *testing.T) {
+	n := make(chan struct{}, 64)
+	r, _ := sessionMCPRuntime(t, slog.New(newSyncLog()), nil, config.Config{}, replyText("ok"))
+	s := sessionMCPCreate(t, r, map[string]config.MCPServerSpec{"remote": {URL: "http://127.0.0.1:1/mcp", HTTPClient: wireClient(t, &http.Client{Transport: countingTransport{n}})}})
+	sessionMCPTurn(t, s, "a", "go")
+	<-n
 }

@@ -123,7 +123,7 @@ func (a *actor) spawn(f func()) {
 func sameSpec(x, y config.MCPServerSpec) bool {
 	return slices.Equal(x.Command, y.Command) && slices.Equal(x.Env, y.Env) && x.Dir == y.Dir && x.URL == y.URL &&
 		maps.Equal(x.Headers, y.Headers) && x.ConnectTimeoutS == y.ConnectTimeoutS && x.ToolLoading == y.ToolLoading &&
-		x.IncludeSessionIDHeader == y.IncludeSessionIDHeader &&
+		x.IncludeSessionIDHeader == y.IncludeSessionIDHeader && x.HTTPClient == y.HTTPClient &&
 		x.ToolTimeout() == y.ToolTimeout()
 }
 
