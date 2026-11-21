@@ -13,6 +13,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -37,15 +42,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -64,6 +60,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -88,15 +89,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -139,6 +131,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -163,15 +160,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -232,6 +220,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -256,15 +249,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -343,6 +327,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -385,15 +374,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -421,6 +401,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -463,15 +448,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -523,6 +499,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -565,15 +546,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -643,6 +615,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -685,15 +662,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -787,6 +755,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -829,15 +802,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -949,6 +913,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -991,15 +960,6 @@
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -1343,7 +1303,7 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 17
+        "to_seq": 16
       }
     }
   }

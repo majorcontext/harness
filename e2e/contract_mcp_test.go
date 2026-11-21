@@ -580,7 +580,7 @@ func pinPrefixRows() []scenario {
 			expectPrefixAfterCompaction{anthropic: anthropic},
 		}
 	}
-	cacheSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true})
+	cacheSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather("")})
 	return []scenario{
 		{name: "pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", prefixBreaks: compactionBreak(), setup: cacheSetup, model: cacheModel, actions: cacheActions(true)},
 		{name: "bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", prefixBreaks: compactionBreak(), chat: true, setup: cacheSetup, model: cacheModel, actions: cacheActions(false)},
@@ -648,8 +648,8 @@ func TestContractMCPAvailability(t *testing.T) {
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}}, expectSystem{req: 4, sameAs: 1}),
 		},
 		{
-			name:  "mcp_notice_and_history_prefix_stay_the_same_after_a_restart",
-			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true}),
+			name:  "mcp_banner_and_history_prefix_stay_the_same_after_a_restart",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
 			model: []harnesstest.Step{
 				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "1"}},
 				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "2"}},

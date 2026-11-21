@@ -125,7 +125,7 @@ func TestContractRuntimeSkillsRefresh(t *testing.T) {
 	t.Run("a_failed_list_keeps_the_last_skills_and_adds_no_segment", rowAFailedListKeepsTheLastSkillsAndAddsNoSegment)
 	t.Run("a_skill_added_after_a_reopen_is_pinned_after_the_history", rowASkillAddedAfterAReopenIsPinnedAfterTheHistory)
 	t.Run("a_pin_stays_in_place_when_a_new_runtime_opens_the_session", rowAPinStaysInPlaceWhenANewRuntimeOpensTheSession)
-	t.Run("a_skill_added_after_a_reopen_keeps_an_mcp_notice_in_place", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
+	t.Run("a_skill_added_after_a_reopen_and_an_mcp_notice_follow_the_new_input", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
 	t.Run("a_reopened_session_lists_the_changed_skills_in_its_prompt_and_keeps_its_update", rowAReopenedSessionListsTheChangedSkillsInItsPromptAndKeepsItsUpdate)
 }
 
@@ -336,8 +336,9 @@ func rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace(t *testing.T) {
 	reqs := fake.Requests()
 	msgs := reqs[2].Messages
 	first, last := msgs[0], msgs[len(msgs)-1]
-	if !strings.Contains(first.Parts[len(first.Parts)-1].Text, "[mcp: unavailable") || strings.Contains(requestTextOf(first), skillUpdateMarker) || updates(reqs[2]) != 1 || !strings.Contains(requestTextOf(last), skillUpdateMarker) {
-		t.Errorf("want the MCP notice in the first message and the one skill update in the last, got %+v", msgs)
+	if strings.Contains(requestTextOf(first), "[mcp: unavailable") || strings.Contains(requestTextOf(first), skillUpdateMarker) || updates(reqs[2]) != 1 ||
+		!strings.Contains(requestTextOf(last), skillUpdateMarker) || !strings.Contains(requestTextOf(last), "[mcp: unavailable") {
+		t.Errorf("want the MCP notice and the one skill update in the last message and neither in the first, got %+v", msgs)
 	}
 }
 

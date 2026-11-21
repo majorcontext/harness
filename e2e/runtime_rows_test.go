@@ -503,7 +503,7 @@ var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptSt
 	"mcp_notice_then_compaction_keeps_a_call_paired":                           runtimeOnly(reasonRetryHeld),
 	"bifrost_mcp_notice_then_compaction_keeps_a_call_paired":                   runtimeOnly(reasonRetryHeld),
 	"mcp_unavailable_at_start_then_connect":                                    runtimeOnly(reasonRetryHeld),
-	"mcp_notice_and_history_prefix_stay_the_same_after_a_restart":              runtimeOnly(reasonRetryHeld),
+	"mcp_banner_and_history_prefix_stay_the_same_after_a_restart":              runtimeOnly(reasonRetryHeld),
 	"mcp_unavailable_connect_fails_with_classified_reason":                     reGolden(specMCPText),
 	"messages_page_after_compaction":                                           reGolden(specMessages, specBootstrapGone, specErrors),
 	"messages_page_windows":                                                    reGolden(specMessages, specBootstrapGone, specErrors),

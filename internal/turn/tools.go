@@ -71,6 +71,9 @@ type Notice struct {
 	// At is the number of messages of the history that the pin follows. Zero:
 	// the whole history of the call.
 	At int
+	// Transient makes the model read Text in the turn of the first call that has text, at the place of that call,
+	// like a turn context. The log records no pin and no later turn reads it, and Cleared is unused.
+	Transient bool
 }
 
 // Hooks run around each tool call of a model call.
