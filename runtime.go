@@ -336,7 +336,7 @@ func (r *Runtime) Open(ctx context.Context, id string, opts ...SessionOption) (*
 	if so.maxSteps != nil && *so.maxSteps < 0 {
 		return nil, fmt.Errorf("%w: max_steps must be >= 0", ErrInvalidRequest)
 	}
-	return r.load(ctx, id, launch{mcp: so.mcp, allowedTools: so.allowedTools, maxSteps: so.maxSteps})
+	return r.load(ctx, id, launch{mcp: so.mcp, mcpAuthFailed: so.mcpAuthFailed, allowedTools: so.allowedTools, maxSteps: so.maxSteps})
 }
 
 // launch is how a load starts a session that this runtime does not run yet.
@@ -350,6 +350,8 @@ type launch struct {
 	profile *prompt.Profile
 	// mcp holds the session MCP servers of WithSessionMCP.
 	mcp map[string]config.MCPServerSpec
+	// mcpAuthFailed is the callback of WithSessionMCPAuthFailed.
+	mcpAuthFailed func(server string, status int)
 	// accounts applies session account selections before an opened turn resumes.
 	accounts     *map[string]string
 	allowedTools *[]string
@@ -382,7 +384,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if err != nil {
 		return nil, err
 	}
-	sm := r.sessionSource(l.mcp)
+	sm := r.sessionSource(l.mcp, l.mcpAuthFailed)
 	var a *session.Actor
 	cfg := session.Config{
 		ID:                    id,

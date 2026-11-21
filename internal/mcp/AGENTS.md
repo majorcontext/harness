@@ -7,6 +7,7 @@ Read the root AGENTS.md.
 - Stdio uses one JSON-RPC message per line.
 - Streamable HTTP accepts a JSON or SSE response. Preserve `MCP-Session-Id`.
 - Preserve `tools/list` and `resources/list` pagination cursors.
+- An HTTP status error holds the status and never the response body. A 401 or 403 is always an `HTTPStatusError`.
 - Send static request headers on every HTTP call.
 - Refuse a redirect to another origin on every HTTP call, unless the caller's client sets its own `CheckRedirect`. Keep the URL out of the error.
 - Client scope: `tools/list`, `tools/call`, `resources/list`, `resources/read`, and the Skills extension: `skills/list`, `skills/get`, `resources/directory/read`.

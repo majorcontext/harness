@@ -57,7 +57,7 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 		ctx = s.sessionHeader(ctx, server)
 		res, err := sv.client.CallTool(ctx, tool, in)
 		if err != nil {
-			return protocol.ToolResult{}, hide(server, err)
+			return protocol.ToolResult{}, s.hide(server, err)
 		}
 		text, blobs := render(res.Content)
 		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil

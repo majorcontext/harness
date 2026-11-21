@@ -100,6 +100,8 @@ type Source struct {
 	budget  int
 	// holdRetries stops the background retries; a session Source takes its parent's value.
 	holdRetries bool
+	// authFailed is the callback of a session Source; nil is none.
+	authFailed func(server string, status int)
 	// httpClient is the client of the HTTP servers; nil is the default client. A test sets it.
 	httpClient *http.Client
 
@@ -182,9 +184,12 @@ func New(cfg config.Config, workDir string, log *slog.Logger, opts ...Option) *S
 
 // NewSession returns the Source of one session: the servers in specs beside the servers of parent, which
 // may be nil. It connects only the servers in specs, and Close stops only them. It dials nothing. A name
-// in specs must not be a name of parent.
-func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger) *Source {
-	return build(cfg, parent, specs, workDir, log, nil)
+// in specs must not be a name of parent. authFailed, when set, runs on its own goroutine for each 401 or 403 of
+// a server in specs.
+func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, authFailed func(server string, status int)) *Source {
+	s := build(cfg, parent, specs, workDir, log, nil)
+	s.authFailed = authFailed
+	return s
 }
 
 func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, opts []Option) *Source {
@@ -480,7 +485,7 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 			if life.Err() != nil {
 				return protocol.ToolResult{}, fmt.Errorf("mcp: server %q: call failed: server removed", r.server)
 			}
-			return protocol.ToolResult{}, hide(r.server, err)
+			return protocol.ToolResult{}, r.src.hide(r.server, err)
 		}
 		text, blobs := render(res.Content)
 		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
@@ -489,13 +494,25 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 
 // hide replaces every error but a server's own RPC error with a reason. A
 // transport error can name the endpoint URL, and an HTTP error the response
-// body, and a secret in either.
-func hide(server string, err error) error {
+// body, and a secret in either. It reports a 401 or 403 of a session server.
+func (s *Source) hide(server string, err error) error {
+	s.reportAuth(server, err)
 	var rpc *mcp.RPCError
 	if errors.As(err, &rpc) {
 		return err
 	}
 	return fmt.Errorf("mcp: server %q: call failed: %s", server, reason(err))
+}
+
+// reportAuth calls the auth callback for a 401 or 403 of a session server. It runs off the caller, which may
+// be the actor.
+func (s *Source) reportAuth(server string, err error) {
+	var he *mcp.HTTPStatusError
+	if s.authFailed == nil || !errors.As(err, &he) || s.parent.owner(server) != nil ||
+		(he.Status != http.StatusUnauthorized && he.Status != http.StatusForbidden) {
+		return
+	}
+	go s.authFailed(server, he.Status)
 }
 
 // reason classifies a connect or transport error without its text.
@@ -514,8 +531,7 @@ func reason(err error) string {
 	return "request failed"
 }
 
-// connectReason classifies a failed connect without its text. An HTTP
-// status error has no typed code, so it reads as a failed initialize.
+// connectReason classifies a failed connect without its text.
 func connectReason(err error) string {
 	var oe *net.OpError
 	switch {
@@ -531,6 +547,21 @@ func connectReason(err error) string {
 		return "connection failed"
 	}
 	return "initialize failed"
+}
+
+// logAttrs returns the log fields of a failed call: the reason, and the HTTP status or the JSON-RPC code when err
+// has one. It never holds the text of err.
+func logAttrs(why string, err error) []any {
+	attrs := []any{"reason", why}
+	var he *mcp.HTTPStatusError
+	var rpc *mcp.RPCError
+	switch {
+	case errors.As(err, &he):
+		attrs = append(attrs, "status", he.Status)
+	case errors.As(err, &rpc):
+		attrs = append(attrs, "rpc_code", rpc.Code)
+	}
+	return attrs
 }
 
 // render splits content into text and blobs. Image and audio content and a

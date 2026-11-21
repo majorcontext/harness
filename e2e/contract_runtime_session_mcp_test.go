@@ -44,6 +44,8 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_tool_reaches_the_cli_through_the_harness_endpoint", rowASessionToolReachesTheCLIThroughTheHarnessEndpoint},
 		{"runtime_and_session_servers_answer_in_one_turn_and_status_lists_both", rowRuntimeAndSessionServersAnswerInOneTurn},
 		{"no_secret_of_a_connected_session_server_is_in_the_log_or_a_tool_error", rowNoSecretOfAConnectedSessionServerIsInTheLogOrAToolError},
+		{"a_session_server_that_answers_401_to_initialize_reports_it_without_the_body", rowASessionServerThatAnswers401ToInitializeReportsIt},
+		{"a_session_server_that_answers_403_to_a_tool_call_reports_it_without_the_body", rowASessionServerThatAnswers403ToAToolCallReportsIt},
 		{"a_session_server_may_not_share_a_name_with_an_embedder_tool", rowASessionServerMayNotShareANameWithAnEmbedderTool},
 		{"a_session_server_may_not_share_a_name_with_a_plugin_tool", rowASessionServerMayNotShareANameWithAPluginTool},
 		{"a_model_change_keeps_a_session_tool_allowed", rowAModelChangeKeepsASessionToolAllowed},
@@ -587,4 +589,101 @@ func rowASessionHTTPServerUsesTheClientOfItsSpec(t *testing.T) {
 	s := sessionMCPCreate(t, r, map[string]config.MCPServerSpec{"remote": {URL: "http://127.0.0.1:1/mcp", HTTPClient: wireClient(t, &http.Client{Transport: countingTransport{n}})}})
 	sessionMCPTurn(t, s, "a", "go")
 	<-n
+}
+
+const sessionMCPBodySentinel = "remote-body-sentinel-4e8b"
+
+type authFailure struct {
+	server string
+	status int
+}
+
+func authStub(t *testing.T, denied func(method string) int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if code := denied(req.Method); code != 0 {
+			http.Error(w, sessionMCPBodySentinel, code)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		var result string
+		switch req.Method {
+		case "initialize":
+			result = `{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"stub","version":"1"}}`
+		case "tools/list":
+			result = `{"tools":[{"name":"forecast","description":"d","inputSchema":{"type":"object"}}]}`
+		default:
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func authFailedRuntime(t *testing.T, log *slog.Logger, url string, steps ...harnesstest.Step) (*harness.Session, chan authFailure) {
+	t.Helper()
+	got := make(chan authFailure, 16)
+	r, _ := sessionMCPRuntime(t, log, nil, config.Config{}, steps...)
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"},
+		harness.WithSessionMCP(map[string]config.MCPServerSpec{"remote": {URL: url}}),
+		harness.WithSessionMCPAuthFailed(func(server string, status int) { got <- authFailure{server, status} }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, got
+}
+
+func requireAuthFailure(t *testing.T, got chan authFailure, status int) {
+	t.Helper()
+	if f := <-got; f != (authFailure{"remote", status}) {
+		t.Errorf("callback = %+v, want remote %d", f, status)
+	}
+}
+
+func rowASessionServerThatAnswers401ToInitializeReportsIt(t *testing.T) {
+	log := newSyncLog()
+	url := authStub(t, func(string) int { return http.StatusUnauthorized })
+	s, got := authFailedRuntime(t, slog.New(log), url, replyText("ok"))
+	sessionMCPTurn(t, s, "a", "go")
+	requireAuthFailure(t, got, http.StatusUnauthorized)
+	if text := log.String(); strings.Contains(text, sessionMCPBodySentinel) || !strings.Contains(text, "remote") || !strings.Contains(text, "401") {
+		t.Errorf("the log = %s, want the server name and 401 and no body", text)
+	}
+}
+
+func rowASessionServerThatAnswers403ToAToolCallReportsIt(t *testing.T) {
+	log := newSyncLog()
+	url := authStub(t, func(m string) int {
+		if m == "tools/call" {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	s, got := authFailedRuntime(t, slog.New(log), url,
+		harnesstest.Step{Name: "call", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "mcp__remote__forecast", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}})
+	sessionMCPTurn(t, s, "a", "go")
+	requireAuthFailure(t, got, http.StatusForbidden)
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(e)
+		if strings.Contains(string(b), sessionMCPBodySentinel) {
+			t.Fatalf("an event holds the body: %s", b)
+		}
+		if e.Kind == "turn.ended" {
+			break
+		}
+	}
+	if strings.Contains(log.String(), sessionMCPBodySentinel) {
+		t.Errorf("the log holds the body: %s", log.String())
+	}
 }

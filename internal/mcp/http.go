@@ -368,13 +368,23 @@ func (t *httpTransport) close() error {
 	return nil
 }
 
+// HTTPStatusError is a non-2xx answer of an HTTP server. It holds the status and never the body.
+type HTTPStatusError struct{ Status int }
+
+func (e *HTTPStatusError) Error() string { return fmt.Sprintf("mcp: http %d", e.Status) }
+
+// httpStatusError returns the RPC error of a body that holds one, except for a 401 or 403, which is always an
+// HTTPStatusError.
 func httpStatusError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return &HTTPStatusError{Status: resp.StatusCode}
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var msg message
 	if json.Unmarshal(body, &msg) == nil && msg.Error != nil {
 		return msg.Error
 	}
-	return fmt.Errorf("mcp: http %d: %s", resp.StatusCode, string(body))
+	return &HTTPStatusError{Status: resp.StatusCode}
 }
 
 // stripParams removes any ";charset=..." style parameters from a
