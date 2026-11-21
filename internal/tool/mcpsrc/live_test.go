@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -536,4 +537,15 @@ func TestFailedConnectDetachesTheCloseOfItsClient(t *testing.T) {
 		}
 		s.Close()
 	})
+}
+
+func TestRemoteErrorTextNeverReachesTheToolError(t *testing.T) {
+	err := (&Source{}).hide("w", &mcp.RPCError{Code: -32001, Message: "denied Bearer sk-live-0123456789"})
+	if want := `mcp: server "w": call failed: rpc error -32001`; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+	var rpc *mcp.RPCError
+	if !errors.As(err, &rpc) {
+		t.Error("the error does not keep its cause for errors.As")
+	}
 }

@@ -177,7 +177,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: tools/call strict: mcp: rpc error -32602: city is required",
+              "text": "mcp: server \"weather\": call failed: rpc error -32602",
               "tool_name": "mcp__weather__strict",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -261,7 +261,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: tools/call strict: mcp: rpc error -32602: city is required",
+              "text": "mcp: server \"weather\": call failed: rpc error -32602",
               "tool_name": "mcp__weather__strict",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -349,7 +349,7 @@
             "type": "tool_result",
             "call_id": "toolu#2",
             "is_error": true,
-            "content": "mcp: tools/call strict: mcp: rpc error -32602: city is required"
+            "content": "mcp: server \"weather\": call failed: rpc error -32602"
           }
         ]
       },

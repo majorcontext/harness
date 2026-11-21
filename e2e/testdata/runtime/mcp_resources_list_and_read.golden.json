@@ -416,7 +416,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing",
+              "text": "read_mcp_resource: mcp: server \"docs\": call failed: rpc error -32002",
               "tool_name": "read_mcp_resource",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -551,7 +551,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing",
+              "text": "read_mcp_resource: mcp: server \"docs\": call failed: rpc error -32002",
               "tool_name": "read_mcp_resource",
               "tool_use_id": "toolu#4",
               "is_error": true
@@ -696,7 +696,7 @@
             "type": "tool_result",
             "call_id": "toolu#4",
             "is_error": true,
-            "content": "read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing"
+            "content": "read_mcp_resource: mcp: server \"docs\": call failed: rpc error -32002"
           }
         ]
       },

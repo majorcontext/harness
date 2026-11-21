@@ -284,7 +284,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: server \"weather\": call failed: request failed",
+              "text": "mcp: server \"weather\": call failed: http status 503",
               "tool_name": "mcp__weather__forecast",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -373,7 +373,7 @@
             "type": "tool_result",
             "call_id": "toolu#2",
             "is_error": true,
-            "content": "mcp: server \"weather\": call failed: request failed"
+            "content": "mcp: server \"weather\": call failed: http status 503"
           }
         ]
       },
