@@ -19,6 +19,9 @@ import (
 // BannerKind is the kind of the pin of Request.Banner.
 const BannerKind = "engine"
 
+// TurnContextKind is the kind of a pin of the turn context of an input. The log records no such pin.
+const TurnContextKind = "turn-context"
+
 // HistoryTool is the name of the tool that gives a backend that owns its loop
 // the conversation that its own session lacks.
 const HistoryTool = "get_conversation_history"

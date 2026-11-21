@@ -247,11 +247,14 @@ type Actor struct {
 	pins turn.Pins
 	// pinned is true once a model call of this process has pinned.
 	pinned bool
+	// turnCtx holds the turn context of each queued input by input ID. It is
+	// in no log and does not outlive the process.
+	turnCtx map[string]string
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
 	a := &Actor{cfg: cfg, mail: make(chan func()), quit: make(chan struct{}), done: make(chan struct{}),
-		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s, pins: restoredPins(s)}
+		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s, pins: restoredPins(s), turnCtx: map[string]string{}}
 	a.view.Store(&View{changed: make(chan struct{})})
 	a.publish(false)
 	return a
@@ -702,6 +705,14 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	}
 	if slices.ContainsFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.CompactionApplied); return ok }) {
 		a.pins.Move(len(a.state.ModelHistory()))
+		if a.run != nil {
+			a.run.moveContext(len(a.state.ModelHistory()))
+		}
+	}
+	for _, e := range events {
+		if w, ok := e.(protocol.InputWithdrawn); ok {
+			delete(a.turnCtx, w.InputID)
+		}
 	}
 	if g, _ := a.state.Goal(); g.State != protocol.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
 		a.stopRetry()

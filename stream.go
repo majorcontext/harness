@@ -20,7 +20,7 @@ type Stream struct {
 // PromptStream registers a lossless queue before admitting a new queued input.
 // It rejects steer delivery, control commands, and repeated IDs; the caller must close the stream.
 // The context bounds the input's lifetime, but Close only releases the event queue.
-func (s *Session) PromptStream(ctx context.Context, in protocol.Input) (*Stream, error) {
+func (s *Session) PromptStream(ctx context.Context, in protocol.Input, opts ...PromptOption) (*Stream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (s *Session) PromptStream(ctx context.Context, in protocol.Input) (*Stream,
 	}
 	in.Delivery = protocol.DeliveryQueue
 	sub := s.a.Subscribe(ctx)
-	adm, err := s.admitInput(ctx, in, func(adm protocol.Admitted) { s.Turn(adm).bind(ctx) })
+	adm, err := s.admitInput(ctx, in, func(adm protocol.Admitted) { s.Turn(adm).bind(ctx) }, opts)
 	if err != nil {
 		sub.Close()
 		return nil, err

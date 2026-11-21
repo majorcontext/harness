@@ -37,6 +37,36 @@ type running struct {
 	waiters []func(runErr, appendErr error)
 	// span is the span of a turn; nil for another kind of run.
 	span trace.Span
+	// turnTexts is the turn context that the turn took, in input order, and
+	// turnPins is the part of it that a model call placed. Only the actor
+	// goroutine reads and writes them.
+	turnTexts []string
+	turnPins  []turn.Pin
+}
+
+// takeContext moves the turn context of input id from the actor into r.
+func (r *running) takeContext(a *Actor, id string) {
+	if text, ok := a.turnCtx[id]; ok {
+		r.turnTexts = append(r.turnTexts, text)
+		delete(a.turnCtx, id)
+	}
+}
+
+// moveContext puts each placed turn context after the first n history messages.
+func (r *running) moveContext(n int) {
+	for i := range r.turnPins {
+		r.turnPins[i].At = n
+	}
+}
+
+// placeContext places the turn context that no model call placed after the
+// first at messages and returns every placed text as a pin. A text keeps its
+// place for the rest of the turn.
+func (r *running) placeContext(at int) []turn.Pin {
+	for _, text := range r.turnTexts[len(r.turnPins):] {
+		r.turnPins = append(r.turnPins, turn.Pin{Kind: turn.TurnContextKind, Text: text, At: at})
+	}
+	return r.turnPins
 }
 
 // newRun returns a run of kind with a ctx that Config.Base bounds.

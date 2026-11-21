@@ -181,7 +181,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		if len(recorded) > 0 {
 			_ = t.a.append(recorded...)
 		}
-		reply(pinned, nil)
+		reply(append(pinned, t.r.placeContext(at)...), nil)
 	})
 	return pins
 }
