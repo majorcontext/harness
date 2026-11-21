@@ -278,7 +278,7 @@
               "tool_name": "read_mcp_resource",
               "tool_input": {
                 "server": "docs",
-                "uri": "skill://s100/refunds/references/GUIDE.md"
+                "uri": "skill://s002/refunds/references/GUIDE.md"
               },
               "tool_use_id": "toolu#2"
             }
@@ -392,7 +392,7 @@
               "tool_name": "read_mcp_resource",
               "tool_input": {
                 "server": "docs",
-                "uri": "skill://s100/refunds/references/GUIDE.md"
+                "uri": "skill://s002/refunds/references/GUIDE.md"
               },
               "tool_use_id": "toolu#2"
             }
@@ -508,7 +508,7 @@
             "name": "read_mcp_resource",
             "arguments": {
               "server": "docs",
-              "uri": "skill://s100/refunds/references/GUIDE.md"
+              "uri": "skill://s002/refunds/references/GUIDE.md"
             }
           }
         ]
