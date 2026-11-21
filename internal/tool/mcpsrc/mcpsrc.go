@@ -498,16 +498,33 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	})
 }
 
-// hide replaces every error but a server's own RPC error with a reason. A
-// transport error can name the endpoint URL, and an HTTP error the response
-// body, and a secret in either. It reports a 401 or 403 of a session server.
+// callError is a failed call that tells the model the server, and the HTTP status or the JSON-RPC code when there is
+// one. It never holds the text of the cause: a remote error message or an endpoint URL can carry a secret. Unwrap
+// gives the cause to errors.As.
+type callError struct {
+	server string
+	why    string
+	cause  error
+}
+
+func (e *callError) Error() string {
+	return fmt.Sprintf("mcp: server %q: call failed: %s", e.server, e.why)
+}
+func (e *callError) Unwrap() error { return e.cause }
+
+// hide replaces every error of a call with a callError. It reports a 401 or 403 of a session server.
 func (s *Source) hide(server string, err error) error {
 	s.reportAuth(server, err)
+	why := reason(err)
+	var he *mcp.HTTPStatusError
 	var rpc *mcp.RPCError
-	if errors.As(err, &rpc) {
-		return err
+	switch {
+	case errors.As(err, &he):
+		why = fmt.Sprintf("http status %d", he.Status)
+	case errors.As(err, &rpc):
+		why = fmt.Sprintf("rpc error %d", rpc.Code)
 	}
-	return fmt.Errorf("mcp: server %q: call failed: %s", server, reason(err))
+	return &callError{server: server, why: why, cause: err}
 }
 
 // reportAuth calls the auth callback for a 401 or 403 of a session server. It runs off the caller, which may

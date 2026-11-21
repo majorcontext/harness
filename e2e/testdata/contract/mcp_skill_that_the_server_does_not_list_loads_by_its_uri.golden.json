@@ -184,7 +184,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "load_mcp_skill: mcp: skills/get skill://acme/billing/chargebacks/SKILL.md: mcp: rpc error -32602: No skill is served at skill://acme/billing/chargebacks/SKILL.md",
+              "text": "load_mcp_skill: mcp: server \"docs\": call failed: rpc error -32602",
               "tool_name": "load_mcp_skill",
               "tool_use_id": "toolu#2",
               "is_error": true
@@ -255,7 +255,7 @@
             "type": "tool_result",
             "call_id": "toolu#2",
             "is_error": true,
-            "content": "load_mcp_skill: mcp: skills/get skill://acme/billing/chargebacks/SKILL.md: mcp: rpc error -32602: No skill is served at skill://acme/billing/chargebacks/SKILL.md"
+            "content": "load_mcp_skill: mcp: server \"docs\": call failed: rpc error -32602"
           }
         ]
       },
