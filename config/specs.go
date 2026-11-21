@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -60,6 +61,8 @@ type MCPServerSpec struct {
 	ToolLoading string `json:"tool_loading,omitempty"`
 	// IncludeSessionIDHeader sends the calling session ID in Harness-Session-Id on HTTP MCP tool and resource calls. Stdio servers do not support this.
 	IncludeSessionIDHeader bool `json:"include_session_id_header,omitempty"`
+	// HTTPClient is the client of a Streamable HTTP server; nil is the default client. No config file sets it.
+	HTTPClient *http.Client `json:"-"`
 }
 
 // PluginSpec configures one plugin process. Name and Command are required.
@@ -143,6 +146,9 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 			return fmt.Errorf("mcp_servers.%s: exactly one of command (stdio) or url (streamable HTTP) is required", name)
 		case hasCommand && hasURL:
 			return fmt.Errorf("mcp_servers.%s: command and url are mutually exclusive", name)
+		}
+		if hasCommand && s.HTTPClient != nil {
+			return fmt.Errorf("mcp_servers.%s: http client needs url, not command", name)
 		}
 		if s.ConnectTimeoutS < 0 {
 			return fmt.Errorf("mcp_servers.%s: connect_timeout_s must not be negative (got %d)", name, s.ConnectTimeoutS)

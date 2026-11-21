@@ -213,7 +213,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
-	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: hc}
+	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: cmp.Or(spec.HTTPClient, hc)}
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}
@@ -504,6 +504,8 @@ func reason(err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
+	case errors.Is(err, mcp.ErrRedirectRefused):
+		return "redirect refused"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return "connection refused"
 	case errors.As(err, &oe):
@@ -521,6 +523,8 @@ func connectReason(err error) string {
 		return "initialize timed out"
 	case errors.Is(err, context.Canceled):
 		return "initialize cancelled"
+	case errors.Is(err, mcp.ErrRedirectRefused):
+		return "redirect refused"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return "connection refused"
 	case errors.As(err, &oe):

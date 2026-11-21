@@ -252,6 +252,9 @@ func collectStructs(t reflect.Type, into map[string]reflect.Type) error {
 
 func collectFields(t reflect.Type, into map[string]reflect.Type) error {
 	for i := range t.NumField() {
+		if t.Field(i).Tag.Get("json") == "-" {
+			continue
+		}
 		if err := collectStructs(t.Field(i).Type, into); err != nil {
 			return err
 		}
