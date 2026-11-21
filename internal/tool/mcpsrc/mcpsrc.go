@@ -59,13 +59,6 @@ func positive(n, def int) int {
 	return def
 }
 
-func schemaBudget(n int) int {
-	if n > 0 {
-		return n
-	}
-	return config.Defaults().MCPSchemaBytes
-}
-
 // budget hands out schema bytes to the eager tools in order. After the first tool that does not fit, none fits.
 type budget struct {
 	left int
@@ -210,7 +203,7 @@ func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPSe
 
 func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, opts []Option) *Source {
 	s := &Source{workDir: workDir, log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
-		budget: schemaBudget(cfg.MCPSchemaBytes), turnCalls: cfg.MCPTurnCalls,
+		budget: positive(cfg.MCPSchemaBytes, config.Defaults().MCPSchemaBytes), turnCalls: cfg.MCPTurnCalls,
 		responseBytes: positive(cfg.MCPResponseBytes, config.Defaults().MCPResponseBytes),
 		resultBytes:   positive(cfg.MCPResultBytes, config.Defaults().MCPResultBytes),
 		inbox:         make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
