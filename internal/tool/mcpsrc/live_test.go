@@ -524,7 +524,7 @@ func TestFailedConnectDetachesTheCloseOfItsClient(t *testing.T) {
 		detached := 0
 		spec := memSpec()
 		spec.ConnectTimeoutS = 1
-		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": spec}, "", nil, nil, HoldRetries(true),
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": spec}, "", nil, nil, HoldRetries(true), AwaitFirstConnect(true),
 			Detach(func(f func()) {
 				mu.Lock()
 				detached++
@@ -659,6 +659,48 @@ func TestSessionServerThatLoadsLateNeverHoldsATurnAndNeverChangesTheTools(t *tes
 		res, err = ts.Resolver.ResolveTool(first, call.Name).Run(first, call)
 		if err != nil || res.IsError || res.Text != "ok" {
 			t.Errorf("call after the load = %+v, %v, want the tool result", res, err)
+		}
+	})
+}
+
+func TestWarmUpReadOfASessionSourceDoesNotWaitOrEndTheFirstConnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		list := m.holdNext("tools/list")
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil, nil, HoldRetries(true))
+		s.httpClient = &http.Client{Transport: m}
+		defer s.Close()
+		s.Start()
+		<-list.held
+		start := time.Now()
+		s.Toolset(context.Background(), nil, nil, "")
+		if waited := time.Since(start); waited != 0 {
+			t.Errorf("the warm-up read waited %v for a server that is loading, want it not to wait", waited)
+		}
+		close(list.release)
+		synctest.Wait()
+		ts := s.Toolset(turn.WithID(context.Background(), "turn1"), nil, nil, "")
+		if !slices.ContainsFunc(ts.Tools, func(t turn.Tool) bool { return t.Spec().Name == "mcp__w__a" }) {
+			t.Errorf("the first turn lacks the tool of the server that loaded after the warm-up read: the warm-up must not end the first connect")
+		}
+	})
+}
+
+func TestCallToAToolOfALoadingServerThatWentAnswersNoSuchTool(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		list := m.holdNext("tools/list")
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil, nil, HoldRetries(true))
+		s.httpClient = &http.Client{Transport: m}
+		defer s.Close()
+		s.Start()
+		<-list.held
+		ts := s.Toolset(turn.WithID(context.Background(), "turn1"), nil, nil, "")
+		tool := ts.Resolver.ResolveTool(context.Background(), "mcp__w__a")
+		s.Set(map[string]config.MCPServerSpec{})
+		res, err := tool.Run(context.Background(), protocol.ToolCall{Name: "mcp__w__a"})
+		if err != nil || !res.IsError || res.Text != "no such tool available: mcp__w__a" {
+			t.Errorf("Run = %+v, %v, want the no such tool result", res, err)
 		}
 	})
 }

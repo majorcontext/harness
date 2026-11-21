@@ -224,6 +224,9 @@ func (t loadingTool) Spec() protocol.ToolSpec {
 
 func (t loadingTool) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
 	owner := t.r.s.owner(t.server)
+	if owner == nil {
+		return protocol.ToolResult{Text: "no such tool available: " + t.name, IsError: true}, nil
+	}
 	owner.awaitAttempt(ctx, t.server)
 	if live := t.r.live(t.name); live != nil {
 		return live.Run(ctx, call)

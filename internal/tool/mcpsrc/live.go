@@ -122,14 +122,18 @@ const loadingWait = time.Second
 
 // turnReady waits for the first connect of the servers that a model call needs. The first connect of the servers of a
 // session never holds a turn: the model call reads the servers that are connected now, and the others load in the
-// background. A read outside a turn, the warm-up, waits as the runtime servers do.
+// background. A read outside a turn, the warm-up, reads the servers that are connected and does not end the first
+// connect, because a turn waits for the warm-up.
 func (s *Source) turnReady(ctx context.Context) bool {
-	if !s.session || s.awaitFirst || turn.ID(ctx) == "" {
+	if !s.session || s.awaitFirst {
 		return s.wait(ctx) && s.settle(ctx)
 	}
 	s.Start()
 	if s.parent != nil && (!s.parent.wait(ctx) || !s.parent.settle(ctx)) {
 		return false
+	}
+	if turn.ID(ctx) == "" {
+		return true
 	}
 	if !s.send(freezeMsg{}) {
 		return true
