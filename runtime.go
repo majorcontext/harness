@@ -131,8 +131,9 @@ type Options struct {
 	// child session and a session with an active goal never ask.
 	AskUserQuestion bool
 	// WebTest is a test seam of web_fetch: loopback, resolver, proxy, and root CAs. Production code leaves it zero.
-	WebTest        WebTestSeam
-	mcpHoldRetries bool
+	WebTest         WebTestSeam
+	mcpHoldRetries  bool
+	mcpAwaitSession bool
 	// Version is the build version that the engine banner names. Each model call of a harness-loop turn
 	// sends the banner as engine context, after the newest message of the session when its first request left. Empty: no banner.
 	Version string
@@ -284,7 +285,7 @@ func New(opts Options) (*Runtime, error) {
 			tools = append(tools, selftool.NewModel(toolHost{r}, catalog))
 		}
 	}
-	r.mcp = mcpsrc.New(opts.Config, opts.WorkDir, r.log, mcpsrc.HoldRetries(opts.mcpHoldRetries))
+	r.mcp = mcpsrc.New(opts.Config, opts.WorkDir, r.log, mcpsrc.HoldRetries(opts.mcpHoldRetries), mcpsrc.AwaitFirstConnect(opts.mcpAwaitSession))
 	r.mcpCfg = opts.Config
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})

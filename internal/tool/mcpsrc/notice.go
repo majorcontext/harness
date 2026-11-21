@@ -1,6 +1,8 @@
 package mcpsrc
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -12,8 +14,9 @@ import (
 
 // The kinds of the notices of a Source.
 const (
-	noticeKind = "mcp"
-	addedKind  = "mcp-set"
+	noticeKind  = "mcp"
+	addedKind   = "mcp-set"
+	loadingKind = "mcp-loading"
 )
 
 const addedHeader = "[mcp: tools added after the first connect — %s. They are deferred: to use one you MUST first read its definition with " +
@@ -192,4 +195,41 @@ func addedPlugins(late []Late) string {
 		blocks[i] = fmt.Sprintf(`<plugin name="%s">%s`, attr(n), toolLines(byPlugin[n])) + "\n</plugin>"
 	}
 	return fmt.Sprintf(pluginsHeader, strings.Join(names, ", ")) + "\n" + strings.Join(blocks, "\n")
+}
+
+// loading renders the notice of the servers of the session that have not ended their first attempt, or "".
+func (v view) loading() string {
+	var names []string
+	for _, name := range v.names {
+		if v.src.session && v.src.loading(name) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "[mcp: " + strings.Join(names, ", ") + " tools loading. Call a tool of such a server through the mcp tool once it has loaded.]"
+}
+
+// loadingTool is a tool of a server that has not ended its first attempt. A call waits for it for a short bound, runs
+// the tool when the server has listed it, and otherwise says that the tools are still loading.
+type loadingTool struct {
+	r            toolResolver
+	server, name string
+}
+
+func (t loadingTool) Spec() protocol.ToolSpec {
+	return protocol.ToolSpec{Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`)}
+}
+
+func (t loadingTool) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error) {
+	owner := t.r.s.owner(t.server)
+	owner.awaitAttempt(ctx, t.server)
+	if live := t.r.live(t.name); live != nil {
+		return live.Run(ctx, call)
+	}
+	if owner.loading(t.server) {
+		return protocol.ToolResult{Text: fmt.Sprintf("mcp: %s tools are still loading; try again shortly", t.server), IsError: true}, nil
+	}
+	return protocol.ToolResult{Text: "no such tool available: " + t.name, IsError: true}, nil
 }

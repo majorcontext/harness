@@ -18,6 +18,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testhook"
 	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
@@ -122,7 +123,9 @@ func sessionMCPRuntime(t *testing.T, log *slog.Logger, st harness.Store, cfg con
 	if st == nil {
 		st = store.NewMemStore()
 	}
-	r, err := harness.New(harness.Options{Store: st, Config: cfg, Logger: log, Getenv: func(string) string { return "k" }})
+	opts := harness.Options{Store: st, Config: cfg, Logger: log, Getenv: func(string) string { return "k" }}
+	testhook.Hooks.AwaitSessionMCP(&opts)
+	r, err := harness.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,10 +332,12 @@ func rowASessionToolReachesTheCLIThroughTheHarnessEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	logPath, toolLog := filepath.Join(dir, "mcp-config.jsonl"), filepath.Join(dir, "tool.jsonl")
 	retries := 0
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: dir, Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
+	opts := harness.Options{Store: store.NewMemStore(), WorkDir: dir, Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: fakeClaudePath(),
 			ExtraArgs: fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "normal", "FAKE_CLAUDE_MCP_CONFIG_LOG": logPath,
-				"FAKE_CLAUDE_CALL_TOOL": "mcp__weather__forecast", "FAKE_CLAUDE_TOOL_LOG": toolLog})}}}})
+				"FAKE_CLAUDE_CALL_TOOL": "mcp__weather__forecast", "FAKE_CLAUDE_TOOL_LOG": toolLog})}}}}
+	testhook.Hooks.AwaitSessionMCP(&opts)
+	r, err := harness.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

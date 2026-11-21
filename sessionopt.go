@@ -32,8 +32,9 @@ func WithMaxSteps(n int) SessionOption {
 }
 
 // WithSessionMCP gives the session MCP servers beside the servers of Config.MCPServers. The map key
-// names a server, as in Config.MCPServers. The runtime connects a server at the first model call of
-// the session and stops it when the session stops. Nothing persists: not the specs and not the
+// names a server, as in Config.MCPServers. The runtime starts to connect a server when the
+// session is created or opened, without holding a turn for it (the tools of a server that has not loaded stay behind the mcp tool), and
+// stops it when the session stops. Nothing persists: not the specs and not the
 // secrets in their env and headers, so a later Open has the servers only when it passes this option
 // again. An Open of a session that this runtime already runs keeps the servers that it has.
 func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption {
@@ -79,12 +80,14 @@ func (r *Runtime) sessionOptions(opts []SessionOption) (sessionOptions, error) {
 	return so, nil
 }
 
-// sessionSource returns the source of the session servers, or nil for none.
+// sessionSource returns the source of the session servers, or nil for none. It starts the connect of the servers.
 func (r *Runtime) sessionSource(servers map[string]config.MCPServerSpec, authFailed func(server string, status int)) *mcpsrc.Source {
 	if len(servers) == 0 {
 		return nil
 	}
-	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log, authFailed, mcpsrc.Detach(r.detach))
+	s := mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log, authFailed, mcpsrc.Detach(r.detach))
+	s.Start()
+	return s
 }
 
 // detach runs f on a goroutine that Close waits for. After Close started it runs f before it returns.

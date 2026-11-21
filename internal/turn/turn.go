@@ -388,7 +388,7 @@ func NextMCPCall(ctx context.Context) int {
 func withCallSequence(ctx, step context.Context, turnID string) (context.Context, context.Context) {
 	calls, mcpCalls := new(atomic.Int64), new(atomic.Int64)
 	for _, c := range []*context.Context{&ctx, &step} {
-		*c = context.WithValue(context.WithValue(context.WithValue(*c, turnIDKey{}, turnID), seqKey{}, calls), mcpCallsKey{}, mcpCalls)
+		*c = context.WithValue(context.WithValue(WithID(*c, turnID), seqKey{}, calls), mcpCallsKey{}, mcpCalls)
 	}
 	return ctx, step
 }
@@ -762,6 +762,11 @@ func adopt(b Backend, caps Capabilities, to Turn, req *Request) error {
 }
 
 type turnIDKey struct{}
+
+// WithID returns a context that carries the turn whose call runs under it.
+func WithID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, turnIDKey{}, id)
+}
 
 // ID returns the ID of the turn whose model call or tool call runs under ctx, or "".
 func ID(ctx context.Context) string {

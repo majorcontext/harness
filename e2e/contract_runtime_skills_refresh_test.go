@@ -13,6 +13,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testhook"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
 )
@@ -56,9 +57,11 @@ func skillsAnthropicRuntime(t *testing.T, log *slog.Logger, src harness.SkillSou
 // skillsRuntimeOn returns a runtime over st that sends its requests to fake.
 func skillsRuntimeOn(t *testing.T, st harness.Store, fake *harnesstest.Server, log *slog.Logger, src harness.SkillSource) *harness.Runtime {
 	t.Helper()
-	r, err := harness.New(harness.Options{Store: st, Logger: log, Skills: src, Getenv: func(string) string { return "k" }, Config: config.Config{
+	opts := harness.Options{Store: st, Logger: log, Skills: src, Getenv: func(string) string { return "k" }, Config: config.Config{
 		ContextWindowTokens: 100000,
-		Providers:           map[string]config.Provider{"anthropic": {BaseURL: fake.URL(), APIKeyEnv: "SKILLS_KEY"}}}})
+		Providers:           map[string]config.Provider{"anthropic": {BaseURL: fake.URL(), APIKeyEnv: "SKILLS_KEY"}}}}
+	testhook.Hooks.AwaitSessionMCP(&opts)
+	r, err := harness.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

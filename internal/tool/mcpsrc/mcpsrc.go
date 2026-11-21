@@ -103,6 +103,10 @@ type Source struct {
 	responseBytes, resultBytes, turnCalls int
 	// holdRetries stops the background retries; a session Source takes its parent's value.
 	holdRetries bool
+	// session is true for the Source of one session. Its servers never hold a model call.
+	session bool
+	// awaitFirst makes a turn of a session wait for its first connect.
+	awaitFirst bool
 	// authFailed is the callback of a session Source; nil is none. authCalls counts its running calls, and
 	// authClosed stops new ones once Close starts; authMu guards both.
 	authFailed func(server string, status int)
@@ -197,7 +201,7 @@ func New(cfg config.Config, workDir string, log *slog.Logger, opts ...Option) *S
 // a server in specs; Close waits for the calls in flight, so authFailed must not call Close.
 func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, authFailed func(server string, status int), opts ...Option) *Source {
 	s := build(cfg, parent, specs, workDir, log, opts)
-	s.authFailed = authFailed
+	s.authFailed, s.session = authFailed, true
 	return s
 }
 
@@ -208,7 +212,7 @@ func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerS
 		resultBytes:   positive(cfg.MCPResultBytes, config.Defaults().MCPResultBytes),
 		inbox:         make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
 	if parent != nil {
-		s.holdRetries = parent.holdRetries
+		s.holdRetries, s.awaitFirst = parent.holdRetries, parent.awaitFirst
 	}
 	for _, o := range opts {
 		o(s)
@@ -303,7 +307,7 @@ func (w withPlugins) Toolset(ctx context.Context, history []protocol.LogMessage,
 }
 
 func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn.Toolset {
-	if !s.wait(ctx) || !s.settle(ctx) {
+	if !s.turnReady(ctx) {
 		return turn.Toolset{}
 	}
 	v := s.view()
@@ -367,7 +371,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
 	}
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
-	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: addedKind, Text: v.added(ok, late)}}
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, late)}}
 	return ts
 }
 
@@ -380,6 +384,9 @@ func (r toolResolver) ResolveTool(ctx context.Context, name string) turn.Tool {
 	server, _, valid := remoteName(name)
 	if !valid || !r.ok(name) || r.s.owner(server) == nil {
 		return nil
+	}
+	if owner := r.s.owner(server); owner.loading(server) {
+		return loadingTool{r: r, server: server, name: name}
 	}
 	// The tools of a model call can be older than the live list: a backend that owns the loop keeps one
 	// Toolset for its whole run, and a select in the same model call can read a new list.

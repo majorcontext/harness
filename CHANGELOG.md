@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Session MCP loading** — the servers of `WithSessionMCP` start to connect when the session is created or opened, and a turn never waits for them: a server that has not connected yet loads in the background, its tools stay behind the `mcp` tool so the tool definitions of the request never change, a transient notice says that its tools are loading, and a call to one of them waits at most 1 s and then answers `<server> tools are still loading; try again shortly`.
+
 - **MCP connect bound** — `connect_timeout_s` also bounds a read of the tool list that a `tools/list_changed` notification starts, so a slow read no longer takes the fixed 15 s when a smaller timeout is set.
 
 - **MCP bounds** — the config keys `mcp_response_bytes` (default 1 MiB), `mcp_result_bytes` (default 256 KiB), and `mcp_turn_calls` (default none) bound the body of an HTTP MCP response, the result that the model reads (cut with a marker), and the MCP tool calls of one turn (a call over the bound is an error result).

@@ -604,3 +604,61 @@ func TestSlowReadOfTheToolListAfterANotificationEndsAtTheConnectTimeout(t *testi
 		}
 	})
 }
+
+func toolDefinitions(t *testing.T, ts turn.Toolset) string {
+	t.Helper()
+	var specs []protocol.ToolSpec
+	for _, tool := range ts.Tools {
+		specs = append(specs, tool.Spec())
+	}
+	b, err := json.Marshal(specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestSessionServerThatLoadsLateNeverHoldsATurnAndNeverChangesTheTools(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		list := m.holdNext("tools/list")
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil, nil, HoldRetries(true))
+		s.httpClient = &http.Client{Transport: m}
+		defer s.Close()
+		s.Start()
+		<-list.held
+		first := turn.WithID(context.Background(), "turn1")
+		start := time.Now()
+		ts := s.Toolset(first, nil, nil, "")
+		if waited := time.Since(start); waited != 0 {
+			t.Errorf("the first Toolset of a turn waited %v for a server that is loading, want it not to wait", waited)
+		}
+		before := toolDefinitions(t, ts)
+		if notice := ts.Notices[1]; notice.Kind != loadingKind || !notice.Transient || !strings.Contains(notice.Text, "w tools loading") {
+			t.Errorf("loading notice = %+v, want a transient notice that names w", notice)
+		}
+		call := protocol.ToolCall{Name: "mcp__w__a"}
+		res, err := ts.Resolver.ResolveTool(first, call.Name).Run(first, call)
+		if err != nil || !res.IsError || res.Text != "mcp: w tools are still loading; try again shortly" {
+			t.Errorf("call mid-load = %+v, %v, want the still loading result", res, err)
+		}
+		if waited := time.Since(start); waited != loadingWait {
+			t.Errorf("the call mid-load waited %v, want %v", waited, loadingWait)
+		}
+		close(list.release)
+		synctest.Wait()
+		for _, turnID := range []string{"turn1", "turn2"} {
+			ts = s.Toolset(turn.WithID(context.Background(), turnID), nil, nil, "")
+			if after := toolDefinitions(t, ts); after != before {
+				t.Errorf("tool definitions in %s changed when the server loaded:\n%s\n%s", turnID, before, after)
+			}
+		}
+		if n := ts.Notices[1]; n.Text != "" {
+			t.Errorf("loading notice after the load = %q, want none", n.Text)
+		}
+		res, err = ts.Resolver.ResolveTool(first, call.Name).Run(first, call)
+		if err != nil || res.IsError || res.Text != "ok" {
+			t.Errorf("call after the load = %+v, %v, want the tool result", res, err)
+		}
+	})
+}
