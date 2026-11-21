@@ -51,7 +51,7 @@ func WithSessionMCP(servers map[string]config.MCPServerSpec) SessionOption {
 // WithSessionMCPAuthFailed calls fn with the server name and the status when a server of WithSessionMCP answers
 // 401 or 403 to initialize, tools/list, tools/call, or a resource or skill request. A server that fails to
 // connect is retried and then parked as before, so fn can run more than once for one server. Each call runs on
-// its own goroutine, so fn must be safe for concurrent use. It carries no body and no header. A runtime server of
+// its own goroutine, so fn must be safe for concurrent use. It must not stop its own session: the end of a session waits for it. It carries no body and no header. A runtime server of
 // Config.MCPServers never calls it. Nothing persists: a later Open has fn only when it passes this option again,
 // and an Open of a session that this runtime already runs keeps the first fn.
 func WithSessionMCPAuthFailed(fn func(server string, status int)) SessionOption {
@@ -84,7 +84,19 @@ func (r *Runtime) sessionSource(servers map[string]config.MCPServerSpec, authFai
 	if len(servers) == 0 {
 		return nil
 	}
-	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log, authFailed)
+	return mcpsrc.NewSession(r.mcpCfg, r.mcp, servers, r.workDir, r.log, authFailed, mcpsrc.Detach(r.detach))
+}
+
+// detach runs f on a goroutine that Close waits for. After Close started it runs f before it returns.
+func (r *Runtime) detach(f func()) {
+	if r.hold() != nil {
+		f()
+		return
+	}
+	go func() {
+		defer r.group.Done()
+		f()
+	}()
 }
 
 // checkSessionTools fails when a session that has MCP servers would share a tool name with an

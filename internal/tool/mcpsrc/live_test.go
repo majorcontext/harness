@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
@@ -27,6 +28,8 @@ type memServer struct {
 	gates  map[string][]*gate
 	counts map[string]int
 	fail   map[string]int
+	// deny holds the status that every request of a method answers.
+	deny map[string]int
 	// notify, when set, makes the next tools/list answer start with a list_changed notification and wait for notify.release
 	// before the list itself. After that answer is built, the server lists notifyTools.
 	notify      *gate
@@ -36,7 +39,7 @@ type memServer struct {
 }
 
 func newMemServer(tools ...string) *memServer {
-	return &memServer{tools: tools, gates: map[string][]*gate{}, counts: map[string]int{}, fail: map[string]int{}}
+	return &memServer{tools: tools, gates: map[string][]*gate{}, counts: map[string]int{}, fail: map[string]int{}, deny: map[string]int{}}
 }
 
 // holdNext holds the next request of method until the test releases the gate.
@@ -108,6 +111,15 @@ func (m *memServer) count(method string) int {
 	return m.counts[method]
 }
 
+// takeFailure returns the HTTP status that the next request of method answers with, or 0. The caller holds m.mu.
+func (m *memServer) takeFailure(method string) int {
+	if m.fail[method] > 0 {
+		m.fail[method]--
+		return http.StatusInternalServerError
+	}
+	return m.deny[method]
+}
+
 func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	method := r.Method
 	var req struct {
@@ -121,10 +133,9 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	m.mu.Lock()
 	m.counts[method]++
-	if m.fail[method] > 0 {
-		m.fail[method]--
+	if status := m.takeFailure(method); status != 0 {
 		m.mu.Unlock()
-		return &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Request: r, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+		return &http.Response{StatusCode: status, Header: http.Header{}, Request: r, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 	}
 	var result any = map[string]any{}
 	var special *gate
@@ -186,6 +197,13 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	return resp, nil
+}
+
+// denyAll makes every request of method answer with status.
+func (m *memServer) denyAll(method string, status int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deny[method] = status
 }
 
 func memSource(m *memServer, specs map[string]config.MCPServerSpec) *Source {
@@ -459,5 +477,63 @@ func TestResourceReadEndsWhenItsServerGoes(t *testing.T) {
 		default:
 			t.Error("the read of a removed server is still in flight")
 		}
+	})
+}
+
+func TestCloseWaitsForTheAuthCallbackInFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		m.denyAll("initialize", http.StatusUnauthorized)
+		started := make(chan struct{}, 8)
+		release := make(chan struct{})
+		var ended atomic.Bool
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil,
+			func(string, int) {
+				started <- struct{}{}
+				<-release
+				ended.Store(true)
+			}, HoldRetries(true))
+		s.httpClient = &http.Client{Transport: m}
+		s.Toolset(context.Background(), nil, nil, "")
+		<-started
+		var closed atomic.Bool
+		go func() {
+			s.Close()
+			closed.Store(true)
+		}()
+		synctest.Wait()
+		if closed.Load() {
+			t.Fatal("Close returned while an auth callback was in flight")
+		}
+		close(release)
+		synctest.Wait()
+		if !closed.Load() || !ended.Load() {
+			t.Errorf("closed = %v, callback ended = %v, want both true", closed.Load(), ended.Load())
+		}
+	})
+}
+
+func TestFailedConnectDetachesTheCloseOfItsClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		m.holdNext("tools/list")
+		var mu sync.Mutex
+		detached := 0
+		spec := memSpec()
+		spec.ConnectTimeoutS = 1
+		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": spec}, "", nil, nil, HoldRetries(true),
+			Detach(func(f func()) {
+				mu.Lock()
+				detached++
+				mu.Unlock()
+			}))
+		s.httpClient = &http.Client{Transport: m}
+		s.Toolset(context.Background(), nil, nil, "")
+		mu.Lock()
+		defer mu.Unlock()
+		if detached != 1 || m.count(http.MethodDelete) != 0 {
+			t.Errorf("detached closes = %d, DELETE requests = %d, want 1 and 0 when the connect times out", detached, m.count(http.MethodDelete))
+		}
+		s.Close()
 	})
 }

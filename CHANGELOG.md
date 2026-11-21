@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Session MCP shutdown** — the end of a session waits for the `WithSessionMCPAuthFailed` calls in flight, so `fn` never runs after `Release`, `End`, or `Close` returns, and `fn` must not stop the session. The `DELETE` that ends a remote HTTP MCP session runs in the background, owned by the runtime and joined by `Runtime.Close`, so a release, a later `Open` of the session, and a connect that times out do not wait for the remote server.
+
 - **MCP HTTP redirects** — a Streamable HTTP MCP server can no longer redirect a request to another origin. The request is refused with the reason `redirect refused`, so the headers, the `Harness-Session-Id` header, and the body stay with the origin of the entry. `config.MCPServerSpec.HTTPClient` sets the client of one entry in Go; a client with its own `CheckRedirect` keeps its policy.
 
 - **Account-selected tool calls** — eligible tools can start while the model response is still streaming when an account is selected.
