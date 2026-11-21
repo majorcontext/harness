@@ -124,10 +124,10 @@ func validatePlugins(plugins []PluginSpec) error {
 	return nil
 }
 
-// validateMCPServers requires a name that is not "harness" and is free of "__" and "mcp__", so mcp__<server>__<tool> decodes in one way, and exactly one of command and url.
+// validateMCPServers requires a name that is not "harness" and is free of "__" and "mcp__", does not start or end with "_", so mcp__<server>__<tool> decodes in one way, and exactly one of command and url.
 func validateMCPServers(servers map[string]MCPServerSpec) error {
 	for name, s := range servers {
-		if err := checkMCPServerName(name); err != nil {
+		if err := CheckMCPServerName(name); err != nil {
 			return fmt.Errorf("mcp_servers.%s: %w", name, err)
 		}
 		hasCommand := len(s.Command) > 0
@@ -157,8 +157,8 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 	return nil
 }
 
-// checkMCPServerName rejects a server name that is empty, reserved, or not uniquely decodable.
-func checkMCPServerName(name string) error {
+// CheckMCPServerName rejects a server name that is empty, reserved, or not uniquely decodable.
+func CheckMCPServerName(name string) error {
 	switch {
 	case name == "":
 		return fmt.Errorf("server name is required (empty key)")
@@ -166,6 +166,8 @@ func checkMCPServerName(name string) error {
 		return fmt.Errorf("server name is reserved for the server of the harness tools")
 	case strings.Contains(name, "__"):
 		return fmt.Errorf("server name must not contain \"__\" (the namespaced tool name mcp__<server>__<tool> would not be uniquely decodable)")
+	case strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_"):
+		return fmt.Errorf("server name must not start or end with \"_\" (the first \"__\" after \"mcp__\" must end the server name)")
 	case strings.HasPrefix(name, "mcp__"):
 		return fmt.Errorf("server name must not start with \"mcp__\" (reserved for the tool-namespace prefix)")
 	}

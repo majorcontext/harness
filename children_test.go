@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -486,4 +487,35 @@ func TestAgentDefsDirsReplaceTheDefaultProfileDir(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestChildProfilePatternKeepsTheToolsOfTheParentList(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := strings.Replace(readerProfile, "tools: ls", "tools: mcp__weather__*", 1)
+	profile = strings.Replace(profile, "name: reader", "name: forecaster", 1)
+	if err := os.WriteFile(filepath.Join(dir, ".agents", "forecaster.md"), []byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	weather := harnesstest.NewMCPServer(t, mcpWeatherSpec())
+	synctest.Test(t, func(t *testing.T) {
+		f := &family{answer: delegation("forecaster", 1, done)}
+		cfg := config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: weather.URL()}}}
+		r := familyRuntime(t, store.NewMemStore(), f, nil, cfg, dir)
+		s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model", Origin: "test", AllowedTools: []string{"task", "mcp__weather__forecast"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(t, s, text("a", "delegate"))
+		if kids := children(t, r); len(kids) != 1 {
+			t.Fatalf("children %+v, want 1", kids)
+		}
+		req, _ := f.last(children(t, r)[0].ID, "child work")
+		if want := []string{"mcp__weather__forecast"}; !slices.Equal(req.AllowedTools, want) {
+			t.Errorf("child allowed tools %v, want %v", req.AllowedTools, want)
+		}
+		closeRuntime(t, r)
+	})
 }

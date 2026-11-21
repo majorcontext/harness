@@ -1,6 +1,10 @@
-package config
+package protocol
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/majorcontext/harness/config"
+)
 
 // ServerPattern returns the server of an allowed-tools entry of the form mcp__<server>__*.
 func ServerPattern(entry string) (server string, ok bool) {
@@ -9,7 +13,7 @@ func ServerPattern(entry string) (server string, ok bool) {
 		return "", false
 	}
 	server, ok = strings.CutSuffix(rest, "__*")
-	if !ok || checkMCPServerName(server) != nil {
+	if !ok || config.CheckMCPServerName(server) != nil {
 		return "", false
 	}
 	return server, true
@@ -20,14 +24,14 @@ func ToolAllowed(allowed []string, name string) bool {
 	if allowed == nil {
 		return true
 	}
+	rest, isMCP := strings.CutPrefix(name, "mcp__")
+	server, tool, _ := strings.Cut(rest, "__")
 	for _, e := range allowed {
 		if e == name {
 			return true
 		}
-		if server, ok := ServerPattern(e); ok {
-			if tool, ok := strings.CutPrefix(name, "mcp__"+server+"__"); ok && tool != "" {
-				return true
-			}
+		if s, ok := ServerPattern(e); ok && isMCP && s == server && tool != "" {
+			return true
 		}
 	}
 	return false

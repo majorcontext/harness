@@ -709,6 +709,10 @@ func rowAServerPatternAllowsEveryToolOfOneServer(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("model requests = %d, want 2", len(reqs))
 	}
+	edge := map[string]config.MCPServerSpec{"weather_": {Command: []string{mcpStubBin(t)}, Env: mcpDocs().StdioEnv()}}
+	if _, err := r.Create(t.Context(), protocol.CreateSession{ID: "s2", Model: "bifrost/gpt-test", AllowedTools: []string{"mcp__weather__*"}}, harness.WithSessionMCP(edge)); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("Create with a server named weather_ = %v, want ErrInvalidRequest", err)
+	}
 	if !requestHas(reqs[0], "mcp__weather__forecast") || requestHas(reqs[0], "mcp__docs__search") {
 		t.Errorf("tools of the first request = %v, want the weather tools and no docs tool", reqs[0].Tools)
 	}

@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -436,7 +435,7 @@ func Restrict(tools []Tool, names []string) []Tool {
 	if names == nil {
 		return tools
 	}
-	return slices.DeleteFunc(slices.Clone(tools), func(t Tool) bool { return !config.ToolAllowed(names, t.Spec().Name) })
+	return slices.DeleteFunc(slices.Clone(tools), func(t Tool) bool { return !protocol.ToolAllowed(names, t.Spec().Name) })
 }
 
 func toolCalls(items []protocol.LogMessage) []protocol.ToolCall {
