@@ -9,7 +9,7 @@
 #
 # Package        slowest CI run  budget
 # e2e (Contract)         77 s     116 s (the jj rows run jj for each fixture)
-# e2e@runtime        101.36 s    153 s (each runtime scenario checks every log prefix against replay)
+# e2e@runtime        101.36 s    153 s (each runtime scenario replays up to 32 log prefixes against its checkpoints)
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
 # gates                 24 s       36 s (cold build of the fake CLI)
@@ -42,7 +42,7 @@ test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
 test internal/backend/claudecode TestClaudeCodeRoutesTheSelectedAccountThroughTheProxy 22
 # Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 7 s alone and 16-41 s on CI, where it runs beside the whole parallel package. The state must pass the 4 MiB chunk and the sync batch cap, and the race detector spends the time decoding it.
 test e2e TestContractRuntimeClaudeCodeStateChunks 60
-# The search edge row checks each log prefix (20.90 s on CI).
+# The search edge row replays its log prefixes (20.90 s on CI).
 test e2e TestContractFileToolsEdges/runtime/file_tools_search_edges 32
 # Isolated module proxy rows build five embedder variants (24.12 s serve and 26.0 s runtime on CI).
 test e2e TestContractCheckpointDependency/serve/checkpoint_versioned_dependency_identity 37
