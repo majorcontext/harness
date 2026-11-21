@@ -124,21 +124,23 @@ func (s *Source) Await(ctx context.Context) bool {
 	if s.parent != nil && !s.parent.wait(ctx) {
 		return false
 	}
-	for s.pending() {
+	for {
+		sn := s.snap.Load()
+		if !pendingIn(sn) {
+			return s.settle(ctx)
+		}
 		select {
-		case <-s.snap.Load().changed:
+		case <-sn.changed:
 		case <-ctx.Done():
 			return false
 		}
 	}
-	return s.settle(ctx)
 }
 
-// pending reports whether a server of s has not ended its first attempt.
-func (s *Source) pending() bool {
-	sn := s.snap.Load()
+// pendingIn reports whether a server of sn has not ended its first attempt.
+func pendingIn(sn *snapshot) bool {
 	for name := range sn.health {
-		if s.loading(name) {
+		if loadingIn(sn, name) {
 			return true
 		}
 	}
@@ -175,8 +177,9 @@ func (s *Source) turnReady(ctx context.Context) bool {
 }
 
 // loading reports whether the server name of s has not ended its first attempt.
-func (s *Source) loading(name string) bool {
-	sn := s.snap.Load()
+func (s *Source) loading(name string) bool { return loadingIn(s.snap.Load(), name) }
+
+func loadingIn(sn *snapshot, name string) bool {
 	h, ok := sn.health[name]
 	return ok && h.attempts == 0 && !sn.live[name].up()
 }
@@ -185,9 +188,13 @@ func (s *Source) loading(name string) bool {
 func (s *Source) awaitAttempt(ctx context.Context, name string) {
 	t := time.NewTimer(loadingWait)
 	defer t.Stop()
-	for s.loading(name) {
+	for {
+		sn := s.snap.Load()
+		if !loadingIn(sn, name) {
+			return
+		}
 		select {
-		case <-s.snap.Load().changed:
+		case <-sn.changed:
 		case <-t.C:
 			return
 		case <-ctx.Done():
