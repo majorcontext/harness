@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/mcp"
@@ -576,4 +577,30 @@ func TestResultOverTheBoundIsCutWithAMarker(t *testing.T) {
 	if text, _ := s.bound("short", nil); text != "short" {
 		t.Errorf("a result inside the bound changed to %q", text)
 	}
+}
+
+func TestSlowReadOfTheToolListAfterANotificationEndsAtTheConnectTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer("a")
+		first, reread := m.holdNext("tools/list"), m.holdNext("tools/list")
+		notify := m.notifyDuringNextList("a")
+		spec := memSpec()
+		spec.ConnectTimeoutS = 2
+		s := memSource(m, map[string]config.MCPServerSpec{"w": spec})
+		defer s.Close()
+		start := time.Now()
+		done := make(chan time.Duration)
+		go func() {
+			s.Toolset(context.Background(), nil, nil, "")
+			done <- time.Since(start)
+		}()
+		<-first.held
+		close(first.release)
+		<-notify.held
+		close(notify.release)
+		<-reread.held
+		if waited := <-done; waited != 2*time.Second {
+			t.Errorf("the first Toolset waited %v for a held read of the tool list, want the connect timeout of 2s", waited)
+		}
+	})
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// refreshTimeout bounds a read of a tool list, and the wait for one after a missed tool name.
+// refreshTimeout bounds a read of a tool list of a server with no connect_timeout_s, and the wait for one after a missed tool name.
 const refreshTimeout = 15 * time.Second
 
 var errRemoved = errors.New("mcp: server removed")
@@ -321,7 +321,7 @@ func (a *actor) startRead(e *entry) {
 	c := e.sv.client
 	s := a.s
 	a.spawn(func() {
-		ctx, cancel := context.WithTimeout(e.ctx, refreshTimeout)
+		ctx, cancel := context.WithTimeout(e.ctx, cmp.Or(time.Duration(e.spec.ConnectTimeoutS)*time.Second, refreshTimeout))
 		defer cancel()
 		tools, err := c.ListAllTools(ctx)
 		slices.SortFunc(tools, func(x, y mcp.Tool) int { return strings.Compare(x.Name, y.Name) })

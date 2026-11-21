@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **MCP connect bound** — `connect_timeout_s` also bounds a read of the tool list that a `tools/list_changed` notification starts, so a slow server no longer holds the first model call for longer than the timeout.
+
 - **MCP bounds** — the config keys `mcp_response_bytes` (default 1 MiB), `mcp_result_bytes` (default 256 KiB), and `mcp_turn_calls` (default none) bound the body of an HTTP MCP response, the result that the model reads (cut with a marker), and the MCP tool calls of one turn (a call over the bound is an error result).
 
 - **MCP down notice** — the `[mcp: unavailable — …]` notice is read in the turn that finds a server down, at the place of its first model call, and is no longer recorded in the log or kept for later turns, so a later turn never reads an outage that ended. The `every configured server is connected again` line is gone. A turn that starts with a server down builds the notice again.
