@@ -30,6 +30,8 @@ First tagged release.
 
 - **Auth failure of a session MCP server** — `harness.WithSessionMCPAuthFailed(fn)` calls `fn(server, status)` when a server of `WithSessionMCP` answers 401 or 403, so an embedder can mark the connection for reconnect. `mcp.HTTPStatusError` carries the status and no body, and an MCP log line holds the server, a reason, and the HTTP status or JSON-RPC code, never the text of the remote error.
 
+- **Allow one MCP server** — an `AllowedTools` entry `mcp__<server>__*` allows every tool of that runtime or session MCP server, a tool that arrives later included. An embedder no longer lists a server before it creates the session.
+
 - **GPT-6.2 on the codex route** — the static `codex` catalog lists `gpt-6.2-sol` and `gpt-6.2-astra`, with their models.dev window and efforts. The ChatGPT model-list request sends `client_version` 0.169.0, so the backend no longer hides models that need Codex CLI 0.166.0 or later.
 
 - **Effort of an input** — `protocol.Input` has an `Effort` field. A turn whose inputs all set an effort runs its model calls at the highest of them, and any other turn uses the effort of the session. The session setting does not change and the log gets no `settings.changed` event.

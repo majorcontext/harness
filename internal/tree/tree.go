@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/protocol"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -238,7 +239,7 @@ func narrow(profile, parent []string) []string {
 	case parent == nil:
 		return profile
 	}
-	return slices.DeleteFunc(slices.Clone(profile), func(n string) bool { return !slices.Contains(parent, n) })
+	return slices.DeleteFunc(slices.Clone(profile), func(n string) bool { return !config.ToolAllowed(parent, n) })
 }
 
 // available drops each name that the child has no tool for, because a

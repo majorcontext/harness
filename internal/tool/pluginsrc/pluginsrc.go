@@ -388,7 +388,7 @@ func (s *Session) Late(allowed []string) []mcpsrc.Late {
 	owner := map[string]string{}
 	for _, i := range s.p.live.Load().host.Plugins() {
 		for _, t := range i.Tools {
-			if !slices.Contains(base, t) && (allowed == nil || slices.Contains(allowed, t)) {
+			if !slices.Contains(base, t) && config.ToolAllowed(allowed, t) {
 				owner[t] = i.Name
 			}
 		}
