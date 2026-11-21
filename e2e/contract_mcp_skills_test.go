@@ -48,7 +48,7 @@ var mcpSkillRows = map[string]runtimeRow{
 	"mcp_skill_whose_frontmatter_differs_from_its_entry_does_not_load":          sameAsServe(),
 	"mcp_skill_that_the_server_does_not_list_loads_by_its_uri":                  sameAsServe(),
 	"mcp_skill_listed_beyond_page_100_checks_its_files":                         sameAsServe(),
-	"mcp_skill_missing_page_101_does_not_read_unverified_files":                 sameAsServe(),
+	"mcp_skill_missing_the_last_page_does_not_read_unverified_files":            sameAsServe(),
 	"mcp_skill_tool_refresh_keeps_listed_entries_and_incomplete_status":         sameAsServe(),
 	"mcp_invalid_skill_entry_does_not_allow_unverified_resource_reads":          sameAsServe(),
 	"mcp_skill_whose_name_is_not_its_last_path_segment_is_not_listed_or_loaded": sameAsServe(),
@@ -75,12 +75,12 @@ func withSkill(change func(*harnesstest.MCPSkill)) harnesstest.MCPSkill {
 	return s
 }
 
-func pagedSkillServer(failPage int) mcpServerDef {
+func pagedSkillServer(pages, failPage int) mcpServerDef {
 	var skills []harnesstest.MCPSkill
-	for n := range 101 {
+	for n := range pages {
 		skills = append(skills, withSkill(func(s *harnesstest.MCPSkill) { s.Path = fmt.Sprintf("s%03d/refunds", n) }))
 	}
-	skills[100].Served = map[string]string{"references/GUIDE.md": "# Guide\nRefund always.\n"}
+	skills[pages-1].Served = map[string]string{"references/GUIDE.md": "# Guide\nRefund always.\n"}
 	d := skillServer("docs", skills...)
 	d.spec.PageSize, d.spec.SkillsListFailPage = 1, failPage
 	return d
@@ -203,7 +203,7 @@ func TestContractMCPSkillVerification(t *testing.T) {
 		{
 			name: "mcp_skill_listed_beyond_page_100_checks_its_files",
 			setup: mcpSetup(nil, func() mcpServerDef {
-				d := pagedSkillServer(0)
+				d := pagedSkillServer(101, 0)
 				d.keepAlive = true
 				d.spec.Skills[100].Served["references/GUIDE.md"] = "# Guide\nRefund within 90 days.\n"
 				return d
@@ -224,19 +224,19 @@ func TestContractMCPSkillIncompleteLists(t *testing.T) {
 	withTurn := func(a ...action) []action { return append(append([]action{}, oneTurn...), a...) }
 	runScenarios(t, []scenario{
 		{
-			name:  "mcp_skill_missing_page_101_does_not_read_unverified_files",
-			setup: mcpSetup(nil, pagedSkillServer(101)),
-			model: toolChain(readRes("docs", "skill://s100/refunds/references/GUIDE.md"),
-				loadSkill("docs", "skill://s100/refunds/SKILL.md"),
-				readRes("docs", "skill://s100/refunds/references/GUIDE.md")),
-			actions: withTurn(expectMCPCalls{server: "docs", want: readCalls("skill://s100/refunds/SKILL.md", "skill://s100/refunds/references/GUIDE.md")}),
+			name:  "mcp_skill_missing_the_last_page_does_not_read_unverified_files",
+			setup: mcpSetup(nil, pagedSkillServer(3, 3)),
+			model: toolChain(readRes("docs", "skill://s002/refunds/references/GUIDE.md"),
+				loadSkill("docs", "skill://s002/refunds/SKILL.md"),
+				readRes("docs", "skill://s002/refunds/references/GUIDE.md")),
+			actions: withTurn(expectMCPCalls{server: "docs", want: readCalls("skill://s002/refunds/SKILL.md", "skill://s002/refunds/references/GUIDE.md")}),
 		},
 		{
 			name:  "mcp_skill_tool_refresh_keeps_listed_entries_and_incomplete_status",
-			setup: mcpSetup(nil, pagedSkillServer(101)),
+			setup: mcpSetup(nil, pagedSkillServer(3, 3)),
 			model: afterFirstTurn(
 				mcpAction("action", "select", "tools", []string{"mcp__docs__updated"}),
-				readRes("docs", "skill://s100/refunds/references/GUIDE.md"),
+				readRes("docs", "skill://s002/refunds/references/GUIDE.md"),
 				readRes("docs", "skill://s000/refunds/references/GUIDE.md"),
 			),
 			actions: append(liveTurns(setMCPTools{server: "docs", tools: []harnesstest.MCPTool{{Name: "updated", Description: "Updated tool"}}}),
@@ -245,9 +245,9 @@ func TestContractMCPSkillIncompleteLists(t *testing.T) {
 		{
 			name: "mcp_incomplete_skill_list_blocks_uncovered_uris_of_any_scheme",
 			setup: mcpSetup(nil, func() mcpServerDef {
-				d := pagedSkillServer(101)
+				d := pagedSkillServer(3, 3)
 				d.spec.Skills[0].RootURI = "https://docs.example/known/refunds"
-				d.spec.Skills[100].RootURI = "https://docs.example/hidden/refunds"
+				d.spec.Skills[2].RootURI = "https://docs.example/hidden/refunds"
 				d.spec.Resources = []harnesstest.MCPResource{{URI: "doc://guide", Text: "An ordinary resource."}}
 				return d
 			}()),
