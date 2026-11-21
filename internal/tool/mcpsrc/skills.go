@@ -26,8 +26,9 @@ import (
 
 // The per-skill limits of the Skills extension.
 const (
-	maxSkillFiles = 512
-	maxSkillBytes = 16 << 20
+	maxSkillFiles  = 512
+	maxSkillBytes  = 16 << 20
+	skillWireBytes = 6*maxSkillBytes + 1<<20
 )
 
 // The skill list in the MCP segment stops at listMax UTF-16 code units, with its fixed text, because a backend that
@@ -96,9 +97,13 @@ func checkEntry(e mcp.Skill) error {
 	return nil
 }
 
+// skillWire sets the bound of the HTTP response of a skill request to the largest body that the Skills limits allow:
+// a file of maxSkillBytes, which JSON escapes in at most 6 bytes for each byte, and the rest of the envelope.
+func skillWire(ctx context.Context) context.Context { return mcp.WithMaxResponse(ctx, skillWireBytes) }
+
 // listSkills reads the skill entries of c and keeps the valid ones. The error names each entry that it left out.
 func listSkills(ctx context.Context, c *mcp.Client) ([]mcp.Skill, error) {
-	all, err := c.ListAllSkills(ctx)
+	all, err := c.ListAllSkills(skillWire(ctx))
 	var rpc *mcp.RPCError
 	var he *mcp.HTTPStatusError
 	if err != nil && !errors.As(err, &rpc) && !errors.As(err, &he) {
@@ -249,7 +254,7 @@ func (l loader) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 func (s *Source) loadSkill(ctx context.Context, c *mcp.Client, server, uri string, reload bool) (mcp.Skill, []byte, error) {
 	entry, ok := listed(s.view().live[server], uri)
 	if !ok || reload {
-		e, err := c.GetSkill(ctx, uri)
+		e, err := c.GetSkill(skillWire(ctx), uri)
 		if err != nil {
 			return mcp.Skill{}, nil, s.hide(server, err)
 		}
@@ -260,7 +265,7 @@ func (s *Source) loadSkill(ctx context.Context, c *mcp.Client, server, uri strin
 	}
 	body, err := s.fetchSkillMD(ctx, c, server, entry)
 	if errors.Is(err, errVerify) {
-		fresh, gerr := c.GetSkill(ctx, uri)
+		fresh, gerr := c.GetSkill(skillWire(ctx), uri)
 		if gerr != nil {
 			s.reportAuth(server, gerr)
 			return mcp.Skill{}, nil, err
@@ -352,7 +357,7 @@ func (s *Source) readBytes(ctx context.Context, c *mcp.Client, server, uri strin
 
 // readContents returns the raw bytes of one resource and the item that holds them.
 func (s *Source) readContents(ctx context.Context, c *mcp.Client, server, uri string) ([]byte, mcp.ResourceContents, error) {
-	res, err := c.ReadResource(ctx, uri)
+	res, err := c.ReadResource(skillWire(ctx), uri)
 	if err != nil {
 		return nil, mcp.ResourceContents{}, s.hide(server, err)
 	}

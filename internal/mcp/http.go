@@ -69,6 +69,53 @@ type HTTPTransport struct {
 	// nil. Per-request timeouts are enforced via context, not by the
 	// http.Client itself, so callers generally don't need a Timeout here.
 	Client *http.Client
+	// MaxResponseBytes bounds the body of each response that the client decodes. Zero or less is no bound. A larger
+	// body fails the request with ErrResponseTooLarge. WithMaxResponse overrides it for one request.
+	MaxResponseBytes int64
+}
+
+type maxResponseKey struct{}
+
+// WithMaxResponse returns a context under which an HTTP request reads at most n response bytes, whatever
+// HTTPTransport.MaxResponseBytes says.
+func WithMaxResponse(ctx context.Context, n int64) context.Context {
+	return context.WithValue(ctx, maxResponseKey{}, n)
+}
+
+// ErrResponseTooLarge is the error of a response whose body passed its bound.
+var ErrResponseTooLarge = errors.New("mcp: response too large")
+
+// boundedBody reads the body of a response and fails with ErrResponseTooLarge after max bytes.
+type boundedBody struct {
+	r    io.Reader
+	left int64
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.left < 0 {
+		return 0, ErrResponseTooLarge
+	}
+	if int64(len(p)) > b.left+1 {
+		p = p[:b.left+1]
+	}
+	n, err := b.r.Read(p)
+	b.left -= int64(n)
+	if b.left < 0 {
+		return max(0, n+int(b.left)), ErrResponseTooLarge
+	}
+	return n, err
+}
+
+// body returns the body of resp under the bound of ctx or of the transport.
+func (t *httpTransport) body(ctx context.Context, resp *http.Response) io.Reader {
+	limit, ok := ctx.Value(maxResponseKey{}).(int64)
+	if !ok {
+		limit = t.maxBody
+	}
+	if limit <= 0 {
+		return resp.Body
+	}
+	return &boundedBody{r: resp.Body, left: limit}
 }
 
 func (t *HTTPTransport) open(handler handlerFunc) (transport, error) {
@@ -81,6 +128,7 @@ func (t *HTTPTransport) open(handler handlerFunc) (transport, error) {
 		headers:  t.Headers,
 		client:   client,
 		handler:  handler,
+		maxBody:  t.MaxResponseBytes,
 	}, nil
 }
 
@@ -124,6 +172,7 @@ type httpTransport struct {
 	headers  map[string]string
 	client   *http.Client
 	handler  handlerFunc
+	maxBody  int64
 
 	nextID atomic.Int64
 
@@ -216,7 +265,7 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 	contentType := strings.ToLower(stripParams(resp.Header.Get("Content-Type")))
 	switch contentType {
 	case "application/json":
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(t.body(ctx, resp))
 		if err != nil {
 			return fmt.Errorf("mcp: reading response: %w", err)
 		}
@@ -228,7 +277,7 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 
 	case "text/event-stream":
 		var found *message
-		err := readSSE(resp.Body, func(ev sseEvent) (bool, error) {
+		err := readSSE(t.body(ctx, resp), func(ev sseEvent) (bool, error) {
 			if len(ev.data) == 0 {
 				return false, nil // priming event
 			}

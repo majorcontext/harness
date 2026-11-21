@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **MCP bounds** — the config keys `mcp_response_bytes` (default 1 MiB), `mcp_result_bytes` (default 256 KiB), and `mcp_turn_calls` (default none) bound the body of an HTTP MCP response, the result that the model reads (cut with a marker), and the MCP tool calls of one turn (a call over the bound is an error result).
+
 - **MCP error text** — a failed MCP call tells the model `mcp: server "<name>": call failed: <why>` with the HTTP status or the JSON-RPC code, and never the text of the remote error, so a credential in that text stays out of tool results, events, and spans.
 
 - **Session MCP shutdown** — the end of a session waits for the `WithSessionMCPAuthFailed` calls in flight, so `fn` never runs after `Release`, `End`, or `Close` returns, and `fn` must not stop the session. The `DELETE` that ends a remote HTTP MCP session runs in the background, owned by the runtime and joined by `Runtime.Close`, so a release, a later `Open` of the session, and a connect that times out do not wait for the remote server.

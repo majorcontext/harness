@@ -42,7 +42,7 @@ func SummaryRequest(ctx context.Context, b Backend, req Request, src Source) (Re
 	if err != nil {
 		return Request{}, err
 	}
-	describe(&call, ts, nil, caps.OwnsLoop, tracing.Scope{})
+	describe(ctx, &call, ts, nil, caps.OwnsLoop, tracing.Scope{})
 	call.Call, call.Ask = nil, nil
 	return call, nil
 }

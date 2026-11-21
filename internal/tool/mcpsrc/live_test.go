@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -547,5 +548,32 @@ func TestRemoteErrorTextNeverReachesTheToolError(t *testing.T) {
 	var rpc *mcp.RPCError
 	if !errors.As(err, &rpc) {
 		t.Error("the error does not keep its cause for errors.As")
+	}
+}
+
+func TestResponseOverTheConfiguredBoundFailsTheConnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemServer(strings.Repeat("t", 2000))
+		s := New(config.Config{MCPResponseBytes: 512, MCPServers: map[string]config.MCPServerSpec{"w": memSpec()}}, "", nil, HoldRetries(true))
+		s.httpClient = &http.Client{Transport: m}
+		defer s.Close()
+		s.Toolset(context.Background(), nil, nil, "")
+		if st := s.status(); len(st) != 1 || st[0].Connected {
+			t.Errorf("status = %+v, want the server down: its tool list is over the response bound", st)
+		}
+	})
+}
+
+func TestResultOverTheBoundIsCutWithAMarker(t *testing.T) {
+	s := &Source{resultBytes: 10}
+	text, blobs := s.bound("aaaaaa", []protocol.Blob{{Data: []byte("1234")}, {Data: []byte("12")}, {Data: []byte("1234")}})
+	if want := "aaaaaa\n[mcp: result cut at 10 bytes; 6 bytes left out]"; text != want {
+		t.Errorf("text = %q, want %q", text, want)
+	}
+	if len(blobs) != 1 || len(blobs[0].Data) != 4 {
+		t.Errorf("blobs = %v, want the first blob only", blobs)
+	}
+	if text, _ := s.bound("short", nil); text != "short" {
+		t.Errorf("a result inside the bound changed to %q", text)
 	}
 }

@@ -84,6 +84,15 @@ func mergeScalars(out, over *Config) {
 	if over.MCPSchemaBytes != 0 {
 		out.MCPSchemaBytes = over.MCPSchemaBytes
 	}
+	if over.MCPResponseBytes != 0 {
+		out.MCPResponseBytes = over.MCPResponseBytes
+	}
+	if over.MCPResultBytes != 0 {
+		out.MCPResultBytes = over.MCPResultBytes
+	}
+	if over.MCPTurnCalls != 0 {
+		out.MCPTurnCalls = over.MCPTurnCalls
+	}
 }
 
 func mergeDirs(out, base, over *Config) {
