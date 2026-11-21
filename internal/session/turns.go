@@ -39,15 +39,11 @@ func (a *Actor) Submit(ctx context.Context, in protocol.InputAdmitted, expectedT
 	return a.submit(ctx, in, expectedTurn, nil, "")
 }
 
-// SubmitBound calls admitted only for a new input, before it replies to admission.
-func (a *Actor) SubmitBound(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64)) (seq uint64, repeat bool, err error) {
-	return a.submit(ctx, in, expectedTurn, admitted, "")
-}
-
-// SubmitTurnContext is SubmitBound for an input with a turn context: text that
-// the model reads in the turn that takes the input, and that no log, event, or
-// later turn holds. An empty text is SubmitBound. A repeated input keeps the
-// text of its first submit.
+// SubmitTurnContext is Submit for an input with a turn context: text that the
+// model reads in the turn that takes the input, and that no log, event, or
+// later turn holds. It calls admitted, when not nil, only for a new input,
+// before it replies to admission. A repeated input keeps the text of its first
+// submit.
 func (a *Actor) SubmitTurnContext(ctx context.Context, in protocol.InputAdmitted, expectedTurn string, admitted func(uint64), text string) (seq uint64, repeat bool, err error) {
 	return a.submit(ctx, in, expectedTurn, admitted, text)
 }

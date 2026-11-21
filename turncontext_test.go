@@ -1,12 +1,16 @@
 package harness_test
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -74,4 +78,34 @@ func TestTurnContextReachesEachModelCallOfOneTurnOnly(t *testing.T) {
 	if strings.Contains(stored.String(), sentinel) {
 		t.Error("the events or the history hold the turn context")
 	}
+}
+
+func TestTurnContextKeepsItsPlaceWhenANoticeChangesInTheTurn(t *testing.T) {
+	weather := harnesstest.NewMCPServer(t, mcpWeatherSpec())
+	weather.FailInitialize(1)
+	synctest.Test(t, func(t *testing.T) {
+		f := mcpActions()
+		r := mcpRuntime(t, f, map[string]*harnesstest.MCPServer{"weather": weather})
+		s := create(t, r)
+		if _, err := s.Prompt(bg, text("a", "connect"), harness.WithTurnContext("ctx-sentinel")); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.mu.Lock()
+		reqs := slices.Clone(f.reqs)
+		f.mu.Unlock()
+		if len(reqs) != 2 {
+			t.Fatalf("model requests = %d, want 2", len(reqs))
+		}
+		place := func(req turn.Request) (int, int) {
+			i := slices.IndexFunc(req.Pins, func(p turn.Pin) bool { return p.Kind == turn.TurnContextKind })
+			return i, req.Pins[i].At
+		}
+		i1, at1 := place(reqs[0])
+		i2, at2 := place(reqs[1])
+		if i1 != i2 || at1 != at2 || !slices.IsSortedFunc(reqs[1].Pins, func(a, b turn.Pin) int { return cmp.Compare(a.At, b.At) }) {
+			t.Errorf("pins of request 2 = %+v, want the turn context at index %d, place %d, and every pin in place order", reqs[1].Pins, i1, at1)
+		}
+		closeRuntime(t, r)
+	})
 }
