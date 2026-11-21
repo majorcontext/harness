@@ -3,14 +3,23 @@ package mcpsrc
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
+// Start begins the first connect of s and returns at once. A nil Source has none.
+func (s *Source) Start() {
+	if s != nil {
+		s.startOnce.Do(func() { s.send(startMsg{}) })
+	}
+}
+
 // wait connects every server once and reports whether that ended before ctx.
 func (s *Source) wait(ctx context.Context) bool {
-	s.startOnce.Do(func() { s.send(startMsg{}) })
+	s.Start()
 	if s.parent != nil && !s.parent.wait(ctx) {
 		return false
 	}
@@ -102,4 +111,94 @@ func (s *Source) Close() {
 		close(s.quit)
 		<-s.done
 	})
+}
+
+// AwaitFirstConnect makes a turn of each session Source wait for its first connect, as the warm-up does. A test host
+// passes true.
+func AwaitFirstConnect(wait bool) Option { return func(s *Source) { s.awaitFirst = wait } }
+
+// Await waits until every server of s has ended its first attempt, and the first connect of its parent ended, and
+// reports false when ctx ends first. A turn never calls it.
+func (s *Source) Await(ctx context.Context) bool {
+	s.Start()
+	if s.parent != nil && !s.parent.wait(ctx) {
+		return false
+	}
+	for {
+		sn := s.snap.Load()
+		if !pendingIn(sn) {
+			return s.settle(ctx)
+		}
+		select {
+		case <-sn.changed:
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// pendingIn reports whether a server of sn has not ended its first attempt.
+func pendingIn(sn *snapshot) bool {
+	for name := range sn.health {
+		if loadingIn(sn, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// loadingWait bounds the wait of a call to a tool of a server that has not ended its first attempt.
+const loadingWait = time.Second
+
+// turnReady waits for the first connect of the servers that a model call needs. The first connect of the servers of a
+// session never holds a turn: the model call reads the servers that are connected now, and the others load in the
+// background. A read outside a turn, the warm-up, reads the servers that are connected and does not end the first
+// connect, because a turn waits for the warm-up.
+func (s *Source) turnReady(ctx context.Context) bool {
+	if !s.session || s.awaitFirst {
+		return s.wait(ctx) && s.settle(ctx)
+	}
+	s.Start()
+	if s.parent != nil && (!s.parent.wait(ctx) || !s.parent.settle(ctx)) {
+		return false
+	}
+	if turn.ID(ctx) == "" {
+		return true
+	}
+	if !s.send(freezeMsg{}) {
+		return true
+	}
+	select {
+	case <-s.ready:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// loading reports whether the server name of s has not ended its first attempt.
+func (s *Source) loading(name string) bool { return loadingIn(s.snap.Load(), name) }
+
+func loadingIn(sn *snapshot, name string) bool {
+	h, ok := sn.health[name]
+	return ok && h.attempts == 0 && !sn.live[name].up()
+}
+
+// awaitAttempt waits until the server name of s ends its first attempt, for at most loadingWait.
+func (s *Source) awaitAttempt(ctx context.Context, name string) {
+	t := time.NewTimer(loadingWait)
+	defer t.Stop()
+	for {
+		sn := s.snap.Load()
+		if !loadingIn(sn, name) {
+			return
+		}
+		select {
+		case <-sn.changed:
+		case <-t.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }

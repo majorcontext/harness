@@ -277,6 +277,12 @@ func (a *actor) checkFreeze() {
 			return
 		}
 	}
+	a.freezeFirst()
+}
+
+// freezeFirst ends the first connect with the servers that are connected now. The tools of any other server are late
+// tools, and the mcp tool reaches them.
+func (a *actor) freezeFirst() {
 	a.frozen = true
 	for e := range a.first {
 		if e.sv.up() {
@@ -377,6 +383,18 @@ func (a *actor) publish() {
 	slices.Sort(sn.names)
 	if old := a.s.snap.Swap(sn); old != nil {
 		close(old.changed)
+	}
+}
+
+// freezeMsg ends the first connect now, whatever the servers that still connect.
+type freezeMsg struct{}
+
+func (freezeMsg) handle(a *actor) {
+	if !a.started {
+		a.startFirst()
+	}
+	if !a.frozen && !a.closed {
+		a.freezeFirst()
 	}
 }
 

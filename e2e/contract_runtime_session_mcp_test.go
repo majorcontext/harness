@@ -18,6 +18,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testhook"
 	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
@@ -57,6 +58,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_http_server_uses_the_client_of_its_spec", rowASessionHTTPServerUsesTheClientOfItsSpec},
 		{"a_release_does_not_wait_for_the_remote_delete_and_close_joins_it", rowAReleaseDoesNotWaitForTheRemoteDeleteAndCloseJoinsIt},
 		{"a_turn_over_the_mcp_call_bound_gets_a_tool_error", rowATurnOverTheMCPCallBoundGetsAToolError},
+		{"a_slow_session_server_never_holds_a_turn_or_changes_the_tools", rowASlowSessionServerNeverHoldsATurnOrChangesTheTools},
 		{"a_skill_of_a_session_server_stays_held_after_release_and_open", rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen},
 	}
 	for _, row := range rows {
@@ -122,7 +124,9 @@ func sessionMCPRuntime(t *testing.T, log *slog.Logger, st harness.Store, cfg con
 	if st == nil {
 		st = store.NewMemStore()
 	}
-	r, err := harness.New(harness.Options{Store: st, Config: cfg, Logger: log, Getenv: func(string) string { return "k" }})
+	opts := harness.Options{Store: st, Config: cfg, Logger: log, Getenv: func(string) string { return "k" }}
+	testhook.Hooks.AwaitSessionMCP(&opts)
+	r, err := harness.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,10 +333,12 @@ func rowASessionToolReachesTheCLIThroughTheHarnessEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	logPath, toolLog := filepath.Join(dir, "mcp-config.jsonl"), filepath.Join(dir, "tool.jsonl")
 	retries := 0
-	r, err := harness.New(harness.Options{Store: store.NewMemStore(), WorkDir: dir, Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
+	opts := harness.Options{Store: store.NewMemStore(), WorkDir: dir, Config: config.Config{RequestMaxRetries: &retries, StreamMaxRetries: &retries,
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: fakeClaudePath(),
 			ExtraArgs: fakeEnvArgs(map[string]string{"FAKE_CLAUDE_MODE": "normal", "FAKE_CLAUDE_MCP_CONFIG_LOG": logPath,
-				"FAKE_CLAUDE_CALL_TOOL": "mcp__weather__forecast", "FAKE_CLAUDE_TOOL_LOG": toolLog})}}}})
+				"FAKE_CLAUDE_CALL_TOOL": "mcp__weather__forecast", "FAKE_CLAUDE_TOOL_LOG": toolLog})}}}}
+	testhook.Hooks.AwaitSessionMCP(&opts)
+	r, err := harness.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
