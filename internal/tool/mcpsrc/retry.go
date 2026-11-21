@@ -17,10 +17,6 @@ type Option func(*Source)
 // Only a test host passes true.
 func HoldRetries(hold bool) Option { return func(s *Source) { s.holdRetries = hold } }
 
-// Detach makes Close hand the close of the HTTP clients of a Source to run and return at once. The close of an HTTP
-// client can wait on the remote server, so run owns the goroutine and bounds the wait; it runs f exactly once.
-func Detach(run func(f func())) Option { return func(s *Source) { s.detach = run } }
-
 // health is what the attempts to connect one server left behind. reason is
 // empty while the server is connected.
 type health struct {

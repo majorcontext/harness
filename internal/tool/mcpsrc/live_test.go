@@ -111,6 +111,15 @@ func (m *memServer) count(method string) int {
 	return m.counts[method]
 }
 
+// takeFailure returns the HTTP status that the next request of method answers with, or 0. The caller holds m.mu.
+func (m *memServer) takeFailure(method string) int {
+	if m.fail[method] > 0 {
+		m.fail[method]--
+		return http.StatusInternalServerError
+	}
+	return m.deny[method]
+}
+
 func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	method := r.Method
 	var req struct {
@@ -124,14 +133,9 @@ func (m *memServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	m.mu.Lock()
 	m.counts[method]++
-	if code := m.deny[method]; code != 0 {
+	if status := m.takeFailure(method); status != 0 {
 		m.mu.Unlock()
-		return &http.Response{StatusCode: code, Header: http.Header{}, Request: r, Body: io.NopCloser(bytes.NewReader(nil))}, nil
-	}
-	if m.fail[method] > 0 {
-		m.fail[method]--
-		m.mu.Unlock()
-		return &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Request: r, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+		return &http.Response{StatusCode: status, Header: http.Header{}, Request: r, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 	}
 	var result any = map[string]any{}
 	var special *gate

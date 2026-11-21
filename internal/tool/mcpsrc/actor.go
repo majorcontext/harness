@@ -190,6 +190,9 @@ func (a *actor) closeClient(name string, c *mcp.Client, remote bool) {
 	})
 }
 
+// Detach hands the close of the HTTP clients of a Source to run, which owns the goroutine and bounds the wait.
+func Detach(run func(f func())) Option { return func(s *Source) { s.detach = run } }
+
 // discard closes clients together. The close of a remote client can wait on its server, so it runs on the goroutine
 // that Detach gave when the Source has one; every other close ends before discard returns.
 func (s *Source) discard(remote bool, clients ...*mcp.Client) {
