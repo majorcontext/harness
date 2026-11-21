@@ -15,6 +15,8 @@ func Defaults() Config {
 		ModelTool:            new(true),
 		InstructionsMaxBytes: 64 << 10,
 		MCPSchemaBytes:       64 << 10,
+		MCPResponseBytes:     1 << 20,
+		MCPResultBytes:       256 << 10,
 		MaxTaskDepth:         3,
 		MaxConcurrentTasks:   20,
 	}

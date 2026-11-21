@@ -56,6 +56,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_http_server_may_not_redirect_to_another_origin", rowASessionHTTPServerMayNotRedirectToAnotherOrigin},
 		{"a_session_http_server_uses_the_client_of_its_spec", rowASessionHTTPServerUsesTheClientOfItsSpec},
 		{"a_release_does_not_wait_for_the_remote_delete_and_close_joins_it", rowAReleaseDoesNotWaitForTheRemoteDeleteAndCloseJoinsIt},
+		{"a_turn_over_the_mcp_call_bound_gets_a_tool_error", rowATurnOverTheMCPCallBoundGetsAToolError},
 		{"a_skill_of_a_session_server_stays_held_after_release_and_open", rowASkillOfASessionServerStaysHeldAfterReleaseAndOpen},
 	}
 	for _, row := range rows {
@@ -721,5 +722,27 @@ func rowAServerPatternAllowsEveryToolOfOneServer(t *testing.T) {
 	}
 	if got := requestText(reqs[1]); !strings.Contains(got, "Oslo: 3C, snow") {
 		t.Errorf("the second request does not hold the tool result: %s", got)
+	}
+}
+
+func rowATurnOverTheMCPCallBoundGetsAToolError(t *testing.T) {
+	call := func(id string) harnesstest.Step {
+		return harnesstest.Step{Name: "call " + id, Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: id, Name: "mcp__weather__forecast", Input: map[string]any{"city": "Oslo"}}}}}
+	}
+	r, fake := sessionMCPRuntime(t, nil, nil, config.Config{MCPTurnCalls: 1}, call("c1"), call("c2"), harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "ok"}}, call("c3"), harnesstest.Step{Name: "done again", Reply: harnesstest.Reply{Text: "ok"}})
+	s := sessionMCPCreate(t, r, weatherServer(t))
+	sessionMCPTurn(t, s, "a", "forecast twice")
+	reqs := fake.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("model requests = %d, want 3", len(reqs))
+	}
+	got := requestText(reqs[2])
+	if !strings.Contains(got, "Oslo: 3C, snow") || !strings.Contains(got, "this turn reached the limit of 1 MCP tool calls") {
+		t.Errorf("the last request = %s, want the first result and the limit error", got)
+	}
+	sessionMCPTurn(t, s, "b", "again")
+	reqs = fake.Requests()
+	if got := requestText(reqs[len(reqs)-1]); strings.Count(got, "reached the limit") != 1 || strings.Count(got, "Oslo: 3C, snow") != 2 {
+		t.Errorf("the next turn did not get its own call: %s", got)
 	}
 }

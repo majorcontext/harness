@@ -125,7 +125,7 @@ func (s *Source) listDirectory(ctx context.Context, c *mcp.Client, server string
 		}
 		seen := map[string]bool{}
 		for cursor := ""; ; {
-			page, err := c.ReadDirectory(ctx, uri, cursor)
+			page, err := c.ReadDirectory(skillWire(ctx), uri, cursor)
 			if err != nil {
 				return protocol.ToolResult{}, true, s.hide(server, err)
 			}

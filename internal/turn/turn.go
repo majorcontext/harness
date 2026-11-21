@@ -374,10 +374,21 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 	}
 }
 
+type mcpCallsKey struct{}
+
+// NextMCPCall counts one MCP tool call of the turn whose tool call runs under ctx and returns its number, from 1.
+// It returns 0 outside a turn.
+func NextMCPCall(ctx context.Context) int {
+	if n, ok := ctx.Value(mcpCallsKey{}).(*atomic.Int64); ok {
+		return int(n.Add(1))
+	}
+	return 0
+}
+
 func withCallSequence(ctx, step context.Context, turnID string) (context.Context, context.Context) {
-	calls := new(atomic.Int64)
+	calls, mcpCalls := new(atomic.Int64), new(atomic.Int64)
 	for _, c := range []*context.Context{&ctx, &step} {
-		*c = context.WithValue(context.WithValue(*c, turnIDKey{}, turnID), seqKey{}, calls)
+		*c = context.WithValue(context.WithValue(context.WithValue(*c, turnIDKey{}, turnID), seqKey{}, calls), mcpCallsKey{}, mcpCalls)
 	}
 	return ctx, step
 }

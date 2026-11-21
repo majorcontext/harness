@@ -52,6 +52,13 @@ func schemaBytes(s protocol.ToolSpec) int {
 	return len(s.Name) + len(s.Description) + len(s.InputSchema)
 }
 
+func positive(n, def int) int {
+	if n > 0 {
+		return n
+	}
+	return def
+}
+
 func schemaBudget(n int) int {
 	if n > 0 {
 		return n
@@ -98,6 +105,9 @@ type Source struct {
 	parent  *Source
 	mode    string
 	budget  int
+	// responseBytes, resultBytes, and turnCalls are the bounds of config: the bytes of one HTTP response, the bytes of
+	// one result for the model, and the MCP tool calls of one turn (zero is no bound).
+	responseBytes, resultBytes, turnCalls int
 	// holdRetries stops the background retries; a session Source takes its parent's value.
 	holdRetries bool
 	// authFailed is the callback of a session Source; nil is none. authCalls counts its running calls, and
@@ -200,8 +210,10 @@ func NewSession(cfg config.Config, parent *Source, specs map[string]config.MCPSe
 
 func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerSpec, workDir string, log *slog.Logger, opts []Option) *Source {
 	s := &Source{workDir: workDir, log: cmp.Or(log, slog.Default()), parent: parent, mode: cfg.MCPToolLoading,
-		budget: schemaBudget(cfg.MCPSchemaBytes),
-		inbox:  make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
+		budget: schemaBudget(cfg.MCPSchemaBytes), turnCalls: cfg.MCPTurnCalls,
+		responseBytes: positive(cfg.MCPResponseBytes, config.Defaults().MCPResponseBytes),
+		resultBytes:   positive(cfg.MCPResultBytes, config.Defaults().MCPResultBytes),
+		inbox:         make(chan msg), quit: make(chan struct{}), done: make(chan struct{}), ready: make(chan struct{})}
 	if parent != nil {
 		s.holdRetries = parent.holdRetries
 	}
@@ -220,11 +232,11 @@ func build(cfg config.Config, parent *Source, specs map[string]config.MCPServerS
 
 // dial connects to the server of spec and reads its tools. changed receives the client when the server says that
 // its tool list changed.
-func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.Client, changed func(*mcp.Client), discard func(*mcp.Client)) (*server, error) {
+func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.Client, responseBytes int, changed func(*mcp.Client), discard func(*mcp.Client)) (*server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
-	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: cmp.Or(spec.HTTPClient, hc)}
+	var tr mcp.Transport = &mcp.HTTPTransport{Endpoint: spec.URL, Headers: spec.Headers, Client: cmp.Or(spec.HTTPClient, hc), MaxResponseBytes: int64(responseBytes)}
 	if len(spec.Command) > 0 {
 		tr = &mcp.StdioTransport{Command: spec.Command, Env: spec.Env, Dir: spec.Dir}
 	}
@@ -475,6 +487,9 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	if !sv.has(r.name) {
 		return protocol.ToolResult{Text: "no such tool available: " + call.Name, IsError: true}, nil
 	}
+	if r.src.overTurnLimit(ctx) {
+		return protocol.ToolResult{Text: fmt.Sprintf("mcp: this turn reached the limit of %d MCP tool calls", r.src.turnCalls), IsError: true}, nil
+	}
 	var in any
 	if len(call.Arguments) > 0 {
 		if err := json.Unmarshal(call.Arguments, &in); err != nil {
@@ -493,7 +508,7 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 			}
 			return protocol.ToolResult{}, r.src.hide(r.server, err)
 		}
-		text, blobs := render(res.Content)
+		text, blobs := r.src.bound(render(res.Content))
 		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
 	})
 }
@@ -551,6 +566,8 @@ func reason(err error) string {
 		return "timed out"
 	case errors.Is(err, mcp.ErrRedirectRefused):
 		return "redirect refused"
+	case errors.Is(err, mcp.ErrResponseTooLarge):
+		return "response too large"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return "connection refused"
 	case errors.As(err, &oe):

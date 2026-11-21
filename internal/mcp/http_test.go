@@ -589,3 +589,33 @@ func TestHTTPCloseSessionDeleteBounded(t *testing.T) {
 		t.Fatal("Close did not return within its bounded deadline; a server that never answers the session DELETE wedged it forever")
 	}
 }
+
+func TestHTTPResponseOverTheBoundFailsBeforeDecoding(t *testing.T) {
+	huge := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"` + string(bytes.Repeat([]byte("x"), 4096)) + `","version":"1"}}}`
+	srv := fixedJSONResponseServer(t, huge)
+	for name, ctx := range map[string]context.Context{
+		"transport bound": context.Background(),
+		"context bound":   WithMaxResponse(context.Background(), 1024),
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := &HTTPTransport{Endpoint: srv.URL}
+			if name == "transport bound" {
+				tr.MaxResponseBytes = 1024
+			}
+			c, err := NewClient(tr, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Initialize(ctx); !errors.Is(err, ErrResponseTooLarge) {
+				t.Errorf("Initialize error = %v, want ErrResponseTooLarge", err)
+			}
+		})
+	}
+	c, err := NewClient(&HTTPTransport{Endpoint: srv.URL, MaxResponseBytes: 1 << 20}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Initialize(context.Background()); err != nil {
+		t.Errorf("Initialize under a larger bound: %v", err)
+	}
+}

@@ -179,6 +179,13 @@ type Config struct {
 	// input schema) of the MCP tools in the tools array. Zero or less is the
 	// default.
 	MCPSchemaBytes int `json:"mcp_schema_bytes,omitempty"`
+	// MCPResponseBytes bounds the body of each response of an HTTP MCP server. Zero or less is the default (1 MiB).
+	MCPResponseBytes int `json:"mcp_response_bytes,omitempty"`
+	// MCPResultBytes bounds the text and the blobs of one MCP tool result that the model reads. Zero or less is the
+	// default (256 KiB).
+	MCPResultBytes int `json:"mcp_result_bytes,omitempty"`
+	// MCPTurnCalls bounds the MCP tool calls of one turn. A call over the bound is an error result. Zero or less is no bound.
+	MCPTurnCalls int `json:"mcp_turn_calls,omitempty"`
 	// SubscriptionDefault lets an unset model resolve to the subscription of the user (see defaultModel). Only the
 	// composition root of a command that a person runs sets it. No file, variable, or flag does.
 	SubscriptionDefault bool `json:"-" env:"-"`

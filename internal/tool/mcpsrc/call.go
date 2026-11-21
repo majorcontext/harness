@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/toolresult"
@@ -59,7 +60,7 @@ func (s *Source) Call(ctx context.Context, server, tool string, args json.RawMes
 		if err != nil {
 			return protocol.ToolResult{}, s.hide(server, err)
 		}
-		text, blobs := render(res.Content)
+		text, blobs := s.bound(render(res.Content))
 		return protocol.ToolResult{Text: text, IsError: res.IsError, Blobs: blobs}, nil
 	})
 }
@@ -81,4 +82,35 @@ func (s *Source) redial(ctx context.Context, server string) error {
 		return fmt.Errorf("mcp: server %q is down: %s; parked until the mcp tool connects it", server, h.reason)
 	}
 	return fmt.Errorf("mcp: server %q is down: %s; retrying in the background", server, h.reason)
+}
+
+// overTurnLimit counts one MCP tool call of the turn under ctx and reports whether it passed the bound of the
+// Source. A call outside a turn is never over.
+func (s *Source) overTurnLimit(ctx context.Context) bool {
+	return s.turnCalls > 0 && turn.NextMCPCall(ctx) > s.turnCalls
+}
+
+// bound keeps the text and the blobs of one result within resultBytes. It cuts the text first, drops each blob that
+// does not fit, and ends the text with a line that says how many bytes it took out.
+func (s *Source) bound(text string, blobs []protocol.Blob) (string, []protocol.Blob) {
+	total := len(text)
+	for _, b := range blobs {
+		total += len(b.Data)
+	}
+	if total <= s.resultBytes {
+		return text, blobs
+	}
+	left := s.resultBytes
+	if len(text) > left {
+		text = strings.ToValidUTF8(text[:left], "")
+	}
+	left -= len(text)
+	var kept []protocol.Blob
+	for _, b := range blobs {
+		if len(b.Data) <= left {
+			kept = append(kept, b)
+			left -= len(b.Data)
+		}
+	}
+	return fmt.Sprintf("%s\n[mcp: result cut at %d bytes; %d bytes left out]", text, s.resultBytes, total-s.resultBytes+left), kept
 }
