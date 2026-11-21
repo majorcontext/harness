@@ -155,7 +155,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 	pins, _ := callRun(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
 		first := !t.a.pinned
 		t.a.pinned = true
-		placed := slices.Clone(ns)
+		placed := slices.DeleteFunc(slices.Clone(ns), func(n turn.Notice) bool { return n.Transient })
 		if len(placed) > 0 && placed[0].Kind == turn.BannerKind && placed[0].Text != "" && !t.a.pins.Has(turn.BannerKind) {
 			b := placed[0]
 			t.a.pins.Prepend(turn.Pin{Kind: b.Kind, Text: b.Text, At: b.At})
@@ -181,7 +181,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		if len(recorded) > 0 {
 			_ = t.a.append(recorded...)
 		}
-		reply(mergePins(pinned, t.r.placeContext(at)), nil)
+		reply(mergePins(mergePins(pinned, t.r.placeContext(at)), t.r.placeStatus(ns, at)), nil)
 	})
 	return pins
 }

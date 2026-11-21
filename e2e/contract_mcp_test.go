@@ -580,7 +580,7 @@ func pinPrefixRows() []scenario {
 			expectPrefixAfterCompaction{anthropic: anthropic},
 		}
 	}
-	cacheSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true})
+	cacheSetup := mcpSetup(map[string]any{"compaction_keep_turns": 1}, mcpServerDef{name: "weather", spec: mcpWeather("")})
 	return []scenario{
 		{name: "pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", prefixBreaks: compactionBreak(), setup: cacheSetup, model: cacheModel, actions: cacheActions(true)},
 		{name: "bifrost_pins_after_a_compaction_keep_each_request_a_prefix_of_the_next", prefixBreaks: compactionBreak(), chat: true, setup: cacheSetup, model: cacheModel, actions: cacheActions(false)},

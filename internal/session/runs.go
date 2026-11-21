@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"slices"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -42,6 +43,9 @@ type running struct {
 	// goroutine reads and writes them.
 	turnTexts []string
 	turnPins  []turn.Pin
+	// statusPins holds the transient notices that the model calls of the turn placed. A kind keeps the text and
+	// the place of its first call for the rest of the turn.
+	statusPins []turn.Pin
 }
 
 // takeContext moves the turn context of input id from the actor into r.
@@ -57,6 +61,20 @@ func (r *running) moveContext(n int) {
 	for i := range r.turnPins {
 		r.turnPins[i].At = n
 	}
+	for i := range r.statusPins {
+		r.statusPins[i].At = n
+	}
+}
+
+// placeStatus places each transient notice of ns that the turn has not placed yet after the first at messages and
+// returns every placed one as a pin.
+func (r *running) placeStatus(ns []turn.Notice, at int) []turn.Pin {
+	for _, n := range ns {
+		if n.Transient && n.Text != "" && !slices.ContainsFunc(r.statusPins, func(p turn.Pin) bool { return p.Kind == n.Kind }) {
+			r.statusPins = append(r.statusPins, turn.Pin{Kind: n.Kind, Text: n.Text, At: at})
+		}
+	}
+	return r.statusPins
 }
 
 // placeContext places the turn context that no model call placed after the

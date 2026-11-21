@@ -10,12 +10,10 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// The kinds of the notices of a Source. recovered is what the conversation says when the last server that
-// was down connects.
+// The kinds of the notices of a Source.
 const (
 	noticeKind = "mcp"
 	addedKind  = "mcp-set"
-	recovered  = "[mcp: every configured server is connected again.]"
 )
 
 const addedHeader = "[mcp: tools added after the first connect — %s. They are deferred: to use one you MUST first read its definition with " +

@@ -367,7 +367,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
 	}
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
-	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: recovered}, {Kind: addedKind, Text: v.added(ok, late)}}
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: addedKind, Text: v.added(ok, late)}}
 	return ts
 }
 
