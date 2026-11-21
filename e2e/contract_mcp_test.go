@@ -648,8 +648,8 @@ func TestContractMCPAvailability(t *testing.T) {
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"[mcp:"}}, expectSystem{req: 4, sameAs: 1}),
 		},
 		{
-			name:  "mcp_notice_and_history_prefix_stay_the_same_after_a_restart",
-			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true}),
+			name:  "mcp_banner_and_history_prefix_stay_the_same_after_a_restart",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
 			model: []harnesstest.Step{
 				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "1"}},
 				{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "2"}},
