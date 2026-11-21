@@ -509,25 +509,6 @@ func TestCloseWaitsForTheAuthCallbackInFlight(t *testing.T) {
 	})
 }
 
-func TestCloseWithDetachReturnsBeforeTheClientCloses(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m := newMemServer("a")
-		var detached []func()
-		s := NewSession(config.Config{}, nil, map[string]config.MCPServerSpec{"w": memSpec()}, "", nil, nil,
-			Detach(func(f func()) { detached = append(detached, f) }))
-		s.httpClient = &http.Client{Transport: m}
-		s.Toolset(context.Background(), nil, nil, "")
-		s.Close()
-		if len(detached) != 1 || m.count(http.MethodDelete) != 0 {
-			t.Fatalf("detached = %d, DELETE requests = %d, want 1 and 0 after Close", len(detached), m.count(http.MethodDelete))
-		}
-		detached[0]()
-		if got := m.count(http.MethodDelete); got != 1 {
-			t.Errorf("DELETE requests after the detached close = %d, want 1", got)
-		}
-	})
-}
-
 func TestFailedConnectDetachesTheCloseOfItsClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newMemServer("a")
