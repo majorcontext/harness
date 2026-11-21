@@ -29,7 +29,7 @@ func Warm(ctx context.Context, b Backend, req Request, src Source) error {
 	if err != nil {
 		return err
 	}
-	describe(&call, ts, nil, caps.OwnsLoop, tracing.Scope{})
+	describe(ctx, &call, ts, nil, caps.OwnsLoop, tracing.Scope{})
 	return b.(Warmer).Warm(ctx, call)
 }
 

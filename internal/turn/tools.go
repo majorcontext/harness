@@ -368,7 +368,7 @@ func toolsetOf(ctx context.Context, call *Request, src Source) Toolset {
 // describe sets the tools, prompt, and Call of call from ts, pins its notices and
 // banner through to, and returns the runner of its calls. all describes every
 // tool and pins nothing, for a backend that owns the loop; a nil to pins nothing.
-func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) runner {
+func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) runner {
 	deferred := ts.Deferred
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
@@ -390,7 +390,8 @@ func describe(call *Request, ts Toolset, to Turn, all bool, sc tracing.Scope) ru
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
-	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: call.mcpCalls}
+	calls, _ := ctx.Value(mcpCallsKey{}).(*atomic.Int64)
+	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: calls}
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

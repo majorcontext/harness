@@ -73,7 +73,6 @@ type Tool interface {
 // Request is one turn to run.
 type Request struct {
 	SessionID   string
-	mcpCalls    *atomic.Int64
 	TurnID      string
 	ResumeItems []protocol.LogMessage
 	Model       string
@@ -332,8 +331,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 			}
 			openStep = true
 		}
-		call.mcpCalls, _ = ctx.Value(mcpCallsKey{}).(*atomic.Int64)
-		t := describe(&call, ts, to, caps.OwnsLoop, lim.Trace.Scope(ctx))
+		t := describe(ctx, &call, ts, to, caps.OwnsLoop, lim.Trace.Scope(ctx))
 		bt := s.startEarly(ctx, step, t, caps.OwnsLoop)
 		err = callModel(step, b, call, s, lim, caps.OwnsLoop)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && s.fresh() && compactOverflow(step, to, &req) {
