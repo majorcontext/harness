@@ -125,6 +125,9 @@ type Request struct {
 	Foreign bool
 	// Compacted says that History is the view that a compaction left.
 	Compacted bool
+	// Kept is the number of leading History messages that the newest compaction left. A wire that binds
+	// reasoning to the content before it sends no reasoning for them. Zero: no compaction ran.
+	Kept int
 	// Banner is the engine status of the session. It comes from the log, so
 	// every process sends the same text. Empty: none.
 	Banner string
@@ -270,8 +273,8 @@ type Turn interface {
 	Settings() (string, protocol.Settings)
 	// Pin pins the changed notices after at messages and returns every pin.
 	Pin(ns []Notice, at int) []Pin
-	CompactTurn(ctx context.Context) (history []protocol.LogMessage, ok bool, err error)
-	AutoCompact(ctx context.Context) (history []protocol.LogMessage, ok bool, err error)
+	CompactTurn(ctx context.Context) (history []protocol.LogMessage, kept int, ok bool, err error)
+	AutoCompact(ctx context.Context) (history []protocol.LogMessage, kept int, ok bool, err error)
 	Ended(err error)
 }
 
@@ -408,22 +411,22 @@ func recordResult(to Turn, req *Request) func(protocol.ToolCall, protocol.ToolRe
 }
 
 func autoCompact(ctx context.Context, to Turn, req *Request) error {
-	h, ok, err := to.AutoCompact(ctx)
+	h, kept, ok, err := to.AutoCompact(ctx)
 	if err != nil {
 		return err
 	}
 	if ok {
-		req.History = h
+		req.History, req.Kept = h, kept
 	}
 	return nil
 }
 
 func compactOverflow(ctx context.Context, to Turn, req *Request) bool {
-	h, ok, err := to.CompactTurn(ctx)
+	h, kept, ok, err := to.CompactTurn(ctx)
 	if err != nil || !ok {
 		return false
 	}
-	req.History = h
+	req.History, req.Kept = h, kept
 	return true
 }
 

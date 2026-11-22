@@ -229,6 +229,25 @@ func (s *State) History() []protocol.LogMessage { return s.messages(false) }
 // conversation that the model reads.
 func (s *State) ModelHistory() []protocol.LogMessage { return s.messages(true) }
 
+// KeptLen returns the number of leading messages of ModelHistory that the
+// newest compaction left: the summary and each message that was recorded
+// before the compaction record. It is 0 when no compaction ran.
+func (s *State) KeptLen() int {
+	if s.compactedAt == 0 {
+		return 0
+	}
+	n := 1
+	for _, e := range s.history {
+		if e.seq > s.compactedAt {
+			break
+		}
+		if !e.readerOnly {
+			n++
+		}
+	}
+	return n
+}
+
 // SummaryBanner leads the summary that the model reads, so that the model does not take the
 // summary for text that the user typed. The record holds the plain summary.
 const SummaryBanner = "[compacted summary of earlier conversation]\n\n"
