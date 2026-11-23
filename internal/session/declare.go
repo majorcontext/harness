@@ -164,7 +164,10 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 	v.first = v.first && !readOnly
 	missing := false
 	if v.has && v.cached == nil {
-		d, err := a.readDeclaration(v.rec.BlobKey)
+		d, err := a.readDeclaration(ctx, v.rec.BlobKey)
+		if ctx.Err() != nil {
+			return declaration{}, false, false
+		}
 		if err != nil {
 			a.log().Warn("harness: the prefix declaration cannot be read; declaring again from live state", "session", a.cfg.ID, "blob", v.rec.BlobKey, "err", err)
 			missing = true
@@ -198,7 +201,7 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 		a.markChecked(ctx, v.first)
 		return current, v.rec.SearchAllowed, true
 	}
-	if err := a.cfg.Store.PutBlob(a.cfg.Base, key, bytes.NewReader(data)); err != nil {
+	if err := a.cfg.Store.PutBlob(ctx, key, bytes.NewReader(data)); err != nil {
 		a.log().Warn("harness: the prefix declaration blob cannot be written", "session", a.cfg.ID, "err", err)
 		return current, v.rec.SearchAllowed, usable
 	}
@@ -227,8 +230,8 @@ func (a *Actor) markChecked(ctx context.Context, first bool) {
 	}
 }
 
-func (a *Actor) readDeclaration(key string) (declaration, error) {
-	data, err := readBlob(a.cfg.Base, a.cfg.Store, key)
+func (a *Actor) readDeclaration(ctx context.Context, key string) (declaration, error) {
+	data, err := readBlob(ctx, a.cfg.Store, key)
 	if err != nil {
 		return declaration{}, err
 	}
