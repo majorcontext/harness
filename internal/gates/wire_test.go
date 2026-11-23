@@ -13,7 +13,7 @@ var recordings = map[string]struct {
 	wire  Wire
 	files []string
 }{
-	"anthropic":   {AnthropicWire, []string{"anthropic.text.sse", "anthropic.tool.sse", "anthropic.tool-result.sse", "anthropic.thinking.sse", "anthropic.websearch.sse", "anthropic.websearch-error.sse", "anthropic.websearch-pause.sse", "anthropic.error.json"}},
+	"anthropic":   {AnthropicWire, []string{"anthropic.text.sse", "anthropic.tool.sse", "anthropic.tool-result.sse", "anthropic.thinking.sse", "anthropic.websearch.sse", "anthropic.websearch-error.sse", "anthropic.websearch-pause.sse", "anthropic.error.json", "anthropic.prefix-baseline.sse", "anthropic.prefix-compacted.error.json", "anthropic.prefix-dropped.sse", "anthropic.prefix-changed.error.json"}},
 	"chat":        {ChatWire, []string{"chat.text.sse", "chat.tool.sse", "chat.tool-result.sse", "chat.error.json"}},
 	"responses":   {ResponsesWire, []string{"responses.text.sse", "responses.tool.sse", "responses.tool-result.sse", "responses.incomplete.sse", "responses.websearch.sse", "responses.error.json"}},
 	"codexmodels": {CodexModelsWire, []string{"codexmodels.catalog.json"}},
