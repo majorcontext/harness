@@ -575,6 +575,8 @@ func (s *State) step(env Envelope) error {
 		return s.applyPin(e)
 	case protocol.PrefixDeclared:
 		return s.applyDeclared(e)
+	case protocol.NestedCallRecorded:
+		return nil
 	}
 	return fmt.Errorf("%w: %T", ErrUnknownKind, env.Event)
 }

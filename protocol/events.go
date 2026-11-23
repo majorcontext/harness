@@ -172,6 +172,7 @@ const (
 	KindToolResultRetained = "tool_result.retained"
 	KindPinRecorded        = "pin.recorded"
 	KindPrefixDeclared     = "prefix.declared"
+	KindNestedCall         = "nested_call.recorded"
 )
 
 // Settings are the session settings other than the model.
@@ -504,6 +505,20 @@ type PrefixDeclared struct {
 	SearchAllowed bool   `json:"search_allowed,omitempty"`
 }
 
+// NestedCallBytes is the most bytes of result text that a NestedCallRecorded holds.
+const NestedCallBytes = 4096
+
+// NestedCallRecorded records one call that a script of the code tool made. CallID is the ID of the call to the
+// code tool, Arguments the JSON input of the nested call, and Text the first NestedCallBytes bytes of its result
+// text. It holds no blob and adds nothing to the history of the session.
+type NestedCallRecorded struct {
+	CallID    string          `json:"call_id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+	Text      string          `json:"text,omitempty"`
+}
+
 // PinRecorded records one pin, a segment of engine context that the model
 // reads after the first At messages of the history. The banner has no record.
 type PinRecorded struct {
@@ -589,6 +604,9 @@ func (BackendState) Kind() string { return KindBackendState }
 
 // Kind returns KindPinRecorded.
 func (PinRecorded) Kind() string { return KindPinRecorded }
+
+// Kind returns KindNestedCall.
+func (NestedCallRecorded) Kind() string { return KindNestedCall }
 
 // Kind returns KindPrefixDeclared.
 func (PrefixDeclared) Kind() string { return KindPrefixDeclared }

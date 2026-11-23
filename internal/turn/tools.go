@@ -429,6 +429,7 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 	}
 	calls, _ := ctx.Value(mcpCallsKey{}).(*atomic.Int64)
 	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: calls}
+	bindNested(&t, to)
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

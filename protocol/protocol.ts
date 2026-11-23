@@ -380,6 +380,14 @@ export interface Model {
   context_window: number;
 }
 
+export interface NestedCallRecorded {
+  call_id: string;
+  name: string;
+  arguments?: unknown;
+  is_error?: boolean;
+  text?: string;
+}
+
 export interface OperatorBatchEntry {
   id: string;
   text: string;

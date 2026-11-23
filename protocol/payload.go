@@ -44,6 +44,7 @@ var payloads = map[string]func() Payload{
 	KindToolResultRetained: func() Payload { return new(ToolResultRetained) },
 	KindPinRecorded:        func() Payload { return new(PinRecorded) },
 	KindPrefixDeclared:     func() Payload { return new(PrefixDeclared) },
+	KindNestedCall:         func() Payload { return new(NestedCallRecorded) },
 }
 
 // DurablePayloads returns a pointer to a zero payload of each durable kind, in kind order.

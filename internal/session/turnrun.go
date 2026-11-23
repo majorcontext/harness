@@ -51,6 +51,19 @@ func (t *turnRun) StepEnded(index int, reason string) error {
 	return err
 }
 
+// NestedCall records one call of a script of the code tool, with its result text masked and cut.
+func (t *turnRun) NestedCall(rec protocol.NestedCallRecorded) error {
+	rec.Text = toolresult.Cut(toolresult.Mask(rec.Text), protocol.NestedCallBytes)
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
+		if t.a.run != t.r {
+			reply(struct{}{}, ErrTurnMismatch)
+			return
+		}
+		reply(struct{}{}, t.a.append(rec))
+	})
+	return err
+}
+
 // Item records m under a new ID.
 func (t *turnRun) Item(m protocol.LogMessage) error { return t.ItemAs("", m) }
 
