@@ -443,6 +443,9 @@
           "max_steps": {
             "type": "integer"
           },
+          "code_mode": {
+            "type": "boolean"
+          },
           "system_blocks": {
             "items": {
               "type": "string"
@@ -1539,6 +1542,9 @@
           },
           "search_allowed": {
             "type": "boolean"
+          },
+          "code_mode": {
+            "type": "boolean"
           }
         },
         "type": "object",
@@ -2018,6 +2024,9 @@
           "service_tier": {
             "type": "string"
           },
+          "code_mode": {
+            "type": "boolean"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -2200,6 +2209,9 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "code_mode": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -2236,6 +2248,9 @@
           },
           "max_steps": {
             "type": "integer"
+          },
+          "code_mode": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -2259,6 +2274,9 @@
           },
           "title": {
             "type": "string"
+          },
+          "code_mode": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false,

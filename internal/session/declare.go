@@ -164,7 +164,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 			ts.Notices = replaceNotices(ts.Notices, notices)
 		}
 	}
-	return ts
+	return d.a.withCodeMode(ctx, ts, decl, live.Tools, len(history))
 }
 
 // withSystem sets the system prompt info on ts, and the skills notice that compares the newest list with the list of info.
@@ -285,7 +285,8 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 	search := false
 	_, err = call(ctx, a, func(reply func(struct{}, error)) {
 		search = a.searchAllowed()
-		err := a.append(protocol.PrefixDeclared{BlobKey: key, Bytes: len(data), Model: model, SearchAllowed: search})
+		err := a.append(protocol.PrefixDeclared{BlobKey: key, Bytes: len(data), Model: model, SearchAllowed: search,
+			CodeMode: a.state.Settings().CodeMode && holdsCode(live.Tools)})
 		if err == nil {
 			a.decl, a.declChecked = decodedDeclaration{key, live}, true
 		}

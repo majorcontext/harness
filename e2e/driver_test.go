@@ -24,6 +24,8 @@ type driver interface {
 	CreateMaxSteps(t *testing.T, n int) callResult
 	// CreateEffort creates a session that names effort and reports the response.
 	CreateEffort(t *testing.T, effort string) callResult
+	CreateCodeMode(t *testing.T) callResult
+	SetCodeMode(t *testing.T, id string, on bool) callResult
 	// PostInput admits an input with a new id and reports the receipt.
 	PostInput(t *testing.T, id, text string) callResult
 	// PostInputEffort admits an input with a new id, the delivery, and the effort, and reports the receipt.

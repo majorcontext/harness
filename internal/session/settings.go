@@ -41,6 +41,9 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	ch.Model = changed(ch.Model, prev)
 	ch.Effort = changed(ch.Effort, set.Effort)
 	ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
+	if ch.CodeMode != nil && *ch.CodeMode == set.CodeMode {
+		ch.CodeMode = nil
+	}
 	if ch.Accounts != nil && maps.Equal(*ch.Accounts, set.Accounts) {
 		ch.Accounts = nil
 	}
@@ -66,7 +69,7 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 			return a.appendCtx(ctx, before...)
 		}
 	}
-	hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil || ch.AllowedTools != nil || ch.MaxSteps != nil
+	hasSettings := ch.Model != nil || ch.Effort != nil || ch.ServiceTier != nil || ch.Accounts != nil || ch.AllowedTools != nil || ch.MaxSteps != nil || ch.CodeMode != nil
 	title = changed(title, a.state.Renamed())
 	if !hasSettings && title == nil {
 		if len(before) == 0 {

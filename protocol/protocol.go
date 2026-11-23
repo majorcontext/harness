@@ -29,6 +29,8 @@ type CreateSession struct {
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 	// MaxSteps caps the model requests of each turn. Zero is no cap; a negative value is invalid.
 	MaxSteps int `json:"max_steps,omitempty"`
+	// CodeMode starts the session in code mode. It is invalid_request while the runtime has no code tool.
+	CodeMode bool `json:"code_mode,omitempty"`
 	// SystemBlocks replaces the session prompt; nil uses defaults, empty clears it, and empty strings are invalid.
 	SystemBlocks []string `json:"system_blocks,omitzero"`
 	// SystemCacheBreakpoint selects a zero-based session system block on Anthropic; nil caches the last block, including MCP guidance.
@@ -149,6 +151,7 @@ type Session struct {
 	Title             string             `json:"title,omitempty"`
 	Effort            string             `json:"effort,omitempty"`
 	ServiceTier       string             `json:"service_tier,omitempty"`
+	CodeMode          bool               `json:"code_mode,omitempty"`
 	Status            Status             `json:"status"`
 	TurnID            string             `json:"turn_id,omitempty"`
 	Queued            []string           `json:"queued,omitempty"`
@@ -414,6 +417,8 @@ type SettingsPatch struct {
 	ServiceTier *string            `json:"service_tier,omitempty"`
 	Accounts    *map[string]string `json:"accounts,omitempty"`
 	Title       *string            `json:"title,omitempty"`
+	// CodeMode is invalid_request while the declaration of the session lacks the code tool.
+	CodeMode *bool `json:"code_mode,omitempty"`
 }
 
 // EventPage is one page of durable events. Next is the after of the next

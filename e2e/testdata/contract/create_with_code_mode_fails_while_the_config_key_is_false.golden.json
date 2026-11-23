@@ -1,0 +1,16 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create_code_mode": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "code_mode needs the code tool, which the code_mode config key gives"
+        }
+      }
+    }
+  }
+}

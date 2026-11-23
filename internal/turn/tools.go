@@ -58,6 +58,8 @@ type Toolset struct {
 	Resolver ToolResolver
 	// Hooks run around each tool call. nil: none.
 	Hooks Hooks
+	// CodeMode refuses a direct model call of a tool that only a script calls.
+	CodeMode bool
 }
 
 // MCPInstructions are the usage guidance of the MCP servers, for a backend
@@ -291,6 +293,8 @@ type runner struct {
 	locks *keyLocks
 	// nests names the tools that run nested calls.
 	nests map[string]bool
+	// codeMode refuses a direct call of a tool that only a script calls. A nested call runs on a runner with none.
+	codeMode bool
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
 	joinMu *sync.Mutex
@@ -304,6 +308,9 @@ type runner struct {
 
 func (t runner) run(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
 	tools, c := t.target(c)
+	if msg := refusedInCodeMode(c.Name); t.codeMode && msg != "" {
+		return protocol.ToolResult{Text: msg, IsError: true}
+	}
 	ctx, span := t.scope.Start(ctx, "execute_tool "+c.Name, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(
 		attribute.String("gen_ai.operation.name", "execute_tool"), attribute.String("gen_ai.tool.name", c.Name),
 		attribute.String("gen_ai.tool.call.id", c.ID), attribute.String("gen_ai.tool.type", "function")))
@@ -449,6 +456,7 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 		t.locks = newKeyLocks()
 	}
 	bindNested(&t, to)
+	t.codeMode = ts.CodeMode && !all
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)

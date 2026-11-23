@@ -40,6 +40,8 @@ First tagged release.
 
 ### Added
 
+- **Code mode setting** — `code_mode` in `CreateSession`, `SettingsPatch`, `settings.changed`, and the session view switches a session between calling tools directly and calling them through the `code` tool. A switch appends one `code-mode` notice at the next model call and changes no byte of the earlier request; a direct call of a tool that only a script calls is refused with an error result. Each `prefix.declared` record holds the mode as `code_mode`.
+
 - **code tool** (`config`, `internal/tool/codetool`, `internal/turn`, `protocol`) — with `code_mode` true, every session has a `code` tool that runs a Starlark script. The script calls the other tools as functions (`attempt`, `parallel`, `search_tools`, `describe_tool`, `json`), and the model reads only the printed output and the last value. Each nested call passes the allowed tools, the hooks, and the scheduler of its model call, and appends a `nested_call.recorded` event that no model reads. `turn` gains the optional `Nesting` interface of a tool. The WebAssembly module offers no `code`.
 
 - **Durable tool declaration** (`internal/session`, `internal/eventlog`, `protocol`, `docs/architecture.md`) — a session records its tools and its MCP prompt segment in a `prefix.declared` event and a blob, so a restart and a new owner send the same tools array and prompt segment, with a tool that was not declared deferred. The session declares again at a compaction between two turns, at a change of the model with other tools, and at the first call of a process when a declared tool has a changed input schema.
