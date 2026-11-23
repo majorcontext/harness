@@ -50,12 +50,23 @@ func (v view) unavailable() string {
 		". Tools from these servers are temporarily absent and may return later in this session.]"
 }
 
+// cleared is the text that replaces the down notice: allConnected once every server of the view is connected, and
+// "" while one is not, so that a server with no attempt yet leaves the recorded notice in place.
+func (v view) cleared() string {
+	for _, name := range v.names {
+		if !v.live[name].up() {
+			return ""
+		}
+	}
+	return allConnected
+}
+
 // added renders the notice of the live tools that the declaration lacks, with the instructions of a server that the
 // prompt does not hold, and the notice of the servers that went. undeclared tells the tools that the declaration
 // lacks, and inPrompt the servers whose instructions the prompt holds; nil: none. It is "" when there is nothing to
-// say, and gone names the servers that the declaration recorded as left, which the notice leaves out. The text
+// say, and gone lists the removals that the declaration recorded, which the notice leaves out; a server that was added again is a new one. The text
 // follows the live state, so a later model call renders it again.
-func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func(string) bool, gone []string) string {
+func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func(string) bool, gone []turn.Gone) string {
 	var servers, blocks []string
 	for _, name := range v.names {
 		var late []remote
@@ -82,7 +93,7 @@ func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func
 	if text := addedPlugins(late); text != "" {
 		out = append(out, text)
 	}
-	removed := slices.DeleteFunc(v.removedNames(), func(name string) bool { return slices.Contains(gone, name) })
+	removed := slices.DeleteFunc(v.removedNames(), func(name string) bool { return slices.Contains(gone, turn.Gone{Name: name, Gen: v.mem[name].gen}) })
 	if len(removed) > 0 {
 		out = append(out, "[mcp: removed — "+strings.Join(removed, ", ")+". The servers and their tools are gone, and a call to one of those tools fails.]")
 	}
@@ -96,6 +107,15 @@ func (v view) removedNames() []string {
 		if _, ok := v.health[name]; !ok && v.mem[name].up {
 			out = append(out, name)
 		}
+	}
+	return out
+}
+
+// gone lists the removed servers with their generation.
+func (v view) gone() []turn.Gone {
+	var out []turn.Gone
+	for _, name := range v.removedNames() {
+		out = append(out, turn.Gone{Name: name, Gen: v.mem[name].gen})
 	}
 	return out
 }

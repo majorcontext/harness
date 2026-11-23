@@ -20,6 +20,7 @@ var durableNoticeRows = map[string]runtimeRow{
 	"a_compaction_keeps_the_down_notice_while_the_server_is_down":                  sameAsServe(),
 	"a_compaction_drops_the_added_notice_that_the_new_declaration_states":          sameAsServe(),
 	"a_compaction_drops_the_removed_server_notice_that_the_declaration_made_stale": sameAsServe(),
+	"a_server_that_is_removed_again_after_a_declaration_is_named_again":            sameAsServe(),
 }
 
 // expectNoticeBlocks checks that request req holds n engine-context blocks that hold marker.
@@ -202,6 +203,25 @@ func TestContractDurableNoticesAfterACompaction(t *testing.T) {
 				expectNoticeBlocks{req: 4, marker: "[mcp: removed", n: 0},
 				expectNoticeBlocks{req: 5, marker: "[mcp: removed", n: 0},
 				expectExtends{req: 5, prev: 4},
+			},
+		},
+		{
+			name: "a_server_that_is_removed_again_after_a_declaration_is_named_again", prefixBreaks: compactionBreak(),
+			config: keepOne, setup: mcpSetup(nil, live, removedLive),
+			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3"), text("four", "four", "4"), text("five", "five", "5")},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				keepDocs,
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				putMCP{servers: []string{"weather", "docs"}}, awaitMCPConnected{put: putMCP{servers: []string{"weather", "docs"}}},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 5, marker: noticeAdded, n: 1},
+				keepDocs,
+				submit{as: "a", text: "five"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 6, marker: "[mcp: removed", n: 1},
 			},
 		},
 	})

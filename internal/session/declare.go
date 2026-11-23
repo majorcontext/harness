@@ -26,8 +26,8 @@ type declaration struct {
 	// Deferred names the tools that were live and deferred when the declaration was built.
 	Deferred []string `json:"deferred,omitempty"`
 	Prompt   string   `json:"prompt,omitempty"`
-	// Gone names the MCP servers that had left the live set when the declaration was built.
-	Gone []string `json:"gone,omitempty"`
+	// Gone lists the MCP servers that had left the live set when the declaration was built.
+	Gone []turn.Gone `json:"gone,omitempty"`
 	// System is the system prompt segments that come before Prompt. nil: the blob was written before a declaration
 	// held the system prompt.
 	System []string `json:"system"`
@@ -288,9 +288,6 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 		err := a.append(protocol.PrefixDeclared{BlobKey: key, Bytes: len(data), Model: model, SearchAllowed: search})
 		if err == nil {
 			a.decl, a.declChecked = decodedDeclaration{key, live}, true
-			if v.due {
-				a.pins.MarkOld()
-			}
 		}
 		reply(struct{}{}, err)
 	})

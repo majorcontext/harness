@@ -50,7 +50,7 @@ type Toolset struct {
 	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
 	MCPInstructions MCPInstructions
 	// Gone names the MCP servers that connected once and left the live set. A declaration records them.
-	Gone []string
+	Gone []Gone
 	// Notices are statuses that the model reads inside the conversation, and
 	// not in the system prompt, so that the system prompt stays stable.
 	Notices []Notice
@@ -90,12 +90,18 @@ type Notice struct {
 	Transient bool
 }
 
+// Gone is the removal of an MCP server. Gen tells a server that was added again from the one that left.
+type Gone struct {
+	Name string `json:"name"`
+	Gen  int    `json:"gen"`
+}
+
 // Declarable is a Tool that tells deferred tools from loaded ones. Declared returns the tool for a model call whose
 // tools array holds only the tools that holds accepts, whose declaration accounts for the tools that accounts accepts
 // (the tools array and the deferred tools that were live when the declaration was built), whose prompt segment is
-// prompt, and which recorded the servers in gone as left, and the notices that replace the notices of the same Kind.
+// prompt, and which recorded the removals in gone, and the notices that replace the notices of the same Kind.
 type Declarable interface {
-	Declared(holds, accounts func(name string) bool, prompt string, gone []string) (Tool, []Notice)
+	Declared(holds, accounts func(name string) bool, prompt string, gone []Gone) (Tool, []Notice)
 }
 
 // Hooks run around each tool call of a model call.

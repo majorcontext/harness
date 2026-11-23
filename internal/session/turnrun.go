@@ -217,11 +217,10 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		}
 		var recorded []protocol.Payload
 		for _, n := range placed {
-			if n.Declared && t.a.pins.Retire(n.Kind, n.Text) {
+			if n.Declared && t.a.pins.Retire(n.Kind, n.Text, t.a.state.PinOld(n.Kind)) {
 				recorded = append(recorded, protocol.PinRecorded{Notice: n.Kind})
 			}
 		}
-		t.a.pins.ClearOld()
 		known := len(t.a.pins.Pinned())
 		for i := range placed {
 			placed[i].At = cmp.Or(placed[i].At, at)

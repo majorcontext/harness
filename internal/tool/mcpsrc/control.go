@@ -88,7 +88,7 @@ func (c control) Spec() protocol.ToolSpec {
 // deferred when it was built. A declaration with no mcp tool gives the session no MCP notice, because the model
 // cannot use the mcp tool: the tools reach the session at its next declaration. prompt tells which servers have
 // their instructions in the prompt segment.
-func (c control) Declared(holds, accounts func(string) bool, prompt string, gone []string) (turn.Tool, []turn.Notice) {
+func (c control) Declared(holds, accounts func(string) bool, prompt string, gone []turn.Gone) (turn.Tool, []turn.Notice) {
 	if !holds(controlName) {
 		return c, []turn.Notice{{Kind: noticeKind}, {Kind: loadingKind, Transient: true}, {Kind: addedKind, Declared: true}}
 	}

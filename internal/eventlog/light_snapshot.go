@@ -44,7 +44,7 @@ type checkpointState struct {
 	Retained                                []protocol.ToolResultRetained
 	Declared                                protocol.PrefixDeclared
 	DeclaredSet, DeclareDue                 bool
-	Pins                                    []protocol.PinRecorded
+	Pins                                    []Pin
 	Commands                                map[string]checkpointCommand
 	History                                 []checkpointEntry
 	Stranded                                []checkpointEntry

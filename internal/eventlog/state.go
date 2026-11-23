@@ -159,7 +159,7 @@ type State struct {
 	declaredSet bool
 	declareDue  bool
 	// pins holds the recorded pins that a compaction has not retired.
-	pins     []protocol.PinRecorded
+	pins     []Pin
 	commands map[string]command
 	history  []entry
 	// folded holds the messages that readers see before the summary of the
@@ -439,7 +439,18 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 
 // Pins returns the pins that the log records, in the order the model reads
 // them.
-func (s *State) Pins() []protocol.PinRecorded { return slices.Clone(s.pins) }
+func (s *State) Pins() []Pin { return slices.Clone(s.pins) }
+
+// PinOld reports whether the newest pin of notice is older than a declaration
+// that followed a compaction, and no model call has ended since.
+func (s *State) PinOld(notice string) bool {
+	for _, p := range slices.Backward(s.pins) {
+		if p.Notice == notice {
+			return p.Old
+		}
+	}
+	return false
+}
 
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }
@@ -537,14 +548,19 @@ func (s *State) step(env Envelope) error {
 	case protocol.StepStarted:
 		return s.applyStepStarted(e)
 	case protocol.StepEnded:
+		s.setPinsOld(false)
 		return s.applyStepEnded(e)
 	case protocol.ItemCompleted:
+		if e.Message.Role == protocol.RoleAssistant {
+			s.setPinsOld(false)
+		}
 		return s.applyItem(e)
 	case protocol.TurnSuspended:
 		return s.applySuspended(e)
 	case protocol.TurnResumed:
 		return s.applyResumed(e)
 	case protocol.TurnEnded:
+		s.setPinsOld(false)
 		return s.applyEnded(e)
 	case protocol.RequestOpened:
 		return s.applyRequestOpened(e)

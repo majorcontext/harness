@@ -143,8 +143,9 @@ func (a *actor) add(name string, spec config.MCPServerSpec) *entry {
 	a.entries[name] = e
 	m := memory{loading: cmp.Or(spec.ToolLoading, a.s.mode, "auto"), sessionIDHeader: spec.IncludeSessionIDHeader && spec.URL != ""}
 	if old := a.mem[name]; old != nil {
-		m.up = old.up
+		m.up, m.gen = old.up, old.gen
 	}
+	m.gen++
 	a.mem[name] = &m
 	return e
 }
