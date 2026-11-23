@@ -169,6 +169,9 @@ func (s *script) exec(thread *starlark.Thread, src string, predeclared starlark.
 }
 
 func (s *script) encode(v starlark.Value) (string, error) {
+	if err := checkBounds(v); err != nil {
+		return "", err
+	}
 	enc := starjson.Module.Members["encode"]
 	r, err := starlark.Call(s.newThread("encode"), enc, starlark.Tuple{v}, nil)
 	if err != nil {
@@ -204,7 +207,7 @@ func (s *script) predeclared() starlark.StringDict {
 	d["search_tools"] = starlark.NewBuiltin("search_tools", s.searchTools)
 	d["describe_tool"] = starlark.NewBuiltin("describe_tool", s.describeTool)
 	d["json"] = &starlarkstruct.Module{Name: "json", Members: starlark.StringDict{
-		"encode": starjson.Module.Members["encode"], "decode": starjson.Module.Members["decode"]}}
+		"encode": starlark.NewBuiltin("json.encode", s.boundedEncode), "decode": starjson.Module.Members["decode"]}}
 	return d
 }
 
@@ -289,4 +292,13 @@ func (l *lane) call(c protocol.ToolCall) (protocol.ToolResult, error) {
 		return wait(), nil
 	}
 	return l.g.Submit(c)(), nil
+}
+
+func (s *script) boundedEncode(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if len(args) == 1 && len(kwargs) == 0 {
+		if err := checkBounds(args[0]); err != nil {
+			return nil, fmt.Errorf("json.encode: %w", err)
+		}
+	}
+	return starjson.Module.Members["encode"].(*starlark.Builtin).CallInternal(th, args, kwargs)
 }

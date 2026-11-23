@@ -56,7 +56,7 @@ Built-in tools:
 
 Functions of the script:
   attempt(tool, **kwargs) calls a tool, never stops the script, and returns a struct with ok (bool) and text (string). tool is a function or a tool name: attempt(bash, command="false").
-  parallel([f1, f2]) runs functions that take no argument at the same time, at most 8 at once, and returns their results in list order. Calls that touch one file still run in order. Do not change a value that two of the functions share.
+  parallel([f1, f2]) runs functions that take no argument at the same time, at most 8 at once, and returns their results in list order. Calls that touch one file still run in order. The functions share values that they capture, and those become read-only: a write to one fails.
   search_tools(query) returns the tools whose name or description matches, as a list of dicts with name and description.
   describe_tool(name) returns a dict with name, description, and input_schema. Use it for a tool that is not listed here, such as an MCP tool.
   json.encode(value), json.decode(text), and print(...).

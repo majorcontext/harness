@@ -41,10 +41,14 @@ func (s *script) attempt(th *starlark.Thread, b *starlark.Builtin, args starlark
 }
 
 func (s *script) parallel(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if th.Local("lane") != nil {
+		return nil, errors.New("parallel: a function that parallel runs cannot call parallel")
+	}
 	fns, err := functionsOf(b, args, kwargs)
 	if err != nil {
 		return nil, err
 	}
+	freezeShared(fns)
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	g := s.n.Group(ctx, s.parent)
@@ -109,6 +113,19 @@ start:
 		return nil, err
 	}
 	return starlark.NewList(results), nil
+}
+
+// freezeShared makes read-only the values that the functions capture and the globals of their module, so that
+// the functions read shared values at the same time and a write to one fails.
+func freezeShared(fns []starlark.Callable) {
+	for _, f := range fns {
+		f.Freeze()
+		if fn, ok := f.(*starlark.Function); ok {
+			for _, v := range fn.Globals() {
+				v.Freeze()
+			}
+		}
+	}
 }
 
 func functionsOf(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) ([]starlark.Callable, error) {
@@ -207,7 +224,57 @@ func (s *script) describeTool(th *starlark.Thread, b *starlark.Builtin, args sta
 	return d, nil
 }
 
+// Bounds of the conversion of a script value to JSON.
+const (
+	maxDepth = 64
+	maxNodes = 1 << 20
+)
+
+// walker converts or checks one value of a script. It refuses a cycle, a depth over maxDepth, and more than
+// maxNodes values, so a script cannot overflow the stack of the process.
+type walker struct {
+	nodes int
+	path  map[any]bool
+}
+
 func toGo(v starlark.Value) (any, error) {
+	w := walker{path: map[any]bool{}}
+	return w.convert(v, 0)
+}
+
+// checkBounds fails when v is a cycle or is nested or large beyond the bounds of the conversion.
+func checkBounds(v starlark.Value) error {
+	w := walker{path: map[any]bool{}}
+	_, err := w.visit(v, 0, false)
+	return err
+}
+
+func (w *walker) convert(v starlark.Value, depth int) (any, error) { return w.visit(v, depth, true) }
+
+func (w *walker) enter(v starlark.Value, depth int) (leave func(), err error) {
+	if depth > maxDepth {
+		return nil, fmt.Errorf("a value is nested deeper than %d levels", maxDepth)
+	}
+	if w.nodes++; w.nodes > maxNodes {
+		return nil, fmt.Errorf("a value holds more than %d items", maxNodes)
+	}
+	switch v.(type) {
+	case *starlark.List, *starlark.Dict, *starlarkstruct.Struct:
+		if w.path[v] {
+			return nil, errors.New("a value contains itself")
+		}
+		w.path[v] = true
+		return func() { delete(w.path, v) }, nil
+	}
+	return func() {}, nil
+}
+
+func (w *walker) visit(v starlark.Value, depth int, build bool) (any, error) {
+	leave, err := w.enter(v, depth)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	switch v := v.(type) {
 	case starlark.NoneType:
 		return nil, nil
@@ -224,31 +291,45 @@ func toGo(v starlark.Value) (any, error) {
 	case starlark.String:
 		return string(v), nil
 	case *starlark.List:
-		return seqToGo(v)
+		return w.seq(v, depth, build)
 	case starlark.Tuple:
-		return seqToGo(v)
+		return w.seq(v, depth, build)
 	case *starlark.Dict:
 		m := map[string]any{}
 		for _, kv := range v.Items() {
 			k, ok := kv[0].(starlark.String)
-			if !ok {
+			if !ok && build {
 				return nil, fmt.Errorf("a dict key is %s, want string", kv[0].Type())
 			}
-			x, err := toGo(kv[1])
+			x, err := w.visit(kv[1], depth+1, build)
 			if err != nil {
 				return nil, err
 			}
 			m[string(k)] = x
 		}
 		return m, nil
+	case *starlarkstruct.Struct:
+		if build {
+			break
+		}
+		for _, name := range v.AttrNames() {
+			x, _ := v.Attr(name)
+			if _, err := w.visit(x, depth+1, false); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+	if !build {
+		return nil, nil
 	}
 	return nil, fmt.Errorf("cannot pass a %s as JSON", v.Type())
 }
 
-func seqToGo(v starlark.Indexable) (any, error) {
+func (w *walker) seq(v starlark.Indexable, depth int, build bool) (any, error) {
 	out := make([]any, v.Len())
 	for i := range out {
-		x, err := toGo(v.Index(i))
+		x, err := w.visit(v.Index(i), depth+1, build)
 		if err != nil {
 			return nil, err
 		}

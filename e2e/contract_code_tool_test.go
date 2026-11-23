@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -24,8 +25,9 @@ func codeWith(extra map[string]any) map[string]any {
 
 // nestedRecords records the nested-call records of the session that the log holds, in order.
 type nestedRecords struct {
-	as   string
-	want int
+	as     string
+	want   int
+	hidden string // a value that no record may hold
 }
 
 func (a nestedRecords) run(t *testing.T, r *run) {
@@ -48,8 +50,12 @@ func (a nestedRecords) run(t *testing.T, r *run) {
 	if len(out) != a.want {
 		t.Fatalf("the log holds %d nested-call records, want %d: %+v", len(out), a.want, out)
 	}
+	raw := mustJSON(t, out)
+	if a.hidden != "" && strings.Contains(string(raw), a.hidden) {
+		t.Fatalf("a nested-call record holds %q: %s", a.hidden, raw)
+	}
 	var body any
-	if err := json.Unmarshal(mustJSON(t, out), &body); err != nil {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
 	r.record(t, "nested_calls", a.as, callResult{Status: 200, Body: body})
@@ -157,6 +163,52 @@ func TestContractCodeToolNested(t *testing.T) {
 	})
 }
 
+func TestContractCodeToolSafety(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:    "a_parallel_inside_a_parallel_function_fails",
+			config:  codeOn,
+			model:   toolChain(codeCall("parallel([lambda: parallel([lambda: ls()])])")),
+			actions: oneTurn,
+		},
+		{
+			name:   "a_cyclic_argument_fails_the_script_and_the_session_goes_on",
+			config: codeOn,
+			model: toolChain(codeCall("x = []\nx.append(x)\nattempt(\"ls\", path=x)"), codeCall("x = []\nx.append(x)\nx"),
+				codeCall("[1, 2]")),
+			actions: oneTurn,
+		},
+		{
+			name:   "parallel_functions_read_the_values_that_they_share",
+			config: codeOn,
+			model: toolChain(codeCall(`xs = list(range(1000))
+def total():
+    t = 0
+    for _ in range(50):
+        for x in xs:
+            t += x
+    return t
+parallel([total, total, total, total, total, total, total, total])`)),
+			actions: oneTurn,
+		},
+		{
+			name:    "a_parallel_function_cannot_change_a_value_that_it_shares",
+			config:  codeOn,
+			model:   toolChain(codeCall("xs = [1]\nparallel([lambda: xs.append(2)])")),
+			actions: oneTurn,
+		},
+		{
+			name:   "a_nested_call_records_its_arguments_with_secrets_masked",
+			config: codeOn,
+			model:  toolChain(codeCall("attempt(bash, command=\"echo TOKEN=abcdefgh1234\")")),
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				nestedRecords{as: "a", want: 1, hidden: "abcdefgh1234"},
+			},
+		},
+	})
+}
+
 func TestContractCodeToolLimits(t *testing.T) {
 	lazy := map[string]any{"mcp_tool_loading": "lazy"}
 	weather := mcpServerDef{name: "weather", spec: mcpWeather("")}
@@ -237,6 +289,11 @@ func TestCodeModeFalseChangesNoRequest(t *testing.T) {
 }
 
 var codeToolRows = map[string]runtimeRow{
+	"a_parallel_inside_a_parallel_function_fails":                                     sameAsServe(),
+	"a_cyclic_argument_fails_the_script_and_the_session_goes_on":                      sameAsServe(),
+	"parallel_functions_read_the_values_that_they_share":                              sameAsServe(),
+	"a_parallel_function_cannot_change_a_value_that_it_shares":                        sameAsServe(),
+	"a_nested_call_records_its_arguments_with_secrets_masked":                         sameAsServe(),
 	"code_mode_true_offers_the_code_tool_beside_the_other_tools":                      sameAsServe(),
 	"a_script_calls_two_tools_and_returns_a_filtered_result_in_one_model_round_trip":  sameAsServe(),
 	"a_tool_error_stops_the_script":                                                   sameAsServe(),
