@@ -43,6 +43,7 @@ func (a *Actor) codeMode(ctx context.Context) bool {
 // mode after the history. The mode holds only while the declaration and the live tools both hold the code tool.
 func (a *Actor) withCodeMode(ctx context.Context, ts turn.Toolset, decl declaration, live []protocol.ToolSpec, at int) turn.Toolset {
 	if !holdsCode(decl.Tools) {
+		ts.Notices = append(slices.Clone(ts.Notices), turn.NoCodeNotice(at))
 		return ts
 	}
 	ts.CodeMode = holdsCode(live) && a.codeMode(ctx)

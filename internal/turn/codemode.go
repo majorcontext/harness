@@ -15,6 +15,7 @@ var directInCodeMode = []string{CodeTool, "ask_user_question", "goal", "model", 
 const (
 	codeModeText   = "[mode: code. Call tools only through the code tool. The tools that earlier text names, except ask_user_question, goal, model, task, mcp, and read_tool_result, are functions of its script, and a direct call to one of them is refused.]"
 	normalModeText = "[mode: normal. Call the tools directly again. The code tool stays available.]"
+	noCodeText     = "[mode: normal. Call the tools directly again. The code tool is gone.]"
 )
 
 // CodeModeNotice returns the notice that states the mode that begins when the model reads it, for a request that
@@ -26,6 +27,12 @@ func CodeModeNotice(code bool, at int) Notice {
 		n.Text = codeModeText
 	}
 	return n
+}
+
+// NoCodeNotice returns the notice of a request whose declaration lacks the code tool. It speaks only after a
+// code-mode notice.
+func NoCodeNotice(at int) Notice {
+	return Notice{Kind: protocol.PinCodeMode, Cleared: noCodeText, At: at}
 }
 
 // refusedInCodeMode returns the error text of a direct call to the tool name in code mode, or "" when the model may

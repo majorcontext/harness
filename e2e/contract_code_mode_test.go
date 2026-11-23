@@ -138,6 +138,7 @@ var codeModeRows = map[string]runtimeRow{
 	"a_hidden_tool_called_directly_in_code_mode_is_refused_and_runs_from_a_script":      sameAsServe(),
 	"a_mode_switch_fails_while_the_declaration_lacks_code_and_works_after_a_compaction": sameAsServe(),
 	"create_with_code_mode_fails_while_the_config_key_is_false":                         sameAsServe(),
+	"a_declaration_without_code_after_a_code_mode_notice_states_that_the_tool_is_gone":  sameAsServe(),
 	"a_child_starts_in_the_mode_of_its_parent":                                          sameAsServe(),
 	"a_backend_that_owns_the_loop_ignores_the_mode":                                     sameAsServe(),
 }
@@ -261,6 +262,24 @@ func TestContractCodeModeDeclaration(t *testing.T) {
 
 func TestContractCodeModeEnforcement(t *testing.T) {
 	runScenarios(t, []scenario{
+		{
+			name:         "a_declaration_without_code_after_a_code_mode_notice_states_that_the_tool_is_gone",
+			prefixBreaks: prefixBreak("a model change declares the live tools, which lack the code tool", breakTools),
+			config:       codeOn,
+			model:        afterFirstTurn(ftRead(map[string]any{"path": "notes.txt"})),
+			actions: []action{
+				writeFile{path: "notes.txt", body: "needle in a haystack\n"},
+				createCode{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				writeFile{path: ".harness.json", body: `{"code_mode": false}`},
+				restart{},
+				setModel{as: "a", model: "anthropic/claude-opus-5"},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				expectTools{req: 1, has: []string{"code"}}, expectTools{req: 2, lacks: []string{"code"}},
+				expectModeNotices{req: 2, want: []string{modeCode, "The code tool is gone."}},
+				expectTools{req: 3, text: []string{"needle in a haystack"}},
+				expectNoText{req: 3, text: refusal},
+			},
+		},
 		{
 			name:   "a_hidden_tool_called_directly_in_code_mode_is_refused_and_runs_from_a_script",
 			config: codeOn,
