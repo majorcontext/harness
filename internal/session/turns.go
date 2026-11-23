@@ -139,30 +139,25 @@ func (a *Actor) modelRequest() turn.Request {
 	model := a.state.Model()
 	req := turn.Request{SessionID: a.cfg.ID, Model: model, Compacted: a.state.CompactionCount() > 0, Purpose: turn.PurposeTurn, Settings: a.state.TurnSettings(), SystemCacheBreakpoint: a.cfg.SystemCacheBreakpoint, SystemOverride: a.cfg.SystemOverride, Sent: a.cfg.Sent,
 		History: a.state.ModelHistory(), Kept: a.state.KeptLen(), AllowedTools: a.state.AllowedTools(), MaxSteps: a.state.MaxSteps(), MaxTokens: a.cfg.MaxTokens, WorkDir: a.state.WorkDir(), Blob: a.blob, Params: a.cfg.Params}
-	plain := !a.cfg.SystemOverride && a.cfg.SystemCacheBreakpoint == nil
-	if a.cfg.Backend.Capabilities(model).OwnsLoop {
-		info := a.livePrompt()
-		a.usePrompt(info)
-		req.Instructions, req.Skills = strings.Join(info.Segments, "\n\n"), info.SkillList
-		if !plain {
-			req.SystemBlocks = info.Segments
-		}
-	} else if !plain {
+	if a.cfg.SystemOverride || a.cfg.SystemCacheBreakpoint != nil {
 		req.SystemBlocks = []string{}
 	}
 	return req
 }
 
-// livePrompt returns the system prompt that the first caller of the process read. A backend that owns the loop and
-// a call with no declaration send it.
-func (a *Actor) livePrompt() prompt.Info {
+// livePrompt returns the system prompt that the first caller of the process read with a context that did not end. A
+// backend that owns the loop and a call with no declaration send it.
+func (a *Actor) livePrompt(ctx context.Context) prompt.Info {
 	a.startMu.Lock()
 	defer a.startMu.Unlock()
-	if a.started == nil {
-		info := a.readPrompt(a.cfg.Base)
+	if a.started != nil {
+		return *a.started
+	}
+	info := a.readPrompt(ctx)
+	if ctx.Err() == nil {
 		a.started = &info
 	}
-	return *a.started
+	return info
 }
 
 // readPrompt reads the system prompt as a new session would.

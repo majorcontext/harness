@@ -28,8 +28,11 @@ type Skills struct {
 	load    turn.Tool
 	log     *slog.Logger
 
-	mu  sync.Mutex
-	now []prompt.Embedded
+	mu sync.Mutex
+	// now is the newest list that a refresh read. Until a refresh succeeds, the list of the declaration stands in.
+	now       []prompt.Embedded
+	refreshed bool
+	declared  []prompt.Embedded
 }
 
 // NewSkills returns the tracker of a session.
@@ -48,7 +51,7 @@ func (s *Skills) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	if err != nil {
 		s.log.Warn("harness: embedded skills not listed", "session", s.session, "err", err)
 	} else {
-		s.now = prompt.ValidEmbedded(infos, nil)
+		s.now, s.refreshed = prompt.ValidEmbedded(infos, nil), true
 	}
 	return turn.Toolset{Tools: turn.Restrict([]turn.Tool{s.load}, allowed), Notices: []turn.Notice{{Kind: skillsKind, At: len(history)}}}
 }
@@ -58,6 +61,10 @@ func (s *Skills) Notice(declared []prompt.Embedded, at int) turn.Notice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := turn.Notice{Kind: skillsKind, At: at}
+	s.declared = declared
+	if !s.refreshed {
+		return n
+	}
 	update := prompt.EmbeddedUpdate(s.now, removed(declared, s.now))
 	if slices.Equal(s.now, declared) {
 		n.Cleared = update
@@ -82,10 +89,14 @@ func removed(declared, now []prompt.Embedded) []string {
 	return out
 }
 
-// Current returns the embedded skills of the newest list, sorted by name.
+// Current returns the embedded skills of the newest list, sorted by name. Before a refresh succeeds, it returns the
+// list of the declaration.
 func (s *Skills) Current() []prompt.Embedded {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.refreshed {
+		return slices.Clone(s.declared)
+	}
 	return slices.Clone(s.now)
 }
 

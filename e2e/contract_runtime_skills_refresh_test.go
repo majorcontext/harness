@@ -25,6 +25,8 @@ type editableSkills struct {
 	mu    sync.Mutex
 	infos []harness.SkillInfo
 	err   error
+	// failNext is the number of the next List calls that fail.
+	failNext int
 }
 
 func (e *editableSkills) set(err error, infos ...harness.SkillInfo) {
@@ -36,6 +38,10 @@ func (e *editableSkills) set(err error, infos ...harness.SkillInfo) {
 func (e *editableSkills) List(context.Context, string) ([]harness.SkillInfo, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.failNext > 0 {
+		e.failNext--
+		return nil, errors.New("database down")
+	}
 	return append([]harness.SkillInfo(nil), e.infos...), e.err
 }
 
@@ -130,6 +136,8 @@ func TestContractRuntimeSkillsRefresh(t *testing.T) {
 	t.Run("a_pin_stays_in_place_when_a_new_runtime_opens_the_session", rowAPinStaysInPlaceWhenANewRuntimeOpensTheSession)
 	t.Run("a_skill_added_after_a_reopen_and_an_mcp_notice_follow_the_new_input", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
 	t.Run("a_reopened_session_keeps_the_skills_of_its_declared_prompt_and_its_update", rowAReopenedSessionKeepsTheSkillsOfItsDeclaredPromptAndItsUpdate)
+	t.Run("a_failed_list_at_the_first_refresh_of_a_reopened_session_keeps_the_declared_skills", rowAFailedListAtTheFirstRefreshOfAReopenedSessionKeepsTheDeclaredSkills)
+	t.Run("a_failed_list_at_the_first_refresh_of_a_session_keeps_the_declared_skills", rowAFailedListAtTheFirstRefreshOfASessionKeepsTheDeclaredSkills)
 	t.Run("a_compaction_between_turns_lists_the_changed_skills_and_moves_the_update_baseline", rowACompactionBetweenTurnsListsTheChangedSkillsAndMovesTheUpdateBaseline)
 }
 
@@ -383,4 +391,51 @@ func requestTextOf(m harnesstest.Message) string {
 		b.WriteString(p.Text)
 	}
 	return b.String()
+}
+
+// loadRefunds scripts a turn that loads the refunds skill after one plain reply.
+func loadRefunds() []harnesstest.Step {
+	return append(okReplies(1), harnesstest.Step{Name: "load", Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "c1", Name: "load_skill", Input: map[string]any{"name": "refunds"}}}}},
+		harnesstest.Step{Name: "done", Reply: harnesstest.Reply{Text: "done"}})
+}
+
+func checkDeclaredSkillsKept(t *testing.T, reqs []harnesstest.Request) {
+	t.Helper()
+	for i, req := range reqs {
+		if updates(req) != 0 {
+			t.Errorf("request %d holds a skill update", i+1)
+		}
+	}
+	if got := requestText(reqs[len(reqs)-1]); !strings.Contains(got, "body of refunds") {
+		t.Errorf("the last request does not hold the loaded skill: %s", got)
+	}
+}
+
+func rowAFailedListAtTheFirstRefreshOfAReopenedSessionKeepsTheDeclaredSkills(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, nil, src, loadRefunds()...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	src.set(errors.New("database down"))
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "b", "load it")
+	checkDeclaredSkillsKept(t, fake.Requests())
+}
+
+func rowAFailedListAtTheFirstRefreshOfASessionKeepsTheDeclaredSkills(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{failNext: 1}
+	src.set(nil, skillRefunds)
+	r, fake := skillsAnthropicRuntime(t, nil, src, loadRefunds()[1:]...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "load it")
+	checkDeclaredSkillsKept(t, fake.Requests())
 }

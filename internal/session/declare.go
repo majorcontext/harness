@@ -121,8 +121,9 @@ type declared struct {
 // declared tools and prompt segment, with each live tool that the declaration lacks deferred.
 func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	ts := d.src.Toolset(ctx, history, allowed, model)
+	warm := turn.IsWarm(ctx)
 	if d.a.cfg.Backend.Capabilities(model).OwnsLoop {
-		return ts
+		return d.withSystem(ts, d.a.livePrompt(ctx), len(history), warm)
 	}
 	live := declaration{Tools: []protocol.ToolSpec{}, Prompt: ts.Prompt}
 	for _, t := range ts.Tools {
@@ -133,10 +134,9 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 			live.Deferred = append(live.Deferred, t.Spec().Name)
 		}
 	}
-	warm := turn.IsWarm(ctx)
 	decl, search, ok := d.a.declare(ctx, live, model, warm)
 	if !ok {
-		return d.withSystem(ts, d.a.livePrompt(), len(history), warm)
+		return d.withSystem(ts, d.a.livePrompt(ctx), len(history), warm)
 	}
 	ts = d.withSystem(ts, decl.info(), len(history), warm)
 	ts.Specs, ts.Prompt, ts.SearchAllowed = decl.Tools, decl.Prompt, &search
@@ -167,7 +167,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 
 // withSystem sets the system prompt info on ts, and the skills notice that compares the newest list with the list of info.
 func (d declared) withSystem(ts turn.Toolset, info prompt.Info, at int, warm bool) turn.Toolset {
-	ts.System = nonNil(info.Segments)
+	ts.System, ts.SkillList = nonNil(info.Segments), info.SkillList
 	if d.a.cfg.SkillsNotice != nil {
 		if n, ok := d.a.cfg.SkillsNotice(info.Embedded, at); ok {
 			ts.Notices = replaceNotices(ts.Notices, []turn.Notice{n})
@@ -260,7 +260,11 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 			return current, v.rec.SearchAllowed, true
 		}
 	}
-	live = live.withSystem(a.readPrompt(ctx))
+	info := a.readPrompt(ctx)
+	if ctx.Err() != nil {
+		return current, v.rec.SearchAllowed, usable
+	}
+	live = live.withSystem(info)
 	data, key, err := live.encode()
 	if err != nil {
 		if !a.oversized {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 	"github.com/majorcontext/harness/store"
@@ -219,5 +220,46 @@ func (n *normalizer) declaration(key string) string {
 func (n *normalizer) maskDeclaration(in, out map[string]any) {
 	if blob, _ := in["blob_key"].(string); strings.HasPrefix(blob, "prefix-") {
 		out["blob_key"], out["bytes"] = n.declaration(blob), "<bytes>"
+	}
+}
+
+// rowACacheBreakpointPastTheLastBlockOfANewDeclarationIsClamped creates a session whose cache breakpoint names the
+// instructions block, removes the instructions file, and runs a turn after a compaction between turns.
+func rowACacheBreakpointPastTheLastBlockOfANewDeclarationIsClamped(t *testing.T) {
+	fake := harnesstest.NewAnthropic(t,
+		harnesstest.Step{Name: "one", Match: harnesstest.LastUserText("one"), Reply: harnesstest.Reply{Text: "1"}},
+		harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+		harnesstest.Step{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "2"}},
+		harnesstest.Step{Name: "three", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{Text: "3"}})
+	work := runtimeWorkdir(t, map[string]string{"AGENTS.md": ruleOne})
+	r, err := newWired(t, harness.Options{Store: store.NewMemStore(), WorkDir: work, Getenv: func(string) string { return "k" }, Config: config.Config{
+		ContextWindowTokens: 100000,
+		Providers:           map[string]config.Provider{"anthropic": {BaseURL: fake.URL(), APIKeyEnv: "SKILLS_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	instructions := 2
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "anthropic/claude-sonnet-5-5", SystemCacheBreakpoint: &instructions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "a", "one")
+	sessionMCPTurn(t, s, "b", "two")
+	if err := os.Remove(filepath.Join(work, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	keep := 1
+	if _, err := s.Compact(t.Context(), protocol.Compact{KeepTurns: &keep}); err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	if len(reqs) != 4 {
+		t.Fatalf("model requests = %d, want 4: the turn after the new declaration sent no request", len(reqs))
+	}
+	last := reqs[len(reqs)-1]
+	if strings.Contains(last.System, "Rule one") || len(last.CacheBreakpoints) == 0 || last.CacheBreakpoints[0].Message != -1 {
+		t.Errorf("the request after the new declaration holds the removed file, or no system cache marker: %+v\n%s", last.CacheBreakpoints, last.System)
 	}
 }
