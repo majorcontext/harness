@@ -89,7 +89,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	if d.a.cfg.Backend.Capabilities(model).OwnsLoop {
 		return ts
 	}
-	live := declaration{Prompt: ts.Prompt}
+	live := declaration{Tools: []protocol.ToolSpec{}, Prompt: ts.Prompt}
 	for _, t := range ts.Tools {
 		live.Tools = append(live.Tools, t.Spec())
 	}
