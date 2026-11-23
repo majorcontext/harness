@@ -48,7 +48,9 @@ func (s *script) parallel(th *starlark.Thread, b *starlark.Builtin, args starlar
 	if err != nil {
 		return nil, err
 	}
-	freezeShared(fns)
+	if err := freezeShared(fns); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	g := s.n.Group(ctx, s.parent)
@@ -116,16 +118,25 @@ start:
 }
 
 // freezeShared makes read-only the values that the functions capture and the globals of their module, so that
-// the functions read shared values at the same time and a write to one fails.
-func freezeShared(fns []starlark.Callable) {
+// the functions read shared values at the same time and a write to one fails. It fails first when the
+// traversal of Freeze would pass maxFreezeCost, because Freeze cannot be canceled.
+func freezeShared(fns []starlark.Callable) error {
+	var roots []starlark.Value
 	for _, f := range fns {
-		f.Freeze()
+		roots = append(roots, f)
 		if fn, ok := f.(*starlark.Function); ok {
 			for _, v := range fn.Globals() {
-				v.Freeze()
+				roots = append(roots, v)
 			}
 		}
 	}
+	if freezeCost(roots) > maxFreezeCost {
+		return errors.New("parallel: the values that the functions share are too large to freeze (a value that contains itself, or nests a tuple or a function in itself)")
+	}
+	for _, v := range roots {
+		v.Freeze()
+	}
+	return nil
 }
 
 func functionsOf(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) ([]starlark.Callable, error) {

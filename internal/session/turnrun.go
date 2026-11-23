@@ -66,23 +66,28 @@ func maskArguments(raw json.RawMessage) json.RawMessage {
 	var out bytes.Buffer
 	enc := json.NewEncoder(&out)
 	enc.SetEscapeHTML(false)
-	if enc.Encode(maskStrings(v)) != nil {
+	if enc.Encode(maskStrings(v, false)) != nil {
 		return nil
 	}
 	return bytes.TrimSpace(out.Bytes())
 }
 
-func maskStrings(v any) any {
+// maskStrings masks each string of v as the result text is masked. A string under a key that names a secret, at
+// any depth, is replaced whole.
+func maskStrings(v any, secret bool) any {
 	switch v := v.(type) {
 	case string:
+		if secret {
+			return "***"
+		}
 		return toolresult.Mask(v)
 	case []any:
 		for i, x := range v {
-			v[i] = maskStrings(x)
+			v[i] = maskStrings(x, secret)
 		}
 	case map[string]any:
 		for k, x := range v {
-			v[k] = maskStrings(x)
+			v[k] = maskStrings(x, secret || toolresult.SecretKey(k))
 		}
 	}
 	return v

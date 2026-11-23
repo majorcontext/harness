@@ -27,7 +27,7 @@ func codeWith(extra map[string]any) map[string]any {
 type nestedRecords struct {
 	as     string
 	want   int
-	hidden string // a value that no record may hold
+	hidden string // a value that the arguments of no record may hold
 }
 
 func (a nestedRecords) run(t *testing.T, r *run) {
@@ -51,8 +51,10 @@ func (a nestedRecords) run(t *testing.T, r *run) {
 		t.Fatalf("the log holds %d nested-call records, want %d: %+v", len(out), a.want, out)
 	}
 	raw := mustJSON(t, out)
-	if a.hidden != "" && strings.Contains(string(raw), a.hidden) {
-		t.Fatalf("a nested-call record holds %q: %s", a.hidden, raw)
+	for _, rec := range out {
+		if a.hidden != "" && strings.Contains(string(rec.Arguments), a.hidden) {
+			t.Fatalf("the arguments of a nested-call record hold %q: %s", a.hidden, raw)
+		}
 	}
 	var body any
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -198,12 +200,25 @@ parallel([total, total, total, total, total, total, total, total])`)),
 			actions: oneTurn,
 		},
 		{
+			name:   "a_script_that_shares_an_exponential_tuple_fails_inside_its_wall_clock_and_the_session_goes_on",
+			config: codeOn,
+			model: toolChain(
+				codeCall("x = ()\nfor _ in range(60):\n    x = (x, x)\nparallel([lambda: 1])", "timeout_s", 20),
+				codeCall("x = ()\nfor _ in range(60):\n    x = (x, x)\nprint(x)", "timeout_s", 20),
+				codeCall("x = ()\nfor _ in range(60):\n    x = (x, x)\njson.encode(x)", "timeout_s", 20),
+				codeCall("x = ()\nfor _ in range(60):\n    x = (x, x)\nx", "timeout_s", 20),
+				codeCall("def f():\n    def g():\n        return g\n    return parallel([g])\nf()", "timeout_s", 20),
+				codeCall("[1]")),
+			actions: oneTurn,
+		},
+		{
 			name:   "a_nested_call_records_its_arguments_with_secrets_masked",
 			config: codeOn,
-			model:  toolChain(codeCall("attempt(bash, command=\"echo TOKEN=abcdefgh1234\")")),
+			model: toolChain(codeCall("attempt(bash, command=\"echo TOKEN=abcdefgh1234\")\n" +
+				"r = attempt(bash, command=\"echo zyxwvu''ts9876\")\nattempt(ls, path=\".\", api_key=r.text, nested={\"password\": [r.text]})")),
 			actions: []action{
 				create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"},
-				nestedRecords{as: "a", want: 1, hidden: "abcdefgh1234"},
+				nestedRecords{as: "a", want: 3, hidden: "zyxwvuts9876"},
 			},
 		},
 	})
@@ -289,25 +304,26 @@ func TestCodeModeFalseChangesNoRequest(t *testing.T) {
 }
 
 var codeToolRows = map[string]runtimeRow{
-	"a_parallel_inside_a_parallel_function_fails":                                     sameAsServe(),
-	"a_cyclic_argument_fails_the_script_and_the_session_goes_on":                      sameAsServe(),
-	"parallel_functions_read_the_values_that_they_share":                              sameAsServe(),
-	"a_parallel_function_cannot_change_a_value_that_it_shares":                        sameAsServe(),
-	"a_nested_call_records_its_arguments_with_secrets_masked":                         sameAsServe(),
-	"code_mode_true_offers_the_code_tool_beside_the_other_tools":                      sameAsServe(),
-	"a_script_calls_two_tools_and_returns_a_filtered_result_in_one_model_round_trip":  sameAsServe(),
-	"a_tool_error_stops_the_script":                                                   sameAsServe(),
-	"attempt_returns_the_error_and_the_script_goes_on":                                sameAsServe(),
-	"parallel_runs_calls_on_one_file_in_list_order_and_returns_results_in_list_order": sameAsServe(),
-	"parallel_overlaps_read_only_calls_and_keeps_list_order":                          sameAsServe(),
-	"a_nested_call_passes_the_before_hook_and_a_deny_becomes_the_error":               sameAsServe(),
-	"a_nested_call_refuses_a_tool_that_the_allowed_tools_leave_out":                   sameAsServe(),
-	"a_script_cannot_call_code_task_goal_model_mcp_or_ask_user_question":              sameAsServe(),
-	"a_script_that_names_task_directly_fails_with_an_undefined_name":                  sameAsServe(),
-	"each_nested_call_has_one_durable_record_that_the_next_request_does_not_hold":     sameAsServe(),
-	"interrupt_cancels_the_script_and_its_running_calls":                              sameAsServe(),
-	"a_script_over_its_wall_clock_fails_and_cancels_its_running_calls":                sameAsServe(),
-	"a_script_over_its_step_limit_fails":                                              sameAsServe(),
-	"a_deferred_mcp_tool_is_found_described_and_called_from_a_script":                 sameAsServe(),
-	"claudecode_bridge_describes_code_when_code_mode_is_true":                         sameAsServe(),
+	"a_script_that_shares_an_exponential_tuple_fails_inside_its_wall_clock_and_the_session_goes_on": sameAsServe(),
+	"a_parallel_inside_a_parallel_function_fails":                                                   sameAsServe(),
+	"a_cyclic_argument_fails_the_script_and_the_session_goes_on":                                    sameAsServe(),
+	"parallel_functions_read_the_values_that_they_share":                                            sameAsServe(),
+	"a_parallel_function_cannot_change_a_value_that_it_shares":                                      sameAsServe(),
+	"a_nested_call_records_its_arguments_with_secrets_masked":                                       sameAsServe(),
+	"code_mode_true_offers_the_code_tool_beside_the_other_tools":                                    sameAsServe(),
+	"a_script_calls_two_tools_and_returns_a_filtered_result_in_one_model_round_trip":                sameAsServe(),
+	"a_tool_error_stops_the_script":                                                                 sameAsServe(),
+	"attempt_returns_the_error_and_the_script_goes_on":                                              sameAsServe(),
+	"parallel_runs_calls_on_one_file_in_list_order_and_returns_results_in_list_order":               sameAsServe(),
+	"parallel_overlaps_read_only_calls_and_keeps_list_order":                                        sameAsServe(),
+	"a_nested_call_passes_the_before_hook_and_a_deny_becomes_the_error":                             sameAsServe(),
+	"a_nested_call_refuses_a_tool_that_the_allowed_tools_leave_out":                                 sameAsServe(),
+	"a_script_cannot_call_code_task_goal_model_mcp_or_ask_user_question":                            sameAsServe(),
+	"a_script_that_names_task_directly_fails_with_an_undefined_name":                                sameAsServe(),
+	"each_nested_call_has_one_durable_record_that_the_next_request_does_not_hold":                   sameAsServe(),
+	"interrupt_cancels_the_script_and_its_running_calls":                                            sameAsServe(),
+	"a_script_over_its_wall_clock_fails_and_cancels_its_running_calls":                              sameAsServe(),
+	"a_script_over_its_step_limit_fails":                                                            sameAsServe(),
+	"a_deferred_mcp_tool_is_found_described_and_called_from_a_script":                               sameAsServe(),
+	"claudecode_bridge_describes_code_when_code_mode_is_true":                                       sameAsServe(),
 }

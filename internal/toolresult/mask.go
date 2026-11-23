@@ -30,6 +30,12 @@ var secretPattern = sync.OnceValue(func() *regexp.Regexp {
 	)
 })
 
+var secretKeyPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)(` + secretKeys + `)`) })
+
+// SecretKey reports whether key names a secret by the key rules of Mask. The value under such a key is a
+// secret whatever its text.
+func SecretKey(key string) bool { return secretKeyPattern().MatchString(key) }
+
 var secretKeywords = []string{
 	"secret", "token", "password",
 	"api_key", "api-key", "apikey",

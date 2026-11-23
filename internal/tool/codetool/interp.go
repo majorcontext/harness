@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
@@ -55,7 +56,22 @@ func run(ctx context.Context, n turn.Nested, parent, src string) protocol.ToolRe
 	stop := context.AfterFunc(ctx, s.cancelAll)
 	defer stop()
 	predeclared := s.predeclared()
-	value, err := s.exec(thread, src, predeclared)
+	done := make(chan outcome, 1)
+	go func() {
+		v, err := s.exec(thread, src, predeclared)
+		done <- outcome{v, err}
+	}()
+	var o outcome
+	select {
+	case o = <-done:
+	case <-ctx.Done():
+		select {
+		case o = <-done:
+		case <-time.After(stopGrace):
+			return protocol.ToolResult{Text: join(s.output(), "The script did not stop after: "+context.Cause(ctx).Error()), IsError: true}
+		}
+	}
+	value, err := o.value, o.err
 	var final string
 	if err == nil && value != nil && value != starlark.None {
 		final, err = s.encode(value)
@@ -75,6 +91,15 @@ func run(ctx context.Context, n turn.Nested, parent, src string) protocol.ToolRe
 		res.Text = "(the script printed nothing and ended with no value)"
 	}
 	return res
+}
+
+// stopGrace is how long run waits for a canceled script to return. A script that is inside one operation of
+// the interpreter that checks no cancellation is left behind.
+const stopGrace = 5 * time.Second
+
+type outcome struct {
+	value starlark.Value
+	err   error
 }
 
 func join(a, b string) string {
@@ -202,6 +227,9 @@ func (s *script) predeclared() starlark.StringDict {
 			d[spec.Name] = starlark.NewBuiltin(spec.Name, s.toolFn(spec.Name))
 		}
 	}
+	for _, name := range []string{"print", "str", "repr"} {
+		d[name] = boundedUniverse(name)
+	}
 	d["attempt"] = starlark.NewBuiltin("attempt", s.attempt)
 	d["parallel"] = starlark.NewBuiltin("parallel", s.parallel)
 	d["search_tools"] = starlark.NewBuiltin("search_tools", s.searchTools)
@@ -301,4 +329,18 @@ func (s *script) boundedEncode(th *starlark.Thread, b *starlark.Builtin, args st
 		}
 	}
 	return starjson.Module.Members["encode"].(*starlark.Builtin).CallInternal(th, args, kwargs)
+}
+
+// boundedUniverse wraps a builtin that renders its arguments as text, so that a value whose text is larger than
+// the bounds of the conversion fails before the interpreter builds it.
+func boundedUniverse(name string) *starlark.Builtin {
+	inner := starlark.Universe[name].(*starlark.Builtin)
+	return starlark.NewBuiltin(name, func(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		for _, a := range args {
+			if err := checkBounds(a); err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+		}
+		return inner.CallInternal(th, args, kwargs)
+	})
 }
