@@ -162,9 +162,9 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 	return nil
 }
 
-// Pin is a recorded pin. Old is true from a declaration after a compaction
-// between turns until the model call of that declaration ends, so that only
-// that call retires a pin.
+// Pin is a recorded pin. Old is true from a declaration until a model step
+// completes an assistant item, so that only the call of the declaration
+// retires a pin.
 type Pin struct {
 	protocol.PinRecorded
 	Old bool
@@ -199,9 +199,7 @@ func (s *State) applyDeclared(e protocol.PrefixDeclared) error {
 	if e.BlobKey == "" || e.Model == "" {
 		return illegal("prefix.declared needs a blob key and a model")
 	}
-	if s.declareDue {
-		s.setPinsOld(true)
-	}
+	s.setPinsOld(true)
 	s.declared, s.declaredSet, s.declareDue = e, true, false
 	return nil
 }

@@ -514,27 +514,31 @@ func TestRecordedPinsKeepTheirPlaceUntilACompactionMovesTheNewestOfEachKind(t *t
 	}
 }
 
-func TestADeclarationAfterACompactionMarksTheHeldPinsUntilAModelCallEnds(t *testing.T) {
-	declared := protocol.PrefixDeclared{BlobKey: "k", Bytes: 1, Model: "anthropic/m"}
-	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), end("t1", protocol.StopCompleted, ""), declared,
-		protocol.PinRecorded{Notice: "mcp-set", Text: "added", At: 1},
-		says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), end("t2", protocol.StopCompleted, ""),
-		protocol.CompactionApplied{FromSeq: 1, ToSeq: 9, Summary: "sum"})
+func TestADeclarationMarksTheHeldPinsUntilAModelStepCompletesAnAssistantItem(t *testing.T) {
+	declared := protocol.PrefixDeclared{BlobKey: "k2", Bytes: 1, Model: "anthropic/m"}
+	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), end("t1", protocol.StopCompleted, ""),
+		protocol.PrefixDeclared{BlobKey: "k", Bytes: 1, Model: "anthropic/m"}, protocol.PinRecorded{Notice: "mcp-set", Text: "added", At: 1})
 	if replay(t, events).PinOld("mcp-set") {
-		t.Fatal("a compaction alone marks the pin")
+		t.Fatal("a recorded pin is marked before a declaration")
 	}
-	s := replay(t, with(events, protocol.PrefixDeclared{BlobKey: "k2", Bytes: 1, Model: "anthropic/m"}))
+	s := replay(t, with(events, declared))
 	if !s.PinOld("mcp-set") {
-		t.Fatal("the declaration after a compaction does not mark the pin")
+		t.Fatal("a declaration with no compaction does not mark the pin")
 	}
-	back := loadState(saveState(*s))
-	if !back.PinOld("mcp-set") {
+	if back := loadState(saveState(*s)); !back.PinOld("mcp-set") {
 		t.Fatal("a checkpoint loses the mark")
 	}
-	s = replay(t, with(events, protocol.PrefixDeclared{BlobKey: "k2", Bytes: 1, Model: "anthropic/m"},
-		says("c", protocol.DeliveryQueue, "three"), start("t3", "c"), end("t3", protocol.StopCompleted, "")))
-	if s.PinOld("mcp-set") {
-		t.Fatal("the mark outlives the turn")
+	cut := with(events, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.StepStarted{TurnID: "t2", Index: 0}, declared,
+		protocol.StepEnded{TurnID: "t2", Index: 0},
+		protocol.ItemCompleted{ItemID: "m", TurnID: "t2", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "restart"}}}},
+		end("t2", protocol.StopInterrupted, protocol.CauseCrashed))
+	if !replay(t, cut).PinOld("mcp-set") {
+		t.Fatal("the close of a cut turn ends the mark before a model call")
+	}
+	step := with(cut, says("c", protocol.DeliveryQueue, "three"), start("t3", "c"), protocol.StepStarted{TurnID: "t3", Index: 0},
+		protocol.ItemCompleted{ItemID: "r", TurnID: "t3", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "ok"}}}})
+	if replay(t, step).PinOld("mcp-set") {
+		t.Fatal("the mark outlives a completed model step")
 	}
 }
 

@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ var durableNoticeRows = map[string]runtimeRow{
 	"a_compaction_keeps_the_down_notice_while_the_server_is_down":                  sameAsServe(),
 	"a_compaction_drops_the_added_notice_that_the_new_declaration_states":          sameAsServe(),
 	"a_compaction_drops_the_removed_server_notice_that_the_declaration_made_stale": sameAsServe(),
+	"a_declaration_without_a_compaction_retires_the_added_notice_that_it_states":   sameAsServe(),
 	"a_declaration_with_no_mcp_surface_retires_the_recorded_down_notice":           sameAsServe(),
 	"a_server_that_is_removed_again_after_a_restart_is_named_again":                sameAsServe(),
 	"a_server_that_is_removed_again_after_a_declaration_is_named_again":            sameAsServe(),
@@ -269,6 +271,29 @@ func TestContractDurableNoticesAfterARemoval(t *testing.T) {
 				restart{},
 				submit{as: "a", text: "four"}, waitIdle{as: "a"},
 				expectNoticeBlocks{req: 5, marker: "[mcp:", n: 0},
+			},
+		},
+	})
+}
+
+func TestContractDurableNoticesAfterADeclaration(t *testing.T) {
+	text := replyTo
+	changed := []harnesstest.MCPTool{{Name: "forecast", Description: forecastFirst, InputSchema: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"},"days":{"type":"integer"}}}`), Result: mcpText("Oslo: 3C, snow")}, weatherAlerts}
+	runScenarios(t, []scenario{
+		{
+			name: "a_declaration_without_a_compaction_retires_the_added_notice_that_it_states", prefixBreaks: prefixBreak("a changed input schema declares the live tools and retires the notice that the declaration states", breakTools, breakHistory),
+			setup: mcpSetup(nil, liveWeather),
+			model: append(append([]harnesstest.Step{text("one", "one", "1")}, callForecast("two", "toolu_2", "2")...), text("three", "three", "3")),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				changeMCPTools{server: "weather", tools: changed},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 3, marker: noticeAdded, n: 1},
+				restart{},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectTools{req: 4, has: []string{"mcp__weather__alerts"}},
+				expectNoticeBlocks{req: 4, marker: noticeAdded, n: 0},
 			},
 		},
 	})

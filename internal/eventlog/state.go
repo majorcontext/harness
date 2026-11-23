@@ -441,8 +441,8 @@ func (s *State) BackendState(backend string) (BackendChain, bool) {
 // them.
 func (s *State) Pins() []Pin { return slices.Clone(s.pins) }
 
-// PinOld reports whether the newest pin of notice is older than a declaration
-// that followed a compaction, and no model call has ended since.
+// PinOld reports whether the newest pin of notice is older than the newest
+// declaration, and no model step has completed an assistant item since.
 func (s *State) PinOld(notice string) bool {
 	for _, p := range slices.Backward(s.pins) {
 		if p.Notice == notice {
@@ -548,10 +548,9 @@ func (s *State) step(env Envelope) error {
 	case protocol.StepStarted:
 		return s.applyStepStarted(e)
 	case protocol.StepEnded:
-		s.setPinsOld(false)
 		return s.applyStepEnded(e)
 	case protocol.ItemCompleted:
-		if e.Message.Role == protocol.RoleAssistant {
+		if e.Message.Role == protocol.RoleAssistant && s.turn.StepOpen {
 			s.setPinsOld(false)
 		}
 		return s.applyItem(e)
@@ -560,7 +559,6 @@ func (s *State) step(env Envelope) error {
 	case protocol.TurnResumed:
 		return s.applyResumed(e)
 	case protocol.TurnEnded:
-		s.setPinsOld(false)
 		return s.applyEnded(e)
 	case protocol.RequestOpened:
 		return s.applyRequestOpened(e)

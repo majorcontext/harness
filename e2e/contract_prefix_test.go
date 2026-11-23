@@ -298,7 +298,7 @@ func TestContractDeclaredPrefixAtOtherChanges(t *testing.T) {
 	first, weather, text := forecastFirst, declaredWeather, replyTo
 	runScenarios(t, []scenario{
 		{
-			name: "a_model_change_declares_the_tools_of_the_new_model", prefixBreaks: prefixBreak("a model change declares the live tools", breakTools),
+			name: "a_model_change_declares_the_tools_of_the_new_model", prefixBreaks: prefixBreak("a model change declares the live tools, and the declaration retires the added notice that it states", breakTools, breakHistory),
 			setup: mcpSetup(nil, liveWeather),
 			model: append(append([]harnesstest.Step{text("one", "one", "1")}, callForecast("two", "toolu_2", "2")...), text("three", "three", "3")),
 			actions: []action{
