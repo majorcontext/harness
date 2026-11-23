@@ -987,7 +987,8 @@
               "kind": "tool_use",
               "tool_name": "code",
               "tool_input": {
-                "script": "[1]"
+                "script": "x = []\nfor _ in range(2000000):\n    x = [x]\nparallel([lambda: 1])",
+                "timeout_s": 20
               },
               "tool_use_id": "toolu#7"
             }
@@ -998,9 +999,251 @@
           "parts": [
             {
               "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:3:10: in \u003ctoplevel\u003e\nError: Starlark computation cancelled: too many steps",
+              "tool_name": "code",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "code",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "x = ()\nfor _ in range(60):\n    x = (x, x)\nparallel([lambda: 1])",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:4:9: in \u003ctoplevel\u003e\nError in parallel: parallel: the values that the functions share are too large to freeze (a value that contains itself, or nests a tuple or a function in itself)",
+              "tool_name": "code",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "x = ()\nfor _ in range(60):\n    x = (x, x)\nprint(x)",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:4:6: in \u003ctoplevel\u003e\nError in print: print: a value holds more than 1048576 items",
+              "tool_name": "code",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "x = ()\nfor _ in range(60):\n    x = (x, x)\njson.encode(x)",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:4:12: in \u003ctoplevel\u003e\nError in json.encode: json.encode: a value holds more than 1048576 items",
+              "tool_name": "code",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "x = ()\nfor _ in range(60):\n    x = (x, x)\nx",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a value holds more than 1048576 items",
+              "tool_name": "code",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "def f():\n    def g():\n        return g\n    return parallel([g])\nf()",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:5:2: in \u003ctoplevel\u003e\n  script:4:20: in f\nError in parallel: parallel: the values that the functions share are too large to freeze (a value that contains itself, or nests a tuple or a function in itself)",
+              "tool_name": "code",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "def outer():\n    def g():\n        return g\n    return [g].append\nparallel([outer()])",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:5:9: in \u003ctoplevel\u003e\nError in parallel: parallel: the values that the functions share are too large to freeze (a value that contains itself, or nests a tuple or a function in itself)",
+              "tool_name": "code",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "x = []\nfor _ in range(2000000):\n    x = [x]\nparallel([lambda: 1])",
+                "timeout_s": 20
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Traceback (most recent call last):\n  script:3:10: in \u003ctoplevel\u003e\nError: Starlark computation cancelled: too many steps",
+              "tool_name": "code",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "[1]"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
               "text": "[1]",
               "tool_name": "code",
-              "tool_use_id": "toolu#7"
+              "tool_use_id": "toolu#8"
             }
           ]
         }
@@ -1190,7 +1433,8 @@
             "call_id": "toolu#7",
             "name": "code",
             "arguments": {
-              "script": "[1]"
+              "script": "x = []\nfor _ in range(2000000):\n    x = [x]\nparallel([lambda: 1])",
+              "timeout_s": 20
             }
           }
         ]
@@ -1202,12 +1446,38 @@
           {
             "type": "tool_result",
             "call_id": "toolu#7",
-            "content": "[1]"
+            "is_error": true,
+            "content": "Traceback (most recent call last):\n  script:3:10: in \u003ctoplevel\u003e\nError: Starlark computation cancelled: too many steps"
           }
         ]
       },
       {
         "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "code",
+            "arguments": {
+              "script": "[1]"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "content": "[1]"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
         "role": "assistant",
         "parts": [
           {

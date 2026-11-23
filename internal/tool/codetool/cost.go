@@ -9,6 +9,9 @@ import (
 // and of a function every time it reaches them, so a shared tuple tree is exponential in its depth.
 const maxFreezeCost = 1 << 24
 
+// maxFreezeDepth is the deepest nesting that the measure and Freeze walk. Both recurse on the Go stack.
+const maxFreezeDepth = 100000
+
 type tupleKey struct {
 	first *starlark.Value
 	n     int
@@ -21,6 +24,7 @@ type coster struct {
 	once   map[any]bool
 	memo   map[any]uint64
 	onPath map[*starlark.Function]bool
+	depth  int
 }
 
 // freezeCost returns the number of visits that freezing roots makes, or maxFreezeCost+1 when it is more.
@@ -48,6 +52,11 @@ func (c *coster) sum(vs func(yield func(starlark.Value) bool)) uint64 {
 }
 
 func (c *coster) cost(v starlark.Value) uint64 {
+	if c.depth++; c.depth > maxFreezeDepth {
+		c.depth--
+		return maxFreezeCost + 1
+	}
+	defer func() { c.depth-- }()
 	switch v := v.(type) {
 	case starlark.Tuple:
 		if len(v) == 0 {
@@ -66,55 +75,8 @@ func (c *coster) cost(v starlark.Value) uint64 {
 		})
 		c.memo[key] = n
 		return n
-	case *starlark.List:
-		if c.once[v] {
-			return 1
-		}
-		c.once[v] = true
-		return c.sum(func(yield func(starlark.Value) bool) {
-			for i := range v.Len() {
-				if !yield(v.Index(i)) {
-					return
-				}
-			}
-		})
-	case *starlark.Dict:
-		if c.once[v] {
-			return 1
-		}
-		c.once[v] = true
-		return c.sum(func(yield func(starlark.Value) bool) {
-			for _, kv := range v.Items() {
-				if !yield(kv[0]) || !yield(kv[1]) {
-					return
-				}
-			}
-		})
-	case *starlark.Set:
-		if c.once[v] {
-			return 1
-		}
-		c.once[v] = true
-		return c.sum(func(yield func(starlark.Value) bool) {
-			for x := range v.Elements() {
-				if !yield(x) {
-					return
-				}
-			}
-		})
-	case *starlarkstruct.Struct:
-		if c.once[v] {
-			return 1
-		}
-		c.once[v] = true
-		return c.sum(func(yield func(starlark.Value) bool) {
-			for _, name := range v.AttrNames() {
-				x, _ := v.Attr(name)
-				if !yield(x) {
-					return
-				}
-			}
-		})
+	case *starlark.List, *starlark.Dict, *starlark.Set, *starlarkstruct.Struct:
+		return c.container(v)
 	case *starlark.Function:
 		return c.function(v)
 	case *starlark.Builtin:
@@ -123,6 +85,50 @@ func (c *coster) cost(v starlark.Value) uint64 {
 			return 1
 		}
 		return c.sum(func(yield func(starlark.Value) bool) { yield(r) })
+	}
+	return 1
+}
+
+// container costs a value that freezes once: one visit after the first reach.
+func (c *coster) container(v starlark.Value) uint64 {
+	if c.once[v] {
+		return 1
+	}
+	c.once[v] = true
+	switch v := v.(type) {
+	case *starlark.List:
+		return c.sum(func(yield func(starlark.Value) bool) {
+			for i := range v.Len() {
+				if !yield(v.Index(i)) {
+					return
+				}
+			}
+		})
+	case *starlark.Dict:
+		return c.sum(func(yield func(starlark.Value) bool) {
+			for _, kv := range v.Items() {
+				if !yield(kv[0]) || !yield(kv[1]) {
+					return
+				}
+			}
+		})
+	case *starlark.Set:
+		return c.sum(func(yield func(starlark.Value) bool) {
+			for x := range v.Elements() {
+				if !yield(x) {
+					return
+				}
+			}
+		})
+	case *starlarkstruct.Struct:
+		return c.sum(func(yield func(starlark.Value) bool) {
+			for _, name := range v.AttrNames() {
+				x, _ := v.Attr(name)
+				if !yield(x) {
+					return
+				}
+			}
+		})
 	}
 	return 1
 }
