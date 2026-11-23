@@ -28,10 +28,11 @@ type wireRequest struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
 	Tools []struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		InputSchema json.RawMessage `json:"input_schema"`
+		Type         string          `json:"type"`
+		Name         string          `json:"name"`
+		Description  string          `json:"description"`
+		InputSchema  json.RawMessage `json:"input_schema"`
+		DeferLoading bool            `json:"defer_loading"`
 	} `json:"tools"`
 }
 
@@ -47,7 +48,11 @@ type wireBlock struct {
 	ToolUseID    string          `json:"tool_use_id"`
 	Content      json.RawMessage `json:"content"`
 	IsError      bool            `json:"is_error"`
-	Source       struct {
+	Tool         struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	} `json:"tool"`
+	Source struct {
 		Type      string `json:"type"`
 		URL       string `json:"url"`
 		MediaType string `json:"media_type"`
@@ -64,17 +69,9 @@ func decodeRequest(body []byte) (Request, error) {
 		System: joinText(w.System), Model: w.Model, MaxTokens: w.MaxTokens, ServiceTier: w.ServiceTier,
 		Effort: w.OutputConfig.Effort, ThinkingType: w.Thinking.Type, ThinkingBudget: w.Thinking.BudgetTokens, Temperature: w.Temperature, TopP: w.TopP,
 	}
-	for _, t := range w.Tools {
-		req.Tools = append(req.Tools, t.Name)
-		if t.Description == "" && len(t.InputSchema) == 0 {
-			continue
-		}
-		if req.ToolSpecs == nil {
-			req.ToolSpecs = map[string]ToolSpec{}
-		}
-		req.ToolSpecs[t.Name] = ToolSpec{Description: t.Description, InputSchema: t.InputSchema}
+	if err := w.decodeTools(&req); err != nil {
+		return Request{}, err
 	}
-	sort.Strings(req.Tools)
 
 	for i, b := range blocks(w.System) {
 		if len(b.CacheControl) > 0 {
@@ -96,6 +93,11 @@ func decodeRequest(body []byte) (Request, error) {
 				leading = false
 			}
 			switch b.Type {
+			case "tool_removal", "tool_addition":
+				if m.Role != "system" || b.Tool.Type != "tool_reference" || !slices.Contains(req.Tools, b.Tool.Name) {
+					return Request{}, fmt.Errorf("%s block of %q in a %s message does not name a declared tool by reference", b.Type, b.Tool.Name, m.Role)
+				}
+				msg.Parts = append(msg.Parts, Part{Kind: b.Type, ToolName: b.Tool.Name})
 			case "text":
 				msg.Parts = append(msg.Parts, Part{Kind: "text", Text: b.Text})
 			case "thinking":
@@ -135,6 +137,54 @@ func decodeRequest(body []byte) (Request, error) {
 		return Request{}, fmt.Errorf("%d tool_use blocks have no tool_result message", len(pending))
 	}
 	return req, nil
+}
+
+// toolChangeBeta is the beta header that a request needs for a deferred tool or a tool change message.
+const toolChangeBeta = "mid-conversation-tool-changes-2026-07-01"
+
+// checkToolChanges applies the rules of the API to the tool changes of req: the beta header, and the place of a removal, which sits immediately before an assistant message or is last.
+func checkToolChanges(req Request) error {
+	changes := len(req.DeferredTools) > 0
+	for i, m := range req.Messages {
+		if m.Role != "system" {
+			continue
+		}
+		changes = true
+		removes := slices.ContainsFunc(m.Parts, func(p Part) bool { return p.Kind == "tool_removal" })
+		if removes && i != len(req.Messages)-1 && req.Messages[i+1].Role != "assistant" {
+			return fmt.Errorf("a tool_removal message is followed by a %s message, not an assistant message or the end", req.Messages[i+1].Role)
+		}
+	}
+	if changes && !strings.Contains(req.Header.Get("Anthropic-Beta"), toolChangeBeta) {
+		return fmt.Errorf("the request defers tools or changes them in the conversation without the %s beta header", toolChangeBeta)
+	}
+	return nil
+}
+
+// decodeTools fills the tool fields of req from the tools of w.
+func (w wireRequest) decodeTools(req *Request) error {
+	plain := 0
+	for _, t := range w.Tools {
+		req.Tools = append(req.Tools, t.Name)
+		if t.DeferLoading {
+			req.DeferredTools = append(req.DeferredTools, t.Name)
+		} else {
+			plain++
+		}
+		if t.Description == "" && len(t.InputSchema) == 0 {
+			continue
+		}
+		if req.ToolSpecs == nil {
+			req.ToolSpecs = map[string]ToolSpec{}
+		}
+		req.ToolSpecs[t.Name] = ToolSpec{Description: t.Description, InputSchema: t.InputSchema}
+	}
+	sort.Strings(req.Tools)
+	sort.Strings(req.DeferredTools)
+	if len(req.DeferredTools) > 0 && plain == 0 {
+		return fmt.Errorf("every tool carries defer_loading, so no tool is plain")
+	}
+	return nil
 }
 
 // sourceURI is the URL of an image or document block, or the data URI of its bytes.

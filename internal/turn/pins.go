@@ -50,10 +50,11 @@ func (p *Pins) Has(kind string) bool {
 }
 
 // Set makes a pin of kind after the first at messages of the history when
-// text differs from the newest pin of kind. An empty text makes a pin of
-// cleared instead, once, after a pin that had text.
-func (p *Pins) Set(kind, text, cleared string, at int) {
-	var last string
+// text differs from the newest pin of kind, or from initial when no pin of
+// kind exists. An empty text makes a pin of cleared instead, once, after a pin
+// that had text.
+func (p *Pins) Set(kind, text, cleared, initial string, at int) {
+	last := initial
 	for _, q := range slices.Backward(p.pins) {
 		if q.Kind == kind {
 			last = q.Text

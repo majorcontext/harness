@@ -22,14 +22,18 @@ type ToolDef struct {
 	Name        string
 	Description string
 	InputSchema json.RawMessage // JSON Schema
+	// Deferred hides the tool from the model until a tool change adds it.
+	Deferred bool
 }
 
 // Request is one model call. System and Messages are canonical; the adapter
 // owns all wire-format concerns, including prompt-cache markers (injected at
 // transcode time, never stored).
 type Request struct {
-	Model  modelref.ModelRef
-	System []string // system prompt segments, in order
+	// ToolChange says that the session may change tools inside the conversation, so the request carries the beta from its first call.
+	ToolChange bool
+	Model      modelref.ModelRef
+	System     []string // system prompt segments, in order
 	// SystemCacheBreakpoint selects one system block; nil uses the last block.
 	SystemCacheBreakpoint *int
 	Messages              []message.Message

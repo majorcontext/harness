@@ -58,6 +58,9 @@ type Capabilities struct {
 	// session of that backend may allow only these and the embedder tools.
 	Tools     []string
 	WebSearch bool // the backend offers the native web search of the provider
+	// ToolChange says that the backend changes the visible tools inside the conversation: it defers the tools that the
+	// base mode hides, and renders a mode change as the removal and addition of tools.
+	ToolChange bool
 }
 
 // WebSearchTool is the name of the native web search in AllowedTools.
@@ -133,6 +136,8 @@ type Request struct {
 	Banner string
 	// BannerAt is the number of messages of the history that the banner follows.
 	BannerAt int
+	// BaseCodeMode is the base mode of the declaration that Tools come from.
+	BaseCodeMode bool
 	// Pins is a copy of the engine context that the model reads inside the conversation.
 	Pins []Pin
 	// WorkDir is the directory that holds the attachments that no provider takes. Empty: the session has none.

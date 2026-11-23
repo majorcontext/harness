@@ -227,7 +227,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		}
 		slices.SortStableFunc(placed, func(x, y turn.Notice) int { return cmp.Compare(x.At, y.At) })
 		for _, n := range placed {
-			t.a.pins.Set(n.Kind, n.Text, n.Cleared, n.At)
+			t.a.pins.Set(n.Kind, n.Text, n.Cleared, n.Initial, n.At)
 		}
 		pinned := t.a.pins.Pinned()
 		for _, p := range pinned[known:] {

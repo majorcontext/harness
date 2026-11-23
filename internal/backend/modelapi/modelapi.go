@@ -64,7 +64,7 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 		return turn.Capabilities{}
 	}
 	control, _ := b.effortControl(ref)
-	caps := turn.Capabilities{Efforts: control.Levels, WebSearch: b.nativeSearch(ref.Model)}
+	caps := turn.Capabilities{Efforts: control.Levels, WebSearch: b.nativeSearch(ref.Model), ToolChange: b.toolChange(ref.Model)}
 	if b.window > 0 {
 		caps.ContextWindow = b.window
 		return caps
@@ -90,6 +90,17 @@ type cacheTTLSource interface {
 func (b *Backend) nativeSearch(model string) bool {
 	w, ok := b.client.(provider.WebSearcher)
 	return ok && w.NativeWebSearch(model)
+}
+
+// toolChangeSource is a provider client that changes the visible tools inside a conversation.
+type toolChangeSource interface {
+	ToolChange(model string) bool
+}
+
+// toolChange reports whether the client changes the visible tools inside a conversation for model.
+func (b *Backend) toolChange(model string) bool {
+	s, ok := b.client.(toolChangeSource)
+	return ok && s.ToolChange(model)
 }
 
 // effortSource is a provider client that knows the effort control of its models.
@@ -293,20 +304,38 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 		}
 	}
 	kept := req.Kept
-	for i, p := range req.Pins {
-		pin := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: p.Text}}}
-		msgs = slices.Insert(msgs, min(p.At, len(req.History))+i, pin)
-		if p.At < req.Kept {
-			kept++
+	changes := b.toolChange(ref.Model)
+	mode := req.BaseCodeMode
+	inserted := 0
+	for _, p := range req.Pins {
+		pins := []message.Part{&message.EngineContext{Text: p.Text}}
+		if code, ok := turn.PinnedMode(p); ok && changes {
+			change := modeChange(req.Tools, mode, code)
+			mode = code
+			pins = pins[:0]
+			if change != nil {
+				pins = append(pins, change)
+			}
+			if turn.NoCodePin(p) {
+				pins = append(pins, &message.EngineContext{Text: p.Text})
+			}
+		}
+		for _, part := range pins {
+			msgs = slices.Insert(msgs, min(p.At, len(req.History))+inserted, message.Message{Role: message.RoleUser, Parts: message.Parts{part}})
+			inserted++
+			if p.At < req.Kept {
+				kept++
+			}
 		}
 	}
 	tools := make([]provider.ToolDef, len(req.Tools))
+	toolChange := changes && slices.ContainsFunc(req.Tools, func(t protocol.ToolSpec) bool { return t.Name == turn.CodeTool })
 	for i, t := range req.Tools {
-		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, Deferred: changes && req.BaseCodeMode && turn.HiddenInCodeMode(t.Name)}
 	}
 	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ThinksByDefault: control.ThinksByDefault, OffThinking: control.OffThinking, ServiceTier: req.Settings.ServiceTier,
 		SessionKey: req.SessionID, WebSearch: req.WebSearch && b.nativeSearch(ref.Model),
-		Temperature: req.Temperature, TopP: req.TopP, OneShot: req.Purpose != turn.PurposeTurn, Kept: kept}
+		Temperature: req.Temperature, TopP: req.TopP, OneShot: req.Purpose != turn.PurposeTurn, Kept: kept, ToolChange: toolChange}
 	preq.System, preq.SystemCacheBreakpoint = slices.Clone(req.SystemBlocks), req.SystemCacheBreakpoint
 	if req.SystemBlocks == nil && req.Instructions != "" {
 		preq.System = []string{req.Instructions}
@@ -349,4 +378,27 @@ func classify(err error) error {
 		return fmt.Errorf("%w: %w", turn.ErrRetryable, err)
 	}
 	return err
+}
+
+// modeChange returns the tool change from the mode from to the mode to over tools, or nil when no tool changes. Code
+// mode hides the tools that turn.HiddenInCodeMode names.
+func modeChange(tools []protocol.ToolSpec, from, to bool) *message.ToolChange {
+	if from == to {
+		return nil
+	}
+	c := &message.ToolChange{}
+	for _, t := range tools {
+		if !turn.HiddenInCodeMode(t.Name) {
+			continue
+		}
+		if to {
+			c.Removed = append(c.Removed, t.Name)
+		} else {
+			c.Added = append(c.Added, t.Name)
+		}
+	}
+	if c.Removed == nil && c.Added == nil {
+		return nil
+	}
+	return c
 }

@@ -507,6 +507,7 @@ export interface Provider {
   use_websocket_transport?: boolean;
   cache_ttl?: string;
   cache_final_message?: boolean;
+  tool_changes?: boolean;
   models?: string[];
   binary_path?: string;
   extra_args?: string[];

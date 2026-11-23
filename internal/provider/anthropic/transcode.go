@@ -48,6 +48,8 @@ type apiRequest struct {
 	Thinking    *apiThinking `json:"thinking,omitempty"`
 	// OutputConfig carries the effort of a model that takes the level as a field.
 	OutputConfig *apiOutputConfig `json:"output_config,omitempty"`
+	// toolChange marks a request that defers a tool or carries a tool-change message, which needs the beta header.
+	toolChange bool
 }
 
 type apiOutputConfig struct {
@@ -149,7 +151,15 @@ type apiBlock struct {
 	// ResultContent is the content of a web_search_tool_result block, which the API issued and a request sends back unchanged.
 	ResultContent json.RawMessage `json:"-"`
 
+	// Tool is the tool that a tool_removal or tool_addition block names by reference.
+	Tool *apiToolRef `json:"tool,omitempty"`
+
 	CacheControl *apiCacheControl `json:"cache_control,omitempty"`
+}
+
+type apiToolRef struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 type apiSource struct {
@@ -167,6 +177,7 @@ type apiToolDef struct {
 	Name           string          `json:"name"`
 	Description    string          `json:"description,omitempty"`
 	InputSchema    json.RawMessage `json:"input_schema,omitempty"`
+	DeferLoading   bool            `json:"defer_loading,omitempty"`
 }
 
 // apiCacheControl marks a prompt-cache breakpoint. TTL is the cache lifetime:
@@ -271,6 +282,7 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		Stream:      true,
+		toolChange:  req.ToolChange,
 	}
 
 	// Extended thinking: a non-off effort level enables a thinking block with a
@@ -339,7 +351,8 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 	}
 
 	for _, t := range req.Tools {
-		out.Tools = append(out.Tools, apiToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+		out.Tools = append(out.Tools, apiToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, DeferLoading: t.Deferred})
+		out.toolChange = out.toolChange || t.Deferred
 	}
 	if req.WebSearch {
 		out.Tools = append(out.Tools, webSearchTool())
@@ -360,7 +373,21 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 	// mechanism and the additive/transcode-only split.
 	messages := imageclamp.Clamp(message.NormalizeForWire(unboundKept(req.Messages, req.Kept)), imageLimits)
 
+	// A removal sits immediately before an assistant message or last, so a tool-change message waits until
+	// the user messages that follow it have merged, and then goes before the next assistant message.
+	var change []apiBlock
+	flush := func() {
+		if change != nil {
+			out.Messages = append(out.Messages, apiMessage{Role: "system", Content: change})
+			change = nil
+		}
+	}
 	add := func(m *message.Message) error {
+		if blocks, ok := toolChangeBlocks(m); ok {
+			out.toolChange = out.toolChange || len(blocks) > 0
+			change = append(change, blocks...)
+			return nil
+		}
 		role := "user"
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
@@ -373,6 +400,9 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 			// A message can transcode to nothing — e.g. an assistant turn
 			// whose only content was another provider's reasoning.
 			return nil
+		}
+		if role == "assistant" {
+			flush()
 		}
 		// The API requires strict user/assistant alternation; merge
 		// adjacent same-role messages.
@@ -391,8 +421,13 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 	if len(out.Messages) == 0 {
 		return nil, fmt.Errorf("anthropic: request has no transcodable messages")
 	}
+	flush()
 	if cacheFinalMessage {
-		last := &out.Messages[len(out.Messages)-1]
+		i := len(out.Messages) - 1
+		for i > 0 && out.Messages[i].Role == "system" {
+			i--
+		}
+		last := &out.Messages[i]
 		last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
 	}
 
@@ -585,4 +620,24 @@ func transcodeBlob(b *message.Blob) (apiBlock, error) {
 		MediaType: b.MediaType,
 		Data:      base64.StdEncoding.EncodeToString(b.Data),
 	}}, nil
+}
+
+// toolChangeBlocks returns the removal blocks and then the addition blocks of a message that holds only a ToolChange
+// part, and false for any other message.
+func toolChangeBlocks(m *message.Message) ([]apiBlock, bool) {
+	if len(m.Parts) != 1 {
+		return nil, false
+	}
+	tc, ok := m.Parts[0].(*message.ToolChange)
+	if !ok {
+		return nil, false
+	}
+	var blocks []apiBlock
+	for _, name := range tc.Removed {
+		blocks = append(blocks, apiBlock{Type: "tool_removal", Tool: &apiToolRef{Type: "tool_reference", Name: name}})
+	}
+	for _, name := range tc.Added {
+		blocks = append(blocks, apiBlock{Type: "tool_addition", Tool: &apiToolRef{Type: "tool_reference", Name: name}})
+	}
+	return blocks, true
 }

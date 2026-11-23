@@ -39,14 +39,30 @@ func (a *Actor) codeMode(ctx context.Context) bool {
 	return on
 }
 
+// baseCodeMode returns the base mode of the newest declaration.
+func (a *Actor) baseCodeMode(ctx context.Context) bool {
+	on, _ := call(ctx, a, func(reply func(bool, error)) {
+		rec, _ := a.state.Declared()
+		reply(rec.CodeMode, nil)
+	})
+	return on
+}
+
 // withCodeMode sets the code mode of a model call on ts: the refusal of a direct call, and the notice that states the
-// mode after the history. The mode holds only while the declaration and the live tools both hold the code tool.
-func (a *Actor) withCodeMode(ctx context.Context, ts turn.Toolset, decl declaration, live []protocol.ToolSpec, at int) turn.Toolset {
+// mode after the history. The mode holds only while the declaration and the live tools both hold the code tool. A
+// backend that changes tools inside the conversation reads the base mode from the tools array, so its notice speaks only
+// when the mode differs from it.
+func (a *Actor) withCodeMode(ctx context.Context, ts turn.Toolset, decl declaration, live []protocol.ToolSpec, at int, model string) turn.Toolset {
 	if !holdsCode(decl.Tools) {
 		ts.Notices = append(slices.Clone(ts.Notices), turn.NoCodeNotice(at))
 		return ts
 	}
 	ts.CodeMode = holdsCode(live) && a.codeMode(ctx)
-	ts.Notices = append(slices.Clone(ts.Notices), turn.CodeModeNotice(ts.CodeMode, at))
+	notice := turn.CodeModeNotice(ts.CodeMode, at)
+	if a.cfg.Backend.Capabilities(model).ToolChange {
+		ts.BaseCode = a.baseCodeMode(ctx)
+		notice = turn.ChangeNotice(ts.CodeMode, ts.BaseCode, at)
+	}
+	ts.Notices = append(slices.Clone(ts.Notices), notice)
 	return ts
 }

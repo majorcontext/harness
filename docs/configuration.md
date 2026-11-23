@@ -40,6 +40,8 @@ The native `anthropic` provider accepts `cache_ttl`: `"5m"` or `"1h"` (default `
 
 A project value overrides the user value, including false; an absent key keeps the user value. Both keys are valid only on the native Anthropic entry (the `anthropic` key with no `type`). A non-boolean `cache_final_message` is invalid. This control does not change the cache policy of Claude Code or other adapters. Go embedders use `config.Provider.CacheTTL` and `CacheFinalMessage`; see [embedding](embedding.md#per-session-system-blocks).
 
+The native `anthropic` entry also accepts `tool_changes` (boolean). It lets a session hide tools in code mode with `defer_loading` and change them inside the conversation by reference, which needs the `mid-conversation-tool-changes-2026-07-01` beta and one of the models that take it. The default is true when the entry sets no `base_url` and false for any other base URL, because a gateway may not pass the beta. Set it to true for a gateway that passes the beta, or to false to turn it off. Without it, code mode states the mode in a message and every tool stays in the tools array.
+
 ## Default model
 
 `model` sets the default model. When no config, `HARNESS_MODEL`, or `-model` sets one, `harness run` and `harness acp` choose the first match:

@@ -163,6 +163,8 @@ type Provider struct {
 	CacheTTL string `json:"cache_ttl,omitempty"`
 	// CacheFinalMessage adds the final-message cache marker; nil defaults to true.
 	CacheFinalMessage *bool `json:"cache_final_message,omitempty"`
+	// ToolChanges says that the entry takes tool changes inside a conversation: the beta header, deferred tools, and system messages that add and remove tools. nil: on for the direct Anthropic API (no base_url), off for any other base URL, because a gateway may not pass the beta. Valid only on the native anthropic entry.
+	ToolChanges *bool `json:"tool_changes,omitempty"`
 	// Models lists the model ids of the entry as its API names them, without the provider key. When it is set, it is the model list of the entry, in this order.
 	Models []string `json:"models,omitempty"`
 
@@ -203,6 +205,10 @@ func (p Provider) Clone() Provider {
 	if p.CacheFinalMessage != nil {
 		value := *p.CacheFinalMessage
 		p.CacheFinalMessage = &value
+	}
+	if p.ToolChanges != nil {
+		value := *p.ToolChanges
+		p.ToolChanges = &value
 	}
 	p.ExtraHeaders = maps.Clone(p.ExtraHeaders)
 	p.OmitResponseParams = slices.Clone(p.OmitResponseParams)
@@ -547,10 +553,21 @@ func validateSanitizeToolSchemas(name string, p Provider) error {
 	return nil
 }
 
+// ToolChangesOn reports whether the entry takes tool changes inside a conversation: the tool_changes value, else true only when the entry sets no base_url.
+func (p Provider) ToolChangesOn() bool {
+	if p.ToolChanges != nil {
+		return *p.ToolChanges
+	}
+	return p.BaseURL == ""
+}
+
 // validateCacheTTL rejects an unknown cache_ttl, and any value outside the native anthropic entry.
 func validateCacheTTL(name string, p Provider) error {
 	if p.CacheFinalMessage != nil && (name != "anthropic" || p.Type != "") {
 		return fmt.Errorf("providers.%s: cache_final_message is only valid on the native anthropic provider", name)
+	}
+	if p.ToolChanges != nil && (name != "anthropic" || p.Type != "") {
+		return fmt.Errorf("providers.%s: tool_changes is only valid on the native anthropic provider", name)
 	}
 	if p.CacheTTL == "" {
 		return nil

@@ -127,6 +127,8 @@ type Request struct {
 	// CacheBreakpoints holds the cache_control markers in wire order. Only the Anthropic wire fills it.
 	CacheBreakpoints []CacheBreakpoint
 	Tools            []string // sorted names
+	// DeferredTools are the sorted names of the tools that carry defer_loading. Only the Anthropic wire fills it.
+	DeferredTools []string
 	// ToolSpecs holds the description and the input schema of each tool by name. Only the Anthropic wire fills it.
 	ToolSpecs map[string]ToolSpec
 	// Header holds the HTTP request headers. Only NewChat and NewAnthropic fill it.
@@ -200,6 +202,9 @@ var anthropicCodec = codec{
 	decode: func(body []byte, h http.Header) (Request, error) {
 		req, err := decodeRequest(body)
 		req.Header = h.Clone()
+		if err == nil {
+			err = checkToolChanges(req)
+		}
 		return req, err
 	},
 	stream: (*Server).stream, writeError: writeError, replyError: writeReplyError,

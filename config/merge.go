@@ -221,6 +221,10 @@ func overlayProvider(ex, v Provider) Provider {
 	if v.CacheTTL != "" {
 		ex.CacheTTL = v.CacheTTL
 	}
+	if v.ToolChanges != nil {
+		value := *v.ToolChanges
+		ex.ToolChanges = &value
+	}
 	if v.ResponsesPath != "" {
 		ex.ResponsesPath = v.ResponsesPath
 	}

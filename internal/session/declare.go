@@ -164,7 +164,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 			ts.Notices = replaceNotices(ts.Notices, notices)
 		}
 	}
-	return d.a.withCodeMode(ctx, ts, decl, live.Tools, len(history))
+	return d.a.withCodeMode(ctx, ts, decl, live.Tools, len(history), model)
 }
 
 // withSystem sets the system prompt info on ts, and the skills notice that compares the newest list with the list of info.

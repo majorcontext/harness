@@ -444,3 +444,21 @@ func controlOf(info map[string]modelInfo, id string) (EffortControl, bool) {
 	}
 	return EffortControl{Levels: slices.Clone(i.efforts), Field: i.effortField, Budget: i.budgetTokens}, true
 }
+
+// toolChangeModels are the Anthropic models that take tool changes inside a conversation.
+var toolChangeModels = map[string]bool{
+	"claude-opus-4-8": true, "claude-opus-5": true, "claude-opus-5-5": true,
+	"claude-fable-5": true, "claude-fable-5-1": true, "claude-fable-5-2": true,
+	"claude-mythos-5": true, "claude-mythos-5-1": true, "claude-mythos-5-2": true,
+	"claude-sonnet-5-5": true, "claude-haiku-5-5": true,
+}
+
+// ToolChange reports whether an Anthropic model id takes tool changes inside a conversation: deferred tools, and system
+// messages that remove and add tools by reference. A Bedrock-style id and a routing namespace read as the model they name.
+func ToolChange(model string) bool {
+	model = lastPathSegment(model)
+	if suffix, bedrock := stripBedrockAnthropicPrefix(model); bedrock {
+		model = suffix
+	}
+	return toolChangeModels[stripBedrockVersionSuffix(model)]
+}

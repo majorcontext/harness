@@ -687,6 +687,11 @@ func marshalPart(p Part) ([]byte, error) {
 			Type PartType `json:"type"`
 			*EngineContext
 		}{PartEngineContext, v})
+	case *ToolChange:
+		return json.Marshal(struct {
+			Type PartType `json:"type"`
+			*ToolChange
+		}{PartToolChange, v})
 	default:
 		return nil, fmt.Errorf("message: cannot marshal part type %T", p)
 	}
@@ -704,6 +709,7 @@ var partVariants = []struct {
 	{PartReasoning, func() Part { return new(Reasoning) }},
 	{PartWebSearch, func() Part { return new(WebSearch) }},
 	{PartEngineContext, func() Part { return new(EngineContext) }},
+	{PartToolChange, func() Part { return new(ToolChange) }},
 }
 
 func unmarshalPart(raw json.RawMessage) (Part, error) {

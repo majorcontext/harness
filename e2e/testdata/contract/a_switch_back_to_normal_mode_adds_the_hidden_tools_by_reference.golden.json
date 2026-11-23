@@ -1,0 +1,374 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "code",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "deferred_tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "session_info",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "code",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "deferred_tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "session_info",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "parts": [
+            {
+              "kind": "tool_addition",
+              "tool_name": "process"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "read_file"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "write_file"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "edit_file"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "glob"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "grep"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "ls"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "bash"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "session_info"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "code",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "deferred_tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "session_info",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "parts": [
+            {
+              "kind": "tool_addition",
+              "tool_name": "process"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "read_file"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "write_file"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "edit_file"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "glob"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "grep"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "ls"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "bash"
+            },
+            {
+              "kind": "tool_addition",
+              "tool_name": "session_info"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "2"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "3"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "set_code_mode.a": {
+      "status": 200,
+      "body": {
+        "cache_expires_at": "\u003ctime\u003e",
+        "context": {
+          "compact_at": 800000,
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "title": "one",
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

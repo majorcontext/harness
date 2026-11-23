@@ -60,6 +60,8 @@ type Toolset struct {
 	Hooks Hooks
 	// CodeMode refuses a direct model call of a tool that only a script calls.
 	CodeMode bool
+	// BaseCode is the base mode of the declaration that Specs come from: the mode that the tools array states.
+	BaseCode bool
 }
 
 // MCPInstructions are the usage guidance of the MCP servers, for a backend
@@ -81,6 +83,8 @@ type Notice struct {
 	Text string
 	// Cleared is pinned once when Text turns empty after a status with text.
 	Cleared string
+	// Initial is the status that the model reads before the first pin of this Kind, so a Text equal to it pins nothing.
+	Initial string
 	// At is the number of messages of the history that the pin follows. Zero:
 	// the whole history of the call.
 	At int
@@ -447,6 +451,7 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 		}
 	}
 	call.MCPInstructions = ts.MCPInstructions
+	call.BaseCodeMode = ts.BaseCode
 	if !all && to != nil {
 		call.Pins = to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
 	}
