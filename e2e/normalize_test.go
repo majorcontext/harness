@@ -80,6 +80,7 @@ type normRequest struct {
 	User                   string           `json:"user,omitempty"`
 	PromptCacheKey         string           `json:"prompt_cache_key,omitempty"`
 	Tools                  []string         `json:"tools"`
+	DeferredTools          []string         `json:"deferred_tools,omitempty"`
 	Messages               []normReqMessage `json:"messages"`
 }
 
@@ -298,7 +299,7 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 			ReasoningEffort:        r.ReasoningEffort,
 			User:                   n.id(r.User),
 			PromptCacheKey:         n.id(r.PromptCacheKey),
-			Tools:                  slices.Sorted(slices.Values(r.Tools)),
+			Tools:                  slices.Sorted(slices.Values(r.Tools)), DeferredTools: r.DeferredTools,
 		}
 		if r.ThinkingType == "adaptive" {
 			nr.AdaptiveMaxTokens = r.MaxTokens

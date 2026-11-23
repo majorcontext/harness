@@ -43,3 +43,38 @@ func refusedInCodeMode(name string) string {
 	}
 	return "code mode: " + name + " is a function of a script. Call it from the script of a code call, with the same arguments."
 }
+
+// HiddenInCodeMode reports whether code mode hides the tool name from the model, so that only a script calls it.
+func HiddenInCodeMode(name string) bool { return refusedInCodeMode(name) != "" }
+
+// ChangeNotice is the code-mode notice for a backend that changes tools inside the conversation. It always has text,
+// and the base mode of the declaration is the status before the first pin, so a mode that the tools array states pins
+// nothing.
+func ChangeNotice(code, base bool, at int) Notice {
+	n := CodeModeNotice(code, at)
+	n.Text, n.Cleared, n.Initial = normalModeText, "", normalModeText
+	if code {
+		n.Text = codeModeText
+	}
+	if base {
+		n.Initial = codeModeText
+	}
+	return n
+}
+
+// PinnedMode returns the mode that a pin states and true, or false for a pin that states none.
+func PinnedMode(p Pin) (code, ok bool) {
+	if p.Kind != protocol.PinCodeMode {
+		return false, false
+	}
+	switch p.Text {
+	case codeModeText:
+		return true, true
+	case normalModeText, noCodeText:
+		return false, true
+	}
+	return false, false
+}
+
+// NoCodePin reports whether p states that the code tool is gone.
+func NoCodePin(p Pin) bool { return p.Kind == protocol.PinCodeMode && p.Text == noCodeText }

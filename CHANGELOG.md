@@ -40,6 +40,8 @@ First tagged release.
 
 ### Added
 
+- **Tool changes on the Anthropic wire** (`config`, `internal/modelmeta`, `internal/provider/anthropic`, `internal/turn`) — on a model that takes the `mid-conversation-tool-changes-2026-07-01` beta, code mode sends the tools that it hides with `defer_loading: true`, and a mode switch appends one system message with `tool_removal` and `tool_addition` blocks in place of the engine-context notice, so a switch never changes an earlier byte. A request that holds `code` sends the beta header from its first call, so the header changes only at a declaration. The new key `providers.anthropic.tool_changes` turns it on or off; it defaults to on only for the direct Anthropic API.
+
 - **Code mode setting** — `code_mode` in `CreateSession`, `SettingsPatch`, `settings.changed`, and the session view switches a session between calling tools directly and calling them through the `code` tool. A switch appends one `code-mode` notice at the next model call and changes no byte of the earlier request; a direct call of a tool that only a script calls is refused with an error result. Each `prefix.declared` record holds the mode as `code_mode`.
 
 - **code tool** (`config`, `internal/tool/codetool`, `internal/turn`, `protocol`) — with `code_mode` true, every session has a `code` tool that runs a Starlark script. The script calls the other tools as functions (`attempt`, `parallel`, `search_tools`, `describe_tool`, `json`), and the model reads only the printed output and the last value. Each nested call passes the allowed tools, the hooks, and the scheduler of its model call, and appends a `nested_call.recorded` event that no model reads. `turn` gains the optional `Nesting` interface of a tool. The WebAssembly module offers no `code`.

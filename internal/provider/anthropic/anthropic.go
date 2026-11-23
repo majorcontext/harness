@@ -33,6 +33,8 @@ const (
 	// 5m TTL sends no beta at all, which is the escape hatch for a gateway
 	// that rejects an unknown beta.
 	extendedCacheTTLBeta = "extended-cache-ttl-2025-04-11"
+	// toolChangeBeta gates defer_loading with no tool search, and the system messages that remove and add tools.
+	toolChangeBeta = "mid-conversation-tool-changes-2026-07-01"
 )
 
 // Client is a provider.Provider for the Anthropic Messages API. The zero
@@ -63,6 +65,14 @@ type Client struct {
 	// or Content-Type.
 	ExtraHeaders   map[string]string
 	RequestRetries int // see provider.Do
+	// ToolChanges says that the endpoint passes the tool-change beta. A model that takes tool changes then
+	// gets deferred tools and system messages that add and remove tools.
+	ToolChanges bool
+}
+
+// ToolChange reports whether the client sends tool changes inside a conversation for model.
+func (c *Client) ToolChange(model string) bool {
+	return c.ToolChanges && modelmeta.ToolChange(model)
 }
 
 func (c *Client) Name() string { return Family }
@@ -135,6 +145,13 @@ func (c *Client) send(ctx context.Context, wire *apiRequest, ttl string) (*http.
 	httpReq.Header.Set("Anthropic-Version", apiVersion)
 	if ttl == CacheTTL1h {
 		httpReq.Header.Set("Anthropic-Beta", extendedCacheTTLBeta)
+	}
+	if wire.toolChange {
+		beta := toolChangeBeta
+		if v := httpReq.Header.Get("Anthropic-Beta"); v != "" {
+			beta = v + "," + beta
+		}
+		httpReq.Header.Set("Anthropic-Beta", beta)
 	}
 
 	hc := c.HTTPClient

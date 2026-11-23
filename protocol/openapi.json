@@ -1768,6 +1768,9 @@
           "cache_final_message": {
             "type": "boolean"
           },
+          "tool_changes": {
+            "type": "boolean"
+          },
           "models": {
             "items": {
               "type": "string"
