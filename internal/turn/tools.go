@@ -90,10 +90,10 @@ type Notice struct {
 	Transient bool
 }
 
-// Gone is the removal of an MCP server. Gen tells a server that was added again from the one that left.
+// Gone is the removal of an MCP server. Gen tells a server that was added again, or in another process, from the one that left.
 type Gone struct {
 	Name string `json:"name"`
-	Gen  int    `json:"gen"`
+	Gen  uint64 `json:"gen"`
 }
 
 // Declarable is a Tool that tells deferred tools from loaded ones. Declared returns the tool for a model call whose

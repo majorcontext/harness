@@ -14,12 +14,14 @@ const noticeCleared = "[mcp: every server is connected again.]"
 // durableNoticeRows is the disposition of the rows of the durable notices.
 var durableNoticeRows = map[string]runtimeRow{
 	"a_down_server_notice_is_sent_once_after_a_restart":                            sameAsServe(),
-	"a_connected_server_turns_the_down_notice_into_one_cleared_notice":             sameAsServe(),
+	"a_connected_server_turns_the_down_notice_into_one_cleared_notice":             runtimeOnly("mcp-retry-held"),
 	"an_added_tools_notice_is_sent_once_after_a_restart":                           sameAsServe(),
 	"a_notice_that_the_log_never_recorded_follows_the_history_of_a_new_call":       sameAsServe(),
 	"a_compaction_keeps_the_down_notice_while_the_server_is_down":                  sameAsServe(),
 	"a_compaction_drops_the_added_notice_that_the_new_declaration_states":          sameAsServe(),
 	"a_compaction_drops_the_removed_server_notice_that_the_declaration_made_stale": sameAsServe(),
+	"a_declaration_with_no_mcp_surface_retires_the_recorded_down_notice":           sameAsServe(),
+	"a_server_that_is_removed_again_after_a_restart_is_named_again":                sameAsServe(),
 	"a_server_that_is_removed_again_after_a_declaration_is_named_again":            sameAsServe(),
 }
 
@@ -205,6 +207,14 @@ func TestContractDurableNoticesAfterACompaction(t *testing.T) {
 				expectExtends{req: 5, prev: 4},
 			},
 		},
+	})
+}
+
+func TestContractDurableNoticesAfterARemoval(t *testing.T) {
+	text, keepOne, summary, live := replyTo, keepOneTurn, gistSummary, liveWeather
+	removedLive := mcpServerDef{name: "docs", spec: mcpDocs(), sse: true}
+	keepDocs := putMCP{servers: []string{"docs"}}
+	runScenarios(t, []scenario{
 		{
 			name: "a_server_that_is_removed_again_after_a_declaration_is_named_again", prefixBreaks: compactionBreak(),
 			config: keepOne, setup: mcpSetup(nil, live, removedLive),
@@ -222,6 +232,43 @@ func TestContractDurableNoticesAfterACompaction(t *testing.T) {
 				keepDocs,
 				submit{as: "a", text: "five"}, waitIdle{as: "a"},
 				expectNoticeBlocks{req: 6, marker: "[mcp: removed", n: 1},
+			},
+		},
+		{
+			name: "a_server_that_is_removed_again_after_a_restart_is_named_again", prefixBreaks: compactionBreak(),
+			config: keepOne, setup: mcpSetup(nil, live, removedLive),
+			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3"), text("four", "four", "4"), text("five", "five", "5")},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				keepDocs,
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				restart{},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 5, marker: noticeAdded, n: 1},
+				keepDocs,
+				submit{as: "a", text: "five"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 6, marker: "[mcp: removed", n: 1},
+			},
+		},
+		{
+			name: "a_declaration_with_no_mcp_surface_retires_the_recorded_down_notice", prefixBreaks: compactionBreak(),
+			config: keepOne, setup: mcpSetup(nil, downWeather),
+			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3"), text("four", "four", "4")},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 1, marker: noticeDown, n: 1},
+				putMCP{servers: nil},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 4, marker: "[mcp:", n: 0},
+				restart{},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				expectNoticeBlocks{req: 5, marker: "[mcp:", n: 0},
 			},
 		},
 	})

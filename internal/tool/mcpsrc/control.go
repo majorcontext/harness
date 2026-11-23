@@ -90,7 +90,7 @@ func (c control) Spec() protocol.ToolSpec {
 // their instructions in the prompt segment.
 func (c control) Declared(holds, accounts func(string) bool, prompt string, gone []turn.Gone) (turn.Tool, []turn.Notice) {
 	if !holds(controlName) {
-		return c, []turn.Notice{{Kind: noticeKind}, {Kind: loadingKind, Transient: true}, {Kind: addedKind, Declared: true}}
+		return c, []turn.Notice{{Kind: noticeKind, Declared: true}, {Kind: loadingKind, Transient: true}, {Kind: addedKind, Declared: true}}
 	}
 	c.loaded, c.has = maps.Clone(c.loaded), accounts
 	for n := range c.loaded {

@@ -139,7 +139,7 @@ type memory struct {
 	// up is true once the server connected, so that a server that goes is named as removed.
 	up bool
 	// gen counts the adds of the name, so that a server that is added again is a new one.
-	gen int
+	gen uint64
 }
 
 type server struct {
