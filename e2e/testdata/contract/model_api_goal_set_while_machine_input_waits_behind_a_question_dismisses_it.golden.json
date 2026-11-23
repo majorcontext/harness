@@ -39,6 +39,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
+        "ask_user_question",
         "bash",
         "edit_file",
         "glob",
@@ -118,6 +119,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
+        "ask_user_question",
         "bash",
         "edit_file",
         "glob",
@@ -335,7 +337,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 11,
+        "head_seq": 12,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -373,7 +375,7 @@
           "turns": 1,
           "verdict": "met"
         },
-        "head_seq": 29,
+        "head_seq": 30,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -397,7 +399,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 12
+        "seq": 13
       }
     }
   }

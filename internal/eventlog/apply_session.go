@@ -71,6 +71,9 @@ func (s *State) applyCompaction(e protocol.CompactionApplied, seq uint64, at tim
 		}
 	}
 	s.compaction, s.compactedAt, s.compactedTime = e, seq, at
+	if !e.ByBackend && s.turn.ID == "" {
+		s.declareDue = true
+	}
 	s.readAt = time.Time{}
 	s.compacted++
 	s.usage = s.usage.Add(e.Usage)
@@ -178,6 +181,14 @@ func (s *State) movePins(n int) {
 		}
 	}
 	s.pins = kept
+}
+
+func (s *State) applyDeclared(e protocol.PrefixDeclared) error {
+	if e.BlobKey == "" || e.Model == "" {
+		return illegal("prefix.declared needs a blob key and a model")
+	}
+	s.declared, s.declaredSet, s.declareDue = e, true, false
+	return nil
 }
 
 func (s *State) applyRetained(e protocol.ToolResultRetained) error {

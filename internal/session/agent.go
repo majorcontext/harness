@@ -20,10 +20,11 @@ func (a *Actor) source(r *running) turn.Source {
 		srcs = append(srcs, a.cfg.Source)
 	}
 	srcs = append(srcs, actorTools{a, r})
+	var src turn.Source = declared{a, srcs}
 	if a.cfg.Record != nil {
-		return a.cfg.Record(srcs)
+		return a.cfg.Record(src)
 	}
-	return srcs
+	return src
 }
 
 // actorTools are the tools that read the session itself. A turn of a backend

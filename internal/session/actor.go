@@ -247,6 +247,11 @@ type Actor struct {
 	pins turn.Pins
 	// pinned is true once a model call of this process has pinned.
 	pinned bool
+	// declMu orders the calls of declare. decl is the decoded blob of the newest declaration, read once for each process.
+	declMu      sync.Mutex
+	decl        decodedDeclaration
+	declChecked bool
+	oversized   bool
 	// turnCtx holds the turn context of each queued input by input ID. It is
 	// in no log and does not outlive the process.
 	turnCtx map[string]string

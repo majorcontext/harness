@@ -431,6 +431,13 @@ export interface Plugins {
   plugins: Plugin[];
 }
 
+export interface PrefixDeclared {
+  blob_key: string;
+  bytes: number;
+  model: string;
+  search_allowed?: boolean;
+}
+
 export interface ProcessInfo {
   name: string;
   origin: string;

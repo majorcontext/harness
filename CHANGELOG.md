@@ -40,6 +40,8 @@ First tagged release.
 
 ### Added
 
+- **Durable tool declaration** (`internal/session`, `internal/eventlog`, `protocol`, `docs/architecture.md`) — a session records its tools and its MCP prompt segment in a `prefix.declared` event and a blob, so a restart and a new owner send the same tools array and prompt segment, with a tool that was not declared deferred. The session declares again at a compaction between two turns, at a change of the model with other tools, and at the first call of a process when a declared tool has a changed input schema.
+
 - **Turn context** — `harness.WithTurnContext(text)` is an option of `Session.Prompt`, `Session.PromptStream`, and `Turn.Steer`. The model reads the text as engine context after the input on each model call of that turn, and no event, history read, or later turn holds it. It is not persisted, and a backend that owns the loop ignores it.
 
 - **Auth failure of a session MCP server** — `harness.WithSessionMCPAuthFailed(fn)` calls `fn(server, status)` when a server of `WithSessionMCP` answers 401 or 403, so an embedder can mark the connection for reconnect. `mcp.HTTPStatusError` carries the status and no body, and an MCP log line holds the server, a reason, and the HTTP status or JSON-RPC code, never the text of the remote error.

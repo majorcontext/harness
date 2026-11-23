@@ -79,6 +79,9 @@ func TestContractRuntimeOwner(t *testing.T) {
 		{"the_local_owner_grants_a_session_once_at_a_time", rowTheLocalOwnerGrantsASessionOnceAtATime},
 		{"new_reads_neither_owner_epoch_nor_sync_from_the_config", rowNewReadsNeitherOwnerEpochNorSyncFromTheConfig},
 		{"a_run_token_without_a_serve_url_is_refused", rowARunTokenWithoutAServeURLIsRefused},
+		{"a_new_owner_sends_the_declared_tools", rowANewOwnerSendsTheDeclaredTools},
+		{"a_new_owner_without_the_blob_declares_again", rowANewOwnerWithoutTheBlobDeclaresAgain},
+		{"a_new_owner_without_the_blob_still_replicates", rowANewOwnerWithoutTheBlobStillReplicates},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {

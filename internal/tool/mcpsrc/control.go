@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -64,7 +66,9 @@ type control struct {
 	// ok is the allowed-tools filter of the model call.
 	ok func(string) bool
 	// late returns the plugin tools that the mcp tool loads too. nil: none.
-	late func() []Late
+	late func(has func(string) bool) []Late
+	// has tells the tools of the declaration. nil: the tools that the first connect reached.
+	has func(string) bool
 }
 
 func (c control) Spec() protocol.ToolSpec {
@@ -77,6 +81,45 @@ func (c control) Spec() protocol.ToolSpec {
 		`"tool":{"type":"string","description":"The namespaced name of the deferred tool to run (required for call)"},` +
 		`"arguments":{"type":"object","description":"The arguments of the tool, as its input schema describes (for call)"}},` +
 		`"required":["action"]}`)}
+}
+
+// Declared makes a tool that the declaration does not account for a deferred tool of the mcp tool, and names it in
+// the added notice. The declaration accounts for a tool that its tools array holds and for a tool that its prompt
+// segment lists. A declaration with no mcp tool gives the session no MCP notice, because the model cannot use
+// the mcp tool: the tools reach the session at its next declaration.
+func (c control) Declared(has func(string) bool, prompt string) (turn.Tool, []turn.Notice) {
+	if !has(controlName) {
+		return c, []turn.Notice{{Kind: noticeKind, Transient: true}, {Kind: loadingKind, Transient: true}, {Kind: addedKind}}
+	}
+	c.loaded, c.has = maps.Clone(c.loaded), has
+	for n := range c.loaded {
+		if !has(n) {
+			delete(c.loaded, n)
+		}
+	}
+	listed, cut := catalogNames(prompt)
+	undeclared := func(n string) bool { return !cut && !has(n) && !listed[n] }
+	var late []Late
+	if c.late != nil {
+		late = c.late(has)
+	}
+	return c, []turn.Notice{{Kind: addedKind, Text: c.v.added(c.ok, late, undeclared)}}
+}
+
+// catalogNames returns the tool names that the lines of prompt list as toolLines writes them, and whether a line
+// says that the list is cut, so that the prompt does not name every deferred tool.
+func catalogNames(prompt string) (names map[string]bool, cut bool) {
+	names = map[string]bool{}
+	for _, l := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(l, "... and ") && strings.Contains(l, " more tools;") {
+			cut = true
+		}
+		if strings.HasPrefix(l, prefix) {
+			name, _, _ := strings.Cut(l, " — ")
+			names[name] = true
+		}
+	}
+	return names, cut
 }
 
 // Forward makes the call action run the deferred tool that it names, between the hooks of that tool.
@@ -114,7 +157,7 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 		c.v = c.s.view()
 		c.all = c.v.liveAll(c.ok)
 		if c.late != nil {
-			for _, l := range c.late() {
+			for _, l := range c.late(c.has) {
 				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
 			}
 		}
@@ -256,7 +299,7 @@ func (c control) choose(ctx context.Context, names []string) (any, error) {
 		c.v = c.s.view()
 		c.all = c.v.liveAll(c.ok)
 		if c.late != nil {
-			for _, l := range c.late() {
+			for _, l := range c.late(c.has) {
 				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
 			}
 		}

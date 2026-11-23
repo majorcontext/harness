@@ -132,7 +132,7 @@ func TestGoal(t *testing.T) {
 	}{
 		{"a usage limit pauses the goal until its retry", &goalBackend{verdicts: []string{"MET: ok"}, errs: []error{turn.ErrExhausted, nil}},
 			func(t *testing.T, a *Actor, _ *goalBackend) { setGoal(t, a) },
-			slices.Concat(ran[:2], []string{"session.titled", "turn.started", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed active", "input.admitted", "turn.started",
+			slices.Concat(ran[:2], []string{"session.titled", "turn.started", "prefix.declared", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed active", "input.admitted", "turn.started",
 				"item.completed assistant re Continue working toward the goal.", "turn.ended completed", "goal.evaluated met", "goal.changed achieved"})},
 		{"clearing a paused goal starts the input it left queued", &goalBackend{errs: []error{turn.ErrExhausted, nil}, gated: true}, func(t *testing.T, a *Actor, b *goalBackend) {
 			setGoal(t, a)
@@ -140,7 +140,7 @@ func TestGoal(t *testing.T) {
 			close(b.gate)
 			synctest.Wait()
 			clearGoal(t, a)
-		}, slices.Concat(ran[:2], []string{"session.titled", "turn.started", "input.admitted", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed cleared",
+		}, slices.Concat(ran[:2], []string{"session.titled", "turn.started", "input.admitted", "prefix.declared", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed cleared",
 			"turn.started", "item.completed assistant re hi", "turn.ended completed"})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

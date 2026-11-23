@@ -732,8 +732,10 @@ func nextCall(ctx context.Context, b Backend, caps Capabilities, req Request, sr
 	if err := applyParams(ctx, b, caps, req, &call); err != nil {
 		return Request{}, Toolset{}, err
 	}
+	ts := toolsetOf(ctx, &call, src)
+	call.SearchAllowed = call.SearchAllowed && (ts.SearchAllowed == nil || *ts.SearchAllowed)
 	call.WebSearch = call.SearchAllowed && b.Capabilities(call.Model).WebSearch
-	return call, toolsetOf(ctx, &call, src), nil
+	return call, ts, nil
 }
 
 // applyParams runs the Params hook of req and sets its result on call.

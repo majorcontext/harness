@@ -171,6 +171,7 @@ const (
 	KindBackendState       = "backend.state"
 	KindToolResultRetained = "tool_result.retained"
 	KindPinRecorded        = "pin.recorded"
+	KindPrefixDeclared     = "prefix.declared"
 )
 
 // Settings are the session settings other than the model.
@@ -495,6 +496,14 @@ type ToolResultRetained struct {
 	Head    string `json:"head"`
 }
 
+// PrefixDeclared names the blob that holds the declared tools and prompt segment of a session.
+type PrefixDeclared struct {
+	BlobKey       string `json:"blob_key"`
+	Bytes         int    `json:"bytes"`
+	Model         string `json:"model"`
+	SearchAllowed bool   `json:"search_allowed,omitempty"`
+}
+
 // PinRecorded records one pin, a segment of engine context that the model
 // reads after the first At messages of the history. The banner has no record.
 type PinRecorded struct {
@@ -580,6 +589,9 @@ func (BackendState) Kind() string { return KindBackendState }
 
 // Kind returns KindPinRecorded.
 func (PinRecorded) Kind() string { return KindPinRecorded }
+
+// Kind returns KindPrefixDeclared.
+func (PrefixDeclared) Kind() string { return KindPrefixDeclared }
 
 // Kind returns KindToolResultRetained.
 func (ToolResultRetained) Kind() string { return KindToolResultRetained }

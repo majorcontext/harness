@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -352,4 +353,92 @@ func maxStepsChanges(t *testing.T, st harness.Store) []int {
 		}
 	}
 	return out
+}
+
+func TestOpenWithANarrowerAllowlistKeepsTheDeclaredTools(t *testing.T) {
+	server := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{},
+		harnesstest.Step{Name: "first", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "done"}},
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("call"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "secret", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("secret"), Reply: harnesstest.Reply{Text: "ok"}})
+	st := store.NewMemStore()
+	r := allowlistRuntime(t, st, server)
+	if _, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "test/gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := func(s *harness.Session, id, text string) {
+		t.Helper()
+		turn, err := s.Prompt(t.Context(), protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result, err := turn.Wait(t.Context()); err != nil || result.StopReason != protocol.StopCompleted {
+			t.Fatalf("turn = %+v, %v", result, err)
+		}
+	}
+	prompt(s, "a", "hi")
+	closeRuntime(t, r)
+	r = allowlistRuntime(t, st, server)
+	if s, err = r.Open(t.Context(), "s1", harness.WithAllowedTools([]string{"echo"})); err != nil {
+		t.Fatal(err)
+	}
+	prompt(s, "b", "call")
+	reqs := server.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("model requests = %d, want 3", len(reqs))
+	}
+	for i, req := range reqs {
+		if !slices.Equal(req.Tools, reqs[0].Tools) || !slices.Contains(req.Tools, "secret") {
+			t.Errorf("request %d tools = %q, want the declared tools %q, which hold secret", i+1, req.Tools, reqs[0].Tools)
+		}
+	}
+	last := reqs[2].Messages[len(reqs[2].Messages)-1]
+	if len(last.Parts) != 1 || !strings.Contains(last.Parts[0].Text, "no such tool available: secret") {
+		t.Errorf("result of the call to secret = %+v, want the error no such tool available: secret", last.Parts)
+	}
+}
+
+func TestOpenThatForbidsWebSearchSendsNoSearchAfterADeclaredSearch(t *testing.T) {
+	server := harnesstest.NewAnthropic(t, harnesstest.Step{Name: "reply", Repeat: true, Reply: harnesstest.Reply{Text: "ok"}})
+	st := store.NewMemStore()
+	search := true
+	newRuntime := func() *harness.Runtime {
+		r, err := harness.New(harness.Options{Store: st, Getenv: func(string) string { return "k" }, Config: config.Config{
+			Web:       config.WebSpec{Search: &search},
+			Providers: map[string]config.Provider{"anthropic": {APIKeyEnv: "TEST_KEY", BaseURL: server.URL()}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { closeRuntime(t, r) })
+		return r
+	}
+	prompt := func(s *harness.Session, id string) {
+		t.Helper()
+		turn, err := s.Prompt(t.Context(), protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: id}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := turn.Wait(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newRuntime()
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "anthropic/claude-opus-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt(s, "one")
+	closeRuntime(t, r)
+	r = newRuntime()
+	if s, err = r.Open(t.Context(), "s1", harness.WithAllowedTools([]string{"session_info"})); err != nil {
+		t.Fatal(err)
+	}
+	prompt(s, "two")
+	reqs := server.Requests()
+	if len(reqs) < 2 || !slices.Contains(reqs[0].Tools, "web_search") || slices.Contains(reqs[len(reqs)-1].Tools, "web_search") {
+		t.Errorf("tools of the first and the last request = %q, %q; want web_search only in the first", reqs[0].Tools, reqs[len(reqs)-1].Tools)
+	}
 }

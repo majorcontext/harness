@@ -36,6 +36,11 @@ type Toolset struct {
 	Tools []Tool
 	// Deferred are not described, but the model may call them.
 	Deferred []Tool
+	// Specs, when not nil, are the tools described to the model in place of the Spec of each of Tools.
+	Specs []protocol.ToolSpec
+	// SearchAllowed, when not nil, is the search_allowed of the declaration that Specs come from. The call sends
+	// the native web search only when the session allows it now too.
+	SearchAllowed *bool
 	// Prompt follows the system prompt.
 	Prompt string
 	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
@@ -74,6 +79,13 @@ type Notice struct {
 	// Transient makes the model read Text in the turn of the first call that has text, at the place of that call,
 	// like a turn context. The log records no pin and no later turn reads it, and Cleared is unused.
 	Transient bool
+}
+
+// Declarable is a Tool that tells deferred tools from loaded ones. Declared returns the tool for a model call whose
+// tools array holds only the tools that has accepts and whose prompt segment is prompt, and the notices that
+// replace the notices of the same Kind.
+type Declarable interface {
+	Declared(has func(name string) bool, prompt string) (Tool, []Notice)
 }
 
 // Hooks run around each tool call of a model call.
@@ -377,8 +389,12 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
 	}
 	call.Tools = nil
-	for _, t := range ts.Tools {
-		call.Tools = append(call.Tools, t.Spec())
+	if ts.Specs != nil {
+		call.Tools = slices.Clone(ts.Specs)
+	} else {
+		for _, t := range ts.Tools {
+			call.Tools = append(call.Tools, t.Spec())
+		}
 	}
 	switch {
 	case call.Instructions == "":

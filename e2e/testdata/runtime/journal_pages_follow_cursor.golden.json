@@ -292,10 +292,11 @@
           },
           {
             "d": {
-              "index": 0,
-              "turn_id": "turn#1"
+              "blob_key": "prefix-de9d41df4cb331aacf5d45527b7f6c69880a339c5bca2070cc1ff2d90729df2b",
+              "bytes": 14084,
+              "model": "anthropic/claude-fable-5"
             },
-            "k": "step.started",
+            "k": "prefix.declared",
             "seq": 6,
             "t": "\u003ctime\u003e"
           }
@@ -309,6 +310,15 @@
         "events": [
           {
             "d": {
+              "index": 0,
+              "turn_id": "turn#1"
+            },
+            "k": "step.started",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
@@ -319,7 +329,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 7,
+            "seq": 8,
             "t": "\u003ctime\u003e"
           },
           {
@@ -337,16 +347,6 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 8,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "finish_reason": "end_turn",
-              "index": 0,
-              "turn_id": "turn#1"
-            },
-            "k": "step.ended",
             "seq": 9,
             "t": "\u003ctime\u003e"
           }
@@ -360,11 +360,21 @@
         "events": [
           {
             "d": {
+              "finish_reason": "end_turn",
+              "index": 0,
+              "turn_id": "turn#1"
+            },
+            "k": "step.ended",
+            "seq": 10,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "stop_reason": "completed",
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
-            "seq": 10,
+            "seq": 11,
             "t": "\u003ctime\u003e"
           },
           {
@@ -380,17 +390,6 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 11,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "input_ids": [
-                "in2"
-              ],
-              "turn_id": "turn#2"
-            },
-            "k": "turn.started",
             "seq": 12,
             "t": "\u003ctime\u003e"
           }
@@ -410,6 +409,15 @@
         "events": [
           {
             "d": {
+              "index": 0,
+              "turn_id": "turn#1"
+            },
+            "k": "step.started",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "cache_ttl_seconds": 3600,
               "source": "anthropic",
               "tokens": 5,
@@ -420,24 +428,6 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 7,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "item_id": "item#1",
-              "message": {
-                "parts": [
-                  {
-                    "text": "1",
-                    "type": "text"
-                  }
-                ],
-                "role": "assistant"
-              },
-              "turn_id": "turn#1"
-            },
-            "k": "item.completed",
             "seq": 8,
             "t": "\u003ctime\u003e"
           }

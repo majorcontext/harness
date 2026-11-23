@@ -63,7 +63,7 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 		want     []string
 	}{
 		{"a tool call after the handoff is refused", false, say("partial"), []protocol.LogMessage{callTool("c2")},
-			[]string{"step.started", "item.completed assistant partial", "step.ended"}},
+			[]string{"prefix.declared", "step.started", "item.completed assistant partial", "step.ended"}},
 		{"a tool call that a loop-owning backend ran after the handoff is cut off", true, say("partial"),
 			[]protocol.LogMessage{callTool("c2")},
 			[]string{"item.completed assistant partial", "item.completed assistant c2", "item.completed tool c2 " + cutOff}},

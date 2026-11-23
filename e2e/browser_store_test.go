@@ -244,11 +244,14 @@ func (k *browserKit) durabilityRows() {
 				t.Fatalf("turn = %+v", r.Turn)
 			}
 			blobs := r.Stored.Sessions[r.SessionID].Blobs
-			if len(blobs) != 1 {
-				t.Fatalf("blobs = %v, want one blob and no temporary file", blobs)
+			if len(blobs) != 2 {
+				t.Fatalf("blobs = %v, want the declaration blob and one result blob, and no temporary file", blobs)
 			}
 			for key, size := range blobs {
 				t.Logf("blob %q holds %d bytes", key, size)
+				if strings.HasPrefix(key, "prefix-") {
+					continue
+				}
 				if size != 18889 {
 					t.Errorf("blob %q holds %d bytes, want 18889", key, size)
 				}

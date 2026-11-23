@@ -293,7 +293,7 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 11
+        "to_seq": 12
       }
     },
     "get_session.a": {
@@ -306,7 +306,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 18,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

@@ -294,7 +294,7 @@ func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {
 		}
 		defer closeRuntime(t, r)
 		converse(t, create(t, r), "hi")
-		wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "step.started", "item.completed assistant c1", "item.completed tool c1 "+cutOff,
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "session.titled", "prefix.declared", "step.started", "item.completed assistant c1", "item.completed tool c1 "+cutOff,
 			"step.ended", "turn.ended failed flaky")
 		if got := b.runs.Load(); got != 1 {
 			t.Errorf("runs = %d, want 1", got)

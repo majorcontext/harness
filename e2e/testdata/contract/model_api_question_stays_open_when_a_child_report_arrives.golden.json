@@ -380,7 +380,7 @@
     "answer_question.a": {
       "status": 202,
       "body": {
-        "seq": 16,
+        "seq": 17,
         "status": "started"
       }
     },
@@ -394,7 +394,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 14,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -424,7 +424,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 16,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -457,7 +457,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 29,
+        "head_seq": 30,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

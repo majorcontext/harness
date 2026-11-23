@@ -381,14 +381,14 @@ func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed 
 	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Notices: []turn.Notice{{Kind: segmentKind, Text: strings.Join(segs, "\n\n")}}, Hooks: s}
 }
 
-// Late returns the plugin tools of the live set that the first tool read of the session did not reach and
-// allowed keeps, in name order.
-func (s *Session) Late(allowed []string) []mcpsrc.Late {
+// Late returns the plugin tools of the live set that the first tool read of the session did not reach, or that
+// has refuses, and allowed keeps, in name order.
+func (s *Session) Late(allowed []string, has func(string) bool) []mcpsrc.Late {
 	base := s.first().names
 	owner := map[string]string{}
 	for _, i := range s.p.live.Load().host.Plugins() {
 		for _, t := range i.Tools {
-			if !slices.Contains(base, t) && protocol.ToolAllowed(allowed, t) {
+			if (!slices.Contains(base, t) || has != nil && !has(t)) && protocol.ToolAllowed(allowed, t) {
 				owner[t] = i.Name
 			}
 		}

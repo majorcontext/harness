@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,7 +41,7 @@ func TestContractRuntimeSessionMCP(t *testing.T) {
 		{"a_session_stdio_server_stops_at_end", func(t *testing.T) { rowASessionStdioServerStops(t, "end") }},
 		{"a_session_stdio_server_stops_at_close", func(t *testing.T) { rowASessionStdioServerStops(t, "close") }},
 		{"a_session_server_that_fails_to_connect_parks", rowASessionServerThatFailsToConnectParks},
-		{"an_open_without_the_option_has_no_session_tools", rowAnOpenWithoutTheOptionHasNoSessionTools},
+		{"an_open_without_the_option_cannot_run_a_session_tool", rowAnOpenWithoutTheOptionCannotRunASessionTool},
 		{"no_secret_of_a_session_server_is_in_the_log", rowNoSecretOfASessionServerIsInTheLog},
 		{"a_session_tool_reaches_the_cli_through_the_harness_endpoint", rowASessionToolReachesTheCLIThroughTheHarnessEndpoint},
 		{"runtime_and_session_servers_answer_in_one_turn_and_status_lists_both", rowRuntimeAndSessionServersAnswerInOneTurn},
@@ -247,7 +248,7 @@ func rowASessionServerThatFailsToConnectParks(t *testing.T) {
 	}
 }
 
-func rowAnOpenWithoutTheOptionHasNoSessionTools(t *testing.T) {
+func rowAnOpenWithoutTheOptionCannotRunASessionTool(t *testing.T) {
 	st := store.NewMemStore()
 	r, fake := sessionMCPRuntime(t, nil, st, config.Config{},
 		harnesstest.Step{Name: "first", Reply: harnesstest.Reply{Text: "ok"}},
@@ -267,10 +268,8 @@ func rowAnOpenWithoutTheOptionHasNoSessionTools(t *testing.T) {
 	if len(reqs) != 3 || !requestHas(reqs[0], "mcp__weather__forecast") {
 		t.Fatalf("requests = %+v", reqs)
 	}
-	for _, n := range reqs[1].Tools {
-		if strings.HasPrefix(n, "mcp") {
-			t.Errorf("an Open without the option has the tool %q", n)
-		}
+	if !slices.Equal(reqs[1].Tools, reqs[0].Tools) {
+		t.Errorf("an Open without the option sends the tools %q, want the declared tools %q", reqs[1].Tools, reqs[0].Tools)
 	}
 	if got := requestText(reqs[2]); !strings.Contains(got, "no such tool available") {
 		t.Errorf("the result of a session tool call after an Open without the option = %s, want no such tool available", got)

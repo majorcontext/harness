@@ -383,7 +383,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 16,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -413,7 +413,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 22,
+        "head_seq": 23,
         "id": "ses:a",
         "last_turn": {
           "cause": "crashed",
@@ -496,11 +496,21 @@
           },
           {
             "d": {
+              "blob_key": "prefix-de9d41df4cb331aacf5d45527b7f6c69880a339c5bca2070cc1ff2d90729df2b",
+              "bytes": 14084,
+              "model": "anthropic/claude-fable-5"
+            },
+            "k": "prefix.declared",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "index": 0,
               "turn_id": "turn#1"
             },
             "k": "step.started",
-            "seq": 6,
+            "seq": 7,
             "t": "\u003ctime\u003e"
           },
           {
@@ -515,7 +525,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 7,
+            "seq": 8,
             "t": "\u003ctime\u003e"
           },
           {
@@ -537,7 +547,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 8,
+            "seq": 9,
             "t": "\u003ctime\u003e"
           },
           {
@@ -557,7 +567,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 9,
+            "seq": 10,
             "t": "\u003ctime\u003e"
           },
           {
@@ -567,7 +577,7 @@
               "turn_id": "turn#1"
             },
             "k": "step.ended",
-            "seq": 10,
+            "seq": 11,
             "t": "\u003ctime\u003e"
           },
           {
@@ -576,7 +586,7 @@
               "turn_id": "turn#1"
             },
             "k": "step.started",
-            "seq": 11,
+            "seq": 12,
             "t": "\u003ctime\u003e"
           },
           {
@@ -591,7 +601,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 12,
+            "seq": 13,
             "t": "\u003ctime\u003e"
           },
           {
@@ -609,7 +619,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 13,
+            "seq": 14,
             "t": "\u003ctime\u003e"
           },
           {
@@ -619,7 +629,7 @@
               "turn_id": "turn#1"
             },
             "k": "step.ended",
-            "seq": 14,
+            "seq": 15,
             "t": "\u003ctime\u003e"
           },
           {
@@ -628,7 +638,7 @@
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
-            "seq": 15,
+            "seq": 16,
             "t": "\u003ctime\u003e"
           }
         ]
@@ -696,11 +706,21 @@
           },
           {
             "d": {
+              "blob_key": "prefix-de9d41df4cb331aacf5d45527b7f6c69880a339c5bca2070cc1ff2d90729df2b",
+              "bytes": 14084,
+              "model": "anthropic/claude-fable-5"
+            },
+            "k": "prefix.declared",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
               "index": 0,
               "turn_id": "turn#1"
             },
             "k": "step.started",
-            "seq": 6,
+            "seq": 7,
             "t": "\u003ctime\u003e"
           },
           {
@@ -715,7 +735,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 7,
+            "seq": 8,
             "t": "\u003ctime\u003e"
           },
           {
@@ -737,7 +757,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 8,
+            "seq": 9,
             "t": "\u003ctime\u003e"
           },
           {
@@ -757,7 +777,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 9,
+            "seq": 10,
             "t": "\u003ctime\u003e"
           },
           {
@@ -767,7 +787,7 @@
               "turn_id": "turn#1"
             },
             "k": "step.ended",
-            "seq": 10,
+            "seq": 11,
             "t": "\u003ctime\u003e"
           },
           {
@@ -776,7 +796,7 @@
               "turn_id": "turn#1"
             },
             "k": "step.started",
-            "seq": 11,
+            "seq": 12,
             "t": "\u003ctime\u003e"
           },
           {
@@ -791,7 +811,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 12,
+            "seq": 13,
             "t": "\u003ctime\u003e"
           },
           {
@@ -809,7 +829,7 @@
               "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 13,
+            "seq": 14,
             "t": "\u003ctime\u003e"
           },
           {
@@ -819,7 +839,7 @@
               "turn_id": "turn#1"
             },
             "k": "step.ended",
-            "seq": 14,
+            "seq": 15,
             "t": "\u003ctime\u003e"
           },
           {
@@ -828,7 +848,7 @@
               "turn_id": "turn#1"
             },
             "k": "turn.ended",
-            "seq": 15,
+            "seq": 16,
             "t": "\u003ctime\u003e"
           },
           {
@@ -844,7 +864,7 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 16,
+            "seq": 17,
             "t": "\u003ctime\u003e"
           },
           {
@@ -855,7 +875,7 @@
               "turn_id": "turn#2"
             },
             "k": "turn.started",
-            "seq": 17,
+            "seq": 18,
             "t": "\u003ctime\u003e"
           },
           {
@@ -864,7 +884,7 @@
               "turn_id": "turn#2"
             },
             "k": "step.started",
-            "seq": 18,
+            "seq": 19,
             "t": "\u003ctime\u003e"
           },
           {
@@ -873,7 +893,7 @@
               "owner": "\u003cowner\u003e"
             },
             "k": "owner.acquired",
-            "seq": 19,
+            "seq": 20,
             "t": "\u003ctime\u003e"
           },
           {
@@ -883,7 +903,7 @@
               "turn_id": "turn#2"
             },
             "k": "step.ended",
-            "seq": 20,
+            "seq": 21,
             "t": "\u003ctime\u003e"
           },
           {
@@ -901,7 +921,7 @@
               "turn_id": "turn#2"
             },
             "k": "item.completed",
-            "seq": 21,
+            "seq": 22,
             "t": "\u003ctime\u003e"
           },
           {
@@ -911,7 +931,7 @@
               "turn_id": "turn#2"
             },
             "k": "turn.ended",
-            "seq": 22,
+            "seq": 23,
             "t": "\u003ctime\u003e"
           }
         ]
@@ -929,7 +949,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 15,
+            "head_seq": 16,
             "id": "ses:a",
             "last_turn": {
               "stop_reason": "completed",
@@ -963,7 +983,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 22,
+            "head_seq": 23,
             "id": "ses:a",
             "last_turn": {
               "cause": "crashed",

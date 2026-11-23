@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -179,13 +180,16 @@ func CatchUp(ctx context.Context, st Storage, sy Sync, epoch uint64, id string) 
 
 // recordBlobs reads each blob that r points to. A state chunk never changes. A
 // later save under the key of a one-blob state overwrites that blob, so the
-// batch carries its newest content.
+// batch carries its newest content. A declaration blob that the store lacks is left
+// out: the receiver declares again, and a batch that fails here would stop
+// every later record.
 func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][]byte, error) {
 	env, err := eventlog.Decode(r.Data)
 	if err != nil {
 		return nil, err
 	}
 	var keys []string
+	optional := false
 	switch e := env.Event.(type) {
 	case protocol.BackendState:
 		if key := cmp.Or(e.Chunk, e.BlobKey); key != "" {
@@ -193,6 +197,8 @@ func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][
 		}
 	case protocol.ToolResultRetained:
 		keys = []string{e.BlobKey}
+	case protocol.PrefixDeclared:
+		keys, optional = []string{e.BlobKey}, true
 	case protocol.ItemCompleted:
 		for _, p := range e.Message.Parts {
 			for _, b := range p.Blobs {
@@ -209,6 +215,9 @@ func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][
 	var blobs map[string][]byte
 	for _, key := range keys {
 		data, err := readBlob(ctx, st, key)
+		if optional && errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}

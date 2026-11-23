@@ -302,7 +302,7 @@
       "body": {
         "command": "accepted",
         "input_id": "in2",
-        "seq": 11
+        "seq": 12
       }
     },
     "command.a#2": {
@@ -310,7 +310,7 @@
       "body": {
         "command": "accepted",
         "input_id": "in4",
-        "seq": 21
+        "seq": 22
       }
     }
   }
