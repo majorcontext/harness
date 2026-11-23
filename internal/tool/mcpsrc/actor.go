@@ -67,12 +67,12 @@ type actor struct {
 	// closing counts, for each name, the dials and clients of earlier entries that did not report closed. A name dials again only at zero.
 	closing map[string]int
 	first   map[*entry]bool
-	reached []string
 	started bool
-	frozen  bool
-	closed  bool
-	after   []func()
-	// signalReady asks the loop to close s.ready after it publishes the snapshot, so a reader that wakes reads the frozen state.
+	// ended is true once the first connect ended.
+	ended  bool
+	closed bool
+	after  []func()
+	// signalReady asks the loop to close s.ready after it publishes the snapshot, so a reader that wakes reads the state that the first connect made.
 	signalReady bool
 }
 
@@ -86,7 +86,7 @@ func (a *actor) run() {
 		select {
 		case m := <-a.s.inbox:
 			m.handle(a)
-			a.checkFreeze()
+			a.checkFirst()
 			a.publish()
 			for _, f := range a.after {
 				f()
@@ -141,18 +141,11 @@ func (a *actor) add(name string, spec config.MCPServerSpec) *entry {
 	e := &entry{name: name, spec: cloneSpec(spec)}
 	e.ctx, e.cancel = context.WithCancel(a.s.ctx)
 	a.entries[name] = e
-	loading := cmp.Or(spec.ToolLoading, a.s.mode, "auto")
-	switch m := a.mem[name]; {
-	case m == nil:
-		a.mem[name] = &memory{loading: loading, seen: map[string]mcp.Tool{}, base: map[string]bool{}, sessionIDHeader: spec.IncludeSessionIDHeader && spec.URL != ""}
-	default:
-		c := *m
-		c.sessionIDHeader = spec.IncludeSessionIDHeader && spec.URL != ""
-		if len(m.base) == 0 {
-			c.loading = loading
-		}
-		a.mem[name] = &c
+	m := memory{loading: cmp.Or(spec.ToolLoading, a.s.mode, "auto"), sessionIDHeader: spec.IncludeSessionIDHeader && spec.URL != ""}
+	if old := a.mem[name]; old != nil {
+		m.up = old.up
 	}
+	a.mem[name] = &m
 	return e
 }
 
@@ -266,10 +259,10 @@ func (a *actor) startFirst() {
 	}
 }
 
-// checkFreeze ends the first connect when every entry of it ended its first attempt and has no read of its tool
-// list in flight. The tools that each server lists then are the tools of the first connect.
-func (a *actor) checkFreeze() {
-	if !a.started || a.frozen {
+// checkFirst ends the first connect when every entry of it ended its first attempt and has no read of its tool
+// list in flight.
+func (a *actor) checkFirst() {
+	if !a.started || a.ended {
 		return
 	}
 	for e := range a.first {
@@ -277,42 +270,20 @@ func (a *actor) checkFreeze() {
 			return
 		}
 	}
-	a.freezeFirst()
+	a.endFirst()
 }
 
-// freezeFirst ends the first connect with the servers that are connected now. The tools of any other server are late
-// tools, and the mcp tool reaches them.
-func (a *actor) freezeFirst() {
-	a.frozen = true
-	for e := range a.first {
-		if e.sv.up() {
-			a.reached = append(a.reached, e.name)
-			a.freeze(e)
-		}
-	}
-	slices.Sort(a.reached)
+// endFirst ends the first connect with the servers that are connected now. A server that connects later is in the
+// live set from then on.
+func (a *actor) endFirst() {
+	a.ended = true
 	a.signalReady = true
 }
 
-func (a *actor) freeze(e *entry) {
-	m := *a.mem[e.name]
-	m.base = map[string]bool{}
-	for _, t := range e.sv.tools {
-		m.base[t.Name] = true
-	}
-	m.inst, m.resources, m.servesSkills, m.skills = e.sv.client.Instructions(), e.sv.resources(), e.sv.servesSkills(), e.sv.skills
-	a.mem[e.name] = &m
-}
-
-// remember adds the tools of sv to what the runtime read of the server.
-func (a *actor) remember(name string, sv *server) {
+// remember notes that the server name connected.
+func (a *actor) remember(name string) {
 	m := *a.mem[name]
-	m.up, m.seen = true, maps.Clone(m.seen)
-	for _, t := range sv.tools {
-		if _, ok := m.seen[t.Name]; !ok {
-			m.seen[t.Name] = t
-		}
-	}
+	m.up = true
 	a.mem[name] = &m
 }
 
@@ -369,7 +340,7 @@ func (a *actor) statuses() []protocol.MCPServerStatus {
 // publish makes the immutable snapshot of the state, and wakes the readers that wait for a change.
 func (a *actor) publish() {
 	sn := &snapshot{live: map[string]*server{}, life: map[string]context.Context{}, health: map[string]health{},
-		mem: maps.Clone(a.mem), reached: slices.Clone(a.reached), changed: make(chan struct{})}
+		mem: maps.Clone(a.mem), changed: make(chan struct{})}
 	for name, e := range a.entries {
 		sn.names = append(sn.names, name)
 		sn.health[name] = health{attempts: e.attempts, reason: e.reason, parked: e.parked}
@@ -386,15 +357,15 @@ func (a *actor) publish() {
 	}
 }
 
-// freezeMsg ends the first connect now, whatever the servers that still connect.
-type freezeMsg struct{}
+// endFirstMsg ends the first connect now, whatever the servers that still connect.
+type endFirstMsg struct{}
 
-func (freezeMsg) handle(a *actor) {
+func (endFirstMsg) handle(a *actor) {
 	if !a.started {
 		a.startFirst()
 	}
-	if !a.frozen && !a.closed {
-		a.freezeFirst()
+	if !a.ended && !a.closed {
+		a.endFirst()
 	}
 }
 
@@ -506,7 +477,7 @@ func (m dialedMsg) handle(a *actor) {
 		a.s.reportAuth(e.name, m.sv.skillsErr)
 		a.s.log.Warn("mcp: skills left out of the list", append([]any{"server", e.name}, logAttrs("skills left out", m.sv.skillsErr)...)...)
 	}
-	a.remember(e.name, e.sv)
+	a.remember(e.name)
 	for _, w := range waiters {
 		w.reply <- connectResult{dialed: w.dialed}
 	}
@@ -593,7 +564,7 @@ func (m listedMsg) handle(a *actor) {
 		sv := newServer(m.client, m.tools, e.spec.ToolTimeout())
 		sv.skills, sv.skillsErr = e.sv.skills, e.sv.skillsErr
 		e.sv = sv
-		a.remember(e.name, e.sv)
+		a.remember(e.name)
 	} else if e.ctx.Err() == nil {
 		a.s.reportAuth(e.name, m.err)
 		a.s.log.Warn("mcp: tool list did not refresh", append([]any{"server", e.name}, logAttrs(reason(m.err), m.err)...)...)
@@ -643,9 +614,8 @@ func (m closeMsg) handle(a *actor) {
 	a.s.discard(false, local...)
 	a.s.discard(true, remote...)
 	clear(a.entries)
-	if !a.frozen {
-		a.frozen = true
-		a.signalReady = true
+	if !a.ended {
+		a.endFirst()
 	}
 	close(m.reply)
 }

@@ -18,10 +18,12 @@ const maxDeclarationBytes = 8 << 20
 
 var errDeclarationTooLarge = errors.New("session: the prefix declaration is above the size bound")
 
-// declaration is the tools and the prompt segment that a session sends in front of its messages.
+// declaration is the tools, the deferred tool names, and the prompt segment that a session sends in front of its messages.
 type declaration struct {
-	Tools  []protocol.ToolSpec `json:"tools"`
-	Prompt string              `json:"prompt,omitempty"`
+	Tools []protocol.ToolSpec `json:"tools"`
+	// Deferred names the tools that were live and deferred when the declaration was built.
+	Deferred []string `json:"deferred,omitempty"`
+	Prompt   string   `json:"prompt,omitempty"`
 }
 
 // encode returns the blob bytes and the key "prefix-<sha256 hex of the bytes>".
@@ -93,6 +95,11 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	for _, t := range ts.Tools {
 		live.Tools = append(live.Tools, t.Spec())
 	}
+	for _, t := range ts.Deferred {
+		if _, ok := t.(turn.Declarable); !ok {
+			live.Deferred = append(live.Deferred, t.Spec().Name)
+		}
+	}
 	decl, search, ok := d.a.declare(ctx, live, model, turn.IsWarm(ctx))
 	if !ok {
 		return ts
@@ -101,14 +108,22 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	has := func(name string) bool {
 		return slices.ContainsFunc(decl.Tools, func(s protocol.ToolSpec) bool { return s.Name == name })
 	}
-	ts.Deferred, ts.Tools = slices.Clip(ts.Deferred), slices.Clone(ts.Tools)
+	accounts := func(name string) bool { return has(name) || slices.Contains(decl.Deferred, name) }
+	ts.Deferred, ts.Tools = slices.Clip(slices.Clone(ts.Deferred)), slices.Clone(ts.Tools)
+	for i, t := range ts.Deferred {
+		if dt, ok := t.(turn.Declarable); ok {
+			var notices []turn.Notice
+			ts.Deferred[i], notices = dt.Declared(has, accounts, decl.Prompt)
+			ts.Notices = replaceNotices(ts.Notices, notices)
+		}
+	}
 	for i, t := range ts.Tools {
 		if !has(live.Tools[i].Name) {
 			ts.Deferred = append(ts.Deferred, t)
 		}
 		if dt, ok := t.(turn.Declarable); ok {
 			var notices []turn.Notice
-			ts.Tools[i], notices = dt.Declared(has, decl.Prompt)
+			ts.Tools[i], notices = dt.Declared(has, accounts, decl.Prompt)
 			ts.Notices = replaceNotices(ts.Notices, notices)
 		}
 	}

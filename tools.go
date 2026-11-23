@@ -137,7 +137,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	srcs = append(srcs, turn.Fixed{selftool.NewSessionInfo(toolHost{r}, id, sp)})
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
-			if !r.mcpSurface(id, func() bool { return mcp.Populated() || plug != nil && plug.Present() }) {
+			if c.OwnsLoop && !mcp.Populated() && (plug == nil || !plug.Present()) {
 				return nil
 			}
 			if plug == nil || c.OwnsLoop {
@@ -224,17 +224,4 @@ func checkHookTimeouts(p *plugin.Plugin) error {
 		}
 	}
 	return nil
-}
-
-// mcpSurface reports whether session id has MCP tools. The first read of the session in this runtime decides it from
-// populated, and the answer holds for the life of the runtime, also after a release and an open.
-func (r *Runtime) mcpSurface(id string, populated func() bool) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	on, ok := r.surfaces[id]
-	if !ok {
-		on = populated()
-		r.surfaces[id] = on
-	}
-	return on
 }

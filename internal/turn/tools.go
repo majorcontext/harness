@@ -82,10 +82,11 @@ type Notice struct {
 }
 
 // Declarable is a Tool that tells deferred tools from loaded ones. Declared returns the tool for a model call whose
-// tools array holds only the tools that has accepts and whose prompt segment is prompt, and the notices that
-// replace the notices of the same Kind.
+// tools array holds only the tools that holds accepts, whose declaration accounts for the tools that accounts accepts
+// (the tools array and the deferred tools that were live when the declaration was built), and whose prompt segment is
+// prompt, and the notices that replace the notices of the same Kind.
 type Declarable interface {
-	Declared(has func(name string) bool, prompt string) (Tool, []Notice)
+	Declared(holds, accounts func(name string) bool, prompt string) (Tool, []Notice)
 }
 
 // Hooks run around each tool call of a model call.

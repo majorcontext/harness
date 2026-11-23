@@ -390,8 +390,8 @@ func TestModelCallWaitsAcrossOverlappingRefreshes(t *testing.T) {
 		close(second.release)
 		synctest.Wait()
 		ts := <-done
-		if !slices.ContainsFunc(ts.Deferred, func(t turn.Tool) bool { return t.Spec().Name == "mcp__w__b" }) {
-			t.Errorf("deferred has %d tools, want the tool of the second refresh", len(ts.Deferred))
+		if !slices.ContainsFunc(ts.Tools, func(t turn.Tool) bool { return t.Spec().Name == "mcp__w__b" }) {
+			t.Errorf("tools have %d tools, want the tool of the second refresh", len(ts.Tools))
 		}
 	})
 }
@@ -618,7 +618,7 @@ func toolDefinitions(t *testing.T, ts turn.Toolset) string {
 	return string(b)
 }
 
-func TestSessionServerThatLoadsLateNeverHoldsATurnAndNeverChangesTheTools(t *testing.T) {
+func TestSessionServerThatLoadsLateNeverHoldsATurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newMemServer("a")
 		list := m.holdNext("tools/list")
@@ -647,11 +647,9 @@ func TestSessionServerThatLoadsLateNeverHoldsATurnAndNeverChangesTheTools(t *tes
 		}
 		close(list.release)
 		synctest.Wait()
-		for _, turnID := range []string{"turn1", "turn2"} {
-			ts = s.Toolset(turn.WithID(context.Background(), turnID), nil, nil, "")
-			if after := toolDefinitions(t, ts); after != before {
-				t.Errorf("tool definitions in %s changed when the server loaded:\n%s\n%s", turnID, before, after)
-			}
+		ts = s.Toolset(turn.WithID(context.Background(), "turn2"), nil, nil, "")
+		if after := toolDefinitions(t, ts); after == before {
+			t.Errorf("tool definitions did not take the server that loaded:\n%s", after)
 		}
 		if n := ts.Notices[1]; n.Text != "" {
 			t.Errorf("loading notice after the load = %q, want none", n.Text)

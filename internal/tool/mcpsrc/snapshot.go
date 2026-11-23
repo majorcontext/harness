@@ -14,8 +14,7 @@ type snapshot struct {
 	life   map[string]context.Context
 	health map[string]health
 	// mem holds every server name that the runtime read, also a removed one.
-	mem     map[string]*memory
-	reached []string
+	mem map[string]*memory
 	// reads counts the servers with a read of the tool list in flight or wanted.
 	reads int
 	// changed closes when the next snapshot is published.
@@ -24,19 +23,18 @@ type snapshot struct {
 
 // view is what one model call reads of the servers of a Source and of its parent.
 type view struct {
-	src     *Source
-	names   []string
-	live    map[string]*server
-	life    map[string]context.Context
-	health  map[string]health
-	mem     map[string]*memory
-	reached []string
+	src    *Source
+	names  []string
+	live   map[string]*server
+	life   map[string]context.Context
+	health map[string]health
+	mem    map[string]*memory
 }
 
 // view returns the servers of s and of its parent from their current snapshots.
 func (s *Source) view() view {
 	sn := s.snap.Load()
-	v := view{src: s, names: sn.names, live: sn.live, life: sn.life, health: sn.health, mem: sn.mem, reached: sn.reached}
+	v := view{src: s, names: sn.names, live: sn.live, life: sn.life, health: sn.health, mem: sn.mem}
 	if s.parent == nil {
 		return v
 	}
@@ -47,7 +45,6 @@ func (s *Source) view() view {
 	maps.Copy(v.life, sn.life)
 	maps.Copy(v.health, sn.health)
 	maps.Copy(v.mem, sn.mem)
-	v.reached = slices.Concat(pv.reached, sn.reached)
 	return v
 }
 

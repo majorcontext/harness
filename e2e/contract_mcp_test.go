@@ -665,7 +665,7 @@ func TestContractMCPAvailability(t *testing.T) {
 			},
 		},
 		{name: "mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: compactionBreak(), setup: pinSetup, model: pinModel, actions: pinActions},
-		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: compactionBreak(), chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
+		{name: "bifrost_mcp_notice_then_compaction_keeps_a_call_paired", prefixBreaks: prefixBreak("a compaction replaces the folded history, and the declaration takes the tools of the server that connected late", breakHistory, breakTools), chat: true, setup: pinSetup, model: pinModel, actions: pinActions},
 	}...))
 }
 

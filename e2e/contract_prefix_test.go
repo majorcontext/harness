@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,10 +54,16 @@ var declaredPrefixRows = map[string]runtimeRow{
 	"a_declared_tool_that_is_gone_reads_no_such_tool_after_a_restart":          sameAsServe(),
 	"a_plugin_tool_that_the_declaration_lacks_is_searched_selected_and_called": sameAsServe(),
 	"a_first_server_after_a_declaration_with_no_mcp_tool_gives_no_notice":      sameAsServe(),
+	"a_removed_last_server_leaves_the_next_declaration_with_no_mcp_tool":       sameAsServe(),
+	"a_declared_mcp_tool_works_after_the_last_plugin_is_removed":               sameAsServe(),
+	"a_tool_added_to_a_server_with_a_cut_catalog_is_named_by_the_added_notice": sameAsServe(),
+	"a_plugin_added_in_a_running_process_is_declared_at_the_next_compaction":   sameAsServe(),
 	"a_tool_added_to_a_lazy_server_is_named_by_the_added_notice":               sameAsServe(),
 	"a_backend_that_owns_the_loop_declares_nothing":                            sameAsServe(),
 	"a_tool_that_the_declaration_lacks_is_selected_with_its_schema":            sameAsServe(),
 	"a_compaction_between_turns_declares_the_live_tools":                       sameAsServe(),
+	"a_compaction_between_turns_declares_a_changed_description":                sameAsServe(),
+	"a_session_that_does_not_compact_keeps_its_tools_when_another_declares":    sameAsServe(),
 	"a_compaction_with_no_change_keeps_the_tools":                              sameAsServe(),
 	"a_tool_change_inside_a_turn_waits_for_a_compaction":                       sameAsServe(),
 	"a_model_change_declares_the_tools_of_the_new_model":                       sameAsServe(),
@@ -66,9 +74,21 @@ const forecastFirst = "Get the weather forecast for a city"
 
 var (
 	declaredWeather = mcpServerDef{name: "weather", spec: harnesstest.MCPSpec{Name: "weather", Tools: weatherTools(forecastFirst)}}
+	liveWeather     = mcpServerDef{name: "weather", spec: harnesstest.MCPSpec{Name: "weather", Tools: weatherTools(forecastFirst)}, sse: true}
 	keepOneTurn     = map[string]any{"compaction_keep_turns": 1}
 	gistSummary     = harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}}
 )
+
+// bigTools is the tool set of a server with more tools than the prompt catalog lists.
+func bigTools() []harnesstest.MCPTool {
+	var tools []harnesstest.MCPTool
+	for i := range 205 {
+		tools = append(tools, harnesstest.MCPTool{Name: fmt.Sprintf("t%03d", i), Description: "Tool number " + strconv.Itoa(i), Result: mcpText("ok")})
+	}
+	return tools
+}
+
+var bigWeather = mcpServerDef{name: "big", spec: harnesstest.MCPSpec{Name: "big", Tools: bigTools()}, sse: true, toolLoading: "lazy"}
 
 func replyTo(name, user, reply string) harnesstest.Step {
 	return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
@@ -147,26 +167,33 @@ func TestContractDeclaredPrefix(t *testing.T) {
 	})
 }
 
+// callForecast scripts a model call that runs the forecast tool when the last user text is user, then replies with reply.
+func callForecast(user, id, reply string) []harnesstest.Step {
+	forecast := withID(id, mcpTool("weather", "forecast", "city", "Oslo"))
+	return []harnesstest.Step{
+		{Name: "call " + user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{forecast}}},
+		{Name: "done " + user, Match: harnesstest.LastToolResult("mcp__weather__forecast"), Reply: harnesstest.Reply{Text: reply}},
+	}
+}
+
 func TestContractDeclaredPrefixAfterACompaction(t *testing.T) {
-	first, weather, text := forecastFirst, declaredWeather, replyTo
+	first, weather, live, text := forecastFirst, declaredWeather, liveWeather, replyTo
 	keepOne, summary := keepOneTurn, gistSummary
-	forecast := mcpTool("weather", "forecast", "city", "Oslo")
+	toolsChange := compactionBreak()
 	runScenarios(t, []scenario{
 		{
-			name: "a_compaction_between_turns_declares_the_live_tools", prefixBreaks: compactionBreak(),
-			config: keepOne, setup: mcpSetup(nil, weather),
-			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3")},
+			name: "a_compaction_between_turns_declares_the_live_tools", prefixBreaks: toolsChange,
+			config: keepOne, setup: mcpSetup(nil, live),
+			model: append(append([]harnesstest.Step{text("one", "one", "1")}, callForecast("two", "toolu_2", "2")...), summary, text("three", "three", "3")),
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "one"}, waitIdle{as: "a"},
-				setMCPTools{server: "weather", tools: weatherTools("A changed description", weatherAlerts)},
-				restart{},
+				changeMCPTools{server: "weather", tools: weatherTools(first, weatherAlerts)},
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
-				expectTools{req: 2, lacks: []string{"mcp__weather__alerts"}},
+				expectTools{req: 3, sameAs: 1, lacks: []string{"mcp__weather__alerts"}},
 				compact{as: "a"},
 				submit{as: "a", text: "three"}, waitIdle{as: "a"},
-				expectTools{req: 4, has: []string{"mcp__weather__alerts"}},
-				expectToolDescription{req: 4, tool: "mcp__weather__forecast", has: "A changed description"},
+				expectTools{req: 5, has: []string{"mcp__weather__alerts"}},
 				journalPage{as: "a", limit: 500},
 			},
 		},
@@ -186,25 +213,82 @@ func TestContractDeclaredPrefixAfterACompaction(t *testing.T) {
 			},
 		},
 		{
-			name: "a_tool_change_inside_a_turn_waits_for_a_compaction", prefixBreaks: compactionBreak(),
-			config: keepOne, setup: mcpSetup(nil, weather),
-			model: []harnesstest.Step{
-				text("one", "one", "1"), text("two", "two", "2"), summary,
-				{Name: "call", Match: harnesstest.LastUserText("three"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{withID("toolu_3", forecast)}}},
-				{Name: "done", Match: harnesstest.LastToolResult("mcp__weather__forecast"), Reply: harnesstest.Reply{Text: "3"}},
-			},
+			name: "a_tool_change_inside_a_turn_waits_for_a_compaction", prefixBreaks: toolsChange,
+			config: keepOne, setup: mcpSetup(nil, live),
+			model: append(append(append([]harnesstest.Step{text("one", "one", "1")}, callForecast("two", "toolu_2", "2")...), summary),
+				callForecast("three", "toolu_3", "3")...),
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "one"}, waitIdle{as: "a"},
-				setMCPTools{server: "weather", tools: weatherTools(first, weatherAlerts)},
-				restart{},
+				changeMCPTools{server: "weather", tools: weatherTools(first, weatherAlerts)},
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
 				compact{as: "a"},
 				changeMCPTools{server: "weather", tools: weatherTools("A changed description", weatherAlerts, weatherSnow)},
 				submit{as: "a", text: "three"}, waitIdle{as: "a"},
-				expectTools{req: 4, has: []string{"mcp__weather__alerts"}, lacks: []string{"mcp__weather__snow"}},
+				expectTools{req: 5, has: []string{"mcp__weather__alerts"}, lacks: []string{"mcp__weather__snow"}},
+				expectTools{req: 6, sameAs: 5},
+				expectToolDescription{req: 6, tool: "mcp__weather__forecast", has: first},
+			},
+		},
+	})
+}
+
+func TestContractDeclaredPrefixLiveState(t *testing.T) {
+	first, live, text := forecastFirst, liveWeather, replyTo
+	keepOne, summary, toolsChange := keepOneTurn, gistSummary, compactionBreak()
+	add := putMCP{servers: []string{"weather"}}
+	runScenarios(t, []scenario{
+		{
+			name: "a_removed_last_server_leaves_the_next_declaration_with_no_mcp_tool", prefixBreaks: toolsChange,
+			config: keepOne, setup: mcpSetup(nil, live),
+			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), summary, text("three", "three", "3"), text("four", "four", "4")},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				putMCP{servers: nil},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				expectTools{req: 2, sameAs: 1, has: []string{"mcp", "mcp__weather__forecast"}, text: []string{"[mcp: removed"}},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectTools{req: 4, lacks: []string{"mcp", "mcp__weather__forecast"}},
+				add, awaitMCPConnected{put: add},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
 				expectTools{req: 5, sameAs: 4},
-				expectToolDescription{req: 5, tool: "mcp__weather__forecast", has: first},
+				expectNoText{req: 5, text: "mcp__weather__forecast"},
+			},
+		},
+		{
+			name: "a_compaction_between_turns_declares_a_changed_description", prefixBreaks: toolsChange,
+			config: keepOne, setup: mcpSetup(nil, live),
+			model: append(append([]harnesstest.Step{text("one", "one", "1")}, callForecast("two", "toolu_2", "2")...), summary, text("three", "three", "3")),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				changeMCPTools{server: "weather", tools: weatherTools("A changed description")},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				expectToolDescription{req: 3, tool: "mcp__weather__forecast", has: first},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectToolDescription{req: 5, tool: "mcp__weather__forecast", has: "A changed description"},
+			},
+		},
+		{
+			name: "a_session_that_does_not_compact_keeps_its_tools_when_another_declares", prefixBreaks: toolsChange,
+			config: keepOne, setup: mcpSetup(nil, live),
+			model: append(append([]harnesstest.Step{text("a one", "a one", "1"), text("b one", "b one", "1")}, callForecast("a two", "toolu_2", "2")...),
+				summary, text("a three", "a three", "3"), text("b two", "b two", "2")),
+			actions: []action{
+				create{as: "a"}, create{as: "b"},
+				submit{as: "a", text: "a one"}, waitIdle{as: "a"},
+				submit{as: "b", text: "b one"}, waitIdle{as: "b"},
+				changeMCPTools{server: "weather", tools: weatherTools("A changed description", weatherAlerts)},
+				submit{as: "a", text: "a two"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "a three"}, waitIdle{as: "a"},
+				expectTools{req: 6, has: []string{"mcp__weather__alerts"}},
+				submit{as: "b", text: "b two"}, waitIdle{as: "b"},
+				expectTools{req: 7, sameAs: 2, lacks: []string{"mcp__weather__alerts"}},
+				expectToolDescription{req: 7, tool: "mcp__weather__forecast", has: first},
 			},
 		},
 	})
@@ -215,16 +299,17 @@ func TestContractDeclaredPrefixAtOtherChanges(t *testing.T) {
 	runScenarios(t, []scenario{
 		{
 			name: "a_model_change_declares_the_tools_of_the_new_model", prefixBreaks: prefixBreak("a model change declares the live tools", breakTools),
-			setup: mcpSetup(nil, weather),
-			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2")},
+			setup: mcpSetup(nil, liveWeather),
+			model: append(append([]harnesstest.Step{text("one", "one", "1")}, callForecast("two", "toolu_2", "2")...), text("three", "three", "3")),
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "one"}, waitIdle{as: "a"},
-				setMCPTools{server: "weather", tools: weatherTools(first, weatherAlerts)},
-				restart{},
-				setModel{as: "a", model: "anthropic/claude-opus-5"},
+				changeMCPTools{server: "weather", tools: weatherTools(first, weatherAlerts)},
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
-				expectTools{req: 2, has: []string{"mcp__weather__alerts"}},
+				expectTools{req: 3, lacks: []string{"mcp__weather__alerts"}},
+				setModel{as: "a", model: "anthropic/claude-opus-5"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectTools{req: 4, has: []string{"mcp__weather__alerts"}},
 				journalPage{as: "a", limit: 500},
 			},
 		},
@@ -246,12 +331,43 @@ func TestContractDeclaredPrefixAtOtherChanges(t *testing.T) {
 }
 
 func TestContractDeclaredPrefixPlugin(t *testing.T) {
+	guarded := map[string]any{"plugins": []any{pluginEntry(t, "guard", nil)}, "compaction_keep_turns": 1}
+	withFixture := putPlugins{plugins: []map[string]any{pluginEntry(t, "guard", nil), pluginEntry(t, "fixture", nil)}}
+	fixtureTools := []string{"fixture_echo"}
 	late, err := json.Marshal(map[string]any{"plugins": []any{pluginEntry(t, "late", map[string]any{"late_tool": "late_report"})}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lateProject := string(late)
 	runScenarios(t, []scenario{
+		{
+			name:   "a_declared_mcp_tool_works_after_the_last_plugin_is_removed",
+			config: pluginConfig(t, nil),
+			model:  afterFirstTurn(mcpAction("action", "status")),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				putPlugins{plugins: []map[string]any{}},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				expectTools{req: 2, has: []string{"mcp"}},
+				expectTools{req: 3, text: []string{`"servers"`}},
+			},
+		},
+		{
+			name: "a_plugin_added_in_a_running_process_is_declared_at_the_next_compaction", prefixBreaks: compactionBreak(),
+			config: guarded,
+			model:  []harnesstest.Step{replyTo("one", "one", "1"), replyTo("two", "two", "2"), gistSummary, replyTo("three", "three", "3")},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				withFixture,
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				expectTools{req: 2, sameAs: 1, lacks: fixtureTools},
+				compact{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectTools{req: 4, has: fixtureTools},
+			},
+		},
 		{
 			name:   "a_plugin_tool_that_the_declaration_lacks_is_searched_selected_and_called",
 			driver: inTreeWith(nil, "", pluginConfig(t, nil)),
@@ -292,36 +408,23 @@ func (a expectNoText) run(t *testing.T, r *run) {
 	}
 }
 
-// addMCPServer writes a project config that adds the fixture server weather.
-type addMCPServer struct{}
-
-func (addMCPServer) run(t *testing.T, r *run) {
-	t.Helper()
-	srv := r.fx["weather"].(*harnesstest.MCPServer)
-	body, err := json.Marshal(map[string]any{"mcp_servers": map[string]any{"weather": map[string]any{"url": srv.URL(), "headers": map[string]string{"Authorization": mcpToken}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile{path: ".harness.json", body: string(body)}.run(t, r)
-}
-
 func TestContractDeclaredPrefixNotices(t *testing.T) {
 	first, text := forecastFirst, replyTo
 	unlisted := declaredWeather
 	unlisted.unlisted = true
 	lazy := declaredWeather
 	lazy.toolLoading = "lazy"
+	add := putMCP{servers: []string{"weather"}}
 	runScenarios(t, []scenario{
 		{
 			name: "a_first_server_after_a_declaration_with_no_mcp_tool_gives_no_notice", prefixBreaks: compactionBreak(),
 			setup:  mcpSetup(nil, unlisted),
-			driver: inTreeWith(nil, "", keepOneTurn),
+			config: keepOneTurn,
 			model:  []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), gistSummary, text("three", "three", "3")},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "one"}, waitIdle{as: "a"},
-				addMCPServer{},
-				restart{},
+				add, awaitMCPConnected{put: add},
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
 				expectTools{req: 2, sameAs: 1, lacks: []string{"mcp"}},
 				expectNoText{req: 2, text: "[mcp:"},
@@ -329,6 +432,19 @@ func TestContractDeclaredPrefixNotices(t *testing.T) {
 				compact{as: "a"},
 				submit{as: "a", text: "three"}, waitIdle{as: "a"},
 				expectTools{req: 4, has: []string{"mcp", "mcp__weather__forecast"}},
+			},
+		},
+		{
+			name:  "a_tool_added_to_a_server_with_a_cut_catalog_is_named_by_the_added_notice",
+			setup: mcpSetup(nil, bigWeather),
+			model: afterFirstTurn(mcpAction("action", "call", "tool", "mcp__big__t000")),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				changeMCPTools{server: "big", tools: append(bigTools(), harnesstest.MCPTool{Name: "newtool", Description: "A tool that arrives later", Result: mcpText("ok")})},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				expectTools{req: 1, lacks: []string{"mcp__big__newtool"}},
+				expectTools{req: 3, text: []string{"mcp__big__newtool"}},
 			},
 		},
 		{

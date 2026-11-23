@@ -129,8 +129,8 @@ func (v view) skillsBlock() string {
 	used := units(open) + units(end) + units(more(1<<20))
 	var b strings.Builder
 	listed, left := 0, 0
-	for _, name := range v.reached {
-		for _, s := range v.mem[name].skills {
+	for _, name := range v.names {
+		for _, s := range v.live[name].skillList() {
 			desc, _ := s.Frontmatter["description"].(string)
 			line := fmt.Sprintf("<skill server=\"%s\" uri=\"%s\" name=\"%s\">%s</skill>\n", attr(name), attr(s.URI),
 				attr(fmt.Sprint(s.Frontmatter["name"])), tag.Replace(cutRunes(strings.TrimSpace(desc), descriptionMax)))
@@ -157,7 +157,15 @@ func (v view) skillsBlock() string {
 func units(s string) int { return len(utf16.Encode([]rune(s))) }
 
 func (v view) skills() bool {
-	return slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].servesSkills })
+	return slices.ContainsFunc(v.names, func(n string) bool { return v.live[n].servesSkills() })
+}
+
+// skillList returns the skills that s lists. A server that is not connected has none.
+func (s *server) skillList() []mcp.Skill {
+	if !s.up() {
+		return nil
+	}
+	return s.skills
 }
 
 type heldKey struct{ session, server, uri string }

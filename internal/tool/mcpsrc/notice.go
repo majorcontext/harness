@@ -19,7 +19,7 @@ const (
 	loadingKind = "mcp-loading"
 )
 
-const addedHeader = "[mcp: tools added after the first connect — %s. They are deferred: to use one you MUST first read its definition with " +
+const addedHeader = "[mcp: tools added after the tool list of this session was fixed — %s. They are deferred: to use one you MUST first read its definition with " +
 	`mcp(action="select", tools=["mcp__server__tool"]), then run it with mcp(action="call", tool="mcp__server__tool", arguments={...}). Find one with mcp(action="search", query="...").]`
 
 // unavailable renders the notice that names each server that is not
@@ -47,16 +47,16 @@ func (v view) unavailable() string {
 		". Tools from these servers are temporarily absent and may return later in this session.]"
 }
 
-// added renders the notice of the tools that arrived after the first connect, with the instructions of a
-// server that the first connect did not reach, and the notice of the servers that went. It is "" when there
-// is neither. The text follows the live state, so a later model call renders it again.
-func (v view) added(ok func(string) bool, late []Late, undeclared func(string) bool) string {
+// added renders the notice of the live tools that the declaration lacks, with the instructions of a server that the
+// prompt does not hold, and the notice of the servers that went. undeclared tells the tools that the declaration
+// lacks, and inPrompt the servers whose instructions the prompt holds; nil: none. It is "" when there is nothing to
+// say. The text follows the live state, so a later model call renders it again.
+func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func(string) bool) string {
 	var servers, blocks []string
 	for _, name := range v.names {
-		m := v.mem[name]
 		var late []remote
 		for _, r := range v.remotes(name, ok) {
-			if r.listed && (!m.base[r.name] || undeclared != nil && undeclared(r.spec.Name)) {
+			if undeclared != nil && undeclared(r.spec.Name) {
 				late = append(late, r)
 			}
 		}
@@ -66,7 +66,7 @@ func (v view) added(ok func(string) bool, late []Late, undeclared func(string) b
 		servers = append(servers, name)
 		var b strings.Builder
 		fmt.Fprintf(&b, `<server name="%s">%s`, attr(name), toolLines(late))
-		if text := cutRunes(strings.TrimSpace(v.live[name].client.Instructions()), instructionsMax); text != "" && !slices.Contains(v.reached, name) {
+		if text := v.serverText(name); text != "" && (inPrompt == nil || !inPrompt(name)) {
 			b.WriteString("\n\n" + tag.Replace(text))
 		}
 		blocks = append(blocks, b.String()+"\n</server>")
@@ -78,16 +78,22 @@ func (v view) added(ok func(string) bool, late []Late, undeclared func(string) b
 	if text := addedPlugins(late); text != "" {
 		out = append(out, text)
 	}
-	var removed []string
-	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
-		if _, ok := v.health[name]; !ok && v.mem[name].up {
-			removed = append(removed, name)
-		}
-	}
+	removed := v.removedNames()
 	if len(removed) > 0 {
 		out = append(out, "[mcp: removed — "+strings.Join(removed, ", ")+". The servers and their tools are gone, and a call to one of those tools fails.]")
 	}
 	return strings.Join(out, "\n")
+}
+
+// removedNames returns the servers that connected once and are not in the live set, in name order.
+func (v view) removedNames() []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
+		if _, ok := v.health[name]; !ok && v.mem[name].up {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // status returns the live state of each server, in the order of their names.
@@ -106,24 +112,25 @@ var tag = strings.NewReplacer("<mcp_instructions>", "(mcp_instructions)", "</mcp
 
 func attr(v string) string { return strings.ReplaceAll(tag.Replace(v), `"`, "'") }
 
-// instructions is the segment of the servers that the first connect reached: each one's own
-// instructions with its allowed tool names, and a line about the resource tools. It reads what the first
-// connect froze, so it never changes.
+// serverOpen is the start of the tag of the server name in the instructions segment.
+func serverOpen(name string) string { return fmt.Sprintf(`<server name="%s" tools="`, attr(name)) }
+
+// instructions is the segment of the connected servers: each one's own instructions with its allowed tool names,
+// and a line about the resource tools.
 func (v view) instructions(ok func(string) bool) string {
 	var b strings.Builder
-	for _, name := range v.reached {
-		m := v.mem[name]
+	for _, name := range v.names {
 		text := v.serverText(name)
 		if text == "" {
 			continue
 		}
 		var tools []string
-		for _, t := range slices.Sorted(maps.Keys(m.base)) {
-			if n := prefix + name + "__" + t; ok(n) {
+		for _, t := range v.live[name].toolList() {
+			if n := prefix + name + "__" + t.Name; ok(n) {
 				tools = append(tools, attr(n))
 			}
 		}
-		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), listNames(tools), tag.Replace(text))
+		fmt.Fprintf(&b, "\n%s%s\">\n%s\n</server>", serverOpen(name), listNames(tools), tag.Replace(text))
 	}
 	if v.resources() {
 		return "<mcp_instructions>\n" + v.common() + b.String() + "\n</mcp_instructions>"
@@ -136,13 +143,16 @@ func (v view) instructions(ok func(string) bool) string {
 
 // perServer is the guidance of the segment for an external harness, which shows the instructions of each
 // server under the name of that server and cuts each one by itself: the line about the resource tools, and
-// the instructions of each server that the first connect reached, cut as in the segment.
+// the instructions of each connected server, cut as in the segment.
 func (v view) perServer() turn.MCPInstructions {
 	var out turn.MCPInstructions
 	if v.resources() {
 		out.Common = v.common()
 	}
-	for _, name := range v.reached {
+	for _, name := range v.names {
+		if !v.live[name].up() {
+			continue
+		}
 		if m := v.mem[name]; m != nil && m.sessionIDHeader {
 			if out.SessionIDHeaderServers == nil {
 				out.SessionIDHeaderServers = map[string]bool{}
@@ -159,9 +169,13 @@ func (v view) perServer() turn.MCPInstructions {
 	return out
 }
 
-// serverText is the instructions of the server name that the first connect froze, cut at instructionsMax.
+// serverText is the instructions of the connected server name, cut at instructionsMax.
 func (v view) serverText(name string) string {
-	return cutRunes(strings.TrimSpace(v.mem[name].inst), instructionsMax)
+	sv := v.live[name]
+	if !sv.up() {
+		return ""
+	}
+	return cutRunes(strings.TrimSpace(sv.client.Instructions()), instructionsMax)
 }
 
 func (v view) common() string {
@@ -171,15 +185,15 @@ func (v view) common() string {
 	return resourcesLine
 }
 
-// resources reports whether a server that the first connect reached serves resources.
+// resources reports whether a connected server serves resources.
 func (v view) resources() bool {
-	return slices.ContainsFunc(v.reached, func(n string) bool { return v.mem[n].resources })
+	return slices.ContainsFunc(v.names, func(n string) bool { return v.live[n].resources() })
 }
 
-const pluginsHeader = "[plugins: tools added after the first tool read — %s. They are deferred: to use one you MUST first read its definition with " +
+const pluginsHeader = "[plugins: tools added after the tool list of this session was fixed — %s. They are deferred: to use one you MUST first read its definition with " +
 	`mcp(action="select", tools=["tool_name"]), then run it with mcp(action="call", tool="tool_name", arguments={...}). Find one with mcp(action="search", query="...").]`
 
-// addedPlugins renders the notice of the live plugin tools that the first tool read did not reach, one block for
+// addedPlugins renders the notice of the live plugin tools that the declaration lacks, one block for
 // each plugin in name order, or "" when there is none.
 func addedPlugins(late []Late) string {
 	byPlugin := map[string][]remote{}

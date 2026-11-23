@@ -165,7 +165,7 @@ func (s *Source) turnReady(ctx context.Context) bool {
 	if turn.ID(ctx) == "" {
 		return true
 	}
-	if !s.send(freezeMsg{}) {
+	if !s.send(endFirstMsg{}) {
 		return true
 	}
 	select {
