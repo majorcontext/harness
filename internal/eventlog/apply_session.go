@@ -162,20 +162,32 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 	return nil
 }
 
+// Pin is a recorded pin. Old is true from a declaration until a model step
+// completes an assistant item, so that only the call of the declaration
+// retires a pin.
+type Pin struct {
+	protocol.PinRecorded
+	Old bool
+}
+
 func (s *State) applyPin(e protocol.PinRecorded) error {
-	if e.Notice == "" || e.Text == "" || e.At < 0 {
-		return illegal("pin.recorded needs a notice, a text, and a place")
+	if e.Notice == "" || e.At < 0 {
+		return illegal("pin.recorded needs a notice and a place")
 	}
-	s.pins = append(s.pins, e)
+	if e.Text == "" {
+		s.pins = slices.DeleteFunc(slices.Clone(s.pins), func(p Pin) bool { return p.Notice == e.Notice })
+		return nil
+	}
+	s.pins = append(s.pins, Pin{PinRecorded: e})
 	return nil
 }
 
 // movePins keeps the newest pin of each notice and puts it after the first n
 // messages of the history.
 func (s *State) movePins(n int) {
-	var kept []protocol.PinRecorded
+	var kept []Pin
 	for i, p := range s.pins {
-		if !slices.ContainsFunc(s.pins[i+1:], func(q protocol.PinRecorded) bool { return q.Notice == p.Notice }) {
+		if !slices.ContainsFunc(s.pins[i+1:], func(q Pin) bool { return q.Notice == p.Notice }) {
 			p.At = n
 			kept = append(kept, p)
 		}
@@ -187,6 +199,7 @@ func (s *State) applyDeclared(e protocol.PrefixDeclared) error {
 	if e.BlobKey == "" || e.Model == "" {
 		return illegal("prefix.declared needs a blob key and a model")
 	}
+	s.setPinsOld(true)
 	s.declared, s.declaredSet, s.declareDue = e, true, false
 	return nil
 }
@@ -197,4 +210,12 @@ func (s *State) applyRetained(e protocol.ToolResultRetained) error {
 	}
 	s.retained = append(s.retained, e)
 	return nil
+}
+
+// setPinsOld marks every pin as older than the declaration, or ends that.
+func (s *State) setPinsOld(old bool) {
+	s.pins = slices.Clone(s.pins)
+	for i := range s.pins {
+		s.pins[i].Old = old
+	}
 }

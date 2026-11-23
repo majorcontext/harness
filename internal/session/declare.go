@@ -26,6 +26,8 @@ type declaration struct {
 	// Deferred names the tools that were live and deferred when the declaration was built.
 	Deferred []string `json:"deferred,omitempty"`
 	Prompt   string   `json:"prompt,omitempty"`
+	// Gone lists the MCP servers that had left the live set when the declaration was built.
+	Gone []turn.Gone `json:"gone,omitempty"`
 	// System is the system prompt segments that come before Prompt. nil: the blob was written before a declaration
 	// held the system prompt.
 	System []string `json:"system"`
@@ -125,7 +127,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	if d.a.cfg.Backend.Capabilities(model).OwnsLoop {
 		return d.withSystem(ts, d.a.livePrompt(ctx), len(history), warm)
 	}
-	live := declaration{Tools: []protocol.ToolSpec{}, Prompt: ts.Prompt}
+	live := declaration{Tools: []protocol.ToolSpec{}, Prompt: ts.Prompt, Gone: ts.Gone}
 	for _, t := range ts.Tools {
 		live.Tools = append(live.Tools, t.Spec())
 	}
@@ -148,7 +150,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	for i, t := range ts.Deferred {
 		if dt, ok := t.(turn.Declarable); ok {
 			var notices []turn.Notice
-			ts.Deferred[i], notices = dt.Declared(has, accounts, decl.Prompt)
+			ts.Deferred[i], notices = dt.Declared(has, accounts, decl.Prompt, decl.Gone)
 			ts.Notices = replaceNotices(ts.Notices, notices)
 		}
 	}
@@ -158,7 +160,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 		}
 		if dt, ok := t.(turn.Declarable); ok {
 			var notices []turn.Notice
-			ts.Tools[i], notices = dt.Declared(has, accounts, decl.Prompt)
+			ts.Tools[i], notices = dt.Declared(has, accounts, decl.Prompt, decl.Gone)
 			ts.Notices = replaceNotices(ts.Notices, notices)
 		}
 	}
@@ -254,7 +256,9 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 		return current, v.rec.SearchAllowed, usable
 	}
 	if !forced {
-		_, same, err := live.withSystem(current.info()).encode()
+		unchanged := live.withSystem(current.info())
+		unchanged.Gone = current.Gone
+		_, same, err := unchanged.encode()
 		if err == nil && same == v.rec.BlobKey {
 			a.markChecked(ctx, v.first)
 			return current, v.rec.SearchAllowed, true

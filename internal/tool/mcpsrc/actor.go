@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"math"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"sync"
@@ -72,12 +73,14 @@ type actor struct {
 	ended  bool
 	closed bool
 	after  []func()
+	// incarnation starts the generation of every name, so that a generation of another process never equals one of this process.
+	incarnation uint64
 	// signalReady asks the loop to close s.ready after it publishes the snapshot, so a reader that wakes reads the state that the first connect made.
 	signalReady bool
 }
 
 func newActor(s *Source) *actor {
-	return &actor{s: s, entries: map[string]*entry{}, mem: map[string]*memory{}, closing: map[string]int{}, first: map[*entry]bool{}}
+	return &actor{s: s, incarnation: rand.Uint64(), entries: map[string]*entry{}, mem: map[string]*memory{}, closing: map[string]int{}, first: map[*entry]bool{}}
 }
 
 func (a *actor) run() {
@@ -142,9 +145,11 @@ func (a *actor) add(name string, spec config.MCPServerSpec) *entry {
 	e.ctx, e.cancel = context.WithCancel(a.s.ctx)
 	a.entries[name] = e
 	m := memory{loading: cmp.Or(spec.ToolLoading, a.s.mode, "auto"), sessionIDHeader: spec.IncludeSessionIDHeader && spec.URL != ""}
+	m.gen = a.incarnation
 	if old := a.mem[name]; old != nil {
-		m.up = old.up
+		m.up, m.gen = old.up, old.gen
 	}
+	m.gen++
 	a.mem[name] = &m
 	return e
 }

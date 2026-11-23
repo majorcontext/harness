@@ -134,11 +134,13 @@ func TestContractRuntimeSkillsRefresh(t *testing.T) {
 	t.Run("a_failed_list_keeps_the_last_skills_and_adds_no_segment", rowAFailedListKeepsTheLastSkillsAndAddsNoSegment)
 	t.Run("a_skill_added_after_a_reopen_is_pinned_after_the_history", rowASkillAddedAfterAReopenIsPinnedAfterTheHistory)
 	t.Run("a_pin_stays_in_place_when_a_new_runtime_opens_the_session", rowAPinStaysInPlaceWhenANewRuntimeOpensTheSession)
-	t.Run("a_skill_added_after_a_reopen_and_an_mcp_notice_follow_the_new_input", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
+	t.Run("a_skill_added_after_a_reopen_follows_the_new_input_and_the_mcp_notice_stays_where_it_was", rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace)
 	t.Run("a_reopened_session_keeps_the_skills_of_its_declared_prompt_and_its_update", rowAReopenedSessionKeepsTheSkillsOfItsDeclaredPromptAndItsUpdate)
 	t.Run("a_failed_list_at_the_first_refresh_of_a_reopened_session_keeps_the_declared_skills", rowAFailedListAtTheFirstRefreshOfAReopenedSessionKeepsTheDeclaredSkills)
 	t.Run("a_failed_list_at_the_first_refresh_of_a_session_keeps_the_declared_skills", rowAFailedListAtTheFirstRefreshOfASessionKeepsTheDeclaredSkills)
-	t.Run("a_compaction_between_turns_lists_the_changed_skills_and_moves_the_update_baseline", rowACompactionBetweenTurnsListsTheChangedSkillsAndMovesTheUpdateBaseline)
+	t.Run("a_compaction_between_turns_lists_the_changed_skills_and_drops_the_update_that_it_states", rowACompactionBetweenTurnsListsTheChangedSkillsAndDropsTheUpdateThatItStates)
+	t.Run("a_compaction_between_turns_drops_the_cleared_skills_text_that_the_new_list_states", rowACompactionBetweenTurnsDropsTheClearedSkillsText)
+	t.Run("a_restart_with_the_skills_unchanged_sends_the_same_bytes_and_records_no_update", rowARestartWithTheSkillsUnchangedRecordsNoUpdate)
 }
 
 func rowASkillAddedMidSessionIsAnnouncedOnceAfterTheHistoryAndLoads(t *testing.T) {
@@ -271,7 +273,7 @@ func rowAReopenedSessionKeepsTheSkillsOfItsDeclaredPromptAndItsUpdate(t *testing
 	}
 }
 
-func rowACompactionBetweenTurnsListsTheChangedSkillsAndMovesTheUpdateBaseline(t *testing.T) {
+func rowACompactionBetweenTurnsListsTheChangedSkillsAndDropsTheUpdateThatItStates(t *testing.T) {
 	keep := 1
 	t.Parallel()
 	src := &editableSkills{}
@@ -297,8 +299,73 @@ func rowACompactionBetweenTurnsListsTheChangedSkillsAndMovesTheUpdateBaseline(t 
 	if !strings.Contains(reqs[3].System, "invoices — Explain an invoice (load with load_skill)") {
 		t.Errorf("the system prompt after the compaction lacks the new skill:\n%s", reqs[3].System)
 	}
-	if updates(reqs[4]) != updates(reqs[3]) {
-		t.Errorf("skill updates = %d, then %d: the list equals the declared list, so no new update", updates(reqs[3]), updates(reqs[4]))
+	if updates(reqs[1]) != 1 || updates(reqs[3]) != 0 || updates(reqs[4]) != 0 {
+		t.Errorf("skill updates = %d, then %d after the compaction, then %d: the new system prompt lists the same skills, so the update leaves the history", updates(reqs[1]), updates(reqs[3]), updates(reqs[4]))
+	}
+}
+
+func rowACompactionBetweenTurnsDropsTheClearedSkillsText(t *testing.T) {
+	keep := 1
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	steps := append(okReplies(3), harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}})
+	r, fake := skillsAnthropicRuntime(t, nil, src, append(steps, okReplies(1)...)...)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "b", "two")
+	src.set(nil, skillRefunds)
+	sessionMCPTurn(t, s, "c", "three")
+	if _, err := s.Compact(t.Context(), protocol.Compact{KeepTurns: &keep}); err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "d", "four")
+	reqs := fake.Requests()
+	if len(reqs) != 5 {
+		t.Fatalf("model requests = %d, want 5", len(reqs))
+	}
+	if updates(reqs[1]) != 1 || updates(reqs[2]) != 2 || updates(reqs[4]) != 0 {
+		t.Errorf("skill updates = %d, %d, then %d after the compaction, want 1, 2 (the list and the cleared list), then 0", updates(reqs[1]), updates(reqs[2]), updates(reqs[4]))
+	}
+}
+
+func rowARestartWithTheSkillsUnchangedRecordsNoUpdate(t *testing.T) {
+	t.Parallel()
+	src := &editableSkills{}
+	src.set(nil, skillRefunds)
+	st := store.NewMemStore()
+	fake := harnesstest.NewAnthropic(t, okReplies(3)...)
+	r := skillsRuntimeOn(t, st, fake, nil, src)
+	s := anthropicSkillSession(t, r)
+	sessionMCPTurn(t, s, "a", "one")
+	src.set(nil, skillRefunds, skillInvoice)
+	sessionMCPTurn(t, s, "b", "two")
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r = skillsRuntimeOn(t, st, fake, nil, src)
+	s, err := r.Open(t.Context(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMCPTurn(t, s, "c", "three")
+	reqs := fake.Requests()
+	stableCache(t, reqs)
+	if updates(reqs[1]) != 1 || updates(reqs[2]) != 1 {
+		t.Errorf("skill updates = %d, then %d after the restart, want 1, then 1", updates(reqs[1]), updates(reqs[2]))
+	}
+	pins := 0
+	for e, err := range harness.ReadEvents(t.Context(), st, "s1", 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == protocol.KindPinRecorded {
+			pins++
+		}
+	}
+	if pins != 1 {
+		t.Errorf("the log holds %d pin records, want 1", pins)
 	}
 }
 
@@ -379,9 +446,9 @@ func rowASkillAddedAfterAReopenKeepsAnMCPNoticeInPlace(t *testing.T) {
 	reqs := fake.Requests()
 	msgs := reqs[2].Messages
 	first, last := msgs[0], msgs[len(msgs)-1]
-	if strings.Contains(requestTextOf(first), "[mcp: unavailable") || strings.Contains(requestTextOf(first), skillUpdateMarker) || updates(reqs[2]) != 1 ||
+	if !strings.Contains(requestTextOf(first), "[mcp: unavailable") || strings.Contains(requestTextOf(first), skillUpdateMarker) || updates(reqs[2]) != 1 ||
 		!strings.Contains(requestTextOf(last), skillUpdateMarker) || !strings.Contains(requestTextOf(last), "[mcp: unavailable") {
-		t.Errorf("want the MCP notice and the one skill update in the last message and neither in the first, got %+v", msgs)
+		t.Errorf("want the recorded MCP notice in the first message, and the one skill update and the new MCP notice in the last, got %+v", msgs)
 	}
 }
 

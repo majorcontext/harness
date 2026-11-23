@@ -1,0 +1,275 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "connect",
+                "server": "weather"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp",
+              "tool_input": {
+                "action": "connect",
+                "server": "weather"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
+              "tool_name": "mcp",
+              "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "connected"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "mcp",
+            "arguments": {
+              "action": "connect",
+              "server": "weather"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "connected"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  }
+}

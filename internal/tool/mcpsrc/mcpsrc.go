@@ -138,6 +138,8 @@ type memory struct {
 	sessionIDHeader bool
 	// up is true once the server connected, so that a server that goes is named as removed.
 	up bool
+	// gen counts the adds of the name, so that a server that is added again is a new one.
+	gen uint64
 }
 
 type server struct {
@@ -359,7 +361,8 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
 	}
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
-	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, nil, nil, nil)}}
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Cleared: v.cleared()}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, nil, nil, nil, nil), Declared: true}}
+	ts.Gone = v.gone()
 	return ts
 }
 

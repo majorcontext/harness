@@ -201,26 +201,28 @@ func (t *turnRun) Settings() (string, protocol.Settings) {
 
 // Pin pins ns on the actor, which owns the pins, and returns every pin. The
 // log records each new pin but the banner, so a new process starts with the
-// pins of the process before it, each at its place. The first call of a
-// process pins a status of a kind that the log never recorded after the banner,
-// as the log alone fixes that place. A later change, and a change of a recorded
-// status, follows the history of its call. A pin never falls before an older
-// one, so the notices are set in the order of their places, and a notice of the
-// same place keeps its order.
+// pins of the process before it, each at its place, and pins only a text that
+// differs from the newest pin of its kind. A change follows the history of its
+// call. A pin never falls before an older one, so the notices are set in the
+// order of their places, and a notice of the same place keeps its order. A
+// call that made a declaration retires each pin that the declaration states
+// instead (see turn.Notice.Declared), and the log records the retirement
+// before the new pins.
 func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 	pins, _ := callRun(context.Background(), t.a, func(reply func([]turn.Pin, error)) {
-		first := !t.a.pinned
-		t.a.pinned = true
 		placed := slices.DeleteFunc(slices.Clone(ns), func(n turn.Notice) bool { return n.Transient })
 		if len(placed) > 0 && placed[0].Kind == turn.BannerKind && placed[0].Text != "" && !t.a.pins.Has(turn.BannerKind) {
 			b := placed[0]
 			t.a.pins.Prepend(turn.Pin{Kind: b.Kind, Text: b.Text, At: b.At})
 		}
+		var recorded []protocol.Payload
+		for _, n := range placed {
+			if n.Declared && t.a.pins.Retire(n.Kind, n.Text, t.a.state.PinOld(n.Kind)) {
+				recorded = append(recorded, protocol.PinRecorded{Notice: n.Kind})
+			}
+		}
 		known := len(t.a.pins.Pinned())
 		for i := range placed {
-			if first && placed[i].At == 0 && !t.a.pins.Has(placed[i].Kind) {
-				placed[i].At = t.a.state.BannerAt()
-			}
 			placed[i].At = cmp.Or(placed[i].At, at)
 		}
 		slices.SortStableFunc(placed, func(x, y turn.Notice) int { return cmp.Compare(x.At, y.At) })
@@ -228,7 +230,6 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 			t.a.pins.Set(n.Kind, n.Text, n.Cleared, n.At)
 		}
 		pinned := t.a.pins.Pinned()
-		var recorded []protocol.Payload
 		for _, p := range pinned[known:] {
 			if p.Kind != turn.BannerKind {
 				recorded = append(recorded, protocol.PinRecorded{Notice: p.Kind, Text: p.Text, At: p.At})

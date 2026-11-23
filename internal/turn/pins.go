@@ -22,6 +22,24 @@ func (p *Pins) Add(q Pin) { p.pins = append(p.pins, q) }
 // Prepend puts q before every pin.
 func (p *Pins) Prepend(q Pin) { p.pins = slices.Insert(p.pins, 0, q) }
 
+// Retire drops every pin of kind when old is true and the newest pin of kind
+// has another text than text, because a declaration states what the pin said.
+// It reports whether it dropped any.
+func (p *Pins) Retire(kind, text string, old bool) bool {
+	var newest *Pin
+	for i := range slices.Backward(p.pins) {
+		if p.pins[i].Kind == kind {
+			newest = &p.pins[i]
+			break
+		}
+	}
+	if newest == nil || !old || newest.Text == text {
+		return false
+	}
+	p.pins = slices.DeleteFunc(slices.Clone(p.pins), func(q Pin) bool { return q.Kind == kind })
+	return true
+}
+
 // Has reports whether a pin of kind exists.
 func (p *Pins) Has(kind string) bool {
 	return slices.ContainsFunc(p.pins, func(q Pin) bool { return q.Kind == kind })

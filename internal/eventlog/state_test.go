@@ -493,16 +493,52 @@ func TestRecordedPinsKeepTheirPlaceUntilACompactionMovesTheNewestOfEachKind(t *t
 	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), end("t1", protocol.StopCompleted, ""),
 		protocol.PinRecorded{Notice: "mcp", Text: "down", At: 2}, protocol.PinRecorded{Notice: "skills", Text: "list", At: 3}, protocol.PinRecorded{Notice: "mcp", Text: "up", At: 3})
 	got := replay(t, events).Pins()
-	want := []protocol.PinRecorded{{Notice: "mcp", Text: "down", At: 2}, {Notice: "skills", Text: "list", At: 3}, {Notice: "mcp", Text: "up", At: 3}}
+	pin := func(notice, text string, at int) Pin {
+		return Pin{PinRecorded: protocol.PinRecorded{Notice: notice, Text: text, At: at}}
+	}
+	want := []Pin{pin("mcp", "down", 2), pin("skills", "list", 3), pin("mcp", "up", 3)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Pins() = %+v, want %+v", got, want)
 	}
 	s := replay(t, with(events, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), end("t2", protocol.StopCompleted, ""),
 		protocol.CompactionApplied{FromSeq: 1, ToSeq: 9, Summary: "sum"}))
 	n := len(s.ModelHistory())
-	want = []protocol.PinRecorded{{Notice: "skills", Text: "list", At: n}, {Notice: "mcp", Text: "up", At: n}}
+	want = []Pin{pin("skills", "list", n), pin("mcp", "up", n)}
 	if got := s.Pins(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Pins() after a compaction = %+v, want %+v", got, want)
+	}
+	s = replay(t, with(events, protocol.PinRecorded{Notice: "mcp"}))
+	want = []Pin{pin("skills", "list", 3)}
+	if got := s.Pins(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Pins() after a record with no text = %+v, want %+v", got, want)
+	}
+}
+
+func TestADeclarationMarksTheHeldPinsUntilAModelStepCompletesAnAssistantItem(t *testing.T) {
+	declared := protocol.PrefixDeclared{BlobKey: "k2", Bytes: 1, Model: "anthropic/m"}
+	events := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), end("t1", protocol.StopCompleted, ""),
+		protocol.PrefixDeclared{BlobKey: "k", Bytes: 1, Model: "anthropic/m"}, protocol.PinRecorded{Notice: "mcp-set", Text: "added", At: 1})
+	if replay(t, events).PinOld("mcp-set") {
+		t.Fatal("a recorded pin is marked before a declaration")
+	}
+	s := replay(t, with(events, declared))
+	if !s.PinOld("mcp-set") {
+		t.Fatal("a declaration with no compaction does not mark the pin")
+	}
+	if back := loadState(saveState(*s)); !back.PinOld("mcp-set") {
+		t.Fatal("a checkpoint loses the mark")
+	}
+	cut := with(events, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.StepStarted{TurnID: "t2", Index: 0}, declared,
+		protocol.StepEnded{TurnID: "t2", Index: 0},
+		protocol.ItemCompleted{ItemID: "m", TurnID: "t2", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "restart"}}}},
+		end("t2", protocol.StopInterrupted, protocol.CauseCrashed))
+	if !replay(t, cut).PinOld("mcp-set") {
+		t.Fatal("the close of a cut turn ends the mark before a model call")
+	}
+	step := with(cut, says("c", protocol.DeliveryQueue, "three"), start("t3", "c"), protocol.StepStarted{TurnID: "t3", Index: 0},
+		protocol.ItemCompleted{ItemID: "r", TurnID: "t3", Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: "ok"}}}})
+	if replay(t, step).PinOld("mcp-set") {
+		t.Fatal("the mark outlives a completed model step")
 	}
 }
 

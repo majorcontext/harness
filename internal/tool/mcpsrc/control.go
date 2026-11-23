@@ -88,9 +88,9 @@ func (c control) Spec() protocol.ToolSpec {
 // deferred when it was built. A declaration with no mcp tool gives the session no MCP notice, because the model
 // cannot use the mcp tool: the tools reach the session at its next declaration. prompt tells which servers have
 // their instructions in the prompt segment.
-func (c control) Declared(holds, accounts func(string) bool, prompt string) (turn.Tool, []turn.Notice) {
+func (c control) Declared(holds, accounts func(string) bool, prompt string, gone []turn.Gone) (turn.Tool, []turn.Notice) {
 	if !holds(controlName) {
-		return c, []turn.Notice{{Kind: noticeKind, Transient: true}, {Kind: loadingKind, Transient: true}, {Kind: addedKind}}
+		return c, []turn.Notice{{Kind: noticeKind, Declared: true}, {Kind: loadingKind, Transient: true}, {Kind: addedKind, Declared: true}}
 	}
 	c.loaded, c.has = maps.Clone(c.loaded), accounts
 	for n := range c.loaded {
@@ -104,7 +104,7 @@ func (c control) Declared(holds, accounts func(string) bool, prompt string) (tur
 	if c.late != nil {
 		late = c.late(accounts)
 	}
-	return c, []turn.Notice{{Kind: addedKind, Text: c.v.added(c.ok, late, undeclared, inPrompt)}}
+	return c, []turn.Notice{{Kind: addedKind, Text: c.v.added(c.ok, late, undeclared, inPrompt, gone), Declared: true}}
 }
 
 // Forward makes the call action run the deferred tool that it names, between the hooks of that tool.
