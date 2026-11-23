@@ -521,6 +521,7 @@ type NestedCallRecorded struct {
 
 // PinRecorded records one pin, a segment of engine context that the model
 // reads after the first At messages of the history. The banner has no record.
+// A record with no Text retires every pin of its Notice.
 type PinRecorded struct {
 	Notice string `json:"notice"`
 	Text   string `json:"text"`

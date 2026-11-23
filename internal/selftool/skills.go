@@ -65,6 +65,7 @@ func (s *Skills) Notice(declared []prompt.Embedded, at int) turn.Notice {
 	if !s.refreshed {
 		return n
 	}
+	n.Declared = true
 	update := prompt.EmbeddedUpdate(s.now, removed(declared, s.now))
 	if slices.Equal(s.now, declared) {
 		n.Cleared = update

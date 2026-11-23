@@ -35,6 +35,7 @@ func TestContractRuntimeProcesses(t *testing.T) {
 		}{
 			{"process_tool_from_the_model", processToolFromModel},
 			{"process_status_pins_after_a_start", processStatusPin},
+			{"process_status_that_turns_empty_pins_the_cleared_text_once", processStatusCleared},
 		} {
 			t.Run(row.name, func(t *testing.T) {
 				t.Parallel()
@@ -210,6 +211,41 @@ func processStatusPin(t *testing.T, h host) {
 		}
 		if want := min(i, 1); pins(r) != want {
 			t.Errorf("request %d holds %d status pins, want %d", i, pins(r), want)
+		}
+	}
+}
+
+func processStatusCleared(t *testing.T, h host) {
+	proc := func(kv ...any) harnesstest.ToolCall { return ftTool("process", ftArgs(kv...)) }
+	steps := append(toolChain(
+		proc("action", "declare", "name", "rt", "command", []string{"sh", "-c", "echo rt-up; sleep 100"}, "ready_regex", "rt-up"),
+		proc("action", "start", "name", "rt"),
+		proc("action", "stop", "name", "rt"),
+		proc("action", "undeclare", "name", "rt"),
+	), harnesstest.Step{Name: "again", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}})
+	d, fake := processHost(t, h, steps...)
+	id := d.Create(t)
+	for _, text := range []string{"go", "again"} {
+		d.Submit(t, id, text)
+		d.WaitIdle(t, id)
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 6 {
+		t.Fatalf("model requests = %d, want 6", len(reqs))
+	}
+	cleared := func(r harnesstest.Request) (n int) {
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if isEngineContext(p) && strings.Contains(p.Text, "[processes: none.]") {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	for i, want := range []int{0, 0, 0, 0, 1, 1} {
+		if got := cleared(reqs[i]); got != want {
+			t.Errorf("request %d holds %d cleared status pins, want %d", i+1, got, want)
 		}
 	}
 }

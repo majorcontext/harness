@@ -250,8 +250,6 @@ type Actor struct {
 	retryAt     time.Time
 	// pins holds the engine context that the model reads inside the history.
 	pins turn.Pins
-	// pinned is true once a model call of this process has pinned.
-	pinned bool
 	// declMu orders the calls of declare. decl is the decoded blob of the newest declaration, read once for each process.
 	declMu      sync.Mutex
 	decl        decodedDeclaration

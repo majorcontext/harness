@@ -7,6 +7,8 @@ import "slices"
 type Pin struct {
 	Kind, Text string
 	At         int
+	// Old is true from a declaration until the next call pins, so that only the call of the declaration retires a pin.
+	Old bool
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
@@ -21,6 +23,37 @@ func (p *Pins) Add(q Pin) { p.pins = append(p.pins, q) }
 
 // Prepend puts q before every pin.
 func (p *Pins) Prepend(q Pin) { p.pins = slices.Insert(p.pins, 0, q) }
+
+// MarkOld marks each pin as older than the declaration that was just made.
+func (p *Pins) MarkOld() { p.setOld(true) }
+
+// ClearOld ends the check of the pins against the newest declaration.
+func (p *Pins) ClearOld() { p.setOld(false) }
+
+func (p *Pins) setOld(old bool) {
+	p.pins = slices.Clone(p.pins)
+	for i := range p.pins {
+		p.pins[i].Old = old
+	}
+}
+
+// Retire drops every pin of kind when the newest one is older than the
+// newest declaration and its text is not text, because the declaration states
+// what the pin said. It reports whether it dropped any.
+func (p *Pins) Retire(kind, text string) bool {
+	var newest *Pin
+	for i := range slices.Backward(p.pins) {
+		if p.pins[i].Kind == kind {
+			newest = &p.pins[i]
+			break
+		}
+	}
+	if newest == nil || !newest.Old || newest.Text == text {
+		return false
+	}
+	p.pins = slices.DeleteFunc(slices.Clone(p.pins), func(q Pin) bool { return q.Kind == kind })
+	return true
+}
 
 // Has reports whether a pin of kind exists.
 func (p *Pins) Has(kind string) bool {

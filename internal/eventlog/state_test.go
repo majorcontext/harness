@@ -504,6 +504,11 @@ func TestRecordedPinsKeepTheirPlaceUntilACompactionMovesTheNewestOfEachKind(t *t
 	if got := s.Pins(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Pins() after a compaction = %+v, want %+v", got, want)
 	}
+	s = replay(t, with(events, protocol.PinRecorded{Notice: "mcp"}))
+	want = []protocol.PinRecorded{{Notice: "skills", Text: "list", At: 3}}
+	if got := s.Pins(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Pins() after a record with no text = %+v, want %+v", got, want)
+	}
 }
 
 func TestDeclarationFollowsTheLog(t *testing.T) {

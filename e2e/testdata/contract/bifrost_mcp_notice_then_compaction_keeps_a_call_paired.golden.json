@@ -130,6 +130,15 @@
           "parts": [
             {
               "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
@@ -177,6 +186,15 @@
           ]
         },
         {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
           "role": "assistant",
           "parts": [
             {
@@ -198,6 +216,15 @@
               "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -271,6 +298,15 @@
           ]
         },
         {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
           "role": "assistant",
           "parts": [
             {
@@ -292,6 +328,15 @@
               "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -389,6 +434,15 @@
           ]
         },
         {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
           "role": "assistant",
           "parts": [
             {
@@ -410,6 +464,15 @@
               "text": "{\"server\":\"weather\",\"connected\":true,\"message\":\"connected\"}",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -576,7 +639,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -683,7 +746,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: every server is connected again.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -879,7 +942,7 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 18
+        "to_seq": 20
       }
     }
   }

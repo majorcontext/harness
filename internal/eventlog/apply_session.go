@@ -163,8 +163,12 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 }
 
 func (s *State) applyPin(e protocol.PinRecorded) error {
-	if e.Notice == "" || e.Text == "" || e.At < 0 {
-		return illegal("pin.recorded needs a notice, a text, and a place")
+	if e.Notice == "" || e.At < 0 {
+		return illegal("pin.recorded needs a notice and a place")
+	}
+	if e.Text == "" {
+		s.pins = slices.DeleteFunc(slices.Clone(s.pins), func(p protocol.PinRecorded) bool { return p.Notice == e.Notice })
+		return nil
 	}
 	s.pins = append(s.pins, e)
 	return nil

@@ -19,6 +19,9 @@ const (
 	loadingKind = "mcp-loading"
 )
 
+// allConnected is the text that replaces the down notice when no server is down any more.
+const allConnected = "[mcp: every server is connected again.]"
+
 const addedHeader = "[mcp: tools added after the tool list of this session was fixed — %s. They are deferred: to use one you MUST first read its definition with " +
 	`mcp(action="select", tools=["mcp__server__tool"]), then run it with mcp(action="call", tool="mcp__server__tool", arguments={...}). Find one with mcp(action="search", query="...").]`
 
@@ -50,8 +53,9 @@ func (v view) unavailable() string {
 // added renders the notice of the live tools that the declaration lacks, with the instructions of a server that the
 // prompt does not hold, and the notice of the servers that went. undeclared tells the tools that the declaration
 // lacks, and inPrompt the servers whose instructions the prompt holds; nil: none. It is "" when there is nothing to
-// say. The text follows the live state, so a later model call renders it again.
-func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func(string) bool) string {
+// say, and gone names the servers that the declaration recorded as left, which the notice leaves out. The text
+// follows the live state, so a later model call renders it again.
+func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func(string) bool, gone []string) string {
 	var servers, blocks []string
 	for _, name := range v.names {
 		var late []remote
@@ -78,7 +82,7 @@ func (v view) added(ok func(string) bool, late []Late, undeclared, inPrompt func
 	if text := addedPlugins(late); text != "" {
 		out = append(out, text)
 	}
-	removed := v.removedNames()
+	removed := slices.DeleteFunc(v.removedNames(), func(name string) bool { return slices.Contains(gone, name) })
 	if len(removed) > 0 {
 		out = append(out, "[mcp: removed — "+strings.Join(removed, ", ")+". The servers and their tools are gone, and a call to one of those tools fails.]")
 	}

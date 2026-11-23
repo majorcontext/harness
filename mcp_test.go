@@ -34,9 +34,10 @@ func TestAllowedMCPToolsOfAnOwnedLoopBackend(t *testing.T) {
 }
 
 const (
-	mcpDownNotice   = `[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]`
-	mcpParkedNotice = `[mcp: unavailable — weather (initialize failed; use the mcp tool action "connect" to retry). Tools from these servers are temporarily absent and may return later in this session.]`
-	mcpStatusCall   = "status"
+	mcpDownNotice    = `[mcp: unavailable — weather (initialize failed; retrying). Tools from these servers are temporarily absent and may return later in this session.]`
+	mcpClearedNotice = `[mcp: every server is connected again.]`
+	mcpParkedNotice  = `[mcp: unavailable — weather (initialize failed; use the mcp tool action "connect" to retry). Tools from these servers are temporarily absent and may return later in this session.]`
+	mcpStatusCall    = "status"
 )
 
 func mcpWeatherSpec() harnesstest.MCPSpec {
@@ -112,8 +113,8 @@ func TestMCPServerDownAtBootComesUpAfterARetry(t *testing.T) {
 		submit(t, s, text("b", "second"))
 		req, _ = f.last("s1", "second")
 		want := []string{"mcp__docs__search"}
-		if got := slices.DeleteFunc(toolNames(req), func(n string) bool { return !strings.HasPrefix(n, "mcp__") }); !slices.Equal(got, want) || mcpNotice(req) != "" || req.Instructions != prompt {
-			t.Errorf("second call tools %v, notice %q; want %v, no notice, and the prompt of the first call", got, mcpNotice(req), want)
+		if got := slices.DeleteFunc(toolNames(req), func(n string) bool { return !strings.HasPrefix(n, "mcp__") }); !slices.Equal(got, want) || mcpNotice(req) != mcpClearedNotice || req.Instructions != prompt {
+			t.Errorf("second call tools %v, notice %q; want %v, the cleared notice, and the prompt of the first call", got, mcpNotice(req), want)
 		}
 		if got := pinned(req, "mcp-set"); !strings.Contains(got, "mcp__weather__forecast") {
 			t.Errorf("added notice %q; want the deferred tool of the late server", got)
@@ -159,8 +160,8 @@ func TestMCPServerThatStaysDownParksUntilTheModelConnects(t *testing.T) {
 		weather.SetAvailable(true)
 		ask("connect")
 		req := ask("after")
-		if mcpNotice(req) != "" || slices.Contains(toolNames(req), "mcp__weather__forecast") || !strings.Contains(pinned(req, "mcp-set"), "mcp__weather__forecast") {
-			t.Errorf("call after connect has tools %v, notice %q; want no notice and the tool deferred and announced", toolNames(req), mcpNotice(req))
+		if mcpNotice(req) != mcpClearedNotice || slices.Contains(toolNames(req), "mcp__weather__forecast") || !strings.Contains(pinned(req, "mcp-set"), "mcp__weather__forecast") {
+			t.Errorf("call after connect has tools %v, notice %q; want the cleared notice and the tool deferred and announced", toolNames(req), mcpNotice(req))
 		}
 		closeRuntime(t, r)
 	})

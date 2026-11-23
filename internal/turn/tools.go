@@ -49,6 +49,8 @@ type Toolset struct {
 	Prompt string
 	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
 	MCPInstructions MCPInstructions
+	// Gone names the MCP servers that connected once and left the live set. A declaration records them.
+	Gone []string
 	// Notices are statuses that the model reads inside the conversation, and
 	// not in the system prompt, so that the system prompt stays stable.
 	Notices []Notice
@@ -80,6 +82,9 @@ type Notice struct {
 	// At is the number of messages of the history that the pin follows. Zero:
 	// the whole history of the call.
 	At int
+	// Declared is true when a declaration states what the text says. A pin of this kind that is older than the
+	// newest declaration, and whose text is not the text now, leaves the history that the model reads.
+	Declared bool
 	// Transient makes the model read Text in the turn of the first call that has text, at the place of that call,
 	// like a turn context. The log records no pin and no later turn reads it, and Cleared is unused.
 	Transient bool
@@ -87,10 +92,10 @@ type Notice struct {
 
 // Declarable is a Tool that tells deferred tools from loaded ones. Declared returns the tool for a model call whose
 // tools array holds only the tools that holds accepts, whose declaration accounts for the tools that accounts accepts
-// (the tools array and the deferred tools that were live when the declaration was built), and whose prompt segment is
-// prompt, and the notices that replace the notices of the same Kind.
+// (the tools array and the deferred tools that were live when the declaration was built), whose prompt segment is
+// prompt, and which recorded the servers in gone as left, and the notices that replace the notices of the same Kind.
 type Declarable interface {
-	Declared(holds, accounts func(name string) bool, prompt string) (Tool, []Notice)
+	Declared(holds, accounts func(name string) bool, prompt string, gone []string) (Tool, []Notice)
 }
 
 // Hooks run around each tool call of a model call.
@@ -164,6 +169,7 @@ func (s Sources) Toolset(ctx context.Context, history []protocol.LogMessage, all
 		}
 		maps.Copy(out.MCPInstructions.SessionIDHeaderServers, ts.MCPInstructions.SessionIDHeaderServers)
 		out.Notices = append(out.Notices, ts.Notices...)
+		out.Gone = append(out.Gone, ts.Gone...)
 		if ts.Resolver != nil {
 			resolvers = append(resolvers, ts.Resolver)
 		}

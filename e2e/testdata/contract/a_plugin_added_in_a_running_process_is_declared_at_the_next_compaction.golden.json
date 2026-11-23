@@ -223,10 +223,6 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the tool list of this session was fixed — fixture. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"fixture\"\u003e\nfixture_config — Return the plugin config block.\nfixture_crash — Exit the plugin process.\nfixture_echo — Echo the text argument.\nfixture_fail — Return an error result.\nfixture_report — Report what the plugin observed.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
-            },
-            {
-              "kind": "text",
               "text": "three"
             }
           ]
