@@ -386,7 +386,7 @@ func newOwnerTools(t *testing.T, hideBlobs, syncSecond bool) (before, after json
 		t.Fatal(err)
 	}
 	srv.SetTools(weatherTools("A changed description", weatherAlerts))
-	var st harness.Store = rcv.store
+	st := rcv.store
 	if hideBlobs {
 		st = blobless{st}
 	}

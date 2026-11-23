@@ -93,7 +93,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	for _, t := range ts.Tools {
 		live.Tools = append(live.Tools, t.Spec())
 	}
-	decl, search, ok := d.a.declare(ctx, live, model)
+	decl, search, ok := d.a.declare(ctx, live, model, turn.IsWarm(ctx))
 	if !ok {
 		return ts
 	}
@@ -149,18 +149,19 @@ func (a *Actor) searchAllowed() bool {
 	return a.cfg.WebSearch && protocol.ToolAllowed(a.state.AllowedTools(), turn.WebSearchTool)
 }
 
-// declare returns the declaration that a model call sends, the search_allowed of its record, and false when the call
+// declare returns the declaration that a model call sends, or that a warm-up reads when readOnly, which appends no record, the search_allowed of its record, and false when the call
 // sends the live tools. The check of the input schemas stays pending until a call ends with no failed write. It
 // appends prefix.declared when the log holds none, after a compaction between turns, at a change of the model
 // with other tools, and at the first call of a process when a declared tool has another input schema. A blob that
 // the store lacks or that does not decode is declared again from live.
-func (a *Actor) declare(ctx context.Context, live declaration, model string) (declaration, bool, bool) {
+func (a *Actor) declare(ctx context.Context, live declaration, model string, readOnly bool) (declaration, bool, bool) {
 	a.declMu.Lock()
 	defer a.declMu.Unlock()
 	v, err := call(ctx, a, func(reply func(declView, error)) { reply(a.declView(), nil) })
 	if err != nil {
 		return declaration{}, false, false
 	}
+	v.first = v.first && !readOnly
 	missing := false
 	if v.has && v.cached == nil {
 		d, err := a.readDeclaration(v.rec.BlobKey)
@@ -177,9 +178,12 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string) (de
 		current = *v.cached
 	}
 	forced := !usable || v.due
-	if !forced && v.rec.Model == model && !(v.first && current.schemaChanged(live.Tools)) {
+	if !forced && v.rec.Model == model && (!v.first || !current.schemaChanged(live.Tools)) {
 		a.markChecked(ctx, v.first)
 		return current, v.rec.SearchAllowed, true
+	}
+	if readOnly {
+		return current, v.rec.SearchAllowed, usable
 	}
 	data, key, err := live.encode()
 	if err != nil {

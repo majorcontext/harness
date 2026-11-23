@@ -25,12 +25,20 @@ func Warm(ctx context.Context, b Backend, req Request, src Source) error {
 		return nil
 	}
 	caps := b.Capabilities(req.Model)
-	call, ts, err := nextCall(ctx, b, caps, req, src)
+	call, ts, err := nextCall(context.WithValue(ctx, warmKey{}, true), b, caps, req, src)
 	if err != nil {
 		return err
 	}
 	describe(ctx, &call, ts, nil, caps.OwnsLoop, tracing.Scope{})
 	return b.(Warmer).Warm(ctx, call)
+}
+
+type warmKey struct{}
+
+// IsWarm reports whether ctx belongs to a warm-up. A warm-up records nothing, so a Source appends no record for it.
+func IsWarm(ctx context.Context) bool {
+	warm, _ := ctx.Value(warmKey{}).(bool)
+	return warm
 }
 
 // CanWarm reports whether b has a warm-up to run for model.
