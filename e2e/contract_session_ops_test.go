@@ -43,6 +43,7 @@ func TestContractSessionOps(t *testing.T) {
 				enqueue{as: "a", text: "third"},
 				enqueue{as: "a", text: "fourth"},
 				restart{},
+				awaitRequests{n: 2},
 				expectQueued{as: "a", texts: []string{"second", "third", "fourth"}},
 				getSession{as: "a"},
 				deleteQueued{as: "a"},
