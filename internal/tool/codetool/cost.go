@@ -117,6 +117,12 @@ func (c *coster) cost(v starlark.Value) uint64 {
 		})
 	case *starlark.Function:
 		return c.function(v)
+	case *starlark.Builtin:
+		r := v.Receiver()
+		if r == nil {
+			return 1
+		}
+		return c.sum(func(yield func(starlark.Value) bool) { yield(r) })
 	}
 	return 1
 }
