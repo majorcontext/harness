@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 
@@ -146,15 +147,19 @@ type Config struct {
 	// Retain gives a harness-loop turn read_tool_result and keeps each large
 	// result out of the history, after the hooks of Source.
 	Retain bool
-	// Prompt returns the system prompt of a turn, when the turn starts.
-	Prompt func() []string
+	// Prompt reads the system prompt of a new session: the segments, the files that they come from, and the
+	// embedded skills. A declaration calls it when it is built. A turn of a backend that owns the loop, and a call
+	// that has no declaration, use the first result of the process. nil: an empty prompt.
+	Prompt func(ctx context.Context) prompt.Info
+	// Used receives the system prompt that a model call sends. nil: none.
+	Used func(prompt.Info)
+	// SkillsNotice returns the notice of the embedded skills of the session after the history of at messages,
+	// compared with the declared list. It returns false when the session has no embedded skills. nil: none.
+	SkillsNotice func(declared []prompt.Embedded, at int) (turn.Notice, bool)
 	// SystemCacheBreakpoint selects the system block to cache; nil uses the provider default.
 	SystemCacheBreakpoint *int
 	// SystemOverride says that the caller supplied the session prompt.
 	SystemOverride bool
-	// Skills is the skill segment of the session prompt, read when the
-	// session started.
-	Skills string
 	// Sent records the system prompt that a backend that builds its own sent.
 	Sent func(system string)
 	// Appended receives the events of each append, the state after it, and
@@ -252,6 +257,8 @@ type Actor struct {
 	decl        decodedDeclaration
 	declChecked bool
 	oversized   bool
+	startMu     sync.Mutex
+	started     *prompt.Info
 	// turnCtx holds the turn context of each queued input by input ID. It is
 	// in no log and does not outlive the process.
 	turnCtx map[string]string

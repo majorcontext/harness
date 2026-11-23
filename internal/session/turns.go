@@ -14,6 +14,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/plugin"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/provider"
 	"github.com/majorcontext/harness/internal/tracing"
 	"github.com/majorcontext/harness/internal/turn"
@@ -135,13 +136,42 @@ func sameJSON(x, y any) bool {
 // modelRequest returns the request of the next model call before its inputs:
 // the conversation as the model reads it, with each pinned segment.
 func (a *Actor) modelRequest() turn.Request {
-	blocks := a.cfg.Prompt()
-	instructions := strings.Join(blocks, "\n\n")
-	if !a.cfg.SystemOverride && a.cfg.SystemCacheBreakpoint == nil {
-		blocks = nil
-	}
-	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Compacted: a.state.CompactionCount() > 0, Purpose: turn.PurposeTurn, Settings: a.state.TurnSettings(), Instructions: instructions, SystemBlocks: blocks, SystemCacheBreakpoint: a.cfg.SystemCacheBreakpoint, SystemOverride: a.cfg.SystemOverride, Skills: a.cfg.Skills, Sent: a.cfg.Sent,
+	model := a.state.Model()
+	req := turn.Request{SessionID: a.cfg.ID, Model: model, Compacted: a.state.CompactionCount() > 0, Purpose: turn.PurposeTurn, Settings: a.state.TurnSettings(), SystemCacheBreakpoint: a.cfg.SystemCacheBreakpoint, SystemOverride: a.cfg.SystemOverride, Sent: a.cfg.Sent,
 		History: a.state.ModelHistory(), Kept: a.state.KeptLen(), AllowedTools: a.state.AllowedTools(), MaxSteps: a.state.MaxSteps(), MaxTokens: a.cfg.MaxTokens, WorkDir: a.state.WorkDir(), Blob: a.blob, Params: a.cfg.Params}
+	if a.cfg.SystemOverride || a.cfg.SystemCacheBreakpoint != nil {
+		req.SystemBlocks = []string{}
+	}
+	return req
+}
+
+// livePrompt returns the system prompt that the first caller of the process read with a context that did not end. A
+// backend that owns the loop and a call with no declaration send it.
+func (a *Actor) livePrompt(ctx context.Context) prompt.Info {
+	a.startMu.Lock()
+	defer a.startMu.Unlock()
+	if a.started != nil {
+		return *a.started
+	}
+	info := a.readPrompt(ctx)
+	if ctx.Err() == nil {
+		a.started = &info
+	}
+	return info
+}
+
+// readPrompt reads the system prompt as a new session would.
+func (a *Actor) readPrompt(ctx context.Context) prompt.Info {
+	if a.cfg.Prompt == nil {
+		return prompt.Info{}
+	}
+	return a.cfg.Prompt(ctx)
+}
+
+func (a *Actor) usePrompt(info prompt.Info) {
+	if a.cfg.Used != nil {
+		a.cfg.Used(info)
+	}
 }
 
 // banner renders the engine status line from the version and the created time

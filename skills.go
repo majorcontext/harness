@@ -51,7 +51,7 @@ func (r *Runtime) listSkills(ctx context.Context, id string) []prompt.Embedded {
 
 // skillSource returns load_skill of session id, with the notice that follows the skill list of the session.
 func (r *Runtime) skillSource(id string, sp *selftool.Prompt) turn.Source {
-	sk := selftool.NewSkills(sp.Embedded(), id, r.embedded, r.skills.Read, r.log)
+	sk := selftool.NewSkills(id, r.embedded, r.skills.Read, r.log)
 	sp.Track(sk)
 	return sk
 }

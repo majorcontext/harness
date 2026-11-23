@@ -41,6 +41,10 @@ type Toolset struct {
 	// SearchAllowed, when not nil, is the search_allowed of the declaration that Specs come from. The call sends
 	// the native web search only when the session allows it now too.
 	SearchAllowed *bool
+	// System, when not nil, is the system prompt of the call in place of the system prompt of the request. Prompt follows it.
+	System []string
+	// SkillList is the skill segment of System, for a backend that builds its own prompt.
+	SkillList string
 	// Prompt follows the system prompt.
 	Prompt string
 	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
@@ -397,6 +401,12 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 			call.Tools = append(call.Tools, t.Spec())
 		}
 	}
+	if ts.System != nil {
+		call.Instructions, call.Skills = strings.Join(ts.System, "\n\n"), ts.SkillList
+		if call.SystemBlocks != nil {
+			call.SystemBlocks = slices.Clone(ts.System)
+		}
+	}
 	switch {
 	case call.Instructions == "":
 		call.Instructions = ts.Prompt
@@ -405,6 +415,13 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 	}
 	if !all && call.SystemBlocks != nil && ts.Prompt != "" {
 		call.SystemBlocks = append(slices.Clone(call.SystemBlocks), ts.Prompt)
+	}
+	if i := call.SystemCacheBreakpoint; i != nil && call.SystemBlocks != nil && *i >= len(call.SystemBlocks) {
+		last := len(call.SystemBlocks) - 1
+		call.SystemCacheBreakpoint = nil
+		if last >= 0 {
+			call.SystemCacheBreakpoint = &last
+		}
 	}
 	call.MCPInstructions = ts.MCPInstructions
 	if !all && to != nil {

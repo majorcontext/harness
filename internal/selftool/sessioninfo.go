@@ -40,15 +40,12 @@ type sessionInfoResult struct {
 	Plugins      []protocol.Plugin `json:"plugins"`
 }
 
-// Prompt is the system prompt of one session and a record of what its model
-// calls sent. The session reads the prompt files once, when it starts.
+// Prompt records what the newest model call of one session sent: its system prompt and its tools.
 type Prompt struct {
-	read     prompt.Info
-	segments []string
-
 	skills *Skills
 
 	mu       sync.Mutex
+	info     prompt.Info
 	turn     []string
 	reported bool
 	call     modelCall
@@ -61,40 +58,51 @@ type modelCall struct {
 	prompt string
 }
 
-// NewPrompt returns the prompt of a session that read describes. agent and p
-// name its agent profile.
-func NewPrompt(read prompt.Info, agent string, p prompt.Profile) *Prompt {
-	segs := slices.Clone(read.Segments)
-	if agent != "" {
-		if t := strings.Trim(p.Prompt, "\n"); t != "" {
-			segs = append(segs, t)
-		}
-	}
-	return &Prompt{read: read, segments: segs}
-}
+// NewPrompt returns the record of a session.
+func NewPrompt() *Prompt { return &Prompt{} }
 
-// SkillList returns the skill segment that the session read, or "".
-func (p *Prompt) SkillList() string { return p.read.SkillList }
-
-// Embedded returns the embedded skills that the session listed in its system prompt.
-func (p *Prompt) Embedded() []prompt.Embedded { return p.read.Embedded }
-
-// Track makes session_info report the embedded skills of sk, in place of the embedded skills that the session
-// listed in its system prompt.
+// Track makes session_info report the embedded skills of sk, in place of the embedded skills that the system prompt
+// lists, and makes SkillsNotice compare them.
 func (p *Prompt) Track(sk *Skills) { p.skills = sk }
 
-// skillsNow returns the skills that session_info reports: the skills of the files that the session read and the
+// SkillsNotice returns the notice of the embedded skills that follows the history of at messages, compared with the
+// declared list. It returns false for a session with no embedded skills.
+func (p *Prompt) SkillsNotice(declared []prompt.Embedded, at int) (turn.Notice, bool) {
+	if p.skills == nil {
+		return turn.Notice{}, false
+	}
+	return p.skills.Notice(declared, at), true
+}
+
+// Used records info as the system prompt of the newest model call.
+func (p *Prompt) Used(info prompt.Info) {
+	p.mu.Lock()
+	p.info, p.reported = info, false
+	p.mu.Unlock()
+}
+
+// skillsNow returns the skills that session_info reports: the skills of the files that the system prompt lists and the
 // embedded skills of the newest list.
 func (p *Prompt) skillsNow() []prompt.Skill {
+	p.mu.Lock()
+	listed := slices.Clone(p.info.Skills)
+	p.mu.Unlock()
 	if p.skills == nil {
-		return slices.Clone(p.read.Skills)
+		return listed
 	}
-	out := slices.DeleteFunc(slices.Clone(p.read.Skills), func(s prompt.Skill) bool { return s.Path == "" })
+	out := slices.DeleteFunc(listed, func(s prompt.Skill) bool { return s.Path == "" })
 	for _, e := range p.skills.Current() {
 		out = append(out, prompt.Skill{Name: e.Name})
 	}
 	slices.SortStableFunc(out, func(a, b prompt.Skill) int { return strings.Compare(a.Name, b.Name) })
 	return out
+}
+
+// instructions returns the instructions files of the system prompt of the newest model call.
+func (p *Prompt) instructions() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.info.Instructions)
 }
 
 // Sent records system as the system prompt of the newest turn, in place of the
@@ -103,17 +111,6 @@ func (p *Prompt) Sent(system string) {
 	p.mu.Lock()
 	p.turn, p.reported = []string{system}, true
 	p.mu.Unlock()
-}
-
-// System returns the system prompt of a turn: the prompt of the session, the
-// prompt of its agent profile, and the process status line. It records the
-// segments as the segments of the turn.
-func (p *Prompt) System() []string {
-	segs := slices.Clone(p.segments)
-	p.mu.Lock()
-	p.turn, p.reported = segs, false
-	p.mu.Unlock()
-	return segs
 }
 
 // Recording returns src and records each Toolset that it gives.
@@ -127,8 +124,14 @@ type recorded struct {
 func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	ts := c.src.Toolset(ctx, history, allowed, model)
 	call := modelCall{prompt: ts.Prompt}
-	for _, t := range ts.Tools {
-		call.tools = append(call.tools, t.Spec().Name)
+	if ts.Specs != nil {
+		for _, s := range ts.Specs {
+			call.tools = append(call.tools, s.Name)
+		}
+	} else {
+		for _, t := range ts.Tools {
+			call.tools = append(call.tools, t.Spec().Name)
+		}
 	}
 	c.p.mu.Lock()
 	c.p.call = call
@@ -141,7 +144,11 @@ func (c recorded) Toolset(ctx context.Context, history []protocol.LogMessage, al
 func (p *Prompt) sent() (system, tools []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	system = slices.Clone(p.turn)
+	if p.reported {
+		system = slices.Clone(p.turn)
+	} else {
+		system = slices.Clone(p.info.Segments)
+	}
 	if p.call.prompt != "" && !p.reported {
 		system = append(system, p.call.prompt)
 	}
@@ -183,8 +190,8 @@ func (t *SessionInfo) Run(_ context.Context, _ protocol.ToolCall) (protocol.Tool
 	out := sessionInfoResult{SessionID: v.ID, Model: v.Model, Effort: v.Effort, ServiceTier: v.ServiceTier, Usage: v.Usage,
 		System: system, Tools: tools, Instructions: "none",
 		Skills: append([]prompt.Skill{}, t.prompt.skillsNow()...), Plugins: append([]protocol.Plugin{}, v.Plugins...)}
-	if len(t.prompt.read.Instructions) > 0 {
-		out.Instructions = strings.Join(t.prompt.read.Instructions, ", ")
+	if names := t.prompt.instructions(); len(names) > 0 {
+		out.Instructions = strings.Join(names, ", ")
 	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	return protocol.ToolResult{Text: string(b)}, err

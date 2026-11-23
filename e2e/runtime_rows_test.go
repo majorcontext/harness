@@ -99,7 +99,7 @@ const (
 	specRetryable      = "`ErrRetryable` (a 429 with `Retry-After`, a 5xx that outlasted the request retries, a transport error except one that declares itself permanent, a truncated stream, a content filter) calls the model again"
 	specModelsRoute    = "GET    /models                                models and their capabilities"
 	specHandoff        = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
-	specPromptOnce     = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
+	specPromptOnce     = "each model call sends the segments of the newest declaration as `turn.Request.Instructions`"
 	specRepeatName     = "fails the load the same way, and the error names both files."
 	specMidTurnFails   = "the turn fails at its next model call"
 	specTypedReceipt   = "A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command"
@@ -184,7 +184,7 @@ func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cit
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
-var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptStreamContextRows, retryOutputRows, promptStreamRows, slowSubscriberRows, sessionSystemRows, checkpointRows, deferredModelRows, mcpLiveRows, pluginLiveRows, providerLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, mcpSkillRows, claudeChildReportRows, accountRows, midTurnCompactionRows, stepLimitRows, inputEffortRows, unshapedErrorRows, declaredPrefixRows, map[string]runtimeRow{
+var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptStreamContextRows, retryOutputRows, promptStreamRows, slowSubscriberRows, sessionSystemRows, checkpointRows, deferredModelRows, mcpLiveRows, pluginLiveRows, providerLiveRows, codexChainRowKinds, codexPluginRowKinds, codexItemIDRowKinds, sessionTitleRows, claudeMCPRows, mcpSkillRows, claudeChildReportRows, accountRows, midTurnCompactionRows, stepLimitRows, inputEffortRows, unshapedErrorRows, declaredPrefixRows, declaredSystemRows, map[string]runtimeRow{
 	"web_search_keeps_the_cached_prefix_of_anthropic_stable_across_calls_and_turns":                            sameAsServe(),
 	"claudecode_web_search_keeps_the_system_prompt_stable_across_turns":                                        sameAsServe(),
 	"codex_web_search_keeps_the_cached_prefix_stable_across_calls_and_turns":                                   sameAsServe(),
@@ -592,7 +592,7 @@ var runtimeRows = withRows(stepBoundaryRows, promptStreamAdmissionRows, promptSt
 	"goal_tool_refusals_copy_the_engine_wording":                                            reGolden(specView, specGoalWording),
 	"goal_tool_set_runs_the_condition_as_its_own_turn":                                      reGolden(specView, specGoalOwnTurn, specGoalTranscript),
 	"input_receipts_and_conflicts":                                                          reGolden(specReceipt, specSameBody, specOtherBody, specTurnMismatch, specErrors),
-	"instructions_are_read_when_the_session_starts":                                         reGolden(specPromptOnce),
+	"instructions_are_read_at_the_first_model_call_of_a_session":                            reGolden(specPromptOnce),
 	"interrupt_cuts_a_running_tool_then_queue_continues":                                    reGolden(specStopped, specInterrupt),
 	"interrupt_during_retry_backoff_ends_the_turn":                                          reGolden(specView, specStopped),
 	"models_lists_the_models_that_a_provider_entry_names":                                   reGolden(specModelsRoute, specView),

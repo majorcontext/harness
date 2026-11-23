@@ -198,8 +198,8 @@
           },
           {
             "d": {
-              "blob_key": "prefix-dada93578ad9c09f6d682308cf8acec7e31c18d1f59f78c4bba75f7d8a4c7750",
-              "bytes": 16210,
+              "blob_key": "prefix#1",
+              "bytes": "\u003cbytes\u003e",
               "model": "anthropic/claude-fable-5"
             },
             "k": "prefix.declared",
@@ -305,8 +305,8 @@
           },
           {
             "d": {
-              "blob_key": "prefix-ecf1a55619f3f59ba5bd4979c163be54a9a738d70c23534fa98c71ab8d0d4713",
-              "bytes": 16236,
+              "blob_key": "prefix#2",
+              "bytes": "\u003cbytes\u003e",
               "model": "anthropic/claude-fable-5"
             },
             "k": "prefix.declared",

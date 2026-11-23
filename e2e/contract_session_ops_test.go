@@ -259,21 +259,21 @@ func TestContractSessionStart(t *testing.T) {
 		return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "ok"}}
 	}
 	runScenarios(t, []scenario{{
-		name:  "instructions_are_read_when_the_session_starts",
+		name:  "instructions_are_read_at_the_first_model_call_of_a_session",
 		model: []harnesstest.Step{turn("q1"), turn("q2"), turn("q3"), turn("q4")},
 		actions: []action{
 			writeFile{path: "AGENTS.md", body: "RULES-ALPHA\n"},
 			create{as: "a"},
-			writeFile{path: "AGENTS.md", body: "RULES-LATE\n"},
 			submit{as: "a", text: "q1"},
 			waitIdle{as: "a"},
+			writeFile{path: "AGENTS.md", body: "RULES-LATE\n"},
 			submit{as: "a", text: "q2"},
 			waitIdle{as: "a"},
 			writeFile{path: "AGENTS.md", body: "RULES-BRAVO\n"},
 			create{as: "b"},
-			writeFile{path: "AGENTS.md", body: "RULES-LATE\n"},
 			submit{as: "b", text: "q3"},
 			waitIdle{as: "b"},
+			writeFile{path: "AGENTS.md", body: "RULES-LATE\n"},
 			submit{as: "b", text: "q4"},
 			waitIdle{as: "b"},
 			recordSystem{},

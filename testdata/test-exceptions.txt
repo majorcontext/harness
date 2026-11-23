@@ -60,3 +60,4 @@ internal/workspace/jj_test.go the changes command rows need the test binary as a
 internal/turn/stream_test.go the order and overlap of tool calls that start while a model call streams need a synctest bubble to prove that a call has not started, and a backend that streams a call and then fails; no scenario row can hold a stream open at that point
 turncontext_test.go WithTurnContext is a Go API option; no HTTP or ACP field carries it
 internal/session/declare_test.go the size bound needs a catalog above 8 MiB; no row builds one
+internal/session/warm_test.go the 15 second warm-up deadline needs a fake clock; no contract row advances it
