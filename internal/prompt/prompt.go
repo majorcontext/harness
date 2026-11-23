@@ -44,8 +44,8 @@ type Skill struct {
 
 // Embedded is a skill of the embedder that the prompt lists.
 type Embedded struct {
-	Name        string
-	Description string
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // Info is the system prompt of a session and what it holds.

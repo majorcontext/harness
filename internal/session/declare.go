@@ -9,6 +9,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -18,18 +19,50 @@ const maxDeclarationBytes = 8 << 20
 
 var errDeclarationTooLarge = errors.New("session: the prefix declaration is above the size bound")
 
-// declaration is the tools, the deferred tool names, and the prompt segment that a session sends in front of its messages.
+// declaration is the system prompt, the tools, the deferred tool names, and the prompt segment that a session sends in
+// front of its messages.
 type declaration struct {
 	Tools []protocol.ToolSpec `json:"tools"`
 	// Deferred names the tools that were live and deferred when the declaration was built.
 	Deferred []string `json:"deferred,omitempty"`
 	Prompt   string   `json:"prompt,omitempty"`
+	// System is the system prompt segments that come before Prompt. nil: the blob was written before a declaration
+	// held the system prompt.
+	System []string `json:"system"`
+	// Instructions names the instructions files of System, in order.
+	Instructions []string `json:"instructions,omitempty"`
+	// Skills are the skills that System lists.
+	Skills []prompt.Skill `json:"skills,omitempty"`
+	// Embedded are the embedded skills that System lists. Skill updates compare the newest list with it.
+	Embedded []prompt.Embedded `json:"embedded,omitempty"`
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// withSystem returns d with the system prompt of info.
+func (d declaration) withSystem(info prompt.Info) declaration {
+	d.System = nonNil(slices.Clone(info.Segments))
+	d.Instructions, d.Skills, d.Embedded = info.Instructions, info.Skills, info.Embedded
+	return d
+}
+
+// info returns the system prompt of d.
+func (d declaration) info() prompt.Info {
+	return prompt.Info{Segments: d.System, Instructions: d.Instructions, Skills: d.Skills, Embedded: d.Embedded}
 }
 
 // encode returns the blob bytes and the key "prefix-<sha256 hex of the bytes>".
 func (d declaration) encode() (data []byte, key string, err error) {
 	if d.Tools == nil {
 		d.Tools = []protocol.ToolSpec{}
+	}
+	if d.System == nil {
+		d.System = []string{}
 	}
 	if data, err = json.Marshal(d); err != nil {
 		return nil, "", err
@@ -100,10 +133,12 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 			live.Deferred = append(live.Deferred, t.Spec().Name)
 		}
 	}
-	decl, search, ok := d.a.declare(ctx, live, model, turn.IsWarm(ctx))
+	warm := turn.IsWarm(ctx)
+	decl, search, ok := d.a.declare(ctx, live, model, warm)
 	if !ok {
-		return ts
+		return d.withSystem(ts, d.a.livePrompt(), len(history), warm)
 	}
+	ts = d.withSystem(ts, decl.info(), len(history), warm)
 	ts.Specs, ts.Prompt, ts.SearchAllowed = decl.Tools, decl.Prompt, &search
 	has := func(name string) bool {
 		return slices.ContainsFunc(decl.Tools, func(s protocol.ToolSpec) bool { return s.Name == name })
@@ -126,6 +161,20 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 			ts.Tools[i], notices = dt.Declared(has, accounts, decl.Prompt)
 			ts.Notices = replaceNotices(ts.Notices, notices)
 		}
+	}
+	return ts
+}
+
+// withSystem sets the system prompt info on ts, and the skills notice that compares the newest list with the list of info.
+func (d declared) withSystem(ts turn.Toolset, info prompt.Info, at int, warm bool) turn.Toolset {
+	ts.System = nonNil(info.Segments)
+	if d.a.cfg.SkillsNotice != nil {
+		if n, ok := d.a.cfg.SkillsNotice(info.Embedded, at); ok {
+			ts.Notices = replaceNotices(ts.Notices, []turn.Notice{n})
+		}
+	}
+	if !warm {
+		d.a.usePrompt(info)
 	}
 	return ts
 }
@@ -194,6 +243,7 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 	current, usable := declaration{}, v.has && !missing
 	if usable {
 		current = *v.cached
+		usable = current.System != nil
 	}
 	forced := !usable || v.due
 	if !forced && v.rec.Model == model && (!v.first || !current.schemaChanged(live.Tools)) {
@@ -203,6 +253,14 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 	if readOnly {
 		return current, v.rec.SearchAllowed, usable
 	}
+	if !forced {
+		_, same, err := live.withSystem(current.info()).encode()
+		if err == nil && same == v.rec.BlobKey {
+			a.markChecked(ctx, v.first)
+			return current, v.rec.SearchAllowed, true
+		}
+	}
+	live = live.withSystem(a.readPrompt(ctx))
 	data, key, err := live.encode()
 	if err != nil {
 		if !a.oversized {
@@ -212,10 +270,6 @@ func (a *Actor) declare(ctx context.Context, live declaration, model string, rea
 		return declaration{}, false, false
 	}
 	a.oversized = false
-	if !forced && key == v.rec.BlobKey {
-		a.markChecked(ctx, v.first)
-		return current, v.rec.SearchAllowed, true
-	}
 	if err := a.cfg.Store.PutBlob(ctx, key, bytes.NewReader(data)); err != nil {
 		a.log().Warn("harness: the prefix declaration blob cannot be written", "session", a.cfg.ID, "err", err)
 		return current, v.rec.SearchAllowed, usable

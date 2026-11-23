@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/majorcontext/harness/internal/prompt"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -44,7 +45,7 @@ func (b *warmBackend) Warm(ctx context.Context, req turn.Request) error {
 
 func warmConfig(ctx context.Context, wg *sync.WaitGroup, log *memLog, b turn.Backend) Config {
 	return Config{ID: "s1", Store: log, Ownership: owned{}, Backend: b, Source: turn.Fixed{extra("echo")},
-		Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() }, Prompt: func() []string { return []string{"be brief"} }}
+		Base: ctx, Go: wg.Go, Done: func(closeDone func()) { closeDone() }, Prompt: func(context.Context) prompt.Info { return prompt.Info{Segments: []string{"be brief"}} }}
 }
 
 func TestWarmEndsWithTheSessionContextOrItsTimeout(t *testing.T) {

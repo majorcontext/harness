@@ -18,14 +18,13 @@ const skillsKind = "skills"
 // SkillLister returns the embedded skills of a session.
 type SkillLister func(ctx context.Context, session string) ([]prompt.Embedded, error)
 
-// Skills tracks the embedded skills of one session after the system prompt listed them. It is a turn.Source that
-// gives load_skill: each model call reads the list again, load_skill loads the skills of that list, and a notice
-// holds the list when it differs from the list of the system prompt. The text depends only on the two lists, so a
-// call that pins nothing loses nothing.
+// Skills tracks the embedded skills of one session. It is a turn.Source that gives load_skill: each model call reads
+// the list again and load_skill loads the skills of that list. Notice builds the notice that holds the list when it
+// differs from the list of the declared system prompt. The text depends only on the two lists, so a call that pins
+// nothing loses nothing.
 type Skills struct {
 	list    SkillLister
 	session string
-	start   []prompt.Embedded
 	load    turn.Tool
 	log     *slog.Logger
 
@@ -33,14 +32,15 @@ type Skills struct {
 	now []prompt.Embedded
 }
 
-// NewSkills returns the tracker of a session whose system prompt listed start.
-func NewSkills(start []prompt.Embedded, session string, list SkillLister, read SkillReader, log *slog.Logger) *Skills {
-	s := &Skills{list: list, session: session, start: start, now: start, log: log}
+// NewSkills returns the tracker of a session.
+func NewSkills(session string, list SkillLister, read SkillReader, log *slog.Logger) *Skills {
+	s := &Skills{list: list, session: session, log: log}
 	s.load = loadSkill{read, session, s.names}
 	return s
 }
 
-// Toolset reads the list and gives load_skill and the update as a notice. A failed read keeps the last list and warns.
+// Toolset reads the list and gives load_skill and an empty skills notice, which the declaring source replaces. A
+// failed read keeps the last list and warns.
 func (s *Skills) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
 	infos, err := s.list(ctx, s.session)
 	s.mu.Lock()
@@ -50,24 +50,31 @@ func (s *Skills) Toolset(ctx context.Context, history []protocol.LogMessage, all
 	} else {
 		s.now = prompt.ValidEmbedded(infos, nil)
 	}
-	n := turn.Notice{Kind: skillsKind, At: len(history)}
-	update := prompt.EmbeddedUpdate(s.now, s.removed())
-	if slices.Equal(s.now, s.start) {
+	return turn.Toolset{Tools: turn.Restrict([]turn.Tool{s.load}, allowed), Notices: []turn.Notice{{Kind: skillsKind, At: len(history)}}}
+}
+
+// Notice returns the skills notice after the history of at messages, for a system prompt that lists declared.
+func (s *Skills) Notice(declared []prompt.Embedded, at int) turn.Notice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := turn.Notice{Kind: skillsKind, At: at}
+	update := prompt.EmbeddedUpdate(s.now, removed(declared, s.now))
+	if slices.Equal(s.now, declared) {
 		n.Cleared = update
 	} else {
 		n.Text = update
 	}
-	return turn.Toolset{Tools: turn.Restrict([]turn.Tool{s.load}, allowed), Notices: []turn.Notice{n}}
+	return n
 }
 
-// removed names the skills of the system prompt that the list lacks.
-func (s *Skills) removed() []string {
+// removed names the skills of declared that now lacks.
+func removed(declared, now []prompt.Embedded) []string {
 	have := map[string]bool{}
-	for _, e := range s.now {
+	for _, e := range now {
 		have[e.Name] = true
 	}
 	var out []string
-	for _, e := range s.start {
+	for _, e := range declared {
 		if !have[e.Name] {
 			out = append(out, e.Name)
 		}

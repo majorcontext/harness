@@ -16,15 +16,15 @@ func spec(name, desc, schema string) protocol.ToolSpec {
 }
 
 func TestDeclarationEncoding(t *testing.T) {
-	a := declaration{Tools: []protocol.ToolSpec{spec("a", "first", `{"type":"object"}`), spec("b", "second", `{"type":"object"}`)}, Prompt: "p"}
+	a := declaration{Tools: []protocol.ToolSpec{spec("a", "first", `{"type":"object"}`), spec("b", "second", `{"type":"object"}`)}, Prompt: "p", System: []string{"sys"}}
 	_, key, err := a.encode()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, again, _ := (declaration{Tools: slices.Clone(a.Tools), Prompt: "p"}).encode(); again != key || !strings.HasPrefix(key, "prefix-") {
+	if _, again, _ := (declaration{Tools: slices.Clone(a.Tools), Prompt: "p", System: []string{"sys"}}).encode(); again != key || !strings.HasPrefix(key, "prefix-") {
 		t.Errorf("equal declarations gave keys %q and %q", key, again)
 	}
-	if _, swapped, _ := (declaration{Tools: []protocol.ToolSpec{a.Tools[1], a.Tools[0]}, Prompt: "p"}).encode(); swapped == key {
+	if _, swapped, _ := (declaration{Tools: []protocol.ToolSpec{a.Tools[1], a.Tools[0]}, Prompt: "p", System: []string{"sys"}}).encode(); swapped == key {
 		t.Error("a changed tool order kept the key")
 	}
 	data, _, _ := a.encode()

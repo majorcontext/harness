@@ -41,6 +41,8 @@ type Toolset struct {
 	// SearchAllowed, when not nil, is the search_allowed of the declaration that Specs come from. The call sends
 	// the native web search only when the session allows it now too.
 	SearchAllowed *bool
+	// System, when not nil, is the system prompt of the call in place of the system prompt of the request. Prompt follows it.
+	System []string
 	// Prompt follows the system prompt.
 	Prompt string
 	// MCPInstructions are the instructions of the MCP servers, which Prompt also holds.
@@ -395,6 +397,12 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 	} else {
 		for _, t := range ts.Tools {
 			call.Tools = append(call.Tools, t.Spec())
+		}
+	}
+	if ts.System != nil && !all {
+		call.Instructions = strings.Join(ts.System, "\n\n")
+		if call.SystemBlocks != nil {
+			call.SystemBlocks = slices.Clone(ts.System)
 		}
 	}
 	switch {

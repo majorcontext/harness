@@ -206,6 +206,7 @@ func (n *normalizer) value(key string, v any) any {
 		for _, k := range slices.Sorted(maps.Keys(x)) {
 			out[n.key(k)] = n.value(k, x[k])
 		}
+		n.maskDeclaration(x, out)
 		return out
 	case []any:
 		out := make([]any, len(x))

@@ -380,30 +380,30 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		return nil, err
 	}
 	plug := r.pluginSession(id)
-	sp, err := r.sessionPrompt(ctx, id, c, l.profile, own)
-	if err != nil {
+	read, sp := r.promptReader(id, c, l.profile), selftool.NewPrompt()
+	if err := r.checkBreakpoint(ctx, id, c, l.created != nil, read, own); err != nil {
 		return nil, err
 	}
 	sm := r.sessionSource(l.mcp, l.mcpAuthFailed)
 	var a *session.Actor
 	cfg := session.Config{
-		ID:                    id,
-		Store:                 storeLog{r.store, id},
-		Ownership:             own,
-		Owner:                 r.name(),
-		Backend:               r.models,
-		Version:               r.version,
-		AskUserQuestion:       r.questions,
-		WebSearch:             r.webSearch,
-		Evaluator:             r.evaluator,
-		TitleModel:            r.titleModel,
-		Source:                r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
-		Record:                sp.Recording,
-		Retain:                r.workDir != "",
-		Prompt:                sp.System,
+		ID:              id,
+		Store:           storeLog{r.store, id},
+		Ownership:       own,
+		Owner:           r.name(),
+		Backend:         r.models,
+		Version:         r.version,
+		AskUserQuestion: r.questions,
+		WebSearch:       r.webSearch,
+		Evaluator:       r.evaluator,
+		TitleModel:      r.titleModel,
+		Source:          r.source(id, root, c.ParentID != "", depth, plug, sp, sm),
+		Record:          sp.Recording,
+		Retain:          r.workDir != "",
+		Prompt:          read,
+		Used:            sp.Used, SkillsNotice: sp.SkillsNotice,
 		SystemCacheBreakpoint: c.SystemCacheBreakpoint,
 		SystemOverride:        c.SystemBlocks != nil,
-		Skills:                sp.SkillList(),
 		Sent:                  sp.Sent,
 		Appended:              r.appended(id, plug),
 		Params:                chatParams(plug),

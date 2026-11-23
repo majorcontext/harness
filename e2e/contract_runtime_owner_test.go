@@ -80,6 +80,7 @@ func TestContractRuntimeOwner(t *testing.T) {
 		{"new_reads_neither_owner_epoch_nor_sync_from_the_config", rowNewReadsNeitherOwnerEpochNorSyncFromTheConfig},
 		{"a_run_token_without_a_serve_url_is_refused", rowARunTokenWithoutAServeURLIsRefused},
 		{"a_new_owner_sends_the_declared_tools", rowANewOwnerSendsTheDeclaredTools},
+		{"a_new_owner_sends_the_declared_system_prompt", rowANewOwnerSendsTheDeclaredSystemPrompt},
 		{"a_new_owner_without_the_blob_declares_again", rowANewOwnerWithoutTheBlobDeclaresAgain},
 		{"a_new_owner_without_the_blob_still_replicates", rowANewOwnerWithoutTheBlobStillReplicates},
 	}
