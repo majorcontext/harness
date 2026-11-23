@@ -15,6 +15,10 @@ func usedText(user string, in int) harnesstest.Step {
 	return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "re " + user, Usage: harnesstest.Usage{Input: in, Output: 1}}}
 }
 
+func thinkingText(user string, in int) harnesstest.Step {
+	return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Reasoning: "think " + user, Text: "re " + user, Usage: harnesstest.Usage{Input: in, Output: 1}}}
+}
+
 var (
 	overThreshold = map[string]any{"context_window_tokens": 1000, "compaction_keep_turns": 1}
 	twoTurns      = []action{
@@ -37,6 +41,20 @@ func TestContractSessionAutoCompaction(t *testing.T) {
 				text("three", 5),
 			},
 			actions: withActions(twoTurns, submit{as: "a", text: "three"}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name: "compaction_keeps_no_thinking_block_of_a_kept_turn_on_the_anthropic_wire", prefixBreaks: compactionBreak(),
+			config: overThreshold,
+			model: []harnesstest.Step{
+				thinkingText("one", 5), thinkingText("two", 900),
+				{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}},
+				thinkingText("three", 5), thinkingText("four", 5),
+			},
+			actions: withActions(twoTurns,
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				submit{as: "a", text: "four"}, waitIdle{as: "a"},
+				getSession{as: "a"},
+			),
 		},
 		{
 			name: "a_negative_compaction_threshold_is_the_default_threshold", prefixBreaks: compactionBreak(),

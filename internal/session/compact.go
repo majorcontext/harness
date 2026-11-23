@@ -155,6 +155,9 @@ func (a *Actor) summarize(ctx context.Context, req turn.Request, src turn.Source
 		}
 		dropped := len(req.History) - 1 - len(rest)
 		req.History = append([]protocol.LogMessage{req.History[0]}, rest...)
+		if req.Kept > 1 {
+			req.Kept = max(1, req.Kept-dropped)
+		}
 		req.Pins = slices.Clone(req.Pins)
 		for i := range req.Pins {
 			if req.Pins[i].At > 1 {

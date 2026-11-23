@@ -66,6 +66,8 @@ type Request struct {
 	CacheKey string
 	// OneShot says that no later request continues this request.
 	OneShot bool
+	// Kept is the number of leading Messages that a compaction left. A wire that binds reasoning to the content before it sends no reasoning for them.
+	Kept int
 }
 
 // StopReason is why the model stopped generating.

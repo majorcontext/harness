@@ -292,9 +292,13 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 			return nil, err
 		}
 	}
+	kept := req.Kept
 	for i, p := range req.Pins {
 		pin := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: p.Text}}}
 		msgs = slices.Insert(msgs, min(p.At, len(req.History))+i, pin)
+		if p.At < req.Kept {
+			kept++
+		}
 	}
 	tools := make([]provider.ToolDef, len(req.Tools))
 	for i, t := range req.Tools {
@@ -302,7 +306,7 @@ func (b *Backend) request(ctx context.Context, req turn.Request) (*provider.Requ
 	}
 	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, EffortField: control.Field, BudgetTokens: control.Budget, ThinksByDefault: control.ThinksByDefault, OffThinking: control.OffThinking, ServiceTier: req.Settings.ServiceTier,
 		SessionKey: req.SessionID, WebSearch: req.WebSearch && b.nativeSearch(ref.Model),
-		Temperature: req.Temperature, TopP: req.TopP, OneShot: req.Purpose != turn.PurposeTurn}
+		Temperature: req.Temperature, TopP: req.TopP, OneShot: req.Purpose != turn.PurposeTurn, Kept: kept}
 	preq.System, preq.SystemCacheBreakpoint = slices.Clone(req.SystemBlocks), req.SystemCacheBreakpoint
 	if req.SystemBlocks == nil && req.Instructions != "" {
 		preq.System = []string{req.Instructions}

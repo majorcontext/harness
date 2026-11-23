@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Thinking blocks after a compaction** — the Anthropic wire sends no thinking block for a message that the newest compaction kept, so a model that binds a thinking block to the content before it no longer answers HTTP 400 on the first call after a compaction. The history and the log keep the reasoning.
+
 - **Session MCP loading** — the servers of `WithSessionMCP` start to connect when the session is created or opened, and a turn never waits for them: a server that has not connected yet loads in the background, its tools stay behind the `mcp` tool so the tool definitions of the request never change, a transient notice says that its tools are loading, and a call to one of them waits at most 1 s and then answers `<server> tools are still loading; try again shortly`. `Session.AwaitMCP(ctx)` waits for the first attempt of each session server for a host that wants the tools in the first request; the ACP agent calls it for the `mcpServers` of a session.
 
 - **MCP connect bound** — `connect_timeout_s` also bounds a read of the tool list that a `tools/list_changed` notification starts, so a slow read no longer takes the fixed 15 s when a smaller timeout is set.

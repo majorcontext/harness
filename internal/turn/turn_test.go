@@ -67,11 +67,11 @@ func (r *recorder) Status(f protocol.StatusFrame) {
 		r.waits = append(r.waits, time.Until(f.NextAt))
 	}
 }
-func (r *recorder) CompactTurn(context.Context) ([]protocol.LogMessage, bool, error) {
-	return r.folded, r.folded != nil, nil
+func (r *recorder) CompactTurn(context.Context) ([]protocol.LogMessage, int, bool, error) {
+	return r.folded, 0, r.folded != nil, nil
 }
-func (*recorder) AutoCompact(context.Context) ([]protocol.LogMessage, bool, error) {
-	return nil, false, nil
+func (*recorder) AutoCompact(context.Context) ([]protocol.LogMessage, int, bool, error) {
+	return nil, 0, false, nil
 }
 func (r *recorder) Ended(err error) { r.ended = append(r.ended, err) }
 

@@ -358,7 +358,7 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 	// record, so the destructive/relocating repairs only NormalizeForWire
 	// performs are safe here specifically. See its doc comment for the full
 	// mechanism and the additive/transcode-only split.
-	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
+	messages := imageclamp.Clamp(message.NormalizeForWire(unboundKept(req.Messages, req.Kept)), imageLimits)
 
 	add := func(m *message.Message) error {
 		role := "user"
@@ -397,6 +397,31 @@ func transcodeRequest(req *provider.Request, ttl string, cacheFinalMessage bool)
 	}
 
 	return out, nil
+}
+
+// unboundKept returns messages with the reasoning of the first kept messages
+// made empty, so that transcodeParts sends no thinking block for them. The API
+// binds a thinking block to the content before it, and a compaction changed
+// that content for the kept messages. The input is not changed.
+func unboundKept(messages []message.Message, kept int) []message.Message {
+	kept = min(kept, len(messages))
+	if kept <= 0 {
+		return messages
+	}
+	out := slices.Clone(messages)
+	for i := range kept {
+		if !slices.ContainsFunc(out[i].Parts, func(p message.Part) bool { _, ok := p.(*message.Reasoning); return ok }) {
+			continue
+		}
+		parts := slices.Clone(out[i].Parts)
+		for j, p := range parts {
+			if _, ok := p.(*message.Reasoning); ok {
+				parts[j] = &message.Reasoning{}
+			}
+		}
+		out[i].Parts = parts
+	}
+	return out
 }
 
 // thinksOnWire reports whether a request thinks: it sends thinking other than

@@ -210,14 +210,14 @@ func (t *turnRun) Ended(runErr error) {
 // running turn before its newest round trip, into a summary while the turn
 // runs, and returns the new history. ok is false when nothing folds. When ctx
 // ends, it appends nothing.
-func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, bool, error) {
+func (t *turnRun) CompactTurn(ctx context.Context) ([]protocol.LogMessage, int, bool, error) {
 	return t.compactRunning(ctx, false)
 }
 
 // AutoCompact compacts as CompactTurn does when the context passes the
 // threshold. A summary that fails or comes back empty leaves the turn on its
 // history, with no error.
-func (t *turnRun) AutoCompact(ctx context.Context) ([]protocol.LogMessage, bool, error) {
+func (t *turnRun) AutoCompact(ctx context.Context) ([]protocol.LogMessage, int, bool, error) {
 	due, err := callRun(ctx, t.a, func(reply func(bool, error)) {
 		if t.a.run != t.r {
 			reply(false, ErrTurnMismatch)
@@ -226,14 +226,14 @@ func (t *turnRun) AutoCompact(ctx context.Context) ([]protocol.LogMessage, bool,
 		reply(t.a.compactDue(), nil)
 	})
 	if err != nil || !due {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	return t.compactRunning(ctx, true)
 }
 
 // compactRunning compacts for the running turn. With soft, a failed summary
 // is no error unless ctx ended.
-func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.LogMessage, bool, error) {
+func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.LogMessage, int, bool, error) {
 	a, r := t.a, t.r
 	type folding struct {
 		req   turn.Request
@@ -251,7 +251,7 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 		reply(folding{req, a.source(r), c, ok, a.retained()}, nil)
 	})
 	if err != nil || !f.ok {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	summary, usage, err := a.summarize(ctx, f.req, f.src)
 	if err != nil {
@@ -265,22 +265,25 @@ func (t *turnRun) compactRunning(ctx context.Context, soft bool) ([]protocol.Log
 			reply(struct{}{}, nil)
 		})
 		if soft && ctx.Err() == nil {
-			return nil, false, nil
+			return nil, 0, false, nil
 		}
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	f.c.Summary, f.c.Index, f.c.Usage = summary, a.resultIndex(f.metas), usage
-	h, err := callRun(ctx, a, func(reply func([]protocol.LogMessage, error)) {
+	type folded struct {
+		h    []protocol.LogMessage
+		kept int
+	}
+	h, err := callRun(ctx, a, func(reply func(folded, error)) {
 		if a.run != r || ctx.Err() != nil {
-			reply(nil, cmp.Or(context.Cause(ctx), error(ErrTurnMismatch)))
+			reply(folded{}, cmp.Or(context.Cause(ctx), error(ErrTurnMismatch)))
 			return
 		}
 		err := a.append(f.c)
 		a.latched = err == nil
-		h := a.state.ModelHistory()
-		reply(h, err)
+		reply(folded{a.state.ModelHistory(), a.state.KeptLen()}, err)
 	})
-	return h, err == nil, err
+	return h.h, h.kept, err == nil, err
 }
 
 // mergePins returns the recorded pins with each turn pin inserted after the
