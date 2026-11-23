@@ -130,7 +130,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -206,7 +206,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -300,7 +300,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -418,7 +418,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -497,6 +497,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -571,7 +576,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -599,6 +604,11 @@
         "grep",
         "ls",
         "mcp",
+        "mcp__weather__alerts",
+        "mcp__weather__echo",
+        "mcp__weather__flaky",
+        "mcp__weather__forecast",
+        "mcp__weather__strict",
         "model",
         "process",
         "read_file",
@@ -673,7 +683,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\nmcp__weather__echo — Return the call arguments\nmcp__weather__flaky — Always reports a tool error\nmcp__weather__forecast — Get the weather forecast for a city\nmcp__weather__strict — Always fails with a JSON-RPC error\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },

@@ -70,7 +70,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -128,7 +128,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the first connect — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },

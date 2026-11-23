@@ -86,7 +86,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the tool list of this session was fixed — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -152,7 +152,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the tool list of this session was fixed — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -243,7 +243,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the tool list of this session was fixed — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -361,7 +361,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the first tool read — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[plugins: tools added after the tool list of this session was fixed — late. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"tool_name\"]), then run it with mcp(action=\"call\", tool=\"tool_name\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cplugin name=\"late\"\u003e\nlate_report — A tool that a restart adds.\n\u003c/plugin\u003e\n\u003c/harness-engine-context\u003e"
             }
           ]
         },

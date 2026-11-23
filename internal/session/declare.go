@@ -101,7 +101,14 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	has := func(name string) bool {
 		return slices.ContainsFunc(decl.Tools, func(s protocol.ToolSpec) bool { return s.Name == name })
 	}
-	ts.Deferred, ts.Tools = slices.Clip(ts.Deferred), slices.Clone(ts.Tools)
+	ts.Deferred, ts.Tools = slices.Clip(slices.Clone(ts.Deferred)), slices.Clone(ts.Tools)
+	for i, t := range ts.Deferred {
+		if dt, ok := t.(turn.Declarable); ok {
+			var notices []turn.Notice
+			ts.Deferred[i], notices = dt.Declared(has, decl.Prompt)
+			ts.Notices = replaceNotices(ts.Notices, notices)
+		}
+	}
 	for i, t := range ts.Tools {
 		if !has(live.Tools[i].Name) {
 			ts.Deferred = append(ts.Deferred, t)

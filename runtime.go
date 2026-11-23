@@ -217,7 +217,6 @@ type Runtime struct {
 	// syncStopped is set once a Sync rejects a batch for good.
 	syncStopped atomic.Bool
 	sessions    map[string]*entry
-	surfaces    map[string]bool // per session ID: whether the session has MCP tools (see mcpSurface)
 	// catching holds the sessions that CatchUp replicates.
 	catching  map[string]*catchGrant
 	catchSlot chan struct{}
@@ -243,7 +242,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, log: cmp.Or(opts.Logger, slog.Default()), health: healthOf(opts.Version, time.Now()),
-		skills: opts.Skills, sessions: map[string]*entry{}, surfaces: map[string]bool{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
+		skills: opts.Skills, sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		titleModel: modelRef(opts.Config, opts.Config.TitleModel),
 		threshold:  positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.maxTokens = opts.Config.MaxTokens

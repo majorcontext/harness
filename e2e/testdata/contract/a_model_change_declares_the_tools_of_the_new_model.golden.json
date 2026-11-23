@@ -38,6 +38,142 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "mcp__weather__forecast",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "mcp__weather__forecast",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp__weather__forecast",
+              "tool_input": {
+                "city": "Oslo"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp__weather__forecast",
+              "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
       "model": "claude-opus-5",
       "tools": [
         "bash",
@@ -88,6 +224,52 @@
               "text": "two"
             }
           ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "mcp__weather__forecast",
+              "tool_input": {
+                "city": "Oslo"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "Oslo: 3C, snow",
+              "tool_name": "mcp__weather__forecast",
+              "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ]
         }
       ]
     }
@@ -129,8 +311,53 @@
         "role": "assistant",
         "parts": [
           {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "mcp__weather__forecast",
+            "arguments": {
+              "city": "Oslo"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "Oslo: 3C, snow"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
             "type": "text",
             "text": "2"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "3"
           }
         ]
       }
@@ -182,7 +409,7 @@
               "input_ids": [
                 "in1"
               ],
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "turn.started",
             "seq": 4,
@@ -210,7 +437,7 @@
           {
             "d": {
               "index": 0,
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "step.started",
             "seq": 7,
@@ -243,7 +470,7 @@
                 ],
                 "role": "assistant"
               },
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "item.completed",
             "seq": 9,
@@ -253,7 +480,7 @@
             "d": {
               "finish_reason": "end_turn",
               "index": 0,
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "step.ended",
             "seq": 10,
@@ -262,27 +489,10 @@
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "turn.ended",
             "seq": 11,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "epoch": 1,
-              "owner": "\u003cowner\u003e"
-            },
-            "k": "owner.acquired",
-            "seq": 12,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "model": "anthropic/claude-opus-5"
-            },
-            "k": "settings.changed",
-            "seq": 13,
             "t": "\u003ctime\u003e"
           },
           {
@@ -298,7 +508,7 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 14,
+            "seq": 12,
             "t": "\u003ctime\u003e"
           },
           {
@@ -306,29 +516,19 @@
               "input_ids": [
                 "in2"
               ],
-              "turn_id": "turn#2"
+              "turn_id": "turn#1"
             },
             "k": "turn.started",
-            "seq": 15,
-            "t": "\u003ctime\u003e"
-          },
-          {
-            "d": {
-              "blob_key": "prefix-0e232eaa555dba75f47204bb0ccaa2ed06889ffc836b7acf9a6b3a19234babaf",
-              "bytes": 16318,
-              "model": "anthropic/claude-opus-5"
-            },
-            "k": "prefix.declared",
-            "seq": 16,
+            "seq": 13,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "index": 0,
-              "turn_id": "turn#2"
+              "turn_id": "turn#1"
             },
             "k": "step.started",
-            "seq": 17,
+            "seq": 14,
             "t": "\u003ctime\u003e"
           },
           {
@@ -343,12 +543,98 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 18,
+            "seq": 15,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "item_id": "item#2",
+              "message": {
+                "parts": [
+                  {
+                    "arguments": {
+                      "city": "Oslo"
+                    },
+                    "call_id": "toolu#1",
+                    "name": "mcp__weather__forecast",
+                    "type": "tool_call"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 16,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#3",
+              "message": {
+                "parts": [
+                  {
+                    "call_id": "toolu#1",
+                    "name": "mcp__weather__forecast",
+                    "text": "Oslo: 3C, snow",
+                    "type": "tool_result"
+                  }
+                ],
+                "role": "tool"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 17,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "finish_reason": "tool_use",
+              "index": 0,
+              "turn_id": "turn#1"
+            },
+            "k": "step.ended",
+            "seq": 18,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "index": 1,
+              "turn_id": "turn#1"
+            },
+            "k": "step.started",
+            "seq": 19,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "at": 5,
+              "notice": "mcp-set",
+              "text": "[mcp: tools added after the tool list of this session was fixed — weather. They are deferred: to use one you MUST first read its definition with mcp(action=\"select\", tools=[\"mcp__server__tool\"]), then run it with mcp(action=\"call\", tool=\"mcp__server__tool\", arguments={...}). Find one with mcp(action=\"search\", query=\"...\").]\n\u003cserver name=\"weather\"\u003e\nmcp__weather__alerts — List active weather alerts\n\u003c/server\u003e"
+            },
+            "k": "pin.recorded",
+            "seq": 20,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "cache_ttl_seconds": 3600,
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 21,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#4",
               "message": {
                 "parts": [
                   {
@@ -358,29 +644,135 @@
                 ],
                 "role": "assistant"
               },
-              "turn_id": "turn#2"
+              "turn_id": "turn#1"
             },
             "k": "item.completed",
-            "seq": 19,
+            "seq": 22,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "finish_reason": "end_turn",
+              "index": 1,
+              "turn_id": "turn#1"
+            },
+            "k": "step.ended",
+            "seq": 23,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 24,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "model": "anthropic/claude-opus-5"
+            },
+            "k": "settings.changed",
+            "seq": 25,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in3",
+              "parts": [
+                {
+                  "text": "three",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 26,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in3"
+              ],
+              "turn_id": "turn#3"
+            },
+            "k": "turn.started",
+            "seq": 27,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "blob_key": "prefix-0e232eaa555dba75f47204bb0ccaa2ed06889ffc836b7acf9a6b3a19234babaf",
+              "bytes": 16318,
+              "model": "anthropic/claude-opus-5"
+            },
+            "k": "prefix.declared",
+            "seq": 28,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "index": 0,
+              "turn_id": "turn#3"
+            },
+            "k": "step.started",
+            "seq": 29,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "cache_ttl_seconds": 3600,
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 30,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#5",
+              "message": {
+                "parts": [
+                  {
+                    "text": "3",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#3"
+            },
+            "k": "item.completed",
+            "seq": 31,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "finish_reason": "end_turn",
               "index": 0,
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "step.ended",
-            "seq": 20,
+            "seq": 32,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "turn.ended",
-            "seq": 21,
+            "seq": 33,
             "t": "\u003ctime\u003e"
           }
         ]
@@ -395,7 +787,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 25,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -409,8 +801,8 @@
         "title": "one",
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 5,
-          "output_tokens": 3
+          "input_tokens": 15,
+          "output_tokens": 9
         },
         "work_dir": "\u003cworkdir\u003e"
       }

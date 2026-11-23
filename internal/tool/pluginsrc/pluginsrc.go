@@ -57,12 +57,6 @@ type Plugins struct {
 	mu     sync.Mutex
 	closed bool
 
-	// dmu guards seen and base. seen holds the first definition that the runtime read of each tool, and base
-	// the tools that a session sent at its first tool read, both for the life of the process.
-	dmu  sync.Mutex
-	seen map[string]pub.ToolDef
-	base map[string]firstRead
-
 	serving sync.WaitGroup
 	smu     sync.Mutex
 	stopped bool
@@ -97,7 +91,6 @@ func New(cfg config.Config, inproc []*pub.Plugin, workDir string, calls Calls, s
 		log.Warn("plugin: hook failed", "plugin", name, "hook", string(hook), "error", plugin.SanitizeSessionError(toolresult.Mask(err.Error())))
 	}
 	return &Plugins{log: log, start: cfg.Plugins, inproc: inproc, workDir: workDir, cachePath: cfg.PluginCache,
-		seen: map[string]pub.ToolDef{}, base: map[string]firstRead{},
 		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{calls}, Log: log,
 			ServeURL: serveURL, RunToken: runToken, OnError: onError}}
 }
@@ -207,7 +200,6 @@ func (p *Plugins) swap(ctx context.Context, specs []config.PluginSpec, taken fun
 			return fmt.Errorf("plugin cache: %w", err)
 		}
 	}
-	p.remember(host.Tools())
 	p.live.Store(&live{host: host, specs: specs, limits: limits})
 	stop()
 	return nil
@@ -255,17 +247,6 @@ func (p *Plugins) replace(cur *live, hostSpecs []plugin.Spec, keep map[string]bo
 		return h, func() {}, err
 	}
 	return cur.host.Replace(hostSpecs, func(n string) bool { return keep[n] })
-}
-
-// remember keeps the first definition of each tool.
-func (p *Plugins) remember(defs []pub.ToolDef) {
-	p.dmu.Lock()
-	defer p.dmu.Unlock()
-	for _, d := range defs {
-		if _, ok := p.seen[d.Name]; !ok {
-			p.seen[d.Name] = d
-		}
-	}
 }
 
 // Configured reports whether the live set, or the start set before the first Start, has a config plugin.
@@ -335,67 +316,47 @@ type Session struct {
 	calls sync.Map // call ID to *plugin.Host
 }
 
-// firstRead is what a session found at its first tool read: the names of the plugin tools that it sends, and
-// whether the live set had a config plugin.
-type firstRead struct {
-	names   []string
-	present bool
-}
+// Present reports whether the live set has a config plugin.
+func (s *Session) Present() bool { return len(s.p.live.Load().specs) > 0 }
 
-// Present reports whether the live set had a config plugin at the first tool read of the session. The first call
-// decides it, and the runtime keeps the answer for the life of the process.
-func (s *Session) Present() bool { return s.first().present }
-
-func (s *Session) first() firstRead {
-	l := s.p.live.Load()
-	s.p.dmu.Lock()
-	defer s.p.dmu.Unlock()
-	f, ok := s.p.base[s.id]
-	if !ok {
-		f.present = len(l.specs) > 0
-		for _, d := range l.host.Tools() {
-			f.names = append(f.names, d.Name)
-		}
-		s.p.base[s.id] = f
-	}
-	return f
-}
-
-// toolOf returns the tool name with its first definition.
-func (s *Session) toolOf(name string) turn.Tool {
-	s.p.dmu.Lock()
-	defer s.p.dmu.Unlock()
-	return tool{s, s.p.seen[name]}
-}
-
-// Toolset gives the plugin tools that the session sent at its first tool read and allowed keeps, and the
-// system.transform segments of this model call as a notice.
+// Toolset gives the plugin tools of the live set that allowed keeps, and the system.transform segments of this
+// model call as a notice.
 func (s *Session) Toolset(ctx context.Context, _ []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	h := s.p.live.Load().host
 	ref, _ := modelref.ParseModelRef(model)
 	segs := h.SystemTransform(ctx, &pub.SystemTransformRequest{SessionID: s.id, Model: ref.String()})
-	var tools []turn.Tool
-	for _, n := range s.first().names {
-		tools = append(tools, s.toolOf(n))
-	}
-	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Notices: []turn.Notice{{Kind: segmentKind, Text: strings.Join(segs, "\n\n")}}, Hooks: s}
+	return turn.Toolset{Tools: turn.Restrict(s.tools(h), allowed), Notices: []turn.Notice{{Kind: segmentKind, Text: strings.Join(segs, "\n\n")}}, Hooks: s}
 }
 
-// Late returns the plugin tools of the live set that the first tool read of the session did not reach, or that
-// has refuses, and allowed keeps, in name order.
+func (s *Session) tools(h *plugin.Host) []turn.Tool {
+	var tools []turn.Tool
+	for _, d := range h.Tools() {
+		tools = append(tools, tool{s, d})
+	}
+	return tools
+}
+
+// Late returns the plugin tools of the live set that allowed keeps and has refuses, in name order. has nil: none.
 func (s *Session) Late(allowed []string, has func(string) bool) []mcpsrc.Late {
-	base := s.first().names
-	owner := map[string]string{}
-	for _, i := range s.p.live.Load().host.Plugins() {
+	if has == nil {
+		return nil
+	}
+	l := s.p.live.Load()
+	owner := map[string]pub.ToolDef{}
+	plugins := map[string]string{}
+	for _, d := range l.host.Tools() {
+		owner[d.Name] = d
+	}
+	for _, i := range l.host.Plugins() {
 		for _, t := range i.Tools {
-			if (!slices.Contains(base, t) || has != nil && !has(t)) && protocol.ToolAllowed(allowed, t) {
-				owner[t] = i.Name
-			}
+			plugins[t] = i.Name
 		}
 	}
 	var out []mcpsrc.Late
 	for _, n := range slices.Sorted(maps.Keys(owner)) {
-		out = append(out, mcpsrc.Late{Plugin: owner[n], Tool: s.toolOf(n)})
+		if !has(n) && protocol.ToolAllowed(allowed, n) {
+			out = append(out, mcpsrc.Late{Plugin: plugins[n], Tool: tool{s, owner[n]}})
+		}
 	}
 	return out
 }
@@ -432,11 +393,7 @@ func (s *Session) Untransformed() turn.Source { return untransformed{s} }
 type untransformed struct{ s *Session }
 
 func (u untransformed) Toolset(_ context.Context, _ []protocol.LogMessage, allowed []string, _ string) turn.Toolset {
-	var tools []turn.Tool
-	for _, d := range u.s.p.live.Load().host.Tools() {
-		tools = append(tools, tool{u.s, d})
-	}
-	return turn.Toolset{Tools: turn.Restrict(tools, allowed), Hooks: u.s}
+	return turn.Toolset{Tools: turn.Restrict(u.s.tools(u.s.p.live.Load().host), allowed), Hooks: u.s}
 }
 
 // Before runs the tool.execute.before chain and announces a call that the

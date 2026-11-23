@@ -89,9 +89,9 @@ func Reserved(name string) bool {
 // The servers of a Source are a live set: Set adds, replaces, and removes
 // them. One actor goroutine owns every server entry (see actor.go). Every
 // other goroutine sends it a message or reads the snapshot that it publishes
-// after each change. The tools that the first connect reached are the tools
-// of the request prefix of each session. A tool that arrives later is
-// deferred, and a tool that a session sent stays in its definitions.
+// after each change. It gives the tools that its servers list now: the request
+// prefix of a session comes from the declaration of the session (see
+// internal/session), and a tool that the declaration lacks is deferred.
 type Source struct {
 	workDir string
 	log     *slog.Logger
@@ -131,20 +131,12 @@ type Source struct {
 	closeOnce sync.Once
 }
 
-// memory is what the runtime keeps of a server name for the whole process, so a session that sent a tool
-// finds its definition again after the server goes. It is replaced, never changed in place.
+// memory is what the runtime keeps of a server name, also after the server goes. It is replaced, never changed in
+// place.
 type memory struct {
-	loading string
-	// seen holds the first definition that the runtime read of each tool.
-	seen map[string]mcp.Tool
-	// base holds the tools that the first connect reached. They are the tools that every session sends.
-	base            map[string]bool
-	inst            string
-	resources       bool
-	servesSkills    bool
-	skills          []mcp.Skill
+	loading         string
 	sessionIDHeader bool
-	// up is true once the server connected.
+	// up is true once the server connected, so that a server that goes is named as removed.
 	up bool
 }
 
@@ -167,6 +159,14 @@ func newServer(c *mcp.Client, tools []mcp.Tool, limit time.Duration) *server {
 }
 
 func (s *server) up() bool { return s != nil && s.client != nil }
+
+// toolList returns the tools that s lists, in name order. A server that is not connected has none.
+func (s *server) toolList() []mcp.Tool {
+	if !s.up() {
+		return nil
+	}
+	return s.tools
+}
 
 // clientOf returns the client of s, or nil.
 func (s *server) clientOf() *mcp.Client {
@@ -271,16 +271,15 @@ func dial(ctx context.Context, spec config.MCPServerSpec, root string, hc *http.
 	return sv, nil
 }
 
-// Toolset returns the mcp tool, the resource tools when a server that the
-// first connect reached serves resources, and the tools of each server. A
-// tool that defers is in Deferred, and the prompt lists it when the first
-// connect reached it. A tool that arrives later is deferred and a notice lists
-// it. A deferred tool never joins the tools of a model call.
+// Toolset returns the mcp tool, the resource tools when a connected server
+// serves resources, and the tools that the connected servers list now. A tool
+// that defers is in Deferred, and the prompt lists it. A deferred tool never
+// joins the tools of a model call.
 func (s *Source) Toolset(ctx context.Context, history []protocol.LogMessage, allowed []string, model string) turn.Toolset {
 	return s.toolset(ctx, allowed, nil)
 }
 
-// Late is a plugin tool that the first tool read of a session did not reach and the live set of plugins has.
+// Late is a plugin tool of the live set that the declaration of a session lacks.
 type Late struct {
 	Plugin string
 	Tool   turn.Tool
@@ -288,10 +287,9 @@ type Late struct {
 
 // Plugins gives the plugin tools that the mcp tool runs for a session.
 type Plugins interface {
-	// Present reports whether the session had a plugin at its first tool read.
+	// Present reports whether the live set has a config plugin.
 	Present() bool
-	// Late returns the late tools that allowed keeps, in name order. A tool that has refuses is late, whether or
-	// not the first tool read reached it. has nil: only the first tool read decides.
+	// Late returns the live tools that allowed keeps and has refuses, in name order. has nil: none.
 	Late(allowed []string, has func(string) bool) []Late
 }
 
@@ -312,16 +310,17 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		return turn.Toolset{}
 	}
 	v := s.view()
-	if len(v.mem) == 0 && (pl == nil || !pl.Present()) {
-		return turn.Toolset{}
-	}
 	ok := func(name string) bool { return protocol.ToolAllowed(allowed, name) }
-	autoDefer := v.baseBytes(ok) > s.budget
+	if len(v.names) == 0 && (pl == nil || !pl.Present()) {
+		if !v.removed() || !ok(controlName) {
+			return turn.Toolset{}
+		}
+		return turn.Toolset{Deferred: []turn.Tool{control{s: s, loaded: map[string]bool{}, v: v, ok: ok}}}
+	}
+	autoDefer := v.bytes(ok) > s.budget
 	fill := budget{left: s.budget}
 	ctl := control{s: s, loaded: map[string]bool{}, v: v, ok: ok}
-	var late []Late
 	if pl != nil {
-		late = pl.Late(allowed, nil)
 		ctl.late = func(has func(string) bool) []Late { return pl.Late(allowed, has) }
 	}
 	var ts turn.Toolset
@@ -330,29 +329,17 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
 		m := v.mem[name]
 		for _, r := range v.remotes(name, ok) {
-			base := m.base[r.name]
-			cut := base && m.loading == "eager" && !fill.fits(r.spec)
+			cut := m.loading == "eager" && !fill.fits(r.spec)
 			cutAny = cutAny || cut
-			deferred := m.loading == "lazy" || m.loading == "auto" && autoDefer || cut
-			if r.listed {
-				ctl.all = append(ctl.all, r)
-			}
-			switch {
-			case base && !deferred:
-				ctl.loaded[r.spec.Name] = true
-				ts.Tools = append(ts.Tools, r)
-			case r.listed:
+			ctl.all = append(ctl.all, r)
+			if m.loading == "lazy" || m.loading == "auto" && autoDefer || cut {
 				ts.Deferred = append(ts.Deferred, r)
-				if base {
-					listed = append(listed, r)
-				}
-			case base:
 				listed = append(listed, r)
+				continue
 			}
+			ctl.loaded[r.spec.Name] = true
+			ts.Tools = append(ts.Tools, r)
 		}
-	}
-	for _, l := range late {
-		ts.Deferred = append(ts.Deferred, l.Tool)
 	}
 	var head []turn.Tool
 	if ok(controlName) {
@@ -372,7 +359,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
 	}
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
-	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, late, nil)}}
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, nil, nil, nil)}}
 	return ts
 }
 
@@ -430,44 +417,33 @@ func remoteName(name string) (string, string, bool) {
 func (v view) liveAll(ok func(string) bool) []remote {
 	var out []remote
 	for _, name := range slices.Sorted(maps.Keys(v.mem)) {
-		for _, r := range v.remotes(name, ok) {
-			if r.listed {
-				out = append(out, r)
-			}
-		}
+		out = append(out, v.remotes(name, ok)...)
 	}
 	return out
 }
 
-// baseBytes sums the schema bytes of the tools that the first connect reached and ok allows, for the servers that
-// are not lazy.
-func (v view) baseBytes(ok func(string) bool) int {
+// bytes sums the schema bytes of the live tools that ok allows, for the servers that are not lazy.
+func (v view) bytes(ok func(string) bool) int {
 	n := 0
 	for name, m := range v.mem {
 		if m.loading == "lazy" {
 			continue
 		}
 		for _, r := range v.remotes(name, ok) {
-			if m.base[r.name] {
-				n += schemaBytes(r.spec)
-			}
+			n += schemaBytes(r.spec)
 		}
 	}
 	return n
 }
 
-// remotes returns the tools of server name that ok allows, sorted. A tool that its server does not list now
-// has no client.
+// remotes returns the tools that the server name lists now and ok allows, sorted.
 func (v view) remotes(name string, ok func(string) bool) []remote {
 	var out []remote
-	sv, m := v.live[name], v.mem[name]
-	for _, tn := range slices.Sorted(maps.Keys(m.seen)) {
-		t := m.seen[tn]
-		spec := protocol.ToolSpec{Name: prefix + name + "__" + tn, Description: t.Description, InputSchema: t.InputSchema, ReadOnly: readOnlyHint(t.Annotations)}
-		if !ok(spec.Name) {
-			continue
+	for _, t := range v.live[name].toolList() {
+		spec := protocol.ToolSpec{Name: prefix + name + "__" + t.Name, Description: t.Description, InputSchema: t.InputSchema, ReadOnly: readOnlyHint(t.Annotations)}
+		if ok(spec.Name) {
+			out = append(out, remote{src: v.src, server: name, name: t.Name, spec: spec})
 		}
-		out = append(out, remote{src: v.src, server: name, name: tn, spec: spec, listed: sv.has(tn)})
 	}
 	return out
 }
@@ -479,7 +455,6 @@ type remote struct {
 	src          *Source
 	server, name string
 	spec         protocol.ToolSpec
-	listed       bool
 }
 
 func (r remote) Spec() protocol.ToolSpec { return r.spec }

@@ -67,7 +67,7 @@ type control struct {
 	ok func(string) bool
 	// late returns the plugin tools that the mcp tool loads too. nil: none.
 	late func(has func(string) bool) []Late
-	// has tells the tools of the declaration. nil: the tools that the first connect reached.
+	// has tells the tools of the declaration. nil: no plugin tool is late.
 	has func(string) bool
 }
 
@@ -99,11 +99,12 @@ func (c control) Declared(has func(string) bool, prompt string) (turn.Tool, []tu
 	}
 	listed, cut := catalogNames(prompt)
 	undeclared := func(n string) bool { return !cut && !has(n) && !listed[n] }
+	inPrompt := func(server string) bool { return strings.Contains(prompt, serverOpen(server)) }
 	var late []Late
 	if c.late != nil {
 		late = c.late(has)
 	}
-	return c, []turn.Notice{{Kind: addedKind, Text: c.v.added(c.ok, late, undeclared)}}
+	return c, []turn.Notice{{Kind: addedKind, Text: c.v.added(c.ok, late, undeclared, inPrompt)}}
 }
 
 // catalogNames returns the tool names that the lines of prompt list as toolLines writes them, and whether a line
@@ -158,7 +159,7 @@ func (c control) Run(ctx context.Context, call protocol.ToolCall) (protocol.Tool
 		c.all = c.v.liveAll(c.ok)
 		if c.late != nil {
 			for _, l := range c.late(c.has) {
-				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
+				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec()})
 			}
 		}
 	}
@@ -300,7 +301,7 @@ func (c control) choose(ctx context.Context, names []string) (any, error) {
 		c.all = c.v.liveAll(c.ok)
 		if c.late != nil {
 			for _, l := range c.late(c.has) {
-				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec(), listed: true})
+				c.all = append(c.all, remote{server: l.Plugin, name: l.Tool.Spec().Name, spec: l.Tool.Spec()})
 			}
 		}
 	}
