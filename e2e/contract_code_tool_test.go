@@ -215,7 +215,7 @@ parallel([total, total, total, total, total, total, total, total])`)),
 			name:   "a_nested_call_records_its_arguments_with_secrets_masked",
 			config: codeOn,
 			model: toolChain(codeCall("attempt(bash, command=\"echo TOKEN=abcdefgh1234\")\n" +
-				"r = attempt(bash, command=\"echo zyxwvu''ts9876\")\nattempt(ls, path=\".\", api_key=r.text, nested={\"password\": [r.text]})")),
+				"r = attempt(bash, command=\"echo zyxwvu''ts9876\")\nattempt(ls, path=\".\", api_key=r.text, nested={\"password\": [r.text]}, headers={\"Authorization\": \"Bearer \" + r.text})")),
 			actions: []action{
 				create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"},
 				nestedRecords{as: "a", want: 3, hidden: "zyxwvuts9876"},
