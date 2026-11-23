@@ -275,6 +275,10 @@ type runner struct {
 	deferred []Tool
 	resolver ToolResolver
 	hooks    Hooks
+	// locks, when set, order the calls of Request.Call and the nested calls of a tool.
+	locks *keyLocks
+	// nests names the tools that run nested calls.
+	nests map[string]bool
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
 	joinMu *sync.Mutex
@@ -429,6 +433,10 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 	}
 	calls, _ := ctx.Value(mcpCallsKey{}).(*atomic.Int64)
 	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: calls}
+	if all {
+		t.locks = newKeyLocks()
+	}
+	bindNested(&t, to)
 	call.Call = t.run
 	if all {
 		t.joinMu = new(sync.Mutex)
@@ -448,29 +456,57 @@ func (t runner) bridged() func(context.Context, protocol.ToolCall) protocol.Tool
 	}
 }
 
+// keyLocks are the locks of one run of a backend that owns the loop. The calls of Request.Call take them, and
+// so do the nested calls of a tool, so a key or an Alone tool is ordered across both paths.
+type keyLocks struct {
+	mu    sync.Mutex
+	locks map[string]chan struct{}
+	alone chan struct{}
+}
+
+func newKeyLocks() *keyLocks {
+	return &keyLocks{locks: map[string]chan struct{}{}, alone: make(chan struct{}, 1)}
+}
+
+func (k *keyLocks) lock(ctx context.Context, key string) (release func(), err error) {
+	k.mu.Lock()
+	lock, ok := k.locks[key]
+	if !ok {
+		lock = make(chan struct{}, 1)
+		k.locks[key] = lock
+	}
+	k.mu.Unlock()
+	return take(ctx, lock)
+}
+
+func take(ctx context.Context, lock chan struct{}) (func(), error) {
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+}
+
 // keyed returns a run func that runs the calls of one key one at a time, in
-// the order they get the key, as a batch does. A backend that owns the loop
-// may run its calls at once, and calls to one file must not lose an edit.
+// the order they get the key, as a batch does, and the calls of a tool that
+// runs nested calls one at a time. A backend that owns the loop may run its calls at once, and
+// calls to one file must not lose an edit.
 func (t runner) keyed() func(context.Context, protocol.ToolCall) protocol.ToolResult {
-	var mu sync.Mutex
-	locks := map[string]chan struct{}{}
 	return func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-		key := t.key(c)
-		if key == "" {
-			return t.run(ctx, c)
+		if _, target := t.target(c); t.nests[target.Name] {
+			release, err := take(ctx, t.locks.alone)
+			if err != nil {
+				return protocol.ToolResult{IsError: true, Text: err.Error()}
+			}
+			defer release()
 		}
-		mu.Lock()
-		lock, ok := locks[key]
-		if !ok {
-			lock = make(chan struct{}, 1)
-			locks[key] = lock
-		}
-		mu.Unlock()
-		select {
-		case lock <- struct{}{}:
-			defer func() { <-lock }()
-		case <-ctx.Done():
-			return protocol.ToolResult{IsError: true, Text: context.Cause(ctx).Error()}
+		if key := t.key(c); key != "" {
+			release, err := t.locks.lock(ctx, key)
+			if err != nil {
+				return protocol.ToolResult{IsError: true, Text: err.Error()}
+			}
+			defer release()
 		}
 		return t.run(ctx, c)
 	}

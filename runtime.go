@@ -187,6 +187,7 @@ type Runtime struct {
 	plugins *pluginsrc.Plugins
 	workDir string
 	web     *webOptions // nil: no web_fetch
+	code    turn.Tool   // nil: no code tool
 	health  protocol.Health
 	version string // the build version that the engine banner names; empty: no banner
 	// questions lets a backend ask the user a question.
@@ -285,7 +286,7 @@ func New(opts Options) (*Runtime, error) {
 		}
 	}
 	r.mcp = mcpsrc.New(opts.Config, opts.WorkDir, r.log, mcpsrc.HoldRetries(opts.mcpHoldRetries), mcpsrc.AwaitFirstConnect(opts.mcpAwaitSession))
-	r.mcpCfg = opts.Config
+	r.mcpCfg, r.code = opts.Config, newCodeTool(opts)
 	r.plugins = pluginsrc.New(opts.Config, opts.Plugins, opts.WorkDir, pluginsrc.Calls{History: r.history, Blob: r.store.GetBlob, MCP: r.mcpCall, Generate: r.generate}, opts.ServeURL, opts.RunToken, r.log)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport, backend.Env{Getenv: opts.Getenv, NoGetenv: "Options.Getenv is nil", Log: r.log, Logins: opts.Logins.owner(), NoProcess: opts.Host.NoProcess, NoLogin: opts.Host.NoLogin})
 	if err := r.checkOptions(tools, opts); err != nil {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"iter"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -69,6 +70,7 @@ type toolCallBody struct {
 	Content   []any           `json:"content,omitempty"`
 	Locations []location      `json:"locations,omitempty"`
 	RawInput  json.RawMessage `json:"rawInput,omitempty"`
+	RawOutput string          `json:"rawOutput,omitempty"`
 }
 
 type toolUpdateBody struct {
@@ -260,4 +262,30 @@ func FindToolImage(events iter.Seq2[protocol.Event, error], key string) (bool, e
 		}
 	}
 	return false, nil
+}
+
+// nestedCall reports a call of a script of the code tool as a tool call of its own tool, already ended.
+func (h *held) nestedCall(e protocol.Event) error {
+	p, err := e.Payload()
+	if err != nil {
+		return nil
+	}
+	rec, ok := p.(*protocol.NestedCallRecorded)
+	if !ok {
+		return nil
+	}
+	id := rec.CallID + "#" + strconv.FormatUint(e.Seq, 10)
+	body := describeCall(protocol.LogPart{CallID: id, Name: rec.Name, Arguments: rec.Arguments}, h.cwd)
+	body.Status, body.RawOutput = "completed", rec.Text
+	switch {
+	case rec.IsError:
+		body.Status = "failed"
+		body.Content = nil
+		if rec.Text != "" {
+			body.Content = []any{textItem(rec.Text)}
+		}
+	case len(body.Content) == 0 && rec.Text != "":
+		body.Content = []any{textItem(rec.Text)}
+	}
+	return h.send("session/update", map[string]any{"sessionId": h.id, "update": body})
 }

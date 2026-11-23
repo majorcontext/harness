@@ -89,6 +89,9 @@ type Config struct {
 	// ModelTool false disables the `model` session tool. nil leaves it
 	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
+	// CodeMode true gives every session the `code` tool, which runs a Starlark script that calls the other tools
+	// as functions. nil leaves it off, so a *bool keeps "unset" apart from "false" in the merge.
+	CodeMode *bool `json:"code_mode,omitempty"`
 	// Web opts in to the web tools. Each field is off when unset. A project
 	// field overrides the user field; an unset one inherits. Fetch needs a WorkDir.
 	Web WebSpec `json:"web,omitzero"`

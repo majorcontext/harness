@@ -1,0 +1,147 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "code",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "code",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "code",
+              "tool_input": {
+                "script": "parallel([\n    lambda: write_file(path=\"p.txt\", content=\"one\"),\n    lambda: edit_file(path=\"p.txt\", old_string=\"one\", new_string=\"two\"),\n    lambda: read_file(path=\"p.txt\"),\n    lambda: bash(command=\"echo a\"),\n    lambda: bash(command=\"echo b\"),\n])"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "[\"wrote 3 bytes to \u003cworkdir\u003e/p.txt\",\"replaced 1 occurrence(s) in \u003cworkdir\u003e/p.txt\",\"1→two\",\"a\\n\",\"b\\n\"]",
+              "tool_name": "code",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "code",
+            "arguments": {
+              "script": "parallel([\n    lambda: write_file(path=\"p.txt\", content=\"one\"),\n    lambda: edit_file(path=\"p.txt\", old_string=\"one\", new_string=\"two\"),\n    lambda: read_file(path=\"p.txt\"),\n    lambda: bash(command=\"echo a\"),\n    lambda: bash(command=\"echo b\"),\n])"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "[\"wrote 3 bytes to \u003cworkdir\u003e/p.txt\",\"replaced 1 occurrence(s) in \u003cworkdir\u003e/p.txt\",\"1→two\",\"a\\n\",\"b\\n\"]"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

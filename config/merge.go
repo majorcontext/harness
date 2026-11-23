@@ -57,6 +57,9 @@ func mergeScalars(out, over *Config) {
 	if over.ModelTool != nil {
 		out.ModelTool = over.ModelTool
 	}
+	if over.CodeMode != nil {
+		out.CodeMode = over.CodeMode
+	}
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
 	}

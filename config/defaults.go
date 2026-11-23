@@ -13,6 +13,7 @@ func Defaults() Config {
 		CompactionThreshold:  0.8,
 		CompactionKeepTurns:  2,
 		ModelTool:            new(true),
+		CodeMode:             new(false),
 		InstructionsMaxBytes: 64 << 10,
 		MCPSchemaBytes:       64 << 10,
 		MCPResponseBytes:     1 << 20,
@@ -38,6 +39,11 @@ func (c *Config) StreamMaxRetriesValue() int {
 // ModelToolEnabled returns model_tool, or its default.
 func (c *Config) ModelToolEnabled() bool {
 	return valueOr(c, func(c *Config) *bool { return c.ModelTool })
+}
+
+// CodeModeEnabled returns code_mode, or its default.
+func (c *Config) CodeModeEnabled() bool {
+	return valueOr(c, func(c *Config) *bool { return c.CodeMode })
 }
 
 // WebFetchEnabled returns web.fetch, which is off when unset.

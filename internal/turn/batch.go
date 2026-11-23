@@ -215,6 +215,16 @@ func (b *batch) exec(f *flight, failure error) {
 		f.out = outcome{res, true}
 		return
 	}
+	if b.t.locks != nil {
+		if key := b.t.key(f.call); key != "" {
+			release, err := b.t.locks.lock(b.ctx, key)
+			if err != nil {
+				f.out = outcome{protocol.ToolResult{Text: err.Error(), IsError: true}, true}
+				return
+			}
+			defer release()
+		}
+	}
 	f.out = outcome{b.t.run(b.ctx, f.call), true}
 }
 

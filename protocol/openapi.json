@@ -1330,6 +1330,28 @@
           "context_window"
         ]
       },
+      "NestedCallRecorded": {
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": true,
+          "is_error": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "name"
+        ]
+      },
       "OperatorBatchEntry": {
         "properties": {
           "id": {

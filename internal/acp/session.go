@@ -181,6 +181,8 @@ func (h *held) forward(ctx context.Context, e protocol.Event, st *pumpState) err
 		return h.usageUpdate(st)
 	case protocol.KindCommandRecorded:
 		return h.commandStatus(e)
+	case protocol.KindNestedCall:
+		return h.nestedCall(e)
 	case protocol.KindTurnEnded:
 		clear(st.diffs)
 		if err := h.usageUpdate(st); err != nil {

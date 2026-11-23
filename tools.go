@@ -38,7 +38,7 @@ func (r *Runtime) known(model, name string) bool { return r.knownIn(model, name,
 func (r *Runtime) knownIn(model, name string, session bool) bool {
 	caps := r.models.Capabilities(model)
 	return slices.Contains(caps.Tools, name) || name == turn.HistoryTool || r.builtin(name) || name == turn.AskTool || r.skills != nil && name == selftool.LoadSkillName || caps.WebSearch && name == turn.WebSearchTool ||
-		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || name == "mcp" && (r.mcp.Populated() || r.plugins.Configured()) || r.owns(name)
+		(r.mcp.Active() || session) && mcpsrc.Reserved(name) || name == "mcp" && (r.mcp.Populated() || r.plugins.Configured()) || r.code != nil && name == r.code.Spec().Name || r.owns(name)
 }
 
 // owns reports whether name is a tool of Options.Tools or of a started plugin.
@@ -134,7 +134,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 			return proc.Notices{M: r.procs, WorkDir: r.workDir}
 		}})
 	}
-	srcs = append(srcs, turn.Fixed{selftool.NewSessionInfo(toolHost{r}, id, sp)})
+	srcs = append(srcs, r.sessionTools(id, sp))
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
 			if c.OwnsLoop && !mcp.Populated() && (plug == nil || !plug.Present()) {
@@ -155,6 +155,15 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 		}})
 	}
 	return srcs
+}
+
+// sessionTools are session_info, and the code tool when code_mode is true.
+func (r *Runtime) sessionTools(id string, sp *selftool.Prompt) turn.Fixed {
+	tools := turn.Fixed{selftool.NewSessionInfo(toolHost{r}, id, sp)}
+	if r.code != nil {
+		tools = append(tools, r.code)
+	}
+	return tools
 }
 
 // perModel gives each model call the Source that pick chooses for the

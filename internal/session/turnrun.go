@@ -51,6 +51,62 @@ func (t *turnRun) StepEnded(index int, reason string) error {
 	return err
 }
 
+// maskArguments masks each string value of the JSON arguments as the result text is masked. Input that is not
+// valid JSON is dropped.
+func maskArguments(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil {
+		return nil
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(maskStrings(v, false)) != nil {
+		return nil
+	}
+	return bytes.TrimSpace(out.Bytes())
+}
+
+// maskStrings masks each string of v as the result text is masked. A string under a key that names a secret, at
+// any depth, is replaced whole.
+func maskStrings(v any, secret bool) any {
+	switch v := v.(type) {
+	case string:
+		if secret {
+			return "***"
+		}
+		return toolresult.Mask(v)
+	case []any:
+		for i, x := range v {
+			v[i] = maskStrings(x, secret)
+		}
+	case map[string]any:
+		for k, x := range v {
+			v[k] = maskStrings(x, secret || toolresult.SecretKey(k))
+		}
+	}
+	return v
+}
+
+// NestedCall records one call of a script of the code tool, with its result text masked and cut.
+func (t *turnRun) NestedCall(rec protocol.NestedCallRecorded) error {
+	rec.Text = toolresult.Cut(toolresult.Mask(rec.Text), protocol.NestedCallBytes)
+	rec.Arguments = maskArguments(rec.Arguments)
+	_, err := callRun(context.Background(), t.a, func(reply func(struct{}, error)) {
+		if t.a.run != t.r {
+			reply(struct{}{}, ErrTurnMismatch)
+			return
+		}
+		reply(struct{}{}, t.a.append(rec))
+	})
+	return err
+}
+
 // Item records m under a new ID.
 func (t *turnRun) Item(m protocol.LogMessage) error { return t.ItemAs("", m) }
 
