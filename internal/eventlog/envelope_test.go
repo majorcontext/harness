@@ -86,6 +86,7 @@ func everyKind() []protocol.Payload {
 		protocol.BackendState{Backend: "codex", BlobKey: "b1"},
 		protocol.ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
 		protocol.PinRecorded{Notice: "mcp", Text: "[mcp: unavailable]", At: 3},
+		protocol.PrefixDeclared{BlobKey: "prefix-aa", Bytes: 120, Model: "anthropic/m", SearchAllowed: true},
 		protocol.StepEnded{TurnID: "t1", Index: 0, FinishReason: "tool_use"},
 		suspend("t1", protocol.CauseHandoff), resume("t1", 1),
 		protocol.CompactionApplied{FromSeq: 1, ToSeq: 12, Summary: "so far", ByBackend: true},
@@ -136,7 +137,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
 	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Title: "Login fix", Status: protocol.StatusIdle, Goal: protocol.GoalAchieved,
-		HeadSeq: 31, CreatedAt: t0, UpdatedAt: t0.Add(30 * time.Second)}
+		HeadSeq: 32, CreatedAt: t0, UpdatedAt: t0.Add(31 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

@@ -37,6 +37,9 @@ type runtimeDriver struct {
 	webSeam        harness.WebTestSeam
 	getenv         func(string) string
 	cfg            config.Config
+	// cfgPath and cfgEnv load cfg again at each start, as the serve binary reads its config at each start.
+	cfgPath        string
+	cfgEnv         map[string]string
 	modelTransport func(string) http.RoundTripper
 	rt             *harness.Runtime
 	srv            *httptest.Server
@@ -79,17 +82,8 @@ func getenv(env map[string]string) func(string) string {
 // ApplyEnv sees, so a variable of the test shell cannot change a row.
 func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir string, env map[string]string) *runtimeDriver {
 	t.Helper()
-	c, err := config.Load(configPath)
-	if _, statErr := os.Stat(filepath.Join(workDir, ".harness.json")); workDir != "" && statErr == nil {
-		c, err = config.LoadProject(configPath, workDir)
-	}
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if err := c.ApplyEnv(func(k string) string { return env[k] }); err != nil {
-		t.Fatalf("apply env: %v", err)
-	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, webSeam: webSeamOf(env), getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	c := loadRuntimeConfig(t, configPath, workDir, env)
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, cfgPath: configPath, cfgEnv: env, ask: ask, webSeam: webSeamOf(env), getenv: getenv(env), lastInput: map[string]string{}, lastTyped: map[string]string{}}
 	if w, ok := tracedRuntimes.Load(configPath); ok {
 		d.traced = w.(*traceWiring)
 	}
@@ -139,6 +133,9 @@ func (d *runtimeDriver) start(t *testing.T) {
 	if d.serve {
 		d.startProc(t)
 		return
+	}
+	if d.cfgPath != "" {
+		d.cfg = *loadRuntimeConfig(t, d.cfgPath, d.workDir, d.cfgEnv)
 	}
 	opts := harness.Options{Store: store.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, Getenv: d.getenv, ModelTransport: d.modelTransport, AskUserQuestion: d.ask, WebTest: d.webSeam}
 	if w := d.traced; w != nil {

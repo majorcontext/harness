@@ -154,6 +154,10 @@ type State struct {
 	children     map[string]protocol.Outcome
 	backends     map[string]BackendChain
 	retained     []protocol.ToolResultRetained
+	// declared is the newest prefix.declared record. declareDue is true after a compaction between turns that no declaration followed.
+	declared    protocol.PrefixDeclared
+	declaredSet bool
+	declareDue  bool
 	// pins holds the recorded pins that a compaction has not retired.
 	pins     []protocol.PinRecorded
 	commands map[string]command
@@ -440,6 +444,12 @@ func (s *State) Pins() []protocol.PinRecorded { return slices.Clone(s.pins) }
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []protocol.ToolResultRetained { return slices.Clone(s.retained) }
 
+// Declared returns the newest declaration of the tools and prompt segment.
+func (s *State) Declared() (protocol.PrefixDeclared, bool) { return s.declared, s.declaredSet }
+
+// DeclarationDue reports whether the next model call declares the prefix again: the log holds no declaration, or a compaction between turns came after the newest one.
+func (s *State) DeclarationDue() bool { return !s.declaredSet || s.declareDue }
+
 // Renamed is the newest title of a person, or empty.
 func (s *State) Renamed() string { return s.renamed }
 
@@ -563,6 +573,8 @@ func (s *State) step(env Envelope) error {
 		return s.applyRetained(e)
 	case protocol.PinRecorded:
 		return s.applyPin(e)
+	case protocol.PrefixDeclared:
+		return s.applyDeclared(e)
 	}
 	return fmt.Errorf("%w: %T", ErrUnknownKind, env.Event)
 }

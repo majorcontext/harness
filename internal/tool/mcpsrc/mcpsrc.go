@@ -290,8 +290,9 @@ type Late struct {
 type Plugins interface {
 	// Present reports whether the session had a plugin at its first tool read.
 	Present() bool
-	// Late returns the late tools that allowed keeps, in name order.
-	Late(allowed []string) []Late
+	// Late returns the late tools that allowed keeps, in name order. A tool that has refuses is late, whether or
+	// not the first tool read reached it. has nil: only the first tool read decides.
+	Late(allowed []string, has func(string) bool) []Late
 }
 
 // With returns s as a turn.Source that also defers the late tools of pl and runs them with the mcp tool.
@@ -320,8 +321,8 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	ctl := control{s: s, loaded: map[string]bool{}, v: v, ok: ok}
 	var late []Late
 	if pl != nil {
-		late = pl.Late(allowed)
-		ctl.late = func() []Late { return pl.Late(allowed) }
+		late = pl.Late(allowed, nil)
+		ctl.late = func(has func(string) bool) []Late { return pl.Late(allowed, has) }
 	}
 	var ts turn.Toolset
 	var listed []remote
@@ -371,7 +372,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 		cat += "\n\n" + fmt.Sprintf(budgetLine, s.budget)
 	}
 	ts.Prompt = strings.Join(slices.DeleteFunc([]string{v.instructions(ok), cat}, func(p string) bool { return p == "" }), "\n\n")
-	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, late)}}
+	ts.Notices = []turn.Notice{{Kind: noticeKind, Text: v.unavailable(), Transient: true}, {Kind: loadingKind, Text: v.loading(), Transient: true}, {Kind: addedKind, Text: v.added(ok, late, nil)}}
 	return ts
 }
 

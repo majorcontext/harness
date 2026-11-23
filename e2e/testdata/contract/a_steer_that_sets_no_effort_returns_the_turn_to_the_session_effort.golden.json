@@ -176,7 +176,7 @@
       "status": 201,
       "body": {
         "input_id": "in2",
-        "seq": 8
+        "seq": 9
       }
     },
     "set_thinking.a": {

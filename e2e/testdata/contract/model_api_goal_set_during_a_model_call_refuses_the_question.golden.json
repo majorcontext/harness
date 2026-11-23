@@ -39,6 +39,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "tools": [
+        "ask_user_question",
         "bash",
         "edit_file",
         "glob",
@@ -212,7 +213,7 @@
           "turns": 1,
           "verdict": "met"
         },
-        "head_seq": 18,
+        "head_seq": 19,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

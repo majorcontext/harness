@@ -505,3 +505,52 @@ func TestRecordedPinsKeepTheirPlaceUntilACompactionMovesTheNewestOfEachKind(t *t
 		t.Fatalf("Pins() after a compaction = %+v, want %+v", got, want)
 	}
 }
+
+func TestDeclarationFollowsTheLog(t *testing.T) {
+	declare := func(key string) protocol.Payload {
+		return protocol.PrefixDeclared{BlobKey: key, Bytes: 10, Model: "anthropic/m"}
+	}
+	compact := protocol.CompactionApplied{FromSeq: 1, ToSeq: 2, Summary: "s"}
+	rows := []struct {
+		name   string
+		events []protocol.Payload
+		err    string
+		due    bool
+		key    string
+	}{
+		{"a log with no declaration is due", base, "", true, ""},
+		{"a declaration ends the due state", with(base, declare("prefix-aa")), "", false, "prefix-aa"},
+		{"a compaction between turns is due again", with(base, declare("prefix-aa"), compact), "", true, "prefix-aa"},
+		{"a declaration after the compaction ends the due state", with(base, declare("prefix-aa"), compact, declare("prefix-aa")), "", false, "prefix-aa"},
+		{"a compaction inside a turn is not due", with(running, declare("prefix-aa"), compact), "", false, "prefix-aa"},
+		{"a compaction by a backend is not due", with(base, declare("prefix-aa"), protocol.CompactionApplied{FromSeq: 1, ToSeq: 2, ByBackend: true}), "", false, "prefix-aa"},
+		{"a declaration needs a blob key", with(base, protocol.PrefixDeclared{Model: "anthropic/m"}), "needs a blob key and a model", false, ""},
+		{"a declaration needs a model", with(base, protocol.PrefixDeclared{BlobKey: "prefix-aa"}), "needs a blob key and a model", false, ""},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			var s State
+			var err error
+			for _, e := range row.events {
+				if err = s.Apply(record(t, s.Head()+1, e)); err != nil {
+					break
+				}
+			}
+			if row.err != "" {
+				if err == nil || !strings.Contains(err.Error(), row.err) {
+					t.Fatalf("Apply error = %v, want %q", err, row.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, st := range map[string]*State{"state": &s, "clone": s.clone()} {
+				d, ok := st.Declared()
+				if st.DeclarationDue() != row.due || d.BlobKey != row.key || ok != (row.key != "") {
+					t.Errorf("%s: due = %v, declared = %+v %v; want due %v, key %q", name, st.DeclarationDue(), d, ok, row.due, row.key)
+				}
+			}
+		})
+	}
+}

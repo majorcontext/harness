@@ -72,7 +72,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "model": "anthropic/claude-fable-5",
         "origin": "",
@@ -103,7 +103,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
+        "head_seq": 13,
         "id": "ses:a",
         "model": "anthropic/claude-fable-5",
         "origin": "",

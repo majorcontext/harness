@@ -55,6 +55,7 @@ type toolSpec struct {
 
 const (
 	objectSchema = `{"type":"object","properties":{"text":{"type":"string"}}}`
+	lateSchema   = `{"type":"object","properties":{"region":{"type":"string"}},"required":["region"]}`
 	reportSchema = `{"type":"object","properties":{"edits":{"type":"integer"},"process":{"type":"boolean"},"events":{"type":"integer"}}}`
 )
 
@@ -80,6 +81,8 @@ var config struct {
 	RecallBlobs bool   `json:"recall_blobs"`
 	Model       bool   `json:"model"`
 	ExtraTool   string `json:"extra_tool"`
+	// LateTool adds a tool of this name that needs a region.
+	LateTool string `json:"late_tool"`
 	// ShellEnv, as NAME=value, subscribes the plugin to shell.env and sets
 	// that variable for every shell command.
 	ShellEnv string `json:"shell_env"`
@@ -219,6 +222,9 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		}
 		if config.ExtraTool != "" {
 			m["tools"] = append(slices.Clone(m["tools"].([]toolSpec)), toolSpec{config.ExtraTool, "An extra tool.", json.RawMessage(objectSchema)})
+		}
+		if config.LateTool != "" {
+			m["tools"] = append(slices.Clone(m["tools"].([]toolSpec)), toolSpec{config.LateTool, "A tool that a restart adds.", json.RawMessage(lateSchema)})
 		}
 		if config.HostCalls {
 			m["tools"] = withHostCallTools(m["tools"].([]toolSpec))
@@ -501,6 +507,9 @@ func execute(params json.RawMessage) any {
 		return map[string]any{"output": []part{{Type: "text", Text: string(rawConfig)}}}
 	case "fixture_crash":
 		os.Exit(3)
+	}
+	if config.LateTool != "" && req.Tool == config.LateTool {
+		return map[string]any{"output": []part{{Type: "text", Text: "late tool ran"}}}
 	}
 	if res, ok := hostCall(req.Tool, params); ok {
 		return res

@@ -83,8 +83,8 @@ func TestEventsStreamCodexDeltas(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantEvents(t, watch(t, sess, 1, 0, text("a", "hi"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started", "5 session.titled",
-		"6 step.started", "~6 item.started i1", "~6 item.delta i1 reasoning plan", "~6 item.delta i1 text hello",
-		"7 context.measured", "8 item.completed i1", "9 step.ended", "10 turn.ended")
+		"6 prefix.declared", "7 step.started", "~7 item.started i1", "~7 item.delta i1 reasoning plan", "~7 item.delta i1 text hello",
+		"8 context.measured", "9 item.completed i1", "10 step.ended", "11 turn.ended")
 }
 
 func deltas(n int, text string) func(turn.Sink) error {
@@ -106,13 +106,13 @@ func TestEventsLiveFrames(t *testing.T) {
 		defer closeRuntime(t, r)
 		s := create(t, r)
 		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started", "5 session.titled",
-			"6 step.started", "~6 item.started i1", "~6 item.delta i1 text z", "~6 item.discarded i1", "~6 status retrying 1", "~6 status running",
-			"~6 item.started i2", "~6 item.delta i2 text x", "~6 item.delta i2 text x", "7 item.completed i2", "8 step.ended", "9 turn.ended")
+			"6 prefix.declared", "7 step.started", "~7 item.started i1", "~7 item.delta i1 text z", "~7 item.discarded i1", "~7 status retrying 1", "~7 status running",
+			"~7 item.started i2", "~7 item.delta i2 text x", "~7 item.delta i2 text x", "8 item.completed i2", "9 step.ended", "10 turn.ended")
 
-		got := watch(t, s, 4, 9, text("b", "two"), true)
+		got := watch(t, s, 4, 10, text("b", "two"), true)
 		durable := slices.DeleteFunc(slices.Clone(got), func(e protocol.Event) bool { return e.Ephemeral })
-		wantEvents(t, durable, "5 session.titled", "6 step.started", "7 item.completed i1", "8 step.ended", "9 turn.ended", "10 input.admitted", "11 turn.started", "12 step.started", "13 item.completed i2", "14 step.ended", "15 turn.ended")
-		wantEvents(t, got[8:10], "~12 item.started i1", "~12 item.delta i1 text y")
+		wantEvents(t, durable, "5 session.titled", "6 prefix.declared", "7 step.started", "8 item.completed i1", "9 step.ended", "10 turn.ended", "11 input.admitted", "12 turn.started", "13 step.started", "14 item.completed i2", "15 step.ended", "16 turn.ended")
+		wantEvents(t, got[9:11], "~13 item.started i1", "~13 item.delta i1 text y")
 		if live := len(got) - len(durable); live >= 1001 {
 			t.Fatalf("a stalled reader got all %d frames, want deltas dropped", live)
 		}
@@ -167,8 +167,8 @@ func TestEventsAutoCompactionFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := compactingRuntime(t, func(out turn.Sink) error { return out.Item(say("gist")) })
 		head := s.Snapshot().HeadSeq
-		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "17 input.admitted", "~17 status compacting", "18 compaction.applied", "~18 status idle",
-			"19 turn.started", "20 step.started", "21 item.completed i1", "22 step.ended", "23 turn.ended")
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "18 input.admitted", "~18 status compacting", "19 compaction.applied", "~19 status idle",
+			"20 turn.started", "21 prefix.declared", "22 step.started", "23 item.completed i1", "24 step.ended", "25 turn.ended")
 	})
 }
 
@@ -204,7 +204,7 @@ func TestEventsInterruptedCompactionFrames(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		wantEvents(t, got, "17 input.admitted", "~17 status compacting", "~17 status compaction_canceled")
+		wantEvents(t, got, "18 input.admitted", "~18 status compacting", "~18 status compaction_canceled")
 	})
 }
 
@@ -215,7 +215,7 @@ func TestEventsReleasedCompactionFrames(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		wantEvents(t, got, "17 input.admitted", "~17 status compacting", "~17 status compaction_failed")
+		wantEvents(t, got, "18 input.admitted", "~18 status compacting", "~18 status compaction_failed")
 	})
 }
 
@@ -223,7 +223,7 @@ func TestEventsFailedCompactionFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := compactingRuntime(t, func(turn.Sink) error { return errors.New("summary failed") })
 		head := s.Snapshot().HeadSeq
-		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "17 input.admitted", "~17 status compacting", "~17 status compaction_failed",
-			"18 turn.started", "19 step.started", "20 item.completed i1", "21 step.ended", "22 turn.ended")
+		wantEvents(t, watch(t, s, head-1, head, text("c", "three"), false)[1:], "18 input.admitted", "~18 status compacting", "~18 status compaction_failed",
+			"19 turn.started", "20 step.started", "21 item.completed i1", "22 step.ended", "23 turn.ended")
 	})
 }

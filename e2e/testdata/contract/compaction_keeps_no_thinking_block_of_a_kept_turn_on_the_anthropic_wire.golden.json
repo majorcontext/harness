@@ -429,7 +429,7 @@
           "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 32,
+        "head_seq": 34,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",

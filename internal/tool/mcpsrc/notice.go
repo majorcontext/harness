@@ -50,13 +50,13 @@ func (v view) unavailable() string {
 // added renders the notice of the tools that arrived after the first connect, with the instructions of a
 // server that the first connect did not reach, and the notice of the servers that went. It is "" when there
 // is neither. The text follows the live state, so a later model call renders it again.
-func (v view) added(ok func(string) bool, late []Late) string {
+func (v view) added(ok func(string) bool, late []Late, undeclared func(string) bool) string {
 	var servers, blocks []string
 	for _, name := range v.names {
 		m := v.mem[name]
 		var late []remote
 		for _, r := range v.remotes(name, ok) {
-			if r.listed && !m.base[r.name] {
+			if r.listed && (!m.base[r.name] || undeclared != nil && undeclared(r.spec.Name)) {
 				late = append(late, r)
 			}
 		}

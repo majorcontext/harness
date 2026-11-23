@@ -389,13 +389,22 @@
       "body": {
         "folded": true,
         "from_seq": 1,
-        "to_seq": 18
+        "to_seq": 19
       }
     },
     "journal_page.a": {
       "status": 200,
       "body": {
         "events": [
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 11,
+            "t": "\u003ctime\u003e"
+          },
           {
             "d": {
               "delivery": "steer",
@@ -409,7 +418,7 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 11,
+            "seq": 12,
             "t": "\u003ctime\u003e"
           },
           {
@@ -417,19 +426,19 @@
               "input_ids": [
                 "in2"
               ],
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "turn.started",
-            "seq": 12,
+            "seq": 13,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "index": 0,
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "step.started",
-            "seq": 13,
+            "seq": 14,
             "t": "\u003ctime\u003e"
           },
           {
@@ -444,7 +453,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 14,
+            "seq": 15,
             "t": "\u003ctime\u003e"
           },
           {
@@ -459,29 +468,29 @@
                 ],
                 "role": "assistant"
               },
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "item.completed",
-            "seq": 15,
+            "seq": 16,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "finish_reason": "end_turn",
               "index": 0,
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "step.ended",
-            "seq": 16,
+            "seq": 17,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#1"
+              "turn_id": "turn#2"
             },
             "k": "turn.ended",
-            "seq": 17,
+            "seq": 18,
             "t": "\u003ctime\u003e"
           },
           {
@@ -497,7 +506,7 @@
               "source": "user"
             },
             "k": "input.admitted",
-            "seq": 18,
+            "seq": 19,
             "t": "\u003ctime\u003e"
           },
           {
@@ -505,19 +514,19 @@
               "input_ids": [
                 "in3"
               ],
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "turn.started",
-            "seq": 19,
+            "seq": 20,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "index": 0,
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "step.started",
-            "seq": 20,
+            "seq": 21,
             "t": "\u003ctime\u003e"
           },
           {
@@ -532,7 +541,7 @@
               "window": 1000000
             },
             "k": "context.measured",
-            "seq": 21,
+            "seq": 22,
             "t": "\u003ctime\u003e"
           },
           {
@@ -547,29 +556,29 @@
                 ],
                 "role": "assistant"
               },
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "item.completed",
-            "seq": 22,
+            "seq": 23,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "finish_reason": "end_turn",
               "index": 0,
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "step.ended",
-            "seq": 23,
+            "seq": 24,
             "t": "\u003ctime\u003e"
           },
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#2"
+              "turn_id": "turn#3"
             },
             "k": "turn.ended",
-            "seq": 24,
+            "seq": 25,
             "t": "\u003ctime\u003e"
           },
           {
@@ -577,14 +586,14 @@
               "by_backend": false,
               "from_seq": 1,
               "summary": "gist",
-              "to_seq": 18,
+              "to_seq": 19,
               "usage": {
                 "input_tokens": 5,
                 "output_tokens": 3
               }
             },
             "k": "compaction.applied",
-            "seq": 25,
+            "seq": 26,
             "t": "\u003ctime\u003e"
           }
         ]

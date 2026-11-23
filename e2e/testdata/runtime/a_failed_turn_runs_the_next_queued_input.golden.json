@@ -354,7 +354,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 16,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -384,7 +384,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 32,
+        "head_seq": 33,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
