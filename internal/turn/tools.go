@@ -277,6 +277,8 @@ type runner struct {
 	hooks    Hooks
 	// locks, when set, order the calls of Request.Call and the nested calls of a tool.
 	locks *keyLocks
+	// nests names the tools that run nested calls.
+	nests map[string]bool
 	// joinMu, when set, makes join run one result at a time across every
 	// callback of the runner.
 	joinMu *sync.Mutex
@@ -487,12 +489,12 @@ func take(ctx context.Context, lock chan struct{}) (func(), error) {
 }
 
 // keyed returns a run func that runs the calls of one key one at a time, in
-// the order they get the key, as a batch does, and the calls of an Alone tool
-// one at a time. A backend that owns the loop may run its calls at once, and
+// the order they get the key, as a batch does, and the calls of a tool that
+// runs nested calls one at a time. A backend that owns the loop may run its calls at once, and
 // calls to one file must not lose an edit.
 func (t runner) keyed() func(context.Context, protocol.ToolCall) protocol.ToolResult {
 	return func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
-		if t.alone(c) {
+		if _, target := t.target(c); t.nests[target.Name] {
 			release, err := take(ctx, t.locks.alone)
 			if err != nil {
 				return protocol.ToolResult{IsError: true, Text: err.Error()}

@@ -50,8 +50,10 @@ func bindNested(t *runner, to Turn) {
 	}
 	n := &nested{to: to}
 	bound := slices.Clone(t.runnable)
+	t.nests = map[string]bool{}
 	for i, x := range bound {
 		if b, ok := x.(Nesting); ok {
+			t.nests[x.Spec().Name] = true
 			bound[i] = b.Nest(n)
 		}
 	}
