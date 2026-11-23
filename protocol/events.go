@@ -180,6 +180,7 @@ type Settings struct {
 	Effort      string            `json:"effort,omitempty"`
 	ServiceTier string            `json:"service_tier,omitempty"`
 	Accounts    map[string]string `json:"accounts,omitempty"`
+	CodeMode    bool              `json:"code_mode,omitempty"`
 }
 
 // Log part types.
@@ -279,7 +280,8 @@ type SettingsChanged struct {
 	// AllowedTools is embedder-only; a nil slice allows all tools, and an empty list allows none.
 	AllowedTools *[]string `json:"allowed_tools,omitempty" jsonschema:"nullable"`
 	// MaxSteps is embedder-only; it replaces the cap of model requests for each turn, and zero clears the cap.
-	MaxSteps *int `json:"max_steps,omitempty"`
+	MaxSteps *int  `json:"max_steps,omitempty"`
+	CodeMode *bool `json:"code_mode,omitempty"`
 }
 
 // SessionTitled sets a non-empty title with no control characters; a person's title always wins, and a derived record changes no state.
@@ -503,6 +505,7 @@ type PrefixDeclared struct {
 	Bytes         int    `json:"bytes"`
 	Model         string `json:"model"`
 	SearchAllowed bool   `json:"search_allowed,omitempty"`
+	CodeMode      bool   `json:"code_mode,omitempty"`
 }
 
 // NestedCallBytes is the most bytes of result text that a NestedCallRecorded holds.
@@ -518,6 +521,9 @@ type NestedCallRecorded struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	Text      string          `json:"text,omitempty"`
 }
+
+// PinCodeMode is the notice of a pin that states the code mode of the session.
+const PinCodeMode = "code-mode"
 
 // PinRecorded records a pin that follows At messages; no Text retires the pins of its Notice.
 type PinRecorded struct {

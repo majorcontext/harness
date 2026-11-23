@@ -1,6 +1,10 @@
 package turn
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/majorcontext/harness/protocol"
+)
 
 // Pin is one message of engine context that the model reads after the first
 // At messages of the history.
@@ -73,11 +77,12 @@ func (p *Pins) Set(kind, text, cleared string, at int) {
 
 // Move puts the newest pin of each kind after the first n messages of the
 // history and drops the older pins of that kind, so a compaction retires each
-// superseded text.
+// superseded text. It drops each code-mode pin: the declaration that follows a
+// compaction states the mode.
 func (p *Pins) Move(n int) {
 	kept := p.pins[:0]
 	for i, q := range p.pins {
-		if slices.ContainsFunc(p.pins[i+1:], func(r Pin) bool { return r.Kind == q.Kind }) {
+		if q.Kind == protocol.PinCodeMode || slices.ContainsFunc(p.pins[i+1:], func(r Pin) bool { return r.Kind == q.Kind }) {
 			continue
 		}
 		q.At = n

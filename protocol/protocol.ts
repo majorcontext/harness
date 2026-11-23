@@ -138,6 +138,7 @@ export interface CreateSession {
   origin?: string;
   allowed_tools?: string[];
   max_steps?: number;
+  code_mode?: boolean;
   system_blocks?: string[];
   system_cache_breakpoint?: number;
 }
@@ -444,6 +445,7 @@ export interface PrefixDeclared {
   bytes: number;
   model: string;
   search_allowed?: boolean;
+  code_mode?: boolean;
 }
 
 export interface ProcessInfo {
@@ -583,6 +585,7 @@ export interface Session {
   title?: string;
   effort?: string;
   service_tier?: string;
+  code_mode?: boolean;
   status: "idle" | "running" | "waiting" | "retrying" | "compacting" | "compaction_failed" | "compaction_canceled";
   turn_id?: string;
   queued?: string[];
@@ -627,6 +630,7 @@ export interface Settings {
   effort?: string;
   service_tier?: string;
   accounts?: Record<string, string>;
+  code_mode?: boolean;
 }
 
 export interface SettingsChanged {
@@ -636,6 +640,7 @@ export interface SettingsChanged {
   accounts?: Record<string, string>;
   allowed_tools?: string[] | null;
   max_steps?: number;
+  code_mode?: boolean;
 }
 
 export interface SettingsPatch {
@@ -644,6 +649,7 @@ export interface SettingsPatch {
   service_tier?: string;
   accounts?: Record<string, string>;
   title?: string;
+  code_mode?: boolean;
 }
 
 export interface StatusFrame {

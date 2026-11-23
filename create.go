@@ -26,6 +26,9 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 			return nil, fmt.Errorf("%w: system_blocks must not contain an empty block", ErrInvalidRequest)
 		}
 	}
+	if req.CodeMode && r.code == nil {
+		return nil, fmt.Errorf("%w: code_mode needs the code tool, which the code_mode config key gives", ErrInvalidRequest)
+	}
 	so, err := r.sessionOptions(opts)
 	if err != nil {
 		return nil, err
@@ -40,7 +43,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession, opts .
 	if err := storecheck.Name(id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin, Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools, MaxSteps: req.MaxSteps}
+	created := protocol.SessionCreated{Model: req.Model, Origin: req.Origin, Settings: protocol.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier, CodeMode: req.CodeMode}, AllowedTools: req.AllowedTools, MaxSteps: req.MaxSteps}
 	copySystem(req, &created)
 	return r.create(ctx, id, launch{created: &created, mcp: so.mcp, mcpAuthFailed: so.mcpAuthFailed})
 }

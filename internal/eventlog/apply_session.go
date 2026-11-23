@@ -47,6 +47,9 @@ func (s *State) applySettings(e protocol.SettingsChanged) error {
 	if e.ServiceTier != nil {
 		s.settings.ServiceTier = *e.ServiceTier
 	}
+	if e.CodeMode != nil {
+		s.settings.CodeMode = *e.CodeMode
+	}
 	if e.Accounts != nil {
 		s.settings.Accounts = maps.Clone(*e.Accounts)
 	}
@@ -182,12 +185,12 @@ func (s *State) applyPin(e protocol.PinRecorded) error {
 	return nil
 }
 
-// movePins keeps the newest pin of each notice and puts it after the first n
+// movePins keeps the newest pin of each notice but the code-mode notice and puts it after the first n
 // messages of the history.
 func (s *State) movePins(n int) {
 	var kept []Pin
 	for i, p := range s.pins {
-		if !slices.ContainsFunc(s.pins[i+1:], func(q Pin) bool { return q.Notice == p.Notice }) {
+		if p.Notice != protocol.PinCodeMode && !slices.ContainsFunc(s.pins[i+1:], func(q Pin) bool { return q.Notice == p.Notice }) {
 			p.At = n
 			kept = append(kept, p)
 		}
