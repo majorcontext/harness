@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -53,6 +55,8 @@ var declaredPrefixRows = map[string]runtimeRow{
 	"a_plugin_tool_that_the_declaration_lacks_is_searched_selected_and_called": sameAsServe(),
 	"a_first_server_after_a_declaration_with_no_mcp_tool_gives_no_notice":      sameAsServe(),
 	"a_removed_last_server_leaves_the_next_declaration_with_no_mcp_tool":       sameAsServe(),
+	"a_declared_mcp_tool_works_after_the_last_plugin_is_removed":               sameAsServe(),
+	"a_tool_added_to_a_server_with_a_cut_catalog_is_named_by_the_added_notice": sameAsServe(),
 	"a_plugin_added_in_a_running_process_is_declared_at_the_next_compaction":   sameAsServe(),
 	"a_tool_added_to_a_lazy_server_is_named_by_the_added_notice":               sameAsServe(),
 	"a_backend_that_owns_the_loop_declares_nothing":                            sameAsServe(),
@@ -74,6 +78,17 @@ var (
 	keepOneTurn     = map[string]any{"compaction_keep_turns": 1}
 	gistSummary     = harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}}
 )
+
+// bigTools is the tool set of a server with more tools than the prompt catalog lists.
+func bigTools() []harnesstest.MCPTool {
+	var tools []harnesstest.MCPTool
+	for i := range 205 {
+		tools = append(tools, harnesstest.MCPTool{Name: fmt.Sprintf("t%03d", i), Description: "Tool number " + strconv.Itoa(i), Result: mcpText("ok")})
+	}
+	return tools
+}
+
+var bigWeather = mcpServerDef{name: "big", spec: harnesstest.MCPSpec{Name: "big", Tools: bigTools()}, sse: true, toolLoading: "lazy"}
 
 func replyTo(name, user, reply string) harnesstest.Step {
 	return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
@@ -326,6 +341,19 @@ func TestContractDeclaredPrefixPlugin(t *testing.T) {
 	lateProject := string(late)
 	runScenarios(t, []scenario{
 		{
+			name:   "a_declared_mcp_tool_works_after_the_last_plugin_is_removed",
+			config: pluginConfig(t, nil),
+			model:  afterFirstTurn(mcpAction("action", "status")),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				putPlugins{plugins: []map[string]any{}},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				expectTools{req: 2, has: []string{"mcp"}},
+				expectTools{req: 3, text: []string{`"servers"`}},
+			},
+		},
+		{
 			name: "a_plugin_added_in_a_running_process_is_declared_at_the_next_compaction", prefixBreaks: compactionBreak(),
 			config: guarded,
 			model:  []harnesstest.Step{replyTo("one", "one", "1"), replyTo("two", "two", "2"), gistSummary, replyTo("three", "three", "3")},
@@ -404,6 +432,19 @@ func TestContractDeclaredPrefixNotices(t *testing.T) {
 				compact{as: "a"},
 				submit{as: "a", text: "three"}, waitIdle{as: "a"},
 				expectTools{req: 4, has: []string{"mcp", "mcp__weather__forecast"}},
+			},
+		},
+		{
+			name:  "a_tool_added_to_a_server_with_a_cut_catalog_is_named_by_the_added_notice",
+			setup: mcpSetup(nil, bigWeather),
+			model: afterFirstTurn(mcpAction("action", "call", "tool", "mcp__big__t000")),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"}, waitIdle{as: "a"},
+				changeMCPTools{server: "big", tools: append(bigTools(), harnesstest.MCPTool{Name: "newtool", Description: "A tool that arrives later", Result: mcpText("ok")})},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				expectTools{req: 1, lacks: []string{"mcp__big__newtool"}},
+				expectTools{req: 3, text: []string{"mcp__big__newtool"}},
 			},
 		},
 		{

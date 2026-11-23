@@ -84,43 +84,27 @@ func (c control) Spec() protocol.ToolSpec {
 }
 
 // Declared makes a tool that the declaration does not account for a deferred tool of the mcp tool, and names it in
-// the added notice. The declaration accounts for a tool that its tools array holds and for a tool that its prompt
-// segment lists. A declaration with no mcp tool gives the session no MCP notice, because the model cannot use
-// the mcp tool: the tools reach the session at its next declaration.
-func (c control) Declared(has func(string) bool, prompt string) (turn.Tool, []turn.Notice) {
-	if !has(controlName) {
+// the added notice. The declaration accounts for a tool that its tools array holds and for a tool that was live and
+// deferred when it was built. A declaration with no mcp tool gives the session no MCP notice, because the model
+// cannot use the mcp tool: the tools reach the session at its next declaration. prompt tells which servers have
+// their instructions in the prompt segment.
+func (c control) Declared(holds, accounts func(string) bool, prompt string) (turn.Tool, []turn.Notice) {
+	if !holds(controlName) {
 		return c, []turn.Notice{{Kind: noticeKind, Transient: true}, {Kind: loadingKind, Transient: true}, {Kind: addedKind}}
 	}
-	c.loaded, c.has = maps.Clone(c.loaded), has
+	c.loaded, c.has = maps.Clone(c.loaded), accounts
 	for n := range c.loaded {
-		if !has(n) {
+		if !holds(n) {
 			delete(c.loaded, n)
 		}
 	}
-	listed, cut := catalogNames(prompt)
-	undeclared := func(n string) bool { return !cut && !has(n) && !listed[n] }
+	undeclared := func(n string) bool { return !accounts(n) }
 	inPrompt := func(server string) bool { return strings.Contains(prompt, serverOpen(server)) }
 	var late []Late
 	if c.late != nil {
-		late = c.late(has)
+		late = c.late(accounts)
 	}
 	return c, []turn.Notice{{Kind: addedKind, Text: c.v.added(c.ok, late, undeclared, inPrompt)}}
-}
-
-// catalogNames returns the tool names that the lines of prompt list as toolLines writes them, and whether a line
-// says that the list is cut, so that the prompt does not name every deferred tool.
-func catalogNames(prompt string) (names map[string]bool, cut bool) {
-	names = map[string]bool{}
-	for _, l := range strings.Split(prompt, "\n") {
-		if strings.HasPrefix(l, "... and ") && strings.Contains(l, " more tools;") {
-			cut = true
-		}
-		if strings.HasPrefix(l, prefix) {
-			name, _, _ := strings.Cut(l, " — ")
-			names[name] = true
-		}
-	}
-	return names, cut
 }
 
 // Forward makes the call action run the deferred tool that it names, between the hooks of that tool.

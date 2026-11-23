@@ -96,9 +96,6 @@ func (v view) removedNames() []string {
 	return out
 }
 
-// removed reports whether a server that connected once is gone.
-func (v view) removed() bool { return len(v.removedNames()) > 0 }
-
 // status returns the live state of each server, in the order of their names.
 func (s *Source) status() []protocol.MCPServerStatus {
 	v := s.view()

@@ -312,7 +312,7 @@ func (s *Source) toolset(ctx context.Context, allowed []string, pl Plugins) turn
 	v := s.view()
 	ok := func(name string) bool { return protocol.ToolAllowed(allowed, name) }
 	if len(v.names) == 0 && (pl == nil || !pl.Present()) {
-		if !v.removed() || !ok(controlName) {
+		if !ok(controlName) {
 			return turn.Toolset{}
 		}
 		return turn.Toolset{Deferred: []turn.Tool{control{s: s, loaded: map[string]bool{}, v: v, ok: ok}}}

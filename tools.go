@@ -137,7 +137,7 @@ func (r *Runtime) source(id, root string, child bool, depth int, plug *pluginsrc
 	srcs = append(srcs, turn.Fixed{selftool.NewSessionInfo(toolHost{r}, id, sp)})
 	if mcp := cmp.Or(sm, r.mcp); mcp != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities) turn.Source {
-			if !mcp.Populated() && (plug == nil || !plug.Present()) && (c.OwnsLoop || !mcp.Active()) {
+			if c.OwnsLoop && !mcp.Populated() && (plug == nil || !plug.Present()) {
 				return nil
 			}
 			if plug == nil || c.OwnsLoop {
