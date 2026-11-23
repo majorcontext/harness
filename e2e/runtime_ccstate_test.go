@@ -315,7 +315,7 @@ func (l *ccLane) blob(key string) []byte {
 
 func rowCCStateChunksFitEveryBatch(t *testing.T) {
 	const entry = 3 << 19
-	first, second := ccEntries("a", 16, entry), append(ccEntries("b", 2, entry), ccEntry("big", 5<<20))
+	first, second := ccEntries("a", 16, entry), append(ccEntries("b", 1, 1<<10), ccEntry("big", stateChunkBytes+1<<10))
 	l := newCCLane(t, "", ccFixture(t, "S", first), ccFixture(t, "S", second))
 	r := l.runtime()
 	s := l.create(r)

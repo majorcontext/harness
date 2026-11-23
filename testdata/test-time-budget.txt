@@ -40,8 +40,8 @@ test internal/gates TestRepository 12
 # The first test of the package to start a runtime builds the fake CLI (up to 14.01 s on CI, budget 1.5 times).
 test internal/backend/claudecode TestClaudeCodeCreateRefusesAnUnknownTool 18
 test internal/backend/claudecode TestClaudeCodeRoutesTheSelectedAccountThroughTheProxy 22
-# Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 7 s alone and 16-41 s on CI, where it runs beside the whole parallel package. The state must pass the 4 MiB chunk and the sync batch cap, and the race detector spends the time decoding it.
-test e2e TestContractRuntimeClaudeCodeStateChunks 60
+# Each row restarts a runtime over a CLI-backed session and replays a large saved state. It takes 5.5 s alone and 16-65 s on CI, where it runs beside the whole parallel package. The state must pass the 4 MiB chunk and the sync batch cap, and the race detector spends the time decoding it.
+test e2e TestContractRuntimeClaudeCodeStateChunks 90
 # The search edge row replays its log prefixes (20.90 s on CI).
 test e2e TestContractFileToolsEdges/runtime/file_tools_search_edges 32
 # Isolated module proxy rows build five embedder variants (24.12 s serve and 26.0 s runtime on CI).
