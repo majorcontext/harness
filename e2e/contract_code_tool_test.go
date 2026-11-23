@@ -284,6 +284,41 @@ func TestContractCodeToolClaudeCode(t *testing.T) {
 	}})
 }
 
+var orderServer = mcpServerDef{name: "order", spec: harnesstest.MCPSpec{Name: "order", Tools: []harnesstest.MCPTool{
+	{Name: "hold", Description: "Waits for its release", Echo: true, Gated: true},
+}}}
+
+// expectPeakHeld fails unless the most gated calls that the server held at the same time is n.
+type expectPeakHeld struct {
+	server string
+	n      int
+}
+
+func (a expectPeakHeld) run(t *testing.T, r *run) {
+	t.Helper()
+	if got := mcpFixture(t, r, a.server).MaxHeld(); got != a.n {
+		t.Fatalf("the server held %d calls at once, want %d", got, a.n)
+	}
+}
+
+func TestContractCodeToolClaudeCodeOrder(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name: "claudecode_bridge_runs_two_code_calls_of_one_session_one_after_the_other",
+		driver: func(t *testing.T, h host, modelURL string) driver {
+			fx := map[string]any{}
+			cfg := mcpSetup(codeOn, orderServer)(t, fx)
+			calls := []turnCall{{"code", map[string]any{"script": `mcp__order__hold(id="a")`}}, {"code", map[string]any{"script": `mcp__order__hold(id="b")`}}}
+			d := claudeLane{mode: "turn_calls", spawnModes: "1=text_only", extra: cfg, turnCalls: [][]turnCall{calls}}.newDriver(t, h, modelURL).(*claudeDriver)
+			d.fx = fx
+			return d
+		},
+		actions: withActions(claudeOneTurn, submit{as: "a", text: "again"},
+			awaitCall{as: "a", callID: "toolu_t0_0"}, awaitCall{as: "a", callID: "toolu_t0_1"},
+			awaitHeld{server: "order", n: 1}, releaseCall{server: "order", id: "a"}, releaseCall{server: "order", id: "b"},
+			waitIdle{as: "a"}, expectPeakHeld{server: "order", n: 1}),
+	}})
+}
+
 func TestCodeModeFalseChangesNoRequest(t *testing.T) {
 	skipShort(t)
 	t.Parallel()
@@ -306,6 +341,7 @@ func TestCodeModeFalseChangesNoRequest(t *testing.T) {
 }
 
 var codeToolRows = map[string]runtimeRow{
+	"claudecode_bridge_runs_two_code_calls_of_one_session_one_after_the_other":                      sameAsServe(),
 	"a_script_that_shares_an_exponential_tuple_fails_inside_its_wall_clock_and_the_session_goes_on": sameAsServe(),
 	"a_parallel_inside_a_parallel_function_fails":                                                   sameAsServe(),
 	"a_cyclic_argument_fails_the_script_and_the_session_goes_on":                                    sameAsServe(),

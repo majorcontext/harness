@@ -425,6 +425,7 @@ type MCPServer struct {
 
 	gates     map[string]chan struct{}
 	inflight  atomic.Int64
+	peak      atomic.Int64
 	held      chan struct{}
 	abandoned chan struct{}
 }
@@ -511,6 +512,9 @@ func (s *MCPServer) Release(id string) {
 	}
 }
 
+// MaxHeld is the most gated calls that waited at the server at the same time.
+func (s *MCPServer) MaxHeld() int { return int(s.peak.Load()) }
+
 // AwaitHeld waits until n gated calls wait at the server at the same time.
 func (s *MCPServer) AwaitHeld(n int, d time.Duration) bool {
 	t := time.NewTimer(d)
@@ -567,7 +571,9 @@ func (s *MCPServer) hold(ctx context.Context, params json.RawMessage) bool {
 	s.mu.Lock()
 	g := s.gateLocked(p.Arguments.ID)
 	s.mu.Unlock()
-	s.inflight.Add(1)
+	n := s.inflight.Add(1)
+	for p := s.peak.Load(); n > p && !s.peak.CompareAndSwap(p, n); p = s.peak.Load() {
+	}
 	defer s.inflight.Add(-1)
 	s.held <- struct{}{}
 	select {
