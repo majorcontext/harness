@@ -140,6 +140,9 @@ type Request struct {
 	BaseCodeMode bool
 	// Pins is a copy of the engine context that the model reads inside the conversation.
 	Pins []Pin
+	// ModeText is the code-mode text that a backend that owns its context sends with the input that starts the turn,
+	// as engine context. Empty: the backend has read the mode, or the session has none.
+	ModeText string
 	// WorkDir is the directory that holds the attachments that no provider takes. Empty: the session has none.
 	WorkDir string
 	// Blob reads the bytes of a blob part.

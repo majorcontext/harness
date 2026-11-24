@@ -8,7 +8,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "run it"
+            "text": "one"
           }
         ]
       },
@@ -18,12 +18,32 @@
         "parts": [
           {
             "type": "text",
-            "text": "Let me check that."
+            "text": "[harness: this turn was interrupted by a process restart and could not complete]"
           }
         ]
       },
       {
         "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
         "role": "assistant",
         "parts": [
           {
@@ -37,33 +57,13 @@
         ]
       },
       {
-        "id": "msg#4",
+        "id": "msg#6",
         "role": "tool",
         "parts": [
           {
             "type": "tool_result",
             "call_id": "toolu#1",
             "content": "hi\n"
-          }
-        ]
-      },
-      {
-        "id": "msg#5",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "Done — it printed hi."
-          }
-        ]
-      },
-      {
-        "id": "msg#6",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "again"
           }
         ]
       },
@@ -73,12 +73,32 @@
         "parts": [
           {
             "type": "text",
-            "text": "Let me check that."
+            "text": "Done — it printed hi."
           }
         ]
       },
       {
         "id": "msg#8",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {
@@ -92,7 +112,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#11",
         "role": "tool",
         "parts": [
           {
@@ -103,7 +123,7 @@
         ]
       },
       {
-        "id": "msg#10",
+        "id": "msg#12",
         "role": "assistant",
         "parts": [
           {
@@ -113,52 +133,5 @@
         ]
       }
     ]
-  },
-  "calls": {
-    "journal_events.a": {
-      "status": 200,
-      "body": []
-    },
-    "journal_events.a#2": {
-      "status": 200,
-      "body": []
-    },
-    "set_code_mode.a": {
-      "status": 200,
-      "body": {
-        "context": {
-          "compact_at": 800000,
-          "tokens": 113,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#1"
-        },
-        "model": "claude-code/sonnet",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": {
-          "captured_at": "\u003ctime\u003e",
-          "plan": "",
-          "provider": "claude",
-          "session_cost_usd": 0.0123,
-          "windows": []
-        },
-        "synced_seq": 0,
-        "title": "run it",
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "cache_read_tokens": 7,
-          "cache_write_tokens": 5,
-          "input_tokens": 101,
-          "output_tokens": 42
-        },
-        "work_dir": "\u003cworkdir\u003e"
-      }
-    }
   }
 }

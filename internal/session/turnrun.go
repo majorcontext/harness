@@ -221,6 +221,9 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 				recorded = append(recorded, protocol.PinRecorded{Notice: n.Kind})
 			}
 		}
+		if slices.ContainsFunc(placed, func(n turn.Notice) bool { return n.Kind == protocol.PinCodeModeInput }) {
+			recorded = append(recorded, t.a.restate(t.r.id, at)...)
+		}
 		known := len(t.a.pins.Pinned())
 		for i := range placed {
 			placed[i].At = cmp.Or(placed[i].At, at)
@@ -238,8 +241,43 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		if len(recorded) > 0 {
 			_ = t.a.append(recorded...)
 		}
-		reply(mergePins(mergePins(pinned, t.r.placeContext(at)), t.r.placeStatus(ns, at)), nil)
+		reply(mergePins(mergePins(t.a.markOwed(pinned), t.r.placeContext(at)), t.r.placeStatus(ns, at)), nil)
 	})
+	return pins
+}
+
+// restate pins again the text of the newest code-mode input pin that an earlier turn recorded and no item of that turn
+// delivered, so that the running turn owns the delivery. It returns the record, or none.
+func (a *Actor) restate(turnID string, at int) []protocol.Payload {
+	for _, p := range slices.Backward(a.state.Pins()) {
+		if p.Notice != protocol.PinCodeModeInput {
+			continue
+		}
+		if p.Delivered || p.Turn == turnID {
+			return nil
+		}
+		a.pins.Add(turn.Pin{Kind: p.Notice, Text: p.Text, At: max(at, p.At)})
+		return []protocol.Payload{protocol.PinRecorded{Notice: p.Notice, Text: p.Text, At: max(at, p.At)}}
+	}
+	return nil
+}
+
+// markOwed sets Owed on the newest code-mode input pin when the log holds it as not delivered. The log is the one
+// owner of that state.
+func (a *Actor) markOwed(pins []turn.Pin) []turn.Pin {
+	var owed bool
+	for _, p := range slices.Backward(a.state.Pins()) {
+		if p.Notice == protocol.PinCodeModeInput {
+			owed = !p.Delivered
+			break
+		}
+	}
+	for i := range slices.Backward(pins) {
+		if pins[i].Kind == protocol.PinCodeModeInput {
+			pins[i].Owed = owed
+			break
+		}
+	}
 	return pins
 }
 

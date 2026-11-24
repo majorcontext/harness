@@ -514,7 +514,11 @@ func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protoco
 		}
 		title = &t
 	}
-	if p.CodeMode != nil && *p.CodeMode && (s.r.code == nil || s.a.DeclaresWithout(ctx, turn.CodeTool)) {
+	next := ""
+	if p.Model != nil {
+		next = *p.Model
+	}
+	if p.CodeMode != nil && *p.CodeMode && (s.r.code == nil || s.a.DeclaresWithout(ctx, turn.CodeTool, next)) {
 		return protocol.Session{}, fmt.Errorf("%w: code_mode needs the code tool in the declaration of the session, which a compaction between two turns adds while the code_mode config key is true", ErrInvalidRequest)
 	}
 	err := s.a.Update(ctx, protocol.SettingsChanged{Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, Accounts: p.Accounts, CodeMode: p.CodeMode}, title)

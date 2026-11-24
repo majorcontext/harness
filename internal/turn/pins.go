@@ -11,6 +11,8 @@ import (
 type Pin struct {
 	Kind, Text string
 	At         int
+	// Owed marks a pin that no backend has read yet.
+	Owed bool
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
@@ -78,12 +80,12 @@ func (p *Pins) Set(kind, text, cleared, initial string, at int) {
 
 // Move puts the newest pin of each kind after the first n messages of the
 // history and drops the older pins of that kind, so a compaction retires each
-// superseded text. It drops each code-mode pin: the declaration that follows a
-// compaction states the mode.
-func (p *Pins) Move(n int) {
+// superseded text. It drops each code-mode pin, because the declaration that
+// follows states the mode, and each code-mode input pin when the backend compacted.
+func (p *Pins) Move(n int, byBackend bool) {
 	kept := p.pins[:0]
 	for i, q := range p.pins {
-		if q.Kind == protocol.PinCodeMode || slices.ContainsFunc(p.pins[i+1:], func(r Pin) bool { return r.Kind == q.Kind }) {
+		if q.Kind == protocol.PinCodeMode || q.Kind == protocol.PinCodeModeInput && byBackend || slices.ContainsFunc(p.pins[i+1:], func(r Pin) bool { return r.Kind == q.Kind }) {
 			continue
 		}
 		q.At = n
@@ -96,3 +98,10 @@ func (p *Pins) Move(n int) {
 func (p *Pins) Pinned() []Pin {
 	return slices.Clone(p.pins)
 }
+
+func withoutKind(pins []Pin, kind string) []Pin {
+	return slices.DeleteFunc(slices.Clone(pins), func(p Pin) bool { return p.Kind == kind })
+}
+
+// Without returns a copy of the pins without the pins of kind.
+func (p *Pins) Without(kind string) []Pin { return withoutKind(p.pins, kind) }

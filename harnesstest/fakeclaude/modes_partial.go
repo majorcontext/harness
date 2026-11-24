@@ -25,6 +25,7 @@ var partialModes = map[string]mode{
 	"partial_retry":                      partialRetry,
 	"partial_tool_result_between_deltas": partialToolResultBetweenDeltas,
 	"partial_retry_tool":                 partialRetryTool,
+	"partial_hang":                       partialHang,
 }
 
 func streamEvent(ev obj) obj {
@@ -80,6 +81,12 @@ func partialMessages(f *fake) {
 	f.emit(say("It printed hi.").inMessage("id", partialSecondID))
 	emit(blockStop(0), messageStop("end_turn"), streamEvent(obj{"type": "message_stop"}))
 	f.emit(success("It printed hi.", 12, 8))
+}
+
+// partialHang streams the start of a reply and hangs before any assistant frame, so the turn has recorded no item.
+func partialHang(f *fake) {
+	partialEmit(f, messageStart(partialFirstID), blockStart(0, textBlock("")), blockDelta(0, textDelta("Working on it.")))
+	hang(f)
 }
 
 // partialRetry drops a reply that it began and answers again, as the CLI does

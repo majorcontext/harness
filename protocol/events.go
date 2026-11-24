@@ -525,6 +525,10 @@ type NestedCallRecorded struct {
 // PinCodeMode is the notice of a pin that states the code mode of the session.
 const PinCodeMode = "code-mode"
 
+// PinCodeModeInput is the notice of a pin that records the code-mode text that a backend that owns the loop was sent with an input.
+// The newest pin states what the kept conversation of that backend was told last.
+const PinCodeModeInput = "code-mode-input"
+
 // PinRecorded records a pin that follows At messages; no Text retires the pins of its Notice.
 type PinRecorded struct {
 	Notice string `json:"notice"`

@@ -360,7 +360,7 @@ func (s *State) remember(env Envelope) {
 			s.settle(env.Seq)
 		}
 		s.compactedLen = len(s.messages(true))
-		s.movePins(s.compactedLen)
+		s.movePins(s.compactedLen, e.ByBackend)
 	}
 }
 

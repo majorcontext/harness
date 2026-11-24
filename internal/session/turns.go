@@ -23,9 +23,6 @@ import (
 const (
 	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
-	// lostToRestart closes the history of a turn that a crash ended, so the
-	// next user message does not join the crashed one on the wire.
-	lostToRestart = "[harness: this turn was interrupted by a process restart and could not complete]"
 )
 
 var (
@@ -190,7 +187,7 @@ func (a *Actor) callRequest(id string) turn.Request {
 	req := a.modelRequest()
 	req.TurnID, req.Foreign = id, a.state.Foreign(req.Model)
 	req.SearchAllowed = a.searchAllowed()
-	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
+	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Without(protocol.PinCodeModeInput)
 	return req
 }
 
@@ -412,7 +409,7 @@ func (a *Actor) endTurn(ctx context.Context, ended protocol.TurnEnded, text, rea
 		ended.StopReason = protocol.StopAwaitingInput
 	}
 	if ended.Cause == protocol.CauseCrashed {
-		marker := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: lostToRestart}}}
+		marker := protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: eventlog.LostToRestart}}}
 		events = append(events, protocol.ItemCompleted{ItemID: newID("item"), TurnID: ended.TurnID, Message: marker})
 	}
 	events = append(events, ended)

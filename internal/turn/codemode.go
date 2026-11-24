@@ -29,6 +29,29 @@ func CodeModeNotice(code bool, at int) Notice {
 	return n
 }
 
+// modeNotices returns the code-mode notices of ns, as notices of the kind that records what a backend that owns its
+// context was sent: the only notices that such a backend reads.
+func modeNotices(ns []Notice) []Notice {
+	out := slices.DeleteFunc(slices.Clone(ns), func(n Notice) bool { return n.Kind != protocol.PinCodeMode })
+	for i := range out {
+		out[i].Kind = protocol.PinCodeModeInput
+	}
+	return out
+}
+
+// owedMode returns the text of the newest code-mode input pin that no backend has read yet, or "".
+func owedMode(pins []Pin) string {
+	for _, p := range slices.Backward(pins) {
+		if p.Kind == protocol.PinCodeModeInput {
+			if p.Owed {
+				return p.Text
+			}
+			break
+		}
+	}
+	return ""
+}
+
 // NoCodeNotice returns the notice of a request whose declaration lacks the code tool. It speaks only after a
 // code-mode notice.
 func NoCodeNotice(at int) Notice {

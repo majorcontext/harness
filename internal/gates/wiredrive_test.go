@@ -211,7 +211,7 @@ const (
 // driver sends SIGINT after their first frame, so the frames of the
 // interrupted turn reach the gate.
 var fakeClaudeHangs = map[string]bool{
-	"turn_calls_hang": true,
+	"turn_calls_hang": true, "partial_hang": true,
 	"hang_after_text": true, "hang_after_listing": true, "hang_in_tool": true,
 	"abandon_tool": true, "hold_tool": true, "drop_tool": true,
 	"tool_on_interrupt": true, "tool_result_on_interrupt": true, "success_on_interrupt": true,
