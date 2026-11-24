@@ -497,9 +497,9 @@ func (r *run) prompt(req turn.Request) (input, error) {
 	if text, ok := answered(req); ok {
 		m.Parts = []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}
 	} else if req.OneShot {
-		m.Parts = startParts(req.History)
+		m.Parts = startParts(req.History, "")
 	} else if !r.continues {
-		m.Parts = startParts(req.Input)
+		m.Parts = startParts(req.Input, req.ModeText)
 	}
 	return userLine(m, r.workDir, r.read)
 }
@@ -509,8 +509,8 @@ func (r *run) prompt(req turn.Request) (input, error) {
 // other inputs;
 // the text of a report is left out, because its task line holds the result.
 // When only reports start the turn, the segment follows the trigger sentence
-// of the runtime.
-func startParts(inputs []protocol.LogMessage) []protocol.LogPart {
+// of the runtime. A non-empty mode follows them as engine context.
+func startParts(inputs []protocol.LogMessage, mode string) []protocol.LogPart {
 	report := func(m protocol.LogMessage) bool {
 		return slices.ContainsFunc(m.Parts, func(p protocol.LogPart) bool { return p.Type == protocol.LogPartTaskReport })
 	}
@@ -531,6 +531,9 @@ func startParts(inputs []protocol.LogMessage) []protocol.LogPart {
 	}
 	if len(tasks) > 0 {
 		parts = append(parts, protocol.LogPart{Type: protocol.LogPartEngineContext, Text: eventlog.TaskSegment(tasks)})
+	}
+	if mode != "" {
+		parts = append(parts, protocol.LogPart{Type: protocol.LogPartEngineContext, Text: mode})
 	}
 	return parts
 }

@@ -167,10 +167,11 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 
 // Pin is a recorded pin. Old is true from a declaration until a model step
 // completes an assistant item, so that only the call of the declaration
-// retires a pin.
+// retires a pin. Turn is the turn that was running when the log recorded the pin.
 type Pin struct {
 	protocol.PinRecorded
-	Old bool
+	Old  bool
+	Turn string
 }
 
 func (s *State) applyPin(e protocol.PinRecorded) error {
@@ -181,7 +182,7 @@ func (s *State) applyPin(e protocol.PinRecorded) error {
 		s.pins = slices.DeleteFunc(slices.Clone(s.pins), func(p Pin) bool { return p.Notice == e.Notice })
 		return nil
 	}
-	s.pins = append(s.pins, Pin{PinRecorded: e})
+	s.pins = append(s.pins, Pin{PinRecorded: e, Turn: s.turn.ID})
 	return nil
 }
 

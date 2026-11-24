@@ -229,6 +229,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 		for _, n := range placed {
 			t.a.pins.Set(n.Kind, n.Text, n.Cleared, n.Initial, n.At)
 		}
+		t.a.pins.Mark(known, t.r.id)
 		pinned := t.a.pins.Pinned()
 		for _, p := range pinned[known:] {
 			if p.Kind != turn.BannerKind {
@@ -247,7 +248,7 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 func restoredPins(s *eventlog.State) turn.Pins {
 	var ps turn.Pins
 	for _, p := range s.Pins() {
-		ps.Add(turn.Pin{Kind: p.Notice, Text: p.Text, At: p.At})
+		ps.Add(turn.Pin{Kind: p.Notice, Text: p.Text, At: p.At, Turn: p.Turn})
 	}
 	return ps
 }

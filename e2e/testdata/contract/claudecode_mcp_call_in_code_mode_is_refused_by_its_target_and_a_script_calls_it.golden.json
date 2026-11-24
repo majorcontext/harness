@@ -1,0 +1,92 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "mcp",
+            "arguments": {
+              "action": "call",
+              "arguments": {
+                "city": "Oslo"
+              },
+              "tool": "mcp__weather__forecast"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "code mode: mcp__weather__forecast is a function of a script. Call it from the script of a code call, with the same arguments."
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "code",
+            "arguments": {
+              "script": "mcp__weather__forecast(city=\"Oslo\")"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "\"Oslo: 3C, snow\""
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done."
+          }
+        ]
+      }
+    ]
+  }
+}

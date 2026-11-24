@@ -125,7 +125,7 @@ func (d declared) Toolset(ctx context.Context, history []protocol.LogMessage, al
 	ts := d.src.Toolset(ctx, history, allowed, model)
 	warm := turn.IsWarm(ctx)
 	if d.a.cfg.Backend.Capabilities(model).OwnsLoop {
-		return d.withSystem(ts, d.a.livePrompt(ctx), len(history), warm)
+		return d.a.withOwnerMode(ctx, d.withSystem(ts, d.a.livePrompt(ctx), len(history), warm), len(history))
 	}
 	live := declaration{Tools: []protocol.ToolSpec{}, Prompt: ts.Prompt, Gone: ts.Gone}
 	for _, t := range ts.Tools {

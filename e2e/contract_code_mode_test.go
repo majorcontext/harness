@@ -140,7 +140,6 @@ var codeModeRows = map[string]runtimeRow{
 	"create_with_code_mode_fails_while_the_config_key_is_false":                         sameAsServe(),
 	"a_declaration_without_code_after_a_code_mode_notice_states_that_the_tool_is_gone":  sameAsServe(),
 	"a_child_starts_in_the_mode_of_its_parent":                                          sameAsServe(),
-	"a_backend_that_owns_the_loop_ignores_the_mode":                                     sameAsServe(),
 }
 
 var (
@@ -308,15 +307,6 @@ func TestContractCodeModeEnforcement(t *testing.T) {
 			actions: []action{
 				createCode{as: "a"}, submit{as: "a", text: "delegate"}, awaitRequests{n: 4}, waitIdle{as: "a"},
 				bindChild{as: "kid", parent: "a", record: true}, getSession{as: "kid"},
-			},
-		},
-		{
-			name:   "a_backend_that_owns_the_loop_ignores_the_mode",
-			driver: claudeLane{mode: "normal", extra: codeOn}.newDriver,
-			actions: []action{
-				createCode{as: "a"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
-				setCodeMode{as: "a", on: false}, submit{as: "a", text: "again"}, waitIdle{as: "a"},
-				claudeJournalEvents{as: "a", prefix: "pin."}, claudeJournalEvents{as: "a", prefix: "prefix."},
 			},
 		},
 	})

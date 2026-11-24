@@ -81,6 +81,10 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(prev) {
 		events = append(events, a.dismissRequests(before...)...)
 	}
+	swap := ch.Model != nil && a.pins.Has(protocol.PinCodeMode) && a.cfg.Backend.Capabilities(*ch.Model).OwnsLoop != a.cfg.Backend.Capabilities(prev).OwnsLoop
+	if swap {
+		events = append(events, protocol.PinRecorded{Notice: protocol.PinCodeMode})
+	}
 	if hasSettings {
 		events = append(events, ch)
 	}
@@ -89,6 +93,9 @@ func (a *Actor) applySettings(ctx context.Context, ch protocol.SettingsChanged, 
 	}
 	if err := a.appendCtx(ctx, events...); err != nil {
 		return err
+	}
+	if swap {
+		a.pins.Drop(protocol.PinCodeMode)
 	}
 	if ch.Model != nil && a.cfg.Backend.Capabilities(*ch.Model).ContextWindow != a.cfg.Backend.Capabilities(prev).ContextWindow {
 		a.latched = false

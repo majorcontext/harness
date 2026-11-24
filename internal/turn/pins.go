@@ -11,6 +11,8 @@ import (
 type Pin struct {
 	Kind, Text string
 	At         int
+	// Turn is the turn that recorded the pin. Empty: none known.
+	Turn string
 }
 
 // Pins holds the pins of one session in the order the model reads them. A pin
@@ -42,6 +44,19 @@ func (p *Pins) Retire(kind, text string, old bool) bool {
 	}
 	p.pins = slices.DeleteFunc(slices.Clone(p.pins), func(q Pin) bool { return q.Kind == kind })
 	return true
+}
+
+// Mark sets the turn of each pin from the first n pins on.
+func (p *Pins) Mark(n int, turnID string) {
+	p.pins = slices.Clone(p.pins)
+	for i := n; i < len(p.pins); i++ {
+		p.pins[i].Turn = turnID
+	}
+}
+
+// Drop removes every pin of kind.
+func (p *Pins) Drop(kind string) {
+	p.pins = slices.DeleteFunc(slices.Clone(p.pins), func(q Pin) bool { return q.Kind == kind })
 }
 
 // Has reports whether a pin of kind exists.

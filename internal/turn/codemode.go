@@ -29,6 +29,24 @@ func CodeModeNotice(code bool, at int) Notice {
 	return n
 }
 
+// modeNotices returns the code-mode notices of ns: the only notices that a backend that owns its context reads.
+func modeNotices(ns []Notice) []Notice {
+	return slices.DeleteFunc(slices.Clone(ns), func(n Notice) bool { return n.Kind != protocol.PinCodeMode })
+}
+
+// sentMode returns the text of the newest code-mode pin that the turn recorded, or "".
+func sentMode(pins []Pin, turnID string) string {
+	for _, p := range slices.Backward(pins) {
+		if p.Kind == protocol.PinCodeMode {
+			if p.Turn == turnID {
+				return p.Text
+			}
+			break
+		}
+	}
+	return ""
+}
+
 // NoCodeNotice returns the notice of a request whose declaration lacks the code tool. It speaks only after a
 // code-mode notice.
 func NoCodeNotice(at int) Notice {
