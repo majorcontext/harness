@@ -167,11 +167,13 @@ func (s *State) applyBackendState(e protocol.BackendState) error {
 
 // Pin is a recorded pin. Old is true from a declaration until a model step
 // completes an assistant item, so that only the call of the declaration
-// retires a pin. Turn is the turn that was running when the log recorded the pin.
+// retires a pin. Turn is the turn that was running when the log recorded the pin, and Delivered is true once that
+// turn recorded an item, so a backend that owns its context has read the pin.
 type Pin struct {
 	protocol.PinRecorded
-	Old  bool
-	Turn string
+	Old       bool
+	Turn      string
+	Delivered bool
 }
 
 func (s *State) applyPin(e protocol.PinRecorded) error {
@@ -186,15 +188,31 @@ func (s *State) applyPin(e protocol.PinRecorded) error {
 	return nil
 }
 
+// markDelivered marks each pin that the running turn recorded as delivered.
+func (s *State) markDelivered() {
+	if s.turn.ID == "" {
+		return
+	}
+	s.pins = slices.Clone(s.pins)
+	for i := range s.pins {
+		if s.pins[i].Turn == s.turn.ID {
+			s.pins[i].Delivered = true
+		}
+	}
+}
+
 // movePins keeps the newest pin of each notice but the code-mode notice and puts it after the first n
-// messages of the history.
-func (s *State) movePins(n int) {
+// messages of the history. The code-mode input notice stays unless the backend compacted, because only a compaction
+// of the backend changes what its conversation holds.
+func (s *State) movePins(n int, byBackend bool) {
 	var kept []Pin
 	for i, p := range s.pins {
-		if p.Notice != protocol.PinCodeMode && !slices.ContainsFunc(s.pins[i+1:], func(q Pin) bool { return q.Notice == p.Notice }) {
-			p.At = n
-			kept = append(kept, p)
+		newest := !slices.ContainsFunc(s.pins[i+1:], func(q Pin) bool { return q.Notice == p.Notice })
+		if p.Notice == protocol.PinCodeMode || p.Notice == protocol.PinCodeModeInput && byBackend || !newest {
+			continue
 		}
+		p.At = n
+		kept = append(kept, p)
 	}
 	s.pins = kept
 }

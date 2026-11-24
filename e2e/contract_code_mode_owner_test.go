@@ -51,7 +51,7 @@ func claudeEvents(t *testing.T, r *run, as string) []protocol.Event {
 	return claudeDriverOf(t, r).laneHost.(*runtimeDriver).events(t, r.id(t, as))
 }
 
-// expectPinRecords checks the number of code-mode pin records of the session.
+// expectPinRecords checks the number of code-mode input pin records of the session.
 type expectPinRecords struct {
 	as string
 	n  int
@@ -61,12 +61,12 @@ func (a expectPinRecords) run(t *testing.T, r *run) {
 	t.Helper()
 	n := 0
 	for _, ev := range claudeEvents(t, r, a.as) {
-		if ev.Kind == protocol.KindPinRecorded && decodeEvent[protocol.PinRecorded](t, ev).Notice == protocol.PinCodeMode {
+		if ev.Kind == protocol.KindPinRecorded && decodeEvent[protocol.PinRecorded](t, ev).Notice == protocol.PinCodeModeInput {
 			n++
 		}
 	}
 	if n != a.n {
-		t.Fatalf("the log holds %d code-mode pin records, want %d", n, a.n)
+		t.Fatalf("the log holds %d code-mode input pin records, want %d", n, a.n)
 	}
 }
 
@@ -132,66 +132,44 @@ func (a claudeSameTools) run(t *testing.T, r *run) {
 }
 
 var ownerModeRows = map[string]runtimeRow{
-	"claudecode_session_created_in_code_mode_gets_the_code_text_with_its_first_input_once":     sameAsServe(),
-	"claudecode_switch_to_code_mode_sends_the_code_text_with_the_next_input_once":              sameAsServe(),
-	"claudecode_switch_back_to_normal_mode_sends_the_normal_text_with_the_next_input_once":     sameAsServe(),
-	"claudecode_restart_in_code_mode_sends_no_mode_text_again":                                 sameAsServe(),
-	"claudecode_backend_compaction_in_code_mode_sends_the_code_text_with_the_next_input":       sameAsServe(),
-	"claudecode_backend_compaction_in_normal_mode_after_a_switch_back_sends_no_mode_text":      sameAsServe(),
-	"claudecode_direct_bash_in_code_mode_is_refused_and_a_script_calls_it":                     sameAsServe(),
-	"claudecode_mcp_call_in_code_mode_is_refused_by_its_target_and_a_script_calls_it":          sameAsServe(),
-	"claudecode_endpoint_lists_the_same_tools_in_both_modes":                                   sameAsServe(),
-	"claudecode_model_change_between_a_harness_model_and_the_cli_model_tells_the_new_one_once": sameAsServe(),
-	"claudecode_session_in_code_mode_updates_while_the_declaration_lacks_code":                 sameAsServe(),
+	"claudecode_code_mode_session_sends_the_code_text_with_its_first_input_once_also_after_a_restart":         sameAsServe(),
+	"claudecode_switches_send_their_text_with_the_next_input_once_and_the_endpoint_lists_the_same_tools":      sameAsServe(),
+	"claudecode_backend_compaction_sends_the_code_text_again_in_code_mode_and_nothing_in_normal_mode":         sameAsServe(),
+	"claudecode_direct_bash_in_code_mode_is_refused_and_a_script_calls_it":                                    sameAsServe(),
+	"claudecode_mcp_call_in_code_mode_is_refused_by_its_target_and_a_script_calls_it":                         sameAsServe(),
+	"claudecode_model_change_between_a_harness_model_and_the_cli_model_states_the_mode_to_each_that_lacks_it": sameAsServe(),
+	"claudecode_session_in_code_mode_updates_while_the_declaration_lacks_code":                                sameAsServe(),
+	"claudecode_code_text_is_owed_until_an_input_that_carried_it_reached_the_cli":                             sameAsServe(),
+	"claudecode_answer_to_a_question_carries_the_code_text_after_a_switch_to_code_mode":                       sameAsServe(),
+	"claudecode_answer_to_a_question_carries_the_normal_text_after_a_switch_back":                             sameAsServe(),
+	"claudecode_return_to_the_cli_in_normal_mode_tells_its_kept_conversation_the_mode":                        sameAsServe(),
 }
 
 func TestContractCodeModeClaudeCodeInput(t *testing.T) {
-	cc := func(mode, spawns string) func(*testing.T, host, string) driver {
-		return claudeLane{mode: mode, spawnModes: spawns, extra: codeOn}.newDriver
-	}
 	turnA := func(text string) []action { return []action{submit{as: "a", text: text}, waitIdle{as: "a"}} }
 	runScenarios(t, []scenario{
 		{
-			name:   "claudecode_session_created_in_code_mode_gets_the_code_text_with_its_first_input_once",
-			driver: cc("normal", ""),
-			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), turnA("two"), []action{
-				expectInputModes{want: []string{"code", ""}}, expectPinRecords{as: "a", n: 1},
+			name:   "claudecode_code_mode_session_sends_the_code_text_with_its_first_input_once_also_after_a_restart",
+			driver: claudeLane{mode: "normal", extra: codeOn}.newDriver,
+			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), []action{restart{}}, turnA("two"), turnA("three"), []action{
+				expectInputModes{want: []string{"code", "", ""}}, expectPinRecords{as: "a", n: 1},
 			}),
 		},
 		{
-			name:   "claudecode_switch_to_code_mode_sends_the_code_text_with_the_next_input_once",
-			driver: cc("normal", ""),
-			actions: modeSeq([]action{create{as: "a"}}, turnA("one"), []action{setCodeMode{as: "a", on: true}}, turnA("two"), turnA("three"), []action{
-				expectInputModes{want: []string{"", "code", ""}}, expectPinRecords{as: "a", n: 1},
-			}),
+			name:   "claudecode_switches_send_their_text_with_the_next_input_once_and_the_endpoint_lists_the_same_tools",
+			driver: claudeLane{mode: "normal", listTools: true, extra: codeOn}.newDriver,
+			actions: modeSeq([]action{create{as: "a"}}, turnA("one"), []action{claudeRememberTools{key: "normal"}, setCodeMode{as: "a", on: true}},
+				turnA("two"), []action{claudeRememberTools{key: "code"}, setCodeMode{as: "a", on: false}}, turnA("three"), turnA("four"), []action{
+					claudeSameTools{a: "normal", b: "code"},
+					expectInputModes{want: []string{"", "code", "normal", ""}}, expectPinRecords{as: "a", n: 2},
+				}),
 		},
 		{
-			name:   "claudecode_switch_back_to_normal_mode_sends_the_normal_text_with_the_next_input_once",
-			driver: cc("normal", ""),
-			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), []action{setCodeMode{as: "a", on: false}}, turnA("two"), turnA("three"), []action{
-				expectInputModes{want: []string{"code", "normal", ""}}, expectPinRecords{as: "a", n: 2},
-			}),
-		},
-		{
-			name:   "claudecode_restart_in_code_mode_sends_no_mode_text_again",
-			driver: cc("normal", ""),
-			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), []action{restart{}}, turnA("two"), []action{
-				expectInputModes{want: []string{"code", ""}}, expectPinRecords{as: "a", n: 1},
-			}),
-		},
-		{
-			name:   "claudecode_backend_compaction_in_code_mode_sends_the_code_text_with_the_next_input",
-			driver: cc("compact_turn", "1=normal,3=normal,4=normal"),
-			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), []action{compact{as: "a"}}, turnA("two"), turnA("three"), []action{
-				expectInputModes{want: []string{"code", "", "code", ""}}, expectPinRecords{as: "a", n: 2},
-			}),
-		},
-		{
-			name:   "claudecode_backend_compaction_in_normal_mode_after_a_switch_back_sends_no_mode_text",
-			driver: cc("compact_turn", "1=normal,2=normal,4=normal"),
-			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), []action{setCodeMode{as: "a", on: false}}, turnA("two"),
-				[]action{compact{as: "a"}}, turnA("three"), []action{
-					expectInputModes{want: []string{"code", "normal", "", ""}}, expectPinRecords{as: "a", n: 2},
+			name:   "claudecode_backend_compaction_sends_the_code_text_again_in_code_mode_and_nothing_in_normal_mode",
+			driver: claudeLane{mode: "compact_turn", spawnModes: "1=normal,3=normal,4=normal,6=normal", extra: codeOn}.newDriver,
+			actions: modeSeq([]action{createCode{as: "a"}}, turnA("one"), []action{compact{as: "a"}}, turnA("two"),
+				[]action{setCodeMode{as: "a", on: false}}, turnA("three"), []action{compact{as: "a"}}, turnA("four"), []action{
+					expectInputModes{want: []string{"code", "", "code", "normal", "", ""}}, expectPinRecords{as: "a", n: 3},
 				}),
 		},
 	})
@@ -236,24 +214,11 @@ func TestContractCodeModeClaudeCodeRefusal(t *testing.T) {
 	})
 }
 
-func TestContractCodeModeClaudeCodeTools(t *testing.T) {
-	runScenarios(t, []scenario{{
-		name:   "claudecode_endpoint_lists_the_same_tools_in_both_modes",
-		driver: claudeLane{mode: "normal", listTools: true, extra: codeOn}.newDriver,
-		actions: []action{
-			create{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"}, claudeRememberTools{key: "normal"},
-			setCodeMode{as: "a", on: true},
-			submit{as: "a", text: "two"}, waitIdle{as: "a"}, claudeRememberTools{key: "code"},
-			claudeSameTools{a: "normal", b: "code"}, expectInputModes{want: []string{"", "code"}},
-		},
-	}})
-}
-
 func TestContractCodeModeClaudeCodeModelChange(t *testing.T) {
 	native := replyTo("native", "native", "native reply")
 	runScenarios(t, []scenario{
 		{
-			name:         "claudecode_model_change_between_a_harness_model_and_the_cli_model_tells_the_new_one_once",
+			name:         "claudecode_model_change_between_a_harness_model_and_the_cli_model_states_the_mode_to_each_that_lacks_it",
 			prefixBreaks: foreignHistoryBreak(),
 			driver:       claudeLane{mode: "normal", extra: codeOn}.newDriver,
 			model:        []harnesstest.Step{native},
@@ -263,7 +228,7 @@ func TestContractCodeModeClaudeCodeModelChange(t *testing.T) {
 				setModel{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "back"}, waitIdle{as: "a"},
 				submit{as: "a", text: "again"}, waitIdle{as: "a"},
 				expectModeNotices{req: 1, want: []string{modeCode}},
-				expectInputModes{want: []string{"code", "code", ""}},
+				expectInputModes{want: []string{"code", "", ""}},
 			},
 		},
 		{
@@ -276,6 +241,58 @@ func TestContractCodeModeClaudeCodeModelChange(t *testing.T) {
 				setModel{as: "a", model: "claude-code/sonnet"}, setCodeMode{as: "a", on: true},
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
 				expectInputModes{want: []string{"code"}},
+			},
+		},
+	})
+}
+
+func TestContractCodeModeClaudeCodeDelivery(t *testing.T) {
+	answers := map[string]string{"Which database?": "SQLite"}
+	question := claudeLane{mode: "question", ask: true, signals: true, extra: codeOn}.newDriver
+	native := replyTo("native", "native", "native reply")
+	runScenarios(t, []scenario{
+		{
+			name:   "claudecode_code_text_is_owed_until_an_input_that_carried_it_reached_the_cli",
+			driver: claudeLane{mode: "normal", spawnModes: "1=crash_before_init", extra: codeOn}.newDriver,
+			actions: []action{
+				createCode{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectInputModes{want: []string{"code", "code", ""}},
+			},
+		},
+		{
+			name:   "claudecode_answer_to_a_question_carries_the_code_text_after_a_switch_to_code_mode",
+			driver: question,
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"},
+				setCodeMode{as: "a", on: true},
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers}, waitIdle{as: "a"},
+				expectInputModes{want: []string{"", "code"}},
+			},
+		},
+		{
+			name:   "claudecode_answer_to_a_question_carries_the_normal_text_after_a_switch_back",
+			driver: question,
+			actions: []action{
+				createCode{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"},
+				setCodeMode{as: "a", on: false},
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers}, waitIdle{as: "a"},
+				expectInputModes{want: []string{"code", "normal"}},
+			},
+		},
+		{
+			name:         "claudecode_return_to_the_cli_in_normal_mode_tells_its_kept_conversation_the_mode",
+			prefixBreaks: foreignHistoryBreak(),
+			driver:       claudeLane{mode: "normal", extra: codeOn}.newDriver,
+			model:        []harnesstest.Step{native},
+			actions: []action{
+				createCode{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				setModel{as: "a", model: "anthropic/claude-fable-5"}, setCodeMode{as: "a", on: false},
+				submit{as: "a", text: "native"}, waitIdle{as: "a"},
+				setModel{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "back"}, waitIdle{as: "a"},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				expectInputModes{want: []string{"code", "normal", ""}},
 			},
 		},
 	})

@@ -154,6 +154,7 @@ func (s *State) applyEnded(e protocol.TurnEnded) error {
 		if e.Cause != "" {
 			return illegal("turn %s completes with cause %q", e.TurnID, e.Cause)
 		}
+		s.markDelivered()
 	case protocol.StopFailed:
 		if e.Cause != "" && e.Cause != protocol.CauseProviderExhausted {
 			return illegal("turn %s has failure cause %q", e.TurnID, e.Cause)

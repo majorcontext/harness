@@ -63,12 +63,32 @@
         "parts": [
           {
             "type": "text",
-            "text": "two"
+            "text": "/compact"
+          }
+        ]
+      },
+      {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "fake CLI summary"
           }
         ]
       },
       {
         "id": "msg#7",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -78,7 +98,7 @@
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#9",
         "role": "assistant",
         "parts": [
           {
@@ -92,7 +112,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#10",
         "role": "tool",
         "parts": [
           {
@@ -103,32 +123,12 @@
         ]
       },
       {
-        "id": "msg#10",
+        "id": "msg#11",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
             "text": "Done — it printed hi."
-          }
-        ]
-      },
-      {
-        "id": "msg#11",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "/compact"
-          }
-        ]
-      },
-      {
-        "id": "cmpsum#1",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "fake CLI summary"
           }
         ]
       },
@@ -186,6 +186,81 @@
             "text": "Done — it printed hi."
           }
         ]
+      },
+      {
+        "id": "msg#17",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "/compact"
+          }
+        ]
+      },
+      {
+        "id": "cmpsum#2",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "fake CLI summary"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "four"
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#21",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
       }
     ]
   },
@@ -197,16 +272,24 @@
         "folded": true
       }
     },
+    "compact.a#2": {
+      "status": 200,
+      "body": {
+        "by_backend": true,
+        "folded": true
+      }
+    },
     "set_code_mode.a": {
       "status": 200,
       "body": {
+        "compaction_count": 1,
         "context": {
           "compact_at": 800000,
           "tokens": 113,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 14,
+        "head_seq": 28,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -219,17 +302,17 @@
           "captured_at": "\u003ctime\u003e",
           "plan": "",
           "provider": "claude",
-          "session_cost_usd": 0.0123,
+          "session_cost_usd": 0.0246,
           "windows": []
         },
         "synced_seq": 0,
         "title": "one",
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "cache_read_tokens": 7,
-          "cache_write_tokens": 5,
-          "input_tokens": 101,
-          "output_tokens": 42
+          "cache_read_tokens": 14,
+          "cache_write_tokens": 10,
+          "input_tokens": 202,
+          "output_tokens": 84
         },
         "work_dir": "\u003cworkdir\u003e"
       }

@@ -491,15 +491,23 @@ func effortArg(e modelref.Effort) (string, bool) {
 }
 
 // prompt is the stdin line that starts the run. A run that continues the
-// turn sends continuation: the resumed session already holds the input.
+// turn sends continuation: the resumed session already holds the input. A
+// run that answers a question sends the answer. Each of them carries the mode
+// text that the session owes the CLI.
 func (r *run) prompt(req turn.Request) (input, error) {
 	m := protocol.LogMessage{Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: continuation}}}
-	if text, ok := answered(req); ok {
+	switch text, ok := answered(req); {
+	case ok:
 		m.Parts = []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}
-	} else if req.OneShot {
+	case req.OneShot:
 		m.Parts = startParts(req.History, "")
-	} else if !r.continues {
+		return userLine(m, r.workDir, r.read)
+	case !r.continues:
 		m.Parts = startParts(req.Input, req.ModeText)
+		return userLine(m, r.workDir, r.read)
+	}
+	if req.ModeText != "" {
+		m.Parts = append(m.Parts, protocol.LogPart{Type: protocol.LogPartEngineContext, Text: req.ModeText})
 	}
 	return userLine(m, r.workDir, r.read)
 }

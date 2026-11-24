@@ -453,10 +453,10 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 	call.MCPInstructions = ts.MCPInstructions
 	call.BaseCodeMode = ts.BaseCode
 	if !all && to != nil {
-		call.Pins = to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History))
+		call.Pins = withoutKind(to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History)), protocol.PinCodeModeInput)
 	}
 	if all && to != nil && call.Purpose == PurposeTurn {
-		call.ModeText = sentMode(to.Pin(modeNotices(ts.Notices), len(call.History)), call.TurnID)
+		call.ModeText = owedMode(to.Pin(modeNotices(ts.Notices), len(call.History)))
 	}
 	calls, _ := ctx.Value(mcpCallsKey{}).(*atomic.Int64)
 	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: calls}

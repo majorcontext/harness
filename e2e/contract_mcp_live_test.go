@@ -386,7 +386,7 @@ func TestContractMCPEmptySetSurface(t *testing.T) {
 			},
 			actions: []action{
 				create{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
-				add,
+				add, awaitMCPConnected{put: add},
 				submit{as: "a", text: "two"}, waitIdle{as: "a"},
 				create{as: "b"}, submit{as: "b", text: "three"}, waitIdle{as: "b"},
 			},

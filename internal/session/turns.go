@@ -190,7 +190,7 @@ func (a *Actor) callRequest(id string) turn.Request {
 	req := a.modelRequest()
 	req.TurnID, req.Foreign = id, a.state.Foreign(req.Model)
 	req.SearchAllowed = a.searchAllowed()
-	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Pinned()
+	req.Banner, req.BannerAt, req.Pins = a.banner(), a.state.BannerAt(), a.pins.Without(protocol.PinCodeModeInput)
 	return req
 }
 

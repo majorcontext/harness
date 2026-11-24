@@ -713,8 +713,8 @@ func (a *Actor) appendCtx(ctx context.Context, events ...protocol.Payload) error
 	if untitled && a.state.Title() != "" {
 		a.startTitle(events)
 	}
-	if slices.ContainsFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.CompactionApplied); return ok }) {
-		a.pins.Move(len(a.state.ModelHistory()))
+	if i := slices.IndexFunc(events, func(e protocol.Payload) bool { _, ok := e.(protocol.CompactionApplied); return ok }); i >= 0 {
+		a.pins.Move(len(a.state.ModelHistory()), events[i].(protocol.CompactionApplied).ByBackend)
 		if a.run != nil {
 			a.run.moveContext(len(a.state.ModelHistory()))
 		}

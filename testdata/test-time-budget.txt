@@ -8,7 +8,7 @@
 # or package slower raises its number in the same diff and states why.
 #
 # Package        slowest CI run  budget
-# e2e (Contract)         77 s     116 s (the jj rows run jj for each fixture)
+# e2e (Contract)         77 s     125 s (the jj rows run jj for each fixture; the 11 Claude Code code-mode rows add about 4 s; a CI run with 15 such rows took 117 s)
 # e2e@runtime        101.36 s    153 s (each runtime scenario replays up to 32 log prefixes against its checkpoints)
 # claudecode             14 s      21 s
 # imageclamp            8.3 s      13 s
@@ -20,7 +20,7 @@
 # any other              <6 s      10 s
 leaf 10
 package default 10
-package e2e 116
+package e2e 125
 package e2e@runtime 153
 package internal/backend/claudecode 21
 package internal/imageclamp 13

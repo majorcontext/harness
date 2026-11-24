@@ -63,32 +63,12 @@
         "parts": [
           {
             "type": "text",
-            "text": "/compact"
-          }
-        ]
-      },
-      {
-        "id": "cmpsum#1",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "fake CLI summary"
-          }
-        ]
-      },
-      {
-        "id": "msg#7",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
             "text": "two"
           }
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
@@ -98,7 +78,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {
@@ -112,7 +92,7 @@
         ]
       },
       {
-        "id": "msg#10",
+        "id": "msg#9",
         "role": "tool",
         "parts": [
           {
@@ -123,7 +103,7 @@
         ]
       },
       {
-        "id": "msg#11",
+        "id": "msg#10",
         "role": "assistant",
         "parts": [
           {
@@ -133,7 +113,7 @@
         ]
       },
       {
-        "id": "msg#12",
+        "id": "msg#11",
         "role": "user",
         "parts": [
           {
@@ -143,7 +123,7 @@
         ]
       },
       {
-        "id": "msg#13",
+        "id": "msg#12",
         "role": "assistant",
         "parts": [
           {
@@ -153,7 +133,7 @@
         ]
       },
       {
-        "id": "msg#14",
+        "id": "msg#13",
         "role": "assistant",
         "parts": [
           {
@@ -167,7 +147,7 @@
         ]
       },
       {
-        "id": "msg#15",
+        "id": "msg#14",
         "role": "tool",
         "parts": [
           {
@@ -178,7 +158,7 @@
         ]
       },
       {
-        "id": "msg#16",
+        "id": "msg#15",
         "role": "assistant",
         "parts": [
           {
@@ -188,14 +168,5 @@
         ]
       }
     ]
-  },
-  "calls": {
-    "compact.a": {
-      "status": 200,
-      "body": {
-        "by_backend": true,
-        "folded": true
-      }
-    }
   }
 }

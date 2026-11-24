@@ -76,10 +76,6 @@
             {
               "kind": "text",
               "text": "native"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[mode: code. Call tools only through the code tool. The tools that earlier text names, except ask_user_question, goal, model, task, mcp, and read_tool_result, are functions of its script, and a direct call to one of them is refused.]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -276,10 +272,9 @@
     ]
   },
   "calls": {
-    "set_model.a": {
+    "set_code_mode.a": {
       "status": 200,
       "body": {
-        "code_mode": true,
         "context": {
           "compact_at": 800000,
           "tokens": 113,
@@ -314,17 +309,54 @@
         "work_dir": "\u003cworkdir\u003e"
       }
     },
-    "set_model.a#2": {
+    "set_model.a": {
       "status": 200,
       "body": {
         "code_mode": true,
+        "context": {
+          "compact_at": 800000,
+          "tokens": 113,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 14,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.0123,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "title": "one",
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 101,
+          "output_tokens": 42
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "set_model.a#2": {
+      "status": 200,
+      "body": {
         "context": {
           "compact_at": 800000,
           "tokens": 5,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 26,
+        "head_seq": 24,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
