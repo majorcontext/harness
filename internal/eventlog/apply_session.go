@@ -188,6 +188,15 @@ func (s *State) applyPin(e protocol.PinRecorded) error {
 	return nil
 }
 
+// LostToRestart is the text of the assistant item that closes the history of a turn that a crash ended, so the next
+// user message does not join the crashed one on the wire. A backend never writes it.
+const LostToRestart = "[harness: this turn was interrupted by a process restart and could not complete]"
+
+// backendItem reports whether m is an assistant message that a backend wrote, as opposed to the marker of a crash.
+func backendItem(m protocol.LogMessage) bool {
+	return m.Role == protocol.RoleAssistant && !slices.ContainsFunc(m.Parts, func(p protocol.LogPart) bool { return p.Text == LostToRestart })
+}
+
 // markDelivered marks each pin that the running turn recorded as delivered.
 func (s *State) markDelivered() {
 	if s.turn.ID == "" {

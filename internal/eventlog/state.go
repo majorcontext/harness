@@ -553,7 +553,9 @@ func (s *State) step(env Envelope) error {
 		if e.Message.Role == protocol.RoleAssistant && s.turn.StepOpen {
 			s.setPinsOld(false)
 		}
-		s.markDelivered()
+		if backendItem(e.Message) {
+			s.markDelivered()
+		}
 		return s.applyItem(e)
 	case protocol.TurnSuspended:
 		return s.applySuspended(e)

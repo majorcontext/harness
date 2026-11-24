@@ -143,6 +143,8 @@ var ownerModeRows = map[string]runtimeRow{
 	"claudecode_answer_to_a_question_carries_the_code_text_after_a_switch_to_code_mode":                       sameAsServe(),
 	"claudecode_answer_to_a_question_carries_the_normal_text_after_a_switch_back":                             sameAsServe(),
 	"claudecode_return_to_the_cli_in_normal_mode_tells_its_kept_conversation_the_mode":                        sameAsServe(),
+	"claudecode_restart_before_the_cli_answers_does_not_count_as_delivery":                                    sameAsServe(),
+	"claudecode_harness_loop_turn_does_not_take_over_an_owed_code_text":                                       sameAsServe(),
 }
 
 func TestContractCodeModeClaudeCodeInput(t *testing.T) {
@@ -293,6 +295,29 @@ func TestContractCodeModeClaudeCodeDelivery(t *testing.T) {
 				setModel{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "back"}, waitIdle{as: "a"},
 				submit{as: "a", text: "again"}, waitIdle{as: "a"},
 				expectInputModes{want: []string{"code", "normal", ""}},
+			},
+		},
+		{
+			name:   "claudecode_restart_before_the_cli_answers_does_not_count_as_delivery",
+			driver: claudeLane{mode: "partial_hang", spawnModes: "2=normal,3=normal", extra: codeOn}.newDriver,
+			actions: []action{
+				createCode{as: "a"}, submit{as: "a", text: "one"}, claudeAwaitText{as: "a", text: "Working on it."},
+				restart{kill: true}, waitIdle{as: "a"},
+				submit{as: "a", text: "two"}, waitIdle{as: "a"},
+				submit{as: "a", text: "three"}, waitIdle{as: "a"},
+				expectInputModes{want: []string{"code", "code", ""}},
+			},
+		},
+		{
+			name:   "claudecode_harness_loop_turn_does_not_take_over_an_owed_code_text",
+			driver: claudeLane{mode: "normal", spawnModes: "1=crash_before_init", extra: codeOn}.newDriver,
+			model:  []harnesstest.Step{native},
+			actions: []action{
+				createCode{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"},
+				setModel{as: "a", model: "anthropic/claude-fable-5"}, submit{as: "a", text: "native"}, waitIdle{as: "a"},
+				setModel{as: "a", model: "claude-code/sonnet"}, submit{as: "a", text: "back"}, waitIdle{as: "a"},
+				submit{as: "a", text: "again"}, waitIdle{as: "a"},
+				expectInputModes{want: []string{"code", "code", ""}},
 			},
 		},
 	})

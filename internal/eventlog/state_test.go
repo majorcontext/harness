@@ -590,3 +590,27 @@ func TestDeclarationFollowsTheLog(t *testing.T) {
 		})
 	}
 }
+
+func TestOnlyAnItemOfTheBackendDeliversACodeModeInputPin(t *testing.T) {
+	pin := protocol.PinRecorded{Notice: protocol.PinCodeModeInput, Text: "code", At: 1}
+	item := func(id, turn, text string) protocol.Payload {
+		return protocol.ItemCompleted{ItemID: id, TurnID: turn, Message: protocol.LogMessage{Role: protocol.RoleAssistant, Parts: []protocol.LogPart{{Type: protocol.LogPartText, Text: text}}}}
+	}
+	delivered := func(events []protocol.Payload) bool {
+		pins := replay(t, events).Pins()
+		return len(pins) > 0 && pins[len(pins)-1].Delivered
+	}
+	cut := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), pin,
+		item("m", "t1", LostToRestart), end("t1", protocol.StopInterrupted, protocol.CauseCrashed))
+	if delivered(cut) {
+		t.Fatal("the marker of a crashed turn delivers the pin")
+	}
+	failed := with(base, says("a", protocol.DeliveryQueue, "one"), start("t1", "a"), pin, end("t1", protocol.StopFailed, ""))
+	if delivered(failed) {
+		t.Fatal("a turn that failed with no item delivers the pin")
+	}
+	again := with(cut, says("b", protocol.DeliveryQueue, "two"), start("t2", "b"), protocol.PinRecorded{Notice: protocol.PinCodeModeInput, Text: "code", At: 1})
+	if !delivered(with(again, item("r", "t2", "ok"))) {
+		t.Fatal("an item of the backend does not deliver the pin of its turn")
+	}
+}

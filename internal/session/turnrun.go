@@ -221,7 +221,9 @@ func (t *turnRun) Pin(ns []turn.Notice, at int) []turn.Pin {
 				recorded = append(recorded, protocol.PinRecorded{Notice: n.Kind})
 			}
 		}
-		recorded = append(recorded, t.a.restate(t.r.id, at)...)
+		if slices.ContainsFunc(placed, func(n turn.Notice) bool { return n.Kind == protocol.PinCodeModeInput }) {
+			recorded = append(recorded, t.a.restate(t.r.id, at)...)
+		}
 		known := len(t.a.pins.Pinned())
 		for i := range placed {
 			placed[i].At = cmp.Or(placed[i].At, at)
