@@ -25,7 +25,9 @@ const modelDescription = "Inspect or swap this session's MAIN model. History tra
 	"set(model) swaps the main model to a full \"provider/model\" ref or a configured " +
 	"alias — it takes effect on the NEXT request in this session. set fails, and " +
 	"changes nothing, if the target names an unconfigured provider (the error lists the " +
-	"valid aliases and provider names). " +
+	"valid aliases and provider names). A target that needs another kind of backend " +
+	"also fails without changing the model; switch it between turns through the session " +
+	"settings, or spawn a task with that model. " +
 	"list() reports the same configured providers (with billing) and aliases, with no " +
 	"current-model or session state — useful to pick a family/model for another tool's " +
 	"own model override (e.g. task's spawn action) without swapping this session's own model. " +
@@ -88,6 +90,8 @@ type Catalog struct {
 	Providers func() []string
 	// Unavailable returns why a configured provider has no backend, or "".
 	Unavailable func(provider string) string
+	// OwnsLoop reports whether the model backend runs the whole turn.
+	OwnsLoop func(model string) bool
 }
 
 // Model is the model tool for the session to which the runtime binds it.
@@ -188,6 +192,9 @@ func (t Model) set(ctx context.Context, s Session, ref string) (modelStatus, err
 			v.Effect = "unchanged"
 		}
 		return v, nil
+	}
+	if t.catalog.OwnsLoop(ref) {
+		return modelStatus{}, fmt.Errorf("model: %s needs another kind of backend; switch models between turns through the session settings, or spawn a task with this model", ref)
 	}
 	v, err := s.Update(ctx, protocol.SettingsPatch{Model: &ref})
 	if err != nil {

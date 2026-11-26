@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Cross-backend model tool switch** — a model API turn refuses a switch to a backend that owns its loop as a tool error. The turn continues on its current model; use session settings between turns, or spawn a task with the target model.
+
 - **Code tool names** — tools with hyphens have collision-safe callable aliases. `call(tool, **kwargs)` calls an exact tool name or function and stops on errors. Undefined names suggest tool calls, and `search_tools` accepts `query=`. The fixed description guides small results, safe bash input, and subagent session IDs without status polling.
 
 - **Tasks from code scripts** — scripts can call every `task` action, including through `attempt`. A spawned child reports later to its parent session; a script timeout or interrupt does not cancel it.
