@@ -22,20 +22,20 @@ var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
 
 var enginePattern = regexp.MustCompile(`engine: harness \S+`)
 
-// ownerPattern matches the owner name that a runtime records: the host name
-// and the pid of its process.
 var ownerPattern = func() *regexp.Regexp {
 	host, _ := os.Hostname()
 	return regexp.MustCompile(regexp.QuoteMeta(host) + `/\d+`)
 }()
-
-// loopbackPortPattern matches the address of a local test server.
 var loopbackPortPattern = regexp.MustCompile(`(?:127\.0\.0\.1|direct\.example):\d{4,5}`)
 
 func maskUnstable(s string) string {
-	s = loopbackPortPattern.ReplaceAllStringFunc(s, portOf)
+	if strings.Contains(s, "127.0.0.1:") || strings.Contains(s, "direct.example:") {
+		s = loopbackPortPattern.ReplaceAllStringFunc(s, portOf)
+	}
 	s = ownerPattern.ReplaceAllString(s, "<owner>")
-	s = timePattern.ReplaceAllString(s, "<time>")
+	if strings.Contains(s, "T") {
+		s = timePattern.ReplaceAllString(s, "<time>")
+	}
 	s = sessionIDPattern.ReplaceAllString(s, "<session>")
 	return enginePattern.ReplaceAllString(s, "engine: harness <version>")
 }
