@@ -34,7 +34,7 @@ const (
 )
 
 // notCallable are the tools that a script cannot call.
-var notCallable = map[string]bool{Name: true, turn.AskTool: true, "goal": true, "model": true, "task": true, "mcp": true}
+var notCallable = map[string]bool{Name: true, turn.AskTool: true, "goal": true, "model": true, "mcp": true}
 
 const description = `Run a Starlark script (a Python dialect) that calls tools as functions. Use it to chain tool calls, loop, filter, and add up results in one step. The result holds only what the script prints and the value that it ends with.
 
@@ -62,7 +62,8 @@ Functions of the script:
   json.encode(value), json.decode(text), and print(...).
 
 The result is the printed output, then the value of the last expression as JSON when the script ends with one. Images that nested calls return follow the text, at most 8.
-A script cannot call code, ask_user_question, goal, model, task, or mcp. It has no file, network, clock, or process access except through tools. A call keeps no state of an earlier call.
+A script that starts subagents should return their session IDs. A subagent report arrives later as its own message; end the turn to wait instead of calling status in a loop.
+A script cannot call code, ask_user_question, goal, model, or mcp. It has no file, network, clock, or process access except through tools. A call keeps no state of an earlier call.
 Limits: timeout_s (default and most 600), a step limit, and bounds on printed output and on result text. A failed script returns its printed output, the error, and the position.`
 
 const schema = `{"type":"object","properties":{` +

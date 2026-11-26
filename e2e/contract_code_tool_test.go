@@ -141,15 +141,9 @@ func TestContractCodeToolNested(t *testing.T) {
 			},
 		},
 		{
-			name:    "a_script_cannot_call_code_task_goal_model_mcp_or_ask_user_question",
+			name:    "a_script_cannot_call_code_goal_model_mcp_or_ask_user_question",
 			config:  codeOn,
-			model:   toolChain(codeCall("[attempt(n).text for n in [\"code\", \"task\", \"goal\", \"model\", \"mcp\", \"ask_user_question\"]]")),
-			actions: oneTurn,
-		},
-		{
-			name:    "a_script_that_names_task_directly_fails_with_an_undefined_name",
-			config:  codeOn,
-			model:   toolChain(codeCall("task(action=\"list\")")),
+			model:   toolChain(codeCall("[attempt(n).text for n in [\"code\", \"goal\", \"model\", \"mcp\", \"ask_user_question\"]]")),
 			actions: oneTurn,
 		},
 		{
@@ -163,6 +157,52 @@ func TestContractCodeToolNested(t *testing.T) {
 			},
 		},
 	})
+}
+
+func TestContractCodeToolTasks(t *testing.T) {
+	var scenarios []scenario
+	for _, tc := range []struct{ name, script string }{
+		{"a_script_spawns_a_child_returns_its_id_and_receives_its_report_later", `json.decode(task(agent="general-purpose", prompt="child work"))["session_id"]`},
+		{"attempt_allows_task_from_a_script", `r = attempt("task", agent="general-purpose", prompt="child work")
+if not r.ok:
+    fail(r.text)
+json.decode(r.text)["session_id"]`},
+	} {
+		model := delegation("general-purpose", childDone)
+		call := codeCall(tc.script)
+		call.ID = "toolu_code"
+		model[0] = harnesstest.Step{Name: "delegate", Match: userStarts("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{call}}}
+		model[2].Match = matchAll(rootStarts("delegate"), harnesstest.LastToolResult("code"))
+		scenarios = append(scenarios, scenario{
+			name: tc.name, config: codeOn, concurrent: true, model: model,
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "delegate"}, waitIdle{as: "a"},
+				codeTaskSpawnResult{}, bindChild{as: "kid", parent: "a", record: true},
+				release{step: "child"}, awaitRequests{n: 4}, waitIdle{as: "a"},
+			},
+		})
+	}
+	runScenarios(t, scenarios)
+}
+
+type codeTaskSpawnResult struct{}
+
+func (codeTaskSpawnResult) run(t *testing.T, r *run) {
+	t.Helper()
+	for _, req := range r.fake.Requests() {
+		if !harnesstest.LastToolResult("code")(req) {
+			continue
+		}
+		id := kidOf(req)
+		if id == "" {
+			t.Fatal("code result has no spawned child session ID")
+		}
+		if !lastResultHas(`"` + id + `"`)(req) {
+			t.Fatal("code result does not return the child session ID")
+		}
+		return
+	}
+	t.Fatal("parent has no code result")
 }
 
 func TestContractCodeToolSafety(t *testing.T) {
@@ -341,6 +381,8 @@ func TestCodeModeFalseChangesNoRequest(t *testing.T) {
 }
 
 var codeToolRows = map[string]runtimeRow{
+	"a_script_spawns_a_child_returns_its_id_and_receives_its_report_later":                          sameAsServe(),
+	"attempt_allows_task_from_a_script":                                                             sameAsServe(),
 	"claudecode_bridge_runs_two_code_calls_of_one_session_one_after_the_other":                      sameAsServe(),
 	"a_script_that_shares_an_exponential_tuple_fails_inside_its_wall_clock_and_the_session_goes_on": sameAsServe(),
 	"a_parallel_inside_a_parallel_function_fails":                                                   sameAsServe(),
@@ -356,8 +398,7 @@ var codeToolRows = map[string]runtimeRow{
 	"parallel_overlaps_read_only_calls_and_keeps_list_order":                                        sameAsServe(),
 	"a_nested_call_passes_the_before_hook_and_a_deny_becomes_the_error":                             sameAsServe(),
 	"a_nested_call_refuses_a_tool_that_the_allowed_tools_leave_out":                                 sameAsServe(),
-	"a_script_cannot_call_code_task_goal_model_mcp_or_ask_user_question":                            sameAsServe(),
-	"a_script_that_names_task_directly_fails_with_an_undefined_name":                                sameAsServe(),
+	"a_script_cannot_call_code_goal_model_mcp_or_ask_user_question":                                 sameAsServe(),
 	"each_nested_call_has_one_durable_record_that_the_next_request_does_not_hold":                   sameAsServe(),
 	"interrupt_cancels_the_script_and_its_running_calls":                                            sameAsServe(),
 	"a_script_over_its_wall_clock_fails_and_cancels_its_running_calls":                              sameAsServe(),
