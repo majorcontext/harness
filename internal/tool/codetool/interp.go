@@ -184,7 +184,7 @@ func (s *script) exec(thread *starlark.Thread, src string, predeclared starlark.
 	}
 	prog, err := starlark.FileProgram(f, predeclared.Has)
 	if err != nil {
-		return nil, err
+		return nil, s.nameError(err)
 	}
 	globals, err := prog.Init(thread, predeclared)
 	if err != nil || !last {
@@ -230,12 +230,14 @@ func (s *script) predeclared() starlark.StringDict {
 	for _, name := range []string{"print", "str", "repr"} {
 		d[name] = boundedUniverse(name)
 	}
+	d["call"] = starlark.NewBuiltin("call", s.invoke)
 	d["attempt"] = starlark.NewBuiltin("attempt", s.attempt)
 	d["parallel"] = starlark.NewBuiltin("parallel", s.parallel)
 	d["search_tools"] = starlark.NewBuiltin("search_tools", s.searchTools)
 	d["describe_tool"] = starlark.NewBuiltin("describe_tool", s.describeTool)
 	d["json"] = &starlarkstruct.Module{Name: "json", Members: starlark.StringDict{
 		"encode": starlark.NewBuiltin("json.encode", s.boundedEncode), "decode": starjson.Module.Members["decode"]}}
+	s.bindAliases(d)
 	return d
 }
 

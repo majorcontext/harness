@@ -36,9 +36,9 @@ const (
 // notCallable are the tools that a script cannot call.
 var notCallable = map[string]bool{Name: true, turn.AskTool: true, "goal": true, "model": true, "mcp": true}
 
-const description = `Run a Starlark script (a Python dialect) that calls tools as functions. Use it to chain tool calls, loop, filter, and add up results in one step. The result holds only what the script prints and the value that it ends with.
+const description = `Run a Starlark script (a Python dialect) that calls tools as functions. Use it to chain tool calls, loop, filter, and add up results in one step. The result holds only what the script prints and the value that it ends with. End with a small value that holds only what the next step needs; do not print whole results.
 
-Each tool of this session is a global function under its own name. Call it with keyword arguments that match its input, such as read_file(path="a.go"). It returns the result text as a string. A tool that returns an error stops the script with that text. A tool that this session lacks is undefined.
+Each tool of this session is a global function under its own name. Call it with keyword arguments that match its input, such as read_file(path="a.go"). It returns the result text as a string. A tool that returns an error stops the script with that text. A tool that this session lacks is undefined. Names with hyphens also have aliases with non-letter, non-digit, non-underscore characters replaced by "_", unless the alias is invalid or collides with a tool name, another alias, or a builtin. Use call("exact-tool-name", ...) when an alias is unavailable.
 
 Built-in tools:
   read_file(path, offset, limit)
@@ -54,7 +54,10 @@ Built-in tools:
   session_info()
   load_skill(name)
 
+Never put prose or Markdown into a bash command string: backticks and $ run. Use write_file to write it to a file, then pass the path.
+
 Functions of the script:
+  call(tool, **kwargs) takes a tool function or a tool name, returns its text, and stops the script on an error result.
   attempt(tool, **kwargs) calls a tool, never stops the script, and returns a struct with ok (bool) and text (string). tool is a function or a tool name: attempt(bash, command="false").
   parallel([f1, f2]) runs functions that take no argument at the same time, at most 8 at once, and returns their results in list order. Calls that touch one file still run in order. The functions share values that they capture, and those become read-only: a write to one fails.
   search_tools(query) returns the tools whose name or description matches, as a list of dicts with name and description.
