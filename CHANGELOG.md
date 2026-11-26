@@ -10,6 +10,8 @@ First tagged release.
 
 ### Fixed
 
+- **Code tool names** — tools with hyphens have collision-safe callable aliases. `call(tool, **kwargs)` calls an exact tool name or function and stops on errors. Undefined names suggest tool calls, and `search_tools` accepts `query=`. The fixed description guides small results, safe bash input, and subagent session IDs without status polling.
+
 - **Tasks from code scripts** — scripts can call every `task` action, including through `attempt`. A spawned child reports later to its parent session; a script timeout or interrupt does not cancel it.
 
 - **Code mode on a backend that owns the loop** — a session in code mode now refuses a direct call of a tool that a script calls, with the same text and code as the harness loop, when the call arrives from a backend that owns the loop (Claude Code). The backend sends the mode text as engine context with the next input after a switch, with the first input of a session that starts in code mode, and again after a compaction. The log records what was sent, so a restart repeats nothing. The tools of the MCP endpoint are the same in both modes. `PATCH` with `code_mode` true no longer needs `code` in a declaration when the session runs on such a backend, and a model change between the two kinds of backend states the mode once.

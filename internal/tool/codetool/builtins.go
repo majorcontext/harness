@@ -20,17 +20,9 @@ import (
 )
 
 func (s *script) attempt(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("attempt: want the tool as its one positional argument")
-	}
-	var name string
-	switch v := args[0].(type) {
-	case *starlark.Builtin:
-		name = v.Name()
-	case starlark.String:
-		name = string(v)
-	default:
-		return nil, fmt.Errorf("attempt: want a tool function or a tool name, got %s", v.Type())
+	name, err := toolName(b.Name(), args)
+	if err != nil {
+		return nil, err
 	}
 	res, err := s.call(th, name, kwargs)
 	if err != nil {
@@ -38,6 +30,28 @@ func (s *script) attempt(th *starlark.Thread, b *starlark.Builtin, args starlark
 	}
 	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
 		"ok": starlark.Bool(!res.IsError), "text": starlark.String(res.Text)}), nil
+}
+
+func toolName(builtin string, args starlark.Tuple) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("%s: want the tool as its one positional argument", builtin)
+	}
+	switch v := args[0].(type) {
+	case *starlark.Builtin:
+		return v.Name(), nil
+	case starlark.String:
+		return string(v), nil
+	default:
+		return "", fmt.Errorf("%s: want a tool function or a tool name, got %s", builtin, v.Type())
+	}
+}
+
+func (s *script) invoke(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	name, err := toolName(b.Name(), args)
+	if err != nil {
+		return nil, err
+	}
+	return s.toolFn(name)(th, b, nil, kwargs)
 }
 
 func (s *script) parallel(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -165,7 +179,7 @@ func (s *script) callable() []protocol.ToolSpec {
 
 func (s *script) searchTools(th *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var query string
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &query); err != nil {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "query", &query); err != nil {
 		return nil, err
 	}
 	tokens := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
