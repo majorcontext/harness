@@ -136,12 +136,12 @@ func TestGoal(t *testing.T) {
 				"item.completed assistant re Continue working toward the goal.", "turn.ended completed", "goal.evaluated met", "goal.changed achieved"})},
 		{"clearing a paused goal starts the input it left queued", &goalBackend{errs: []error{turn.ErrExhausted, nil}, gated: true}, func(t *testing.T, a *Actor, b *goalBackend) {
 			setGoal(t, a)
+			synctest.Wait()
 			submitHi(t, a)
 			close(b.gate)
 			synctest.Wait()
 			clearGoal(t, a)
-		}, slices.Concat(ran[:2], []string{"session.titled", "turn.started", "input.admitted", "prefix.declared", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed cleared",
-			"turn.started", "item.completed assistant re hi", "turn.ended completed"})},
+		}, slices.Concat(ran[:2], []string{"session.titled", "turn.started", "prefix.declared", "input.admitted", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed cleared", "turn.started", "item.completed assistant re hi", "turn.ended completed"})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
