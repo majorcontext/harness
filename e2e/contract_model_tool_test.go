@@ -35,6 +35,16 @@ func TestContractModelTool(t *testing.T) {
 		),
 		actions: oneTurn,
 	}, {
+		name: "model_tool_refuses_cross_backend_switch_without_failing_turn",
+		config: map[string]any{"providers": map[string]any{
+			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": "claude"},
+		}},
+		model: toolChain(
+			model("action", "set", "model", "claude-code/sonnet"),
+			model("action", "status"),
+		),
+		actions: append(append([]action{}, oneTurn...), expectModelSwitchTurnCompleted{}),
+	}, {
 		name:    "native_api_without_credentials_is_unavailable",
 		config:  map[string]any{"providers": map[string]any{"openai": map[string]any{"base_url": "http://127.0.0.1:1"}}},
 		model:   toolChain(model("action", "list"), model("action", "status"), model("action", "set", "model", "openai/gpt-native-1"), model("action", "status")),
@@ -69,10 +79,29 @@ func TestContractModelTool(t *testing.T) {
 }
 
 var credentialProviderRows = map[string]runtimeRow{
-	"uncredentialed_evaluator_rejects_goal_before_another_turn": sameAsServe(),
-	"native_api_configured_header_runs_without_key_env":         sameAsServe(),
-	"native_api_without_credentials_is_unavailable":             sameAsServe(),
-	"native_api_with_credentials_is_available":                  sameAsServe(),
+	"model_tool_refuses_cross_backend_switch_without_failing_turn": sameAsServe(),
+	"uncredentialed_evaluator_rejects_goal_before_another_turn":    sameAsServe(),
+	"native_api_configured_header_runs_without_key_env":            sameAsServe(),
+	"native_api_without_credentials_is_unavailable":                sameAsServe(),
+	"native_api_with_credentials_is_available":                     sameAsServe(),
+}
+
+type expectModelSwitchTurnCompleted struct{}
+
+func (expectModelSwitchTurnCompleted) run(t *testing.T, r *run) {
+	t.Helper()
+	page := r.drv.JournalPage(t, r.id(t, "a"), 0, 1000)
+	for _, raw := range page.Body.(map[string]any)["events"].([]any) {
+		event := raw.(map[string]any)
+		if event["k"] == "turn.ended" {
+			data := event["d"].(map[string]any)
+			if data["stop_reason"] != string(protocol.StopCompleted) {
+				t.Fatalf("cross-backend model tool call failed the turn: %v", data)
+			}
+			return
+		}
+	}
+	t.Fatal("no turn.ended event")
 }
 
 type providerModels struct {
