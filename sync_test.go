@@ -277,12 +277,16 @@ func TestAnImportedDirectoryResumesTheSessionAtAHigherEpoch(t *testing.T) {
 		(<-f1.runs).end()
 		closeRuntime(t, r1)
 		disk := store.NewDiskStore(t.TempDir())
+		stream := bytes.Clone(out.buf.Bytes())
 		sum, err := httpsync.ImportBatches(bg, disk, &out.buf)
 		if err != nil || sum.Sessions != 1 || sum.Records != len(rawLog(t, st)) || sum.Blobs == 0 {
 			t.Fatalf("ImportBatches = %+v, %v; want 1 session, every record, some blobs", sum, err)
 		}
 		if got, want := rawLog(t, disk), rawLog(t, st); !slices.Equal(got, want) {
 			t.Fatalf("imported log = %q, want %q", got, want)
+		}
+		if again, err := httpsync.ImportBatches(bg, disk, bytes.NewReader(stream)); err == nil {
+			t.Fatalf("a second import of the same batches = %+v, want an error", again)
 		}
 		f2 := newFake()
 		f2.save = "v2"

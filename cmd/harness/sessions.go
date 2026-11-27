@@ -121,6 +121,6 @@ func sessionsImportCmd(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("sessions import: %w", err)
 	}
-	fmt.Fprintf(out, "imported %d sessions, %d records, %d blobs into %s\n", sum.Sessions, sum.Records, sum.Blobs, dir)
-	return nil
+	_, err = fmt.Fprintf(out, "imported %d sessions, %d records, %d blobs into %s\n", sum.Sessions, sum.Records, sum.Blobs, dir)
+	return err
 }
