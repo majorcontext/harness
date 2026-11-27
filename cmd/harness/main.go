@@ -104,6 +104,7 @@ func usage(w io.Writer) {
                                     run claude auth login, or print its status
   harness logout claude-code        run claude auth logout
   harness sessions [--json]         list persisted sessions
+  harness sessions import [-dir D]  fill an empty session directory from SyncBatch lines on stdin
   harness version                   print version
 
 Run harness <command> -h for the flags of a command.

@@ -1,7 +1,9 @@
 package harness_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -83,6 +85,14 @@ func (r *replica) notes() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.got)
+}
+
+// lines is a Sync that writes each batch as one JSON line, as an import reads it.
+type lines struct{ buf bytes.Buffer }
+
+func (l *lines) Deliver(_ context.Context, b protocol.SyncBatch) (protocol.SyncAck, error) {
+	err := json.NewEncoder(&l.buf).Encode(b)
+	return protocol.SyncAck{Head: b.FromSeq + uint64(len(b.Records)) - 1}, err
 }
 
 func syncRuntime(t *testing.T, st harness.Store, rep *replica, f *fake) *harness.Runtime {
@@ -252,5 +262,44 @@ func TestADivergedReceiverStopsTheSession(t *testing.T) {
 			t.Fatalf("deliveries = %q, want one rejected delivery", got)
 		}
 		closeRuntime(t, r)
+	})
+}
+
+func TestAnImportedDirectoryResumesTheSessionAtAHigherEpoch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f1, out := store.NewMemStore(), newFake(), &lines{}
+		f1.save = "v1"
+		r1, err := harness.NewWithBackend(harness.Options{Store: st, Sync: out, Owner: harness.NewLocalOwner(1)}, f1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(t, create(t, r1), text("a", "hi"))
+		(<-f1.runs).end()
+		closeRuntime(t, r1)
+		disk := store.NewDiskStore(t.TempDir())
+		stream := bytes.Clone(out.buf.Bytes())
+		sum, err := httpsync.ImportBatches(bg, disk, &out.buf)
+		if err != nil || sum.Sessions != 1 || sum.Records != len(rawLog(t, st)) || sum.Blobs == 0 {
+			t.Fatalf("ImportBatches = %+v, %v; want 1 session, every record, some blobs", sum, err)
+		}
+		if got, want := rawLog(t, disk), rawLog(t, st); !slices.Equal(got, want) {
+			t.Fatalf("imported log = %q, want %q", got, want)
+		}
+		if again, err := httpsync.ImportBatches(bg, disk, bytes.NewReader(stream)); err == nil {
+			t.Fatalf("a second import of the same batches = %+v, want an error", again)
+		}
+		f2 := newFake()
+		f2.save = "v2"
+		r2, err := harness.NewWithBackend(harness.Options{Store: disk, Owner: harness.NewLocalOwner(2)}, f2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(t, open(t, r2), text("b", "again"))
+		run := <-f2.runs
+		run.end()
+		closeRuntime(t, r2)
+		if run.state != "v1" {
+			t.Fatalf("state after the import = %q, want %q", run.state, "v1")
+		}
 	})
 }

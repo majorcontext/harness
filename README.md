@@ -73,7 +73,8 @@ OpenRouter, Ollama, and other endpoints.
 
 `-c` continues the newest session that you started in the current directory. It
 fails when that directory has none. `harness sessions` lists the saved sessions
-(ID, creation time, message count), and `-r <id>` resumes one:
+(ID, creation time, message count), and `-r <id>` resumes one. `harness sessions import -dir D`
+fills an empty directory from `SyncBatch` JSON lines on stdin:
 
 ```bash
 harness run -c -p "Now write a test for each fix"
