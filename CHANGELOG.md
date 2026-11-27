@@ -8,6 +8,10 @@ Harness is pre-1.0. The runtime API, config schema, and plugin protocol may chan
 
 First tagged release.
 
+### Added
+
+- **`harness sessions import`** — fills an empty session directory from `SyncBatch` JSON lines on stdin, applied in order with the receiver rules of Sync. `harness serve` on that directory then lists and resumes the sessions.
+
 ### Fixed
 
 - **Cross-backend model tool switch** — a model API turn refuses a switch to a backend that owns its loop as a tool error. The turn continues on its current model; use session settings between turns, or spawn a task with the target model.
