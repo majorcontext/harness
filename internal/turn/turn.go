@@ -143,6 +143,9 @@ type Request struct {
 	// ModeText is the code-mode text that a backend that owns its context sends with the input that starts the turn,
 	// as engine context. Empty: the backend has read the mode, or the session has none.
 	ModeText string
+	// TurnContext is the turn context that a backend that owns the loop sends with the input that starts the turn, as
+	// engine context, in input order.
+	TurnContext []string
 	// WorkDir is the directory that holds the attachments that no provider takes. Empty: the session has none.
 	WorkDir string
 	// Blob reads the bytes of a blob part.

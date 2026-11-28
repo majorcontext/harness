@@ -456,7 +456,13 @@ func describe(ctx context.Context, call *Request, ts Toolset, to Turn, all bool,
 		call.Pins = withoutKind(to.Pin(append([]Notice{{Kind: BannerKind, Text: call.Banner, At: call.BannerAt}}, ts.Notices...), len(call.History)), protocol.PinCodeModeInput)
 	}
 	if all && to != nil && call.Purpose == PurposeTurn {
-		call.ModeText = owedMode(to.Pin(modeNotices(ts.Notices), len(call.History)))
+		pins := to.Pin(modeNotices(ts.Notices), len(call.History))
+		call.ModeText = owedMode(pins)
+		for _, p := range pins {
+			if p.Kind == TurnContextKind {
+				call.TurnContext = append(call.TurnContext, p.Text)
+			}
+		}
 	}
 	calls, _ := ctx.Value(mcpCallsKey{}).(*atomic.Int64)
 	t := runner{runnable: append(slices.Clip(ts.Tools), ts.Deferred...), deferred: deferred, resolver: ts.Resolver, hooks: ts.Hooks, scope: sc, session: call.SessionID, mcpCalls: calls}

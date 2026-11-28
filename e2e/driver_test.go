@@ -30,6 +30,8 @@ type driver interface {
 	PostInput(t *testing.T, id, text string) callResult
 	// PostInputEffort admits an input with a new id, the delivery, and the effort, and reports the receipt.
 	PostInputEffort(t *testing.T, id, text, delivery, effort string) callResult
+	// PostInputContext admits an input with text and a turn context, under a new id or, with repeat, under the id of the newest input, and reports the receipt.
+	PostInputContext(t *testing.T, id, text, turnContext string, repeat bool) callResult
 	// Repeat sends the newest input of the session again, under its id, with text as its body.
 	Repeat(t *testing.T, id, text string, typed bool) callResult
 	// SteerOtherTurn steers with an expected turn that is not running.

@@ -2,6 +2,7 @@ package harness
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -106,6 +107,9 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input, admitted fu
 	if err := admit.TraceContext(in); err != nil {
 		return protocol.Admitted{}, invalidInput(in.ID, err)
 	}
+	if err := admit.TurnContext(in); err != nil {
+		return protocol.Admitted{}, invalidInput(in.ID, err)
+	}
 	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
 		p, next, err := s.resolve(in)
 		if err != nil {
@@ -137,7 +141,7 @@ func (s *Session) admitInput(ctx context.Context, in protocol.Input, admitted fu
 	if admitted != nil {
 		bound = func(seq uint64) { admitted(protocol.Admitted{InputID: in.ID, Seq: seq}) }
 	}
-	seq, repeat, err = s.a.SubmitTurnContext(ctx, ev, in.ExpectedTurnID, bound, settingsOf(opts).turnContext)
+	seq, repeat, err = s.a.SubmitTurnContext(ctx, ev, in.ExpectedTurnID, bound, cmp.Or(settingsOf(opts).turnContext, in.TurnContext))
 	if err != nil {
 		return protocol.Admitted{}, err
 	}

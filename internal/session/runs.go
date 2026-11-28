@@ -6,6 +6,9 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/majorcontext/harness/protocol"
+
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -54,6 +57,22 @@ func (r *running) takeContext(a *Actor, id string) {
 		r.turnTexts = append(r.turnTexts, text)
 		delete(a.turnCtx, id)
 	}
+}
+
+// steerContext appends to the first of msgs, which holds the steer inputs that are no report, as engine context, each
+// turn context that r took and no message carried, for a backend that owns the loop: it reads a steer input only in
+// the message of that input.
+func (r *running) steerContext(msgs []protocol.LogMessage) []protocol.LogMessage {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	first := &msgs[0]
+	first.Parts = slices.Clip(first.Parts)
+	for _, text := range r.turnTexts[len(r.turnPins):] {
+		first.Parts = append(first.Parts, protocol.LogPart{Type: protocol.LogPartEngineContext, Text: prompt.RenderEngineContext(text)})
+		r.turnPins = append(r.turnPins, turn.Pin{Kind: turn.TurnContextKind, Text: text})
+	}
+	return msgs
 }
 
 // moveContext puts each placed turn context after the first n history messages.

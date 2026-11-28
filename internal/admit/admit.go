@@ -88,6 +88,9 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 	if err := TraceContext(in); err != nil {
 		return ev, nil, err
 	}
+	if err := TurnContext(in); err != nil {
+		return ev, nil, err
+	}
 	ev.SourceLabel = label
 	var blobs []Blob
 	for _, p := range in.Parts {
@@ -106,6 +109,14 @@ func Input(in protocol.Input) (protocol.InputAdmitted, []Blob, error) {
 		}
 	}
 	return ev, blobs, nil
+}
+
+// TurnContext checks the size of the turn context of an input.
+func TurnContext(in protocol.Input) error {
+	if len(in.TurnContext) > protocol.MaxTurnContext {
+		return fmt.Errorf("turn context has %d bytes, more than %d", len(in.TurnContext), protocol.MaxTurnContext)
+	}
+	return nil
 }
 
 // TraceContext checks the traceparent and tracestate of an input. An input

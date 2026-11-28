@@ -1,0 +1,20 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": []
+  },
+  "calls": {
+    "input.a": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {
+            "input_id": "in1"
+          },
+          "message": "turn context has 4097 bytes, more than 4096"
+        }
+      }
+    }
+  }
+}

@@ -224,7 +224,12 @@ type Input struct {
 	// Traceparent and Tracestate are the W3C trace context of the request that sent the input. A turn that starts from this input alone continues that trace; a turn that starts from several inputs links to each.
 	Traceparent string `json:"traceparent,omitempty"`
 	Tracestate  string `json:"tracestate,omitempty"`
+	// TurnContext is text that the model reads as engine context in the turn that takes the input, at most MaxTurnContext bytes. It is not part of the input: no event or read holds it, and a repeat of the input ID keeps the text of its first admission and does not compare it.
+	TurnContext string `json:"turn_context,omitempty"`
 }
+
+// MaxTurnContext is the largest Input.TurnContext in bytes.
+const MaxTurnContext = 4096
 
 // QueuedInput is an input that no turn has taken. Its parts hold the text of each text part and, for an attachment, its media type, size, and Key, never its data.
 type QueuedInput struct {
