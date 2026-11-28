@@ -101,6 +101,7 @@ func TestClaudeCodeFieldsRejectedOnOtherTypes(t *testing.T) {
 		{"extra_args", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", ExtraArgs: []string{"--foo"}}},
 		{"permission_mode", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", PermissionMode: "acceptEdits"}},
 		{"session_mirror", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", SessionMirror: true}},
+		{"config_dir", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", ConfigDir: "/cfg"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,6 +114,25 @@ func TestClaudeCodeFieldsRejectedOnOtherTypes(t *testing.T) {
 				t.Errorf("error %q does not name %q as the only valid type", err, TypeClaudeCodeCLI)
 			}
 		})
+	}
+}
+
+// TestClaudeCodeSessionMirrorNeedsAnAbsoluteConfigDir proves that a mirror
+// knows the config directory that it restores into, and that the harness and
+// the CLI, which runs in another directory, read one path.
+func TestClaudeCodeSessionMirrorNeedsAnAbsoluteConfigDir(t *testing.T) {
+	for _, tc := range []struct {
+		p    Provider
+		want string
+	}{
+		{Provider{Type: TypeClaudeCodeCLI, SessionMirror: true}, "session_mirror needs config_dir"},
+		{Provider{Type: TypeClaudeCodeCLI, SessionMirror: true, ConfigDir: "cfg"}, "not an absolute path"},
+		{Provider{Type: TypeClaudeCodeCLI, SessionMirror: true, ConfigDir: "/cfg"}, ""},
+	} {
+		_, err := mergeAndValidate(&Config{Providers: map[string]Provider{"claude-code": tc.p}}, &Config{})
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%+v: error = %v, want %q", tc.p, err, tc.want)
+		}
 	}
 }
 

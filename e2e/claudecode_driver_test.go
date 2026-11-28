@@ -140,6 +140,9 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": l.mirror},
 		},
 	}
+	if l.mirror {
+		cfg["providers"].(map[string]any)["claude-code"].(map[string]any)["config_dir"] = t.TempDir()
+	}
 	if l.chat {
 		cfg["providers"].(map[string]any)["bifrost"] = map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL + "/v1"}
 	}
@@ -607,8 +610,9 @@ func (d *runtimeDriver) turnEnds(t *testing.T, id string) []any {
 }
 
 // claudeMirror records, for each fakeclaude spawn in order, the session that
-// it resumed, whether it ran with the session mirror, and a digest of each
-// transcript file that it found in its config dir at start.
+// it resumed, whether it ran with the session mirror, and a digest of the
+// transcript of that session that it found in its config dir at start. A
+// transcript of another session is left by a crash and no run reads it.
 type claudeMirror struct{ as string }
 
 func (a claudeMirror) run(t *testing.T, r *run) {
@@ -632,8 +636,12 @@ func (a claudeMirror) run(t *testing.T, r *run) {
 			t.Fatalf("decode argv line %q: %v", line, err)
 		}
 		transcripts := map[string]string{}
+		resume, _ := argvFacts(argv)["resume"].(string)
 		if i < len(seen) {
 			for name, content := range seen[i].Files {
+				if resume == "" || filepath.Base(name) != resume+".jsonl" {
+					continue
+				}
 				sum := sha256.Sum256([]byte(content))
 				transcripts[name] = fmt.Sprintf("%d lines, sha256 %s", strings.Count(content, "\n"), hex.EncodeToString(sum[:6]))
 			}

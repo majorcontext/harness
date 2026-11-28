@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,15 +19,18 @@ import (
 
 // run is one CLI run: it maps the frames of the CLI to items of the turn.
 type run struct {
-	out     turn.Sink
-	turnID  string
-	proc    *external.Process
-	tools   *external.Tools
-	temps   []string
-	dir     string
-	mirror  external.Mirror
-	allowed map[string]bool
-	bridged map[string]string
+	out    turn.Sink
+	turnID string
+	proc   *external.Process
+	tools  *external.Tools
+	temps  []string
+	// dir is the config directory of a mirrored run, and restored is the
+	// transcript that the run wrote into it, relative to dir.
+	dir      string
+	restored string
+	mirror   external.Mirror
+	allowed  map[string]bool
+	bridged  map[string]string
 	// blobs holds the blobs of the bridge results by call ID until the result frame arrives.
 	blobMu sync.Mutex
 	blobs  map[string][]protocol.Blob
@@ -112,9 +116,12 @@ func (r *run) cleanup() {
 	if r.tools != nil {
 		r.tools.Close()
 	}
-	for _, p := range append([]string{r.dir}, r.temps...) {
-		if p != "" {
-			_ = os.RemoveAll(p)
+	for _, p := range r.temps {
+		_ = os.RemoveAll(p)
+	}
+	for _, rel := range []string{r.restored, r.mirror.Path} {
+		if r.dir != "" && rel != "" {
+			_ = os.Remove(filepath.Join(r.dir, rel))
 		}
 	}
 }

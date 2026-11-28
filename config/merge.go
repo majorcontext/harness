@@ -252,6 +252,9 @@ func overlayProvider(ex, v Provider) Provider {
 	if len(v.Models) > 0 {
 		ex.Models = slices.Clone(v.Models)
 	}
+	if v.ConfigDir != "" {
+		ex.ConfigDir = v.ConfigDir
+	}
 	if v.SessionMirror {
 		ex.SessionMirror = true
 	}

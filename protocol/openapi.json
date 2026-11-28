@@ -1792,6 +1792,9 @@
           "permission_mode": {
             "type": "string"
           },
+          "config_dir": {
+            "type": "string"
+          },
           "session_mirror": {
             "type": "boolean"
           }
