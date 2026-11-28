@@ -303,6 +303,19 @@ func (e envelope) failure() string {
 	return strings.Join(e.Errors, "; ")
 }
 
+// noConversationText is the failure text of the Claude Code CLI, seen on
+// version 2.1.330, for a --resume of a session whose transcript is not in its
+// config directory. The CLI offers no other signal: no init frame, and no
+// error code.
+const noConversationText = "No conversation found with session ID: "
+
+// noConversation reports a result that says only that the CLI holds no
+// transcript of the session id. Any other failure text is a different error.
+func noConversation(env envelope, id string) bool {
+	return env.IsError && env.Subtype == "error_during_execution" && env.Result == "" &&
+		len(env.Errors) == 1 && env.Errors[0] == noConversationText+id
+}
+
 // retryable reports whether a failed result is transient. A credential
 // failure is refused, not busy, so it is not.
 func retryable(subtype, failure string) bool {

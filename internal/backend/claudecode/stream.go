@@ -61,6 +61,11 @@ type run struct {
 	// refuses the requests of the run.
 	refused *rateLimitInfo
 	started bool
+	// resumed is the external session that the run resumes, if any.
+	resumed string
+	// noConversation reports a result that says that the CLI holds no
+	// transcript of the resumed session.
+	noConversation bool
 	// early holds the mirror frames that arrive before the init frame names
 	// the session that they belong to.
 	early   []envelope
@@ -244,6 +249,8 @@ func (r *run) outcome(err, exit error) error {
 		return err
 	case r.asked != "":
 		return nil
+	case r.noConversation:
+		return errNoConversation
 	}
 	if r.result.Subtype == "error_max_turns" {
 		return turn.ErrStepLimit
@@ -323,6 +330,10 @@ func (r *run) handle(env envelope) error {
 		return r.streamEvent(env)
 	case "result":
 		if r.placeholder(env) {
+			return nil
+		}
+		if !r.started && r.resumed != "" && noConversation(env, r.resumed) {
+			r.result, r.noConversation = &env, true
 			return nil
 		}
 		r.result, r.waiting = &env, false
