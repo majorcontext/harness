@@ -223,6 +223,7 @@ export interface Input {
   expected_turn_id?: string;
   traceparent?: string;
   tracestate?: string;
+  turn_context?: string;
 }
 
 export interface InputAdmitted {

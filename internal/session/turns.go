@@ -298,7 +298,11 @@ func (a *Actor) steer(r *running) ([]protocol.LogMessage, error) {
 	if err := a.append(events...); err != nil {
 		return nil, err
 	}
-	return eventlog.SteerMessages(steered), nil
+	msgs := eventlog.SteerMessages(steered)
+	if r.ownsLoop {
+		msgs = r.steerContext(msgs)
+	}
+	return msgs, nil
 }
 
 func isCall(p protocol.LogPart) bool { return p.Type == protocol.LogPartToolCall }

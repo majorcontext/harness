@@ -25,6 +25,7 @@ import (
 	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/modelref"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -504,6 +505,9 @@ func (r *run) prompt(req turn.Request) (input, error) {
 		return userLine(m, r.workDir, r.read)
 	case !r.continues:
 		m.Parts = startParts(req.Input, req.ModeText)
+		for _, text := range req.TurnContext {
+			m.Parts = append(m.Parts, protocol.LogPart{Type: protocol.LogPartEngineContext, Text: prompt.RenderEngineContext(text)})
+		}
 		return userLine(m, r.workDir, r.read)
 	}
 	if req.ModeText != "" {

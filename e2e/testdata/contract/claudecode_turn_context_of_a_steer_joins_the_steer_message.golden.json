@@ -1,0 +1,86 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "sleep 1"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "OPERATOR MESSAGES (address these, then continue the task):\n1. second\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "slept"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "steered: OPERATOR MESSAGES (address these, then continue the task):\n1. second\n\n\n\u003charness-engine-context\u003e\nmain moved by 3 commits; your work was rebased onto it.\n\u003c/harness-engine-context\u003e"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "run it",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "OPERATOR MESSAGES (address these, then continue the task):\n1. second\n\n\n\u003charness-engine-context\u003e\nmain moved by 3 commits; your work was rebased onto it.\n\u003c/harness-engine-context\u003e",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "input.a": {
+      "status": 201,
+      "body": {
+        "input_id": "in2",
+        "seq": 8
+      }
+    }
+  }
+}
