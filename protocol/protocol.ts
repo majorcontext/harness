@@ -513,6 +513,7 @@ export interface Provider {
   binary_path?: string;
   extra_args?: string[];
   permission_mode?: string;
+  config_dir?: string;
   session_mirror?: boolean;
 }
 

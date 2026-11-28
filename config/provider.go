@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -174,8 +175,10 @@ type Provider struct {
 	ExtraArgs []string `json:"extra_args,omitempty"`
 	// PermissionMode is the --permission-mode of the CLI, one of default, acceptEdits, bypassPermissions, or plan.
 	PermissionMode string `json:"permission_mode,omitempty"`
-	// SessionMirror runs the CLI with --session-mirror under a scratch CLAUDE_CONFIG_DIR, so the
-	// session state holds the transcript and another host can resume it.
+	// ConfigDir is the CLAUDE_CONFIG_DIR of every run of the CLI: the directory of its login, settings, and CLAUDE.md.
+	ConfigDir string `json:"config_dir,omitempty"`
+	// SessionMirror runs the CLI with --session-mirror and restores the saved transcript into ConfigDir before each
+	// run, so the session state holds the transcript and another host can resume it. It needs ConfigDir.
 	SessionMirror bool `json:"session_mirror,omitempty"`
 
 	keyless   bool
@@ -412,6 +415,12 @@ func validateClaudeCodeFields(name string, p Provider) error {
 		if p.PermissionMode != "" && !slices.Contains(claudeCodePermissionModes(), p.PermissionMode) {
 			return fmt.Errorf("providers.%s: unknown permission_mode %q (valid values: %q)", name, p.PermissionMode, claudeCodePermissionModes())
 		}
+		if p.ConfigDir != "" && !filepath.IsAbs(p.ConfigDir) {
+			return fmt.Errorf("providers.%s: config_dir %q is not an absolute path", name, p.ConfigDir)
+		}
+		if p.SessionMirror && p.ConfigDir == "" {
+			return fmt.Errorf("providers.%s: session_mirror needs config_dir, the config directory of the CLI", name)
+		}
 		return nil
 	}
 	if p.BinaryPath != "" {
@@ -422,6 +431,9 @@ func validateClaudeCodeFields(name string, p Provider) error {
 	}
 	if p.PermissionMode != "" {
 		return fmt.Errorf("providers.%s: permission_mode is only valid on a %q entry", name, TypeClaudeCodeCLI)
+	}
+	if p.ConfigDir != "" {
+		return fmt.Errorf("providers.%s: config_dir is only valid on a %q entry", name, TypeClaudeCodeCLI)
 	}
 	if p.SessionMirror {
 		return fmt.Errorf("providers.%s: session_mirror is only valid on a %q entry", name, TypeClaudeCodeCLI)

@@ -298,14 +298,14 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 			return nil, err
 		}
 	}
+	if b.p.ConfigDir != "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+b.p.ConfigDir)
+	}
 	if b.p.SessionMirror && !req.OneShot {
-		dir, err := scratch(r.mirror)
-		r.dir = dir
-		if err != nil {
+		if err := r.restore(b.p.ConfigDir); err != nil {
 			return nil, err
 		}
 		args = append(args, "--session-mirror")
-		env = append(env, "CLAUDE_CONFIG_DIR="+dir)
 	}
 	cmd := exec.Command(b.p.CLIBinary(), append(args, b.p.ExtraArgs...)...) //nolint:gosec // operator config
 	cmd.Env = env
@@ -347,16 +347,15 @@ func (b *Backend) resumes(m external.Mirror) bool {
 	return m.SessionID != "" && (m.Path != "" || !b.p.SessionMirror)
 }
 
-// scratch returns a new config directory that holds the restored transcript.
-func scratch(m external.Mirror) (string, error) {
-	dir, err := os.MkdirTemp("", "harness-claude-config-")
-	if err != nil {
-		return "", err
-	}
+// restore writes the saved transcript into the config directory dir of the
+// CLI. The run removes the transcript when it ends, so the session state is
+// its one durable copy and the next run reads that copy.
+func (r *run) restore(dir string) error {
 	if real, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = real
 	}
-	return dir, m.Restore(dir)
+	r.dir, r.restored = dir, r.mirror.Path
+	return r.mirror.Restore(dir)
 }
 
 // toolSearchEnv maps mcp_tool_loading to ENABLE_TOOL_SEARCH: the CLI defers

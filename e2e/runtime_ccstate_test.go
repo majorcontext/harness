@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,6 +43,7 @@ func TestContractRuntimeClaudeCodeStateChunks(t *testing.T) {
 		{"claude_code_state_of_a_new_cli_session_starts_a_new_chain", rowCCStateNewSessionStartsANewChain},
 		{"claude_code_state_of_one_blob_resumes_and_the_next_save_starts_a_chain", rowCCStateOneBlobStartsAChain},
 		{"claude_code_state_keeps_mirror_frames_that_arrive_before_the_init_frame", rowCCStateKeepsEarlyMirrors},
+		{"claude_code_state_resumes_in_the_config_dir_and_keeps_its_files", rowCCStateResumesInTheConfigDir},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -125,6 +128,8 @@ type ccLane struct {
 	seen  string
 	argv  string
 	epoch int
+	// cfgDir is the config_dir of the lane, the CLAUDE_CONFIG_DIR of each spawn.
+	cfgDir string
 	// fakeEnv sets the environment of each fakeclaude spawn of the lane.
 	fakeEnv []string
 	// recorder, when set, records the spans of the runtimes of the lane.
@@ -136,7 +141,7 @@ type ccLane struct {
 func newCCLane(t *testing.T, hangAfter string, fixtures ...string) *ccLane {
 	t.Helper()
 	dir := t.TempDir()
-	l := &ccLane{t: t, st: store.NewMemStore(), rcv: newSyncReceiver(t, nil), seen: filepath.Join(dir, "seen.jsonl"), argv: filepath.Join(dir, "argv.jsonl")}
+	l := &ccLane{t: t, st: store.NewMemStore(), rcv: newSyncReceiver(t, nil), seen: filepath.Join(dir, "seen.jsonl"), argv: filepath.Join(dir, "argv.jsonl"), cfgDir: t.TempDir()}
 	l.fakeEnv = fakeEnvArgs(map[string]string{
 		"FAKE_CLAUDE_MODE": "mirror", "FAKE_CLAUDE_STATE": filepath.Join(dir, "state"), "FAKE_CLAUDE_MIRROR_FIXTURE": strings.Join(fixtures, ","),
 		"FAKE_CLAUDE_MIRROR_SEEN": l.seen, "FAKE_CLAUDE_LOG": l.argv, "FAKE_CLAUDE_MIRROR_HANG_AFTER": hangAfter,
@@ -150,7 +155,7 @@ func (l *ccLane) runtime() *harness.Runtime {
 	cfg := syncConfig(l.t, l.epoch, l.rcv, "http://127.0.0.1:1", map[string]any{
 		"model": "claude-code/sonnet",
 		"providers": map[string]any{"claude-code": map[string]any{
-			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true, "extra_args": l.fakeEnv}},
+			"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": true, "config_dir": l.cfgDir, "extra_args": l.fakeEnv}},
 	})
 	opts := harness.Options{Store: l.st, Config: cfg, Getenv: getenv(map[string]string{"HARNESS_E2E_KEY": "k"})}
 	if l.recorder != nil {
@@ -376,6 +381,55 @@ func rowCCStateResumesOnANewRuntime(t *testing.T) {
 	if got := l.resumed(); len(got) != 3 || got[0] != "" || got[1] != "S" || got[2] != "S" {
 		t.Errorf("--resume of the spawns = %q, want none, S, S", got)
 	}
+}
+
+func rowCCStateResumesInTheConfigDir(t *testing.T) {
+	a, b := ccEntries("a", 2, 1<<10), ccEntries("b", 1, 1<<10)
+	l := newCCLane(t, "", ccFixture(t, "S", a), ccFixture(t, "S", b))
+	operator := map[string]string{".credentials.json": `{"login":"x"}`, "settings.json": "{}", "CLAUDE.md": "operator rules"}
+	for name, body := range operator {
+		if err := os.WriteFile(filepath.Join(l.cfgDir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, id := range []string{"1", "2"} {
+		r := l.runtime()
+		open := l.create
+		if i > 0 {
+			open = l.open
+		}
+		s := open(r)
+		l.send(s, id)
+		awaitTurns(t, s, i+1)
+		l.close(r)
+	}
+	resumed := maps.Clone(operator)
+	resumed["projects/p/S.jsonl"] = ccTranscript(a)
+	if seen := l.seenFiles(); len(seen) != 2 || !maps.Equal(seen[0], operator) || !maps.Equal(seen[1], resumed) {
+		t.Errorf("files at start of %d spawns differ: want the files of config_dir, then those and the transcript of turn 1", len(seen))
+	}
+	if got := dirFiles(t, l.cfgDir); !maps.Equal(got, operator) {
+		t.Errorf("config_dir after the turns holds %q, want its own files and no transcript", slices.Sorted(maps.Keys(got)))
+	}
+}
+
+// dirFiles returns the content of each file below dir by its relative path.
+func dirFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		rel, _ := filepath.Rel(dir, p)
+		files[rel] = string(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }
 
 func rowCCStateContinuesAfterAHandoff(t *testing.T) {

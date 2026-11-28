@@ -10,6 +10,7 @@ First tagged release.
 
 ### Added
 
+- **Claude Code `config_dir`** (`config`) — a `claude-code-cli` entry names the CLI config directory, the `CLAUDE_CONFIG_DIR` of every run. `session_mirror` needs it: the backend writes the saved transcript into that directory before a run and removes it after the run, in place of a new empty directory, so a mirrored run has the login, settings, and `CLAUDE.md` of the operator and a true `--resume` works on a host whose disk does not survive.
 - **`harness sessions import`** — fills an empty session directory from `SyncBatch` JSON lines on stdin, applied in order with the receiver rules of Sync. `harness serve` on that directory then lists and resumes the sessions.
 
 ### Fixed
