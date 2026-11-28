@@ -1,0 +1,320 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "after the move"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "third"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "hi",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "after the move\n\n\u003charness-engine-context\u003e\nmain moved by 3 commits; your work was rebased onto it.\n\u003c/harness-engine-context\u003e",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "after the move\n\n\u003charness-engine-context\u003e\nmain moved by 3 commits; your work was rebased onto it.\n\u003c/harness-engine-context\u003e",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "third",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": true,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-3",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "compact_at": 800000,
+          "tokens": 113,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 21,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.0246,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "title": "hi",
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 14,
+          "cache_write_tokens": 10,
+          "input_tokens": 202,
+          "output_tokens": 84
+        },
+        "work_dir": "\u003cworkdir\u003e"
+      }
+    },
+    "history_tool.a": {
+      "status": 200,
+      "body": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "The following is PRIOR conversation history for this session that already happened. It is context for you to read, not a new message to respond to.\n\nShowing messages 1-10 of 10 total (oldest first).\n\nUser: hi\nAssistant: Let me check that.\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nAssistant: Done — it printed hi.\nUser: after the move\nAssistant: Let me check that.\nAssistant called tool bash({\"command\":\"echo hi\"})\nTool result (bash, ok): hi\n\nAssistant: Done — it printed hi.\n",
+              "type": "text"
+            }
+          ]
+        }
+      }
+    },
+    "input.a": {
+      "status": 201,
+      "body": {
+        "input_id": "in2",
+        "seq": 13
+      }
+    },
+    "turn_ends.a": {
+      "status": 200,
+      "body": [
+        {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        {
+          "stop_reason": "completed",
+          "turn_id": "turn#3"
+        }
+      ]
+    }
+  }
+}

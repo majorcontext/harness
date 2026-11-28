@@ -1,0 +1,129 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "hi",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "again",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized",
+          "tools": "ToolSearch"
+        }
+      ]
+    },
+    "turn_ends.a": {
+      "status": 200,
+      "body": [
+        {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        {
+          "error": "claudecode: the turn failed (error_during_execution): No conversation found with session ID: fake-session-9",
+          "error_class": "unrecovered",
+          "stop_reason": "failed",
+          "turn_id": "turn#2"
+        }
+      ]
+    }
+  }
+}

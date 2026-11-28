@@ -14,6 +14,8 @@ First tagged release.
 
 ### Fixed
 
+- **Claude Code session with a lost transcript** — when the Claude Code CLI no longer has the conversation that a session resumes (for example on a new machine with an empty `~/.claude`), the turn no longer fails with `No conversation found with session ID`. The backend runs the same turn once on a new CLI session, which reads the earlier conversation through `get_conversation_history`, and later turns resume the new session.
+
 - **Cross-backend model tool switch** — a model API turn refuses a switch to a backend that owns its loop as a tool error. The turn continues on its current model; use session settings between turns, or spawn a task with the target model.
 
 - **Code tool names** — tools with hyphens have collision-safe callable aliases. `call(tool, **kwargs)` calls an exact tool name or function and stops on errors. Undefined names suggest tool calls, and `search_tools` accepts `query=`. The fixed description guides small results, safe bash input, and subagent session IDs without status polling.

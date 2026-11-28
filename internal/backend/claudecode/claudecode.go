@@ -171,12 +171,32 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 }
 
 // Run runs one turn of the CLI on the external session in the saved state.
+// When the CLI holds no transcript of that session, Run runs the same turn
+// once more on a new session, which reads the history of the session through
+// the history tool, as after a switch from another model.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) error {
 	mirror, err := loadMirror(out)
 	if err != nil {
 		return err
 	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req),
+	steer, err := b.run(ctx, req, out, mirror, false)
+	if !errors.Is(err, errNoConversation) {
+		return err
+	}
+	req.Foreign = true
+	_, err = b.run(ctx, req, out, external.Mirror{}, steer)
+	return err
+}
+
+// errNoConversation reports a run whose CLI holds no transcript of the session
+// that the run resumed. The run recorded nothing.
+var errNoConversation = errors.New("claudecode: the CLI has no conversation of the resumed session")
+
+// run runs one CLI process for the turn on the external session of mirror.
+// steer reports a steer input that an earlier run of the turn took no action
+// on; steered reports one that this run took no action on.
+func (b *Backend) run(ctx context.Context, req turn.Request, out turn.Sink, mirror external.Mirror, steer bool) (steered bool, err error) {
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), steer: steer,
 		names: map[string]string{}, unlisted: map[string]string{}, calls: map[string]bool{}, continues: b.resumes(mirror) && mirror.Turn == req.TurnID,
 		askedCh: make(chan string, 1), askMsg: map[string]string{}}
 	if b.p.Vendor != "" {
@@ -185,14 +205,17 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) erro
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if r.proc, err = external.Start(cmd, grace); err != nil {
-		return fmt.Errorf("claudecode: start %s: %w", cmd.Path, err)
+		return false, fmt.Errorf("claudecode: start %s: %w", cmd.Path, err)
 	}
 	defer context.AfterFunc(ctx, r.proc.Interrupt)()
-	err = r.drive(ctx, req)
-	return b.checkLogin(ctx, cmd.Env, r.finish(ctx, err))
+	err = r.finish(ctx, r.drive(ctx, req))
+	if errors.Is(err, errNoConversation) {
+		return r.steer, err
+	}
+	return r.steer, b.checkLogin(ctx, cmd.Env, err)
 }
 
 func loadMirror(out turn.Sink) (external.Mirror, error) {
@@ -241,7 +264,8 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		args = append(args, "--model", ref.Model)
 	}
 	if b.resumes(r.mirror) {
-		args = append(args, "--resume", r.mirror.SessionID)
+		r.resumed = r.mirror.SessionID
+		args = append(args, "--resume", r.resumed)
 	}
 	if req.OneShot {
 		args = append(args, "--no-session-persistence")
